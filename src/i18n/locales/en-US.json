@@ -318,6 +318,7 @@
   "errors.failedLogExtension": "Failed to log in with extension.",
   "errors.failedLogOut": "Failed to log out.",
   "errors.failedOpenPairingLink": "Failed to open pairing link.",
+  "errors.failedOpenLink": "Failed to open link.",
   "errors.failedOpenShareDialog": "Failed to open share dialog.",
   "errors.failedPairRemoteSigner": "Failed to pair remote signer.",
   "errors.failedPublishGroupMembers": "Failed to publish group members.",

@@ -37,6 +37,15 @@ function shouldToggleDevTools(input: Electron.Input): boolean {
   return key === 'f12' || isMacShortcut || isCrossPlatformShortcut;
 }
 
+function isSafeExternalHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && Boolean(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 function normalizeUnreadChatBadgeCount(count: unknown): number {
   const numericCount = typeof count === 'number' ? count : Number(count);
   if (!Number.isFinite(numericCount)) {
@@ -232,7 +241,9 @@ async function createWindow(): Promise<void> {
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    if (isSafeExternalHttpUrl(url)) {
+      void shell.openExternal(url);
+    }
     return { action: 'deny' };
   });
 

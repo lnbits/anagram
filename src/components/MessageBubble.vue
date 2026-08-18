@@ -170,6 +170,15 @@
             >
               {{ part.text }}
             </button>
+            <button
+              v-else-if="part.type === 'url'"
+              type="button"
+              class="bubble__link"
+              data-testid="message-url-link"
+              @click.stop="handleOpenMessageLink(part.href)"
+            >
+              {{ part.text }}
+            </button>
             <span v-else>{{ part.text }}</span>
           </template>
         </p>
@@ -656,15 +665,16 @@ import type {
 } from 'src/types/chat';
 import { useNostrStore } from 'src/stores/nostrStore';
 import { useTrustedMediaStore } from 'src/stores/trustedMediaStore';
+import { openExternalHttpUrl } from 'src/utils/externalLinks';
 import type { DesktopMessageLayoutPreference } from 'src/utils/themeStorage';
 import { readImageAttachmentsFromMeta } from 'src/utils/messageAttachments';
 import { isReactionUnseenForAuthor } from 'src/utils/messageReactions';
+import { buildMessageTextParts } from 'src/utils/messageTextParts';
 import {
   shouldCollapseMessageText,
   truncateCollapsedMessageText,
 } from 'src/utils/messageTextExpansion';
 import {
-  buildNostrMentionTextParts,
   type NostrMentionProfile,
 } from 'src/utils/nostrMentions';
 import { reportUiError } from 'src/utils/uiErrorHandler';
@@ -982,7 +992,7 @@ const bubbleMessageText = computed(() => {
   return truncateCollapsedMessageText(visibleMessageText.value);
 });
 const bubbleMessageTextParts = computed(() => {
-  return buildNostrMentionTextParts(bubbleMessageText.value, props.mentionProfiles ?? []);
+  return buildMessageTextParts(bubbleMessageText.value, props.mentionProfiles ?? []);
 });
 
 function buildImageAttachmentKey(attachment: MessageAttachmentMetadata, index: number): string {
@@ -1239,6 +1249,14 @@ async function handleCopyImageLink(url: string): Promise<void> {
     });
   } catch (error) {
     reportUiError('Failed to copy image link', error, t('errors.failedCopyImageLink'));
+  }
+}
+
+async function handleOpenMessageLink(url: string): Promise<void> {
+  try {
+    await openExternalHttpUrl(url);
+  } catch (error) {
+    reportUiError('Failed to open message link', error, t('errors.failedOpenLink'));
   }
 }
 
@@ -1570,6 +1588,19 @@ onBeforeUnmount(() => {
 
 .bubble__mention:hover {
   text-decoration: underline;
+}
+
+.bubble__link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--q-primary);
+  cursor: pointer;
+  font: inherit;
+  line-height: inherit;
+  overflow-wrap: anywhere;
+  text-decoration: none;
 }
 
 .bubble__more {

@@ -114,7 +114,7 @@
           <q-btn
             flat
             dense
-            icon="add"
+            icon="attach_file"
             class="composer__menu-trigger"
             data-testid="message-composer-menu"
             :aria-label="$t('message.openComposerMenu')"
@@ -140,15 +140,22 @@
                   </q-item-section>
                   <q-item-section>{{ $t('message.file') }}</q-item-section>
                 </q-item>
-
-                <q-item clickable @click="handleEmojiAction">
-                  <q-item-section avatar class="composer__menu-icon">
-                    <q-icon name="sentiment_satisfied" />
-                  </q-item-section>
-                  <q-item-section>{{ $t('message.emoji') }}</q-item-section>
-                </q-item>
               </q-list>
             </q-menu>
+          </q-btn>
+        </template>
+
+        <template #append>
+          <q-btn
+            flat
+            dense
+            round
+            icon="sentiment_satisfied"
+            class="composer__emoji-trigger"
+            data-testid="message-composer-emoji"
+            :aria-label="$t('message.emoji')"
+            @click="handleEmojiAction"
+          >
             <q-menu
               v-model="isEmojiMenuOpen"
               no-parent-event
@@ -1211,6 +1218,24 @@ defineExpose({
 }
 
 .composer__menu-trigger {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
+  color: var(--nc-text-secondary);
+}
+
+.composer__menu-trigger :deep(.q-icon) {
+  font-size: 24px;
+  transform: rotate(35deg);
+}
+
+.composer__emoji-trigger {
+  flex: 0 0 auto;
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  padding: 0;
   color: var(--nc-text-secondary);
 }
 
@@ -1369,10 +1394,7 @@ defineExpose({
     min-width: 30px;
     height: 30px;
     padding: 0;
-    border: 1px solid #e1e5e9;
-    border-radius: 999px;
     color: #7c8793 !important;
-    background: #f4f6f7 !important;
   }
 
   .composer__menu-trigger :deep(.q-btn__content) {
@@ -1380,7 +1402,7 @@ defineExpose({
   }
 
   .composer__menu-trigger :deep(.q-icon) {
-    font-size: 18px;
+    font-size: 22px;
   }
 
   .composer__send {
@@ -1393,6 +1415,18 @@ defineExpose({
     border-radius: 999px !important;
     overflow: hidden;
     box-shadow: none !important;
+  }
+
+  .composer__emoji-trigger {
+    align-self: flex-end;
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    color: var(--nc-text-secondary);
+  }
+
+  .composer__emoji-trigger :deep(.q-icon) {
+    font-size: 20px;
   }
 
   .composer__send::before {
@@ -1424,8 +1458,6 @@ body.body--dark .composer__reply {
   }
 
   body.body--dark .composer__menu-trigger {
-    border-color: #516173;
-    background: color-mix(in srgb, var(--nc-panel-header-bg) 94%, #263341 6%) !important;
     color: #a9b8c8 !important;
   }
 }

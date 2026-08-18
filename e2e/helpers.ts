@@ -1435,7 +1435,11 @@ export async function forwardMessage(
   text: string,
   destinationName: string
 ): Promise<void> {
-  await threadMessage(page, text).locator('.bubble').click();
+  await threadMessage(page, text)
+    .locator('.bubble')
+    .click({
+      position: { x: 4, y: 4 },
+    });
   await page.getByText('Forward', { exact: true }).click();
   await expect(page.getByTestId('forward-message-chat-list')).toBeVisible({
     timeout: 12_000,

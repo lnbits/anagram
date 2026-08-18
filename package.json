@@ -1,7 +1,7 @@
 {
   "name": "nostr-chat",
   "productName": "Nostr Chat",
-  "version": "0.2.0",
+  "version": "0.5.3",
   "description": "Desktop and web Nostr chat client.",
   "author": "LNbits",
   "homepage": "https://github.com/lnbits/nostr-chat/",

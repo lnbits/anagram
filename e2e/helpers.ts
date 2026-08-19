@@ -241,6 +241,14 @@ export const TEST_ACCOUNTS = {
     privateKey: '1386d7887d6a2bf6aef9bc97a0fdbf64d127af6eb9f4261d86bc8b2d4fbe2391',
     displayName: 'Bob Thread Search',
   },
+  threadPaginationAlice: {
+    privateKey: '4444444444444444444444444444444444444444444444444444444444444444',
+    displayName: 'Alice Thread Pagination',
+  },
+  threadPaginationBob: {
+    privateKey: '5555555555555555555555555555555555555555555555555555555555555555',
+    displayName: 'Bob Thread Pagination',
+  },
   isolationAlice: {
     privateKey: '558033f49171bc9bbc4654b411ad5228b5ba3da15326ed16691824a9db03b628',
     displayName: 'Alice Isolation',

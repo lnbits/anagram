@@ -5,13 +5,32 @@
       isMine ? 'bubble-row--mine' : 'bubble-row--their',
       {
         'bubble-row--show-author-mobile': showAuthorOnMobile,
+        'bubble-row--packaged-text': isPackagedRuntime && !isDesktopBubbleLayout,
+        'bubble-row--mobile-group': mobileGroupLayout,
+        'bubble-row--telegram-avatar-gutter':
+          usesTelegramAvatarLayout && reserveTelegramAuthorAvatarSpace,
         'bubble-row--desktop-bubbles': isDesktopBubbleLayout
       }
     ]"
   >
+    <button
+      v-if="usesTelegramAvatarLayout && showTelegramAuthorAvatar"
+      type="button"
+      class="bubble__telegram-author"
+      data-testid="thread-author-profile-link"
+      :aria-label="$t('profile.open.aria', { name: authorLabel })"
+      @click.stop="handleOpenAuthorProfile"
+    >
+      <CachedAvatar
+        :src="authorAvatarSrc"
+        :alt="authorLabel"
+        :fallback="authorAvatarFallback"
+        class="bubble__telegram-author-avatar"
+      />
+    </button>
     <div class="bubble-stack" :class="isMine ? 'bubble-stack--mine' : 'bubble-stack--their'">
       <button
-        v-if="showAuthorName"
+        v-if="!usesTelegramAvatarLayout && showAuthorName"
         type="button"
         class="bubble__author"
         :class="isMine ? 'bubble__author--mine' : 'bubble__author--their'"
@@ -678,6 +697,7 @@ import {
   type NostrMentionProfile,
 } from 'src/utils/nostrMentions';
 import { reportUiError } from 'src/utils/uiErrorHandler';
+import { isPackagedAppRuntime } from 'src/utils/runtimePlatform';
 import { getDateTimeLocale, t } from 'src/i18n';
 
 const props = defineProps<{
@@ -689,8 +709,11 @@ const props = defineProps<{
   contactRelayUrls?: string[];
   isMessageExpanded?: boolean;
   mentionProfiles?: NostrMentionProfile[];
+  mobileGroupLayout?: boolean;
+  reserveTelegramAuthorAvatarSpace?: boolean;
   showAuthorName?: boolean;
   showAuthorOnMobile?: boolean;
+  showTelegramAuthorAvatar?: boolean;
   desktopMessageLayout?: DesktopMessageLayoutPreference;
 }>();
 
@@ -710,7 +733,15 @@ const $q = useQuasar();
 const nostrStore = useNostrStore();
 const trustedMediaStore = useTrustedMediaStore();
 const isMine = computed(() => props.message.sender === 'me');
+const mobileGroupLayout = computed(() => props.mobileGroupLayout === true);
+const isPackagedRuntime = isPackagedAppRuntime();
 const isDesktopBubbleLayout = computed(() => props.desktopMessageLayout === 'bubbles');
+const usesTelegramAvatarLayout = computed(
+  () => isDesktopBubbleLayout.value && (isPackagedRuntime || $q.screen.width >= 1024)
+);
+const reserveTelegramAuthorAvatarSpace = computed(
+  () => props.reserveTelegramAuthorAvatarSpace === true
+);
 const showAuthorOnMobile = computed(() => props.showAuthorOnMobile === true);
 const loggedInPublicKey = computed(() => nostrStore.getLoggedInPublicKeyHex()?.toLowerCase() ?? '');
 const actionMenuRef = ref<{ show: (evt?: Event) => void } | null>(null);
@@ -790,6 +821,7 @@ function isDeletedMessageMetadata(value: unknown): value is DeletedMessageMetada
 const isStatusDialogOpen = ref(false);
 const statusDialogTab = ref('recipient');
 const showAuthorName = computed(() => props.showAuthorName === true);
+const showTelegramAuthorAvatar = computed(() => props.showTelegramAuthorAvatar === true);
 const authorLabel = computed(() => {
   const explicitLabel = props.authorLabel?.trim();
   if (explicitLabel) {
@@ -1453,6 +1485,7 @@ onBeforeUnmount(() => {
 }
 
 .bubble-row {
+  position: relative;
   display: flex;
   width: 100%;
   margin-bottom: 2px;
@@ -1552,6 +1585,37 @@ onBeforeUnmount(() => {
   line-height: 1.2;
 }
 
+.bubble__telegram-author {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--bubble-author-avatar-size);
+  height: var(--bubble-author-avatar-size);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.bubble__telegram-author:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--q-primary) 58%, transparent);
+  outline-offset: 3px;
+}
+
+.bubble__telegram-author-avatar {
+  width: var(--bubble-author-avatar-size);
+  height: var(--bubble-author-avatar-size);
+  min-width: var(--bubble-author-avatar-size);
+  min-height: var(--bubble-author-avatar-size);
+  font-size: 14px;
+}
+
 .bubble:hover::before,
 .bubble:focus-within::before {
   opacity: 1;
@@ -1569,6 +1633,7 @@ onBeforeUnmount(() => {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
+  text-align: left;
   cursor: pointer;
   color: var(--nc-text);
   line-height: 1.5;
@@ -1592,6 +1657,7 @@ onBeforeUnmount(() => {
 
 .bubble__link {
   display: inline;
+  max-width: 100%;
   padding: 0;
   border: 0;
   background: transparent;
@@ -1599,7 +1665,9 @@ onBeforeUnmount(() => {
   cursor: pointer;
   font: inherit;
   line-height: inherit;
+  text-align: left;
   overflow-wrap: anywhere;
+  vertical-align: baseline;
   text-decoration: none;
 }
 
@@ -2021,6 +2089,10 @@ onBeforeUnmount(() => {
     justify-content: flex-start;
   }
 
+  .bubble-row--desktop-bubbles.bubble-row--telegram-avatar-gutter {
+    padding-left: var(--bubble-author-indent);
+  }
+
   .bubble-row--desktop-bubbles .bubble-stack {
     width: auto;
     max-width: min(76%, 640px);
@@ -2122,6 +2194,16 @@ onBeforeUnmount(() => {
     justify-content: flex-start;
   }
 
+  .bubble-row--mobile-group.bubble-row--mine,
+  .bubble-row--mobile-group.bubble-row--their {
+    justify-content: flex-start;
+  }
+
+  .bubble-row--mobile-group .bubble-stack--mine,
+  .bubble-row--mobile-group .bubble-stack--their {
+    align-items: flex-start;
+  }
+
   .bubble {
     display: block;
     width: auto;
@@ -2143,6 +2225,11 @@ onBeforeUnmount(() => {
 
   .bubble--their {
     background: var(--nc-received);
+    border-bottom-left-radius: 6px;
+  }
+
+  .bubble-row--mobile-group .bubble--mine {
+    border-bottom-right-radius: 16px;
     border-bottom-left-radius: 6px;
   }
 
@@ -2169,6 +2256,25 @@ onBeforeUnmount(() => {
     font-weight: 600;
     line-height: var(--nc-mobile-caption-line-height);
     letter-spacing: 0;
+  }
+
+  .bubble-row--telegram-avatar-gutter {
+    width: 100%;
+    padding-left: 40px;
+    justify-content: flex-start;
+  }
+
+  .bubble-row--telegram-avatar-gutter .bubble-stack--mine,
+  .bubble-row--telegram-avatar-gutter .bubble-stack--their {
+    align-items: flex-start;
+  }
+
+  .bubble-row--telegram-avatar-gutter .bubble__telegram-author,
+  .bubble-row--telegram-avatar-gutter .bubble__telegram-author-avatar {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    min-height: 32px;
   }
 
   .bubble__content {
@@ -2244,6 +2350,85 @@ onBeforeUnmount(() => {
     margin-top: 4px;
     margin-left: 0;
     padding-bottom: 0;
+  }
+
+  .bubble-row--packaged-text,
+  .bubble-row--packaged-text.bubble-row--mine,
+  .bubble-row--packaged-text.bubble-row--their {
+    --bubble-author-indent: 46px;
+    width: 100%;
+    margin-bottom: 2px;
+    justify-content: flex-start;
+  }
+
+  .bubble-row--packaged-text .bubble-stack,
+  .bubble-row--packaged-text .bubble-stack--mine,
+  .bubble-row--packaged-text .bubble-stack--their {
+    width: 100%;
+    max-width: 100%;
+    align-items: flex-start;
+  }
+
+  .bubble-row--packaged-text .bubble {
+    --bubble-author-indent: 46px;
+    display: flex;
+    width: 100%;
+    max-width: 100%;
+    padding: 2px 10px 2px 0;
+    border-radius: 0;
+    background: transparent;
+    font-family: inherit;
+  }
+
+  .bubble-row--packaged-text .bubble::before {
+    display: block;
+  }
+
+  .bubble-row--packaged-text .bubble__author {
+    display: inline-flex;
+    gap: var(--bubble-author-gap);
+    margin-bottom: 4px;
+  }
+
+  .bubble-row--packaged-text .bubble__author-avatar {
+    width: var(--bubble-author-avatar-size);
+    height: var(--bubble-author-avatar-size);
+    min-width: var(--bubble-author-avatar-size);
+    min-height: var(--bubble-author-avatar-size);
+    font-size: 14px;
+  }
+
+  .bubble-row--packaged-text .bubble__author-name {
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: 0.02em;
+  }
+
+  .bubble-row--packaged-text .bubble__content {
+    display: flex;
+    flex: 0 1 auto;
+    margin-left: var(--bubble-author-indent);
+    max-width: min(82%, 560px);
+  }
+
+  .bubble-row--packaged-text .bubble__reply-preview {
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .bubble-row--packaged-text .bubble__reactions {
+    flex: 0 0 100%;
+    margin-top: 0;
+    padding-left: var(--bubble-author-indent);
+  }
+
+  .bubble-row--packaged-text .bubble__meta {
+    align-self: flex-end;
+    margin-top: 0;
+    margin-left: auto;
+    padding-bottom: 2px;
   }
 }
 

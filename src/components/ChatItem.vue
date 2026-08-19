@@ -286,11 +286,11 @@ function emitDeleteChat(): void {
 <style scoped>
 .chat-item {
   min-width: 0;
-  min-height: 78px;
+  min-height: 64px;
   margin: 0;
-  padding: 0 12px;
+  padding: 0 8px;
   border-radius: 0;
-  border-bottom: 1px solid var(--nc-border);
+  border-bottom: 0;
   transition:
     background-color 0.2s ease,
     border-color 0.2s ease,
@@ -309,7 +309,7 @@ function emitDeleteChat(): void {
 .chat-item__name {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -320,6 +320,7 @@ function emitDeleteChat(): void {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.25;
 }
 
 .chat-item__main {
@@ -330,7 +331,7 @@ function emitDeleteChat(): void {
 .chat-item__headline {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -341,8 +342,8 @@ function emitDeleteChat(): void {
 }
 
 .chat-item__actions {
-  flex: 0 0 36px;
-  min-width: 36px;
+  flex: 0 0 28px;
+  min-width: 28px;
   padding-left: 0 !important;
   align-items: flex-end;
   justify-content: center;
@@ -350,6 +351,7 @@ function emitDeleteChat(): void {
 
 .chat-item__time {
   flex: 0 0 auto;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -368,12 +370,12 @@ function emitDeleteChat(): void {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
+  gap: 4px;
 }
 
 .chat-item__reaction-badge {
-  min-height: 24px;
-  padding: 2px 7px 2px 3px;
+  min-height: 20px;
+  padding: 1px 6px 1px 2px;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
@@ -390,8 +392,8 @@ function emitDeleteChat(): void {
 }
 
 .chat-item__reaction-icon-shell {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
@@ -422,6 +424,12 @@ function emitDeleteChat(): void {
 }
 
 .chat-item__unread-badge {
+  min-width: 20px;
+  min-height: 20px;
+  padding: 0 6px;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
 }
 
@@ -432,6 +440,8 @@ function emitDeleteChat(): void {
 }
 
 .q-btn.chat-item__more {
+  min-width: 28px;
+  min-height: 28px;
   color: var(--nc-text-secondary);
   background: transparent !important;
   box-shadow: none !important;
@@ -456,7 +466,12 @@ function emitDeleteChat(): void {
 }
 
 .chat-item :deep(.q-item__section--avatar) {
-  min-width: 60px;
+  min-width: 56px;
+  padding-right: 8px;
+}
+
+.chat-item :deep(.q-item__section--side) {
+  padding-left: 6px;
 }
 
 .chat-item :deep(.q-item__label--caption) {
@@ -464,9 +479,9 @@ function emitDeleteChat(): void {
 }
 
 .chat-item :deep(.chat-item__avatar) {
-  width: 54px;
-  height: 54px;
-  font-size: 24px;
+  width: 48px;
+  height: 48px;
+  font-size: 21px;
 }
 
 .chat-item--active .chat-item__meta,

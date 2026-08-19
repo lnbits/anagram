@@ -118,7 +118,10 @@
         :class="{ 'thread-body--scroll-locked': isThreadScrollLocked }"
         @scroll="handleThreadScroll"
         @wheel="handleThreadWheel"
+        @touchstart="handleThreadTouchStart"
         @touchmove="handleThreadTouchMove"
+        @touchend="resetOlderTouchPull"
+        @touchcancel="resetOlderTouchPull"
       >
         <div v-if="stickyDayLabel" class="thread-day-sticky" aria-hidden="true">
           <span class="thread-day-sticky__label">{{ stickyDayLabel }}</span>
@@ -131,6 +134,7 @@
             icon="keyboard_arrow_up"
             :label="$t('common.more')"
             class="thread-more__button"
+            data-testid="thread-load-older"
             :disable="isLoadingOlderMessages"
             @mousedown.prevent
             @click="handleLoadOlderMessages"
@@ -165,7 +169,7 @@
             v-else
             class="thread-message-entry"
             :class="{
-              'thread-message-entry--sender-change': item.showSenderName,
+              'thread-message-entry--sender-change': item.startsSenderGroup,
               'thread-message-entry--target':
                 highlightedMessageId === item.message.id ||
                 highlightedMessageId === item.message.eventId,
@@ -189,8 +193,11 @@
               :author-label="item.authorLabel"
               :is-message-expanded="isMessageTextExpanded(item.message.id)"
               :mention-profiles="mentionProfiles"
-              :show-author-name="item.showSenderName"
+              :mobile-group-layout="chat.type === 'group'"
+              :reserve-telegram-author-avatar-space="item.reserveTelegramAuthorAvatarSpace"
+              :show-author-name="item.startsSenderGroup"
               :show-author-on-mobile="chat?.type === 'group' && item.message.sender === 'them'"
+              :show-telegram-author-avatar="item.showTelegramAuthorAvatar"
               @open-profile="handleOpenAuthorProfile"
               @open-mention-chat="handleOpenMentionChat"
               @reply="handleReplyToMessage"
@@ -439,6 +446,14 @@ const LAST_SEEN_RECEIVED_ACTIVITY_AT_META_KEY = 'last_seen_received_activity_at'
 let groupMentionContactRefreshToken = 0;
 let selfAuthorIdentityRefreshToken = 0;
 let authorIdentityRefreshToken = 0;
+const OLDER_PULL_TOP_TOLERANCE_PX = 1;
+const OLDER_PULL_TOUCH_THRESHOLD_PX = 48;
+const OLDER_PULL_WHEEL_THRESHOLD_PX = 36;
+const OLDER_PULL_WHEEL_GESTURE_GAP_MS = 180;
+let olderTouchPullStartY: number | null = null;
+let olderWheelPullDistance = 0;
+let olderWheelPullEligible = false;
+let lastThreadWheelAt = 0;
 
 function refreshDesktopMessageLayoutPreference(): void {
   desktopMessageLayout.value = readDesktopMessageLayoutPreference();
@@ -504,7 +519,9 @@ type ThreadItem =
       authorAvatarFallback: string;
       authorAvatarSrc: string;
       authorLabel: string;
-      showSenderName: boolean;
+      reserveTelegramAuthorAvatarSpace: boolean;
+      showTelegramAuthorAvatar: boolean;
+      startsSenderGroup: boolean;
       message: Message;
     };
 
@@ -859,6 +876,7 @@ const threadItems = computed<ThreadItem[]>(() => {
 
   for (const [index, message] of props.messages.entries()) {
     const previousMessage = index > 0 ? props.messages[index - 1] : null;
+    const nextMessage = props.messages[index + 1] ?? null;
     const dayKey = getDayKey(message.sentAt);
     const dayLabel = formatDayLabel(message.sentAt);
     if (dayKey !== lastDayKey) {
@@ -891,11 +909,21 @@ const threadItems = computed<ThreadItem[]>(() => {
     const authorIdentity = resolveMessageAuthorIdentity(message);
     const currentAuthorKey = message.authorPublicKey.trim().toLowerCase();
     const previousAuthorKey = previousMessage?.authorPublicKey?.trim().toLowerCase() ?? '';
-    const showSenderName =
+    const startsSenderGroup =
       previousMessage?.sender !== message.sender ||
       (props.chat?.type === 'group' &&
         message.sender === 'them' &&
         currentAuthorKey !== previousAuthorKey);
+    const nextAuthorKey = nextMessage?.authorPublicKey?.trim().toLowerCase() ?? '';
+    const reserveTelegramAuthorAvatarSpace = true;
+    const continuesSenderGroup = Boolean(
+      nextMessage &&
+        nextMessage.sender === message.sender &&
+        readGroupEpochNoticeNumber(nextMessage) === null &&
+        (!unreadBoundaryMessageId || nextMessage.id !== unreadBoundaryMessageId) &&
+        getDayKey(nextMessage.sentAt) === dayKey &&
+        nextAuthorKey === currentAuthorKey
+    );
 
     items.push({
       type: 'message',
@@ -905,7 +933,9 @@ const threadItems = computed<ThreadItem[]>(() => {
       authorAvatarFallback: authorIdentity.avatarFallback,
       authorAvatarSrc: authorIdentity.avatarSrc,
       authorLabel: authorIdentity.label,
-      showSenderName,
+      reserveTelegramAuthorAvatarSpace,
+      showTelegramAuthorAvatar: reserveTelegramAuthorAvatarSpace && !continuesSenderGroup,
+      startsSenderGroup,
       message
     });
   }
@@ -1356,20 +1386,123 @@ function focusThreadBodyWithoutScroll(): void {
   threadBody.focus({ preventScroll: true });
 }
 
+function canPullToLoadOlderMessages(): boolean {
+  return Boolean(
+    hasOlderMessages.value &&
+      !isLoadingOlderMessages.value &&
+      pendingPaginationContext === null
+  );
+}
+
+function resetOlderWheelPull(): void {
+  olderWheelPullDistance = 0;
+  olderWheelPullEligible = false;
+}
+
+function resetOlderTouchPull(): void {
+  olderTouchPullStartY = null;
+}
+
+function resetOlderPullGestures(): void {
+  resetOlderWheelPull();
+  resetOlderTouchPull();
+  lastThreadWheelAt = 0;
+}
+
 function handleThreadWheel(event: WheelEvent): void {
-  if (!isThreadScrollLocked.value) {
+  if (isThreadScrollLocked.value) {
+    event.preventDefault();
+    return;
+  }
+
+  const threadBody = threadBodyRef.value;
+  if (!threadBody) {
+    resetOlderWheelPull();
+    return;
+  }
+
+  const eventTime = event.timeStamp;
+  const startsNewGesture =
+    lastThreadWheelAt === 0 ||
+    eventTime < lastThreadWheelAt ||
+    eventTime - lastThreadWheelAt > OLDER_PULL_WHEEL_GESTURE_GAP_MS;
+  lastThreadWheelAt = eventTime;
+
+  if (startsNewGesture) {
+    olderWheelPullEligible =
+      event.deltaY < 0 &&
+      threadBody.scrollTop <= OLDER_PULL_TOP_TOLERANCE_PX &&
+      canPullToLoadOlderMessages();
+    olderWheelPullDistance = 0;
+  }
+
+  if (
+    !olderWheelPullEligible ||
+    event.deltaY >= 0 ||
+    threadBody.scrollTop > OLDER_PULL_TOP_TOLERANCE_PX ||
+    !canPullToLoadOlderMessages()
+  ) {
+    if (event.deltaY >= 0 || threadBody.scrollTop > OLDER_PULL_TOP_TOLERANCE_PX) {
+      resetOlderWheelPull();
+    }
+    return;
+  }
+
+  olderWheelPullDistance += Math.abs(event.deltaY);
+  if (olderWheelPullDistance < OLDER_PULL_WHEEL_THRESHOLD_PX) {
     return;
   }
 
   event.preventDefault();
+  resetOlderWheelPull();
+  void loadOlderMessagesForCurrentChat();
+}
+
+function handleThreadTouchStart(event: TouchEvent): void {
+  resetOlderTouchPull();
+
+  const threadBody = threadBodyRef.value;
+  const touch = event.touches[0];
+  if (
+    !threadBody ||
+    !touch ||
+    threadBody.scrollTop > OLDER_PULL_TOP_TOLERANCE_PX ||
+    !canPullToLoadOlderMessages()
+  ) {
+    return;
+  }
+
+  olderTouchPullStartY = touch.clientY;
 }
 
 function handleThreadTouchMove(event: TouchEvent): void {
-  if (!isThreadScrollLocked.value) {
+  if (isThreadScrollLocked.value) {
+    event.preventDefault();
+    return;
+  }
+
+  const threadBody = threadBodyRef.value;
+  const touch = event.touches[0];
+  if (!threadBody || !touch || olderTouchPullStartY === null) {
+    return;
+  }
+
+  if (
+    threadBody.scrollTop > OLDER_PULL_TOP_TOLERANCE_PX ||
+    !canPullToLoadOlderMessages()
+  ) {
+    resetOlderTouchPull();
+    return;
+  }
+
+  const pullDistance = touch.clientY - olderTouchPullStartY;
+  if (pullDistance < OLDER_PULL_TOUCH_THRESHOLD_PX) {
     return;
   }
 
   event.preventDefault();
+  resetOlderTouchPull();
+  void loadOlderMessagesForCurrentChat();
 }
 
 function handleThreadScroll(): void {
@@ -1403,6 +1536,10 @@ function handleThreadScroll(): void {
 
   scrollFrameId = window.requestAnimationFrame(() => {
     scrollFrameId = null;
+    if ((threadBodyRef.value?.scrollTop ?? 0) > OLDER_PULL_TOP_TOLERANCE_PX) {
+      resetOlderWheelPull();
+      resetOlderTouchPull();
+    }
     updateStickyDayLabel();
     updateScrollJumpState();
     scheduleVisibleReactionViewSync();
@@ -1430,6 +1567,7 @@ async function loadOlderMessagesForCurrentChat(): Promise<void> {
     return;
   }
 
+  resetOlderPullGestures();
   blurThreadMoreTrigger();
   focusThreadBodyWithoutScroll();
   logThreadScrollTrace('MORE_OLDER_CLICK', {
@@ -2334,6 +2472,7 @@ watch(
     clearReplyTargetHighlight();
     pendingSentMessageReveal = false;
     pendingPaginationContext = null;
+    resetOlderPullGestures();
     expandedMessageIds.value = new Set();
     setThreadScrollLocked(false);
     setAutomaticBottomScrollEnabled(true);
@@ -2493,6 +2632,7 @@ onBeforeUnmount(() => {
     cancelAnimationFrame(visibleReactionSyncFrameId);
   }
   pendingPaginationContext = null;
+  resetOlderPullGestures();
   setThreadScrollLocked(false);
   cancelPendingScrollToBottom();
   clearPendingViewportSettleScrolls();

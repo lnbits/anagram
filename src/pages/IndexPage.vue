@@ -11,12 +11,11 @@
     >
       <aside v-if="!isMobile || !isMobileThreadOpen" class="sidebar">
         <div class="sidebar-top">
-          <div class="sidebar-top__row" :class="{ 'sidebar-top__row--mobile': isMobile }">
-            <div v-if="!isMobile" class="sidebar-top__title">{{ $t('chat.chats') }}</div>
+          <div class="sidebar-top__row">
             <q-input
-              v-if="isMobile"
               v-model="searchQuery"
-              class="nc-input sidebar-top__search sidebar-top__search--mobile"
+              class="nc-input sidebar-top__search"
+              data-testid="chat-list-search"
               dense
               outlined
               rounded
@@ -80,18 +79,6 @@
               </q-btn>
             </div>
           </div>
-
-          <q-input
-            v-if="!isMobile"
-            v-model="searchQuery"
-            class="nc-input"
-            dense
-            outlined
-            rounded
-            clearable
-            clear-icon="close"
-            :placeholder="$t('common.search')"
-          />
 
           <ReconnectHealingBanner class="sidebar-top__healing" />
           <StartupHistoryBanner class="sidebar-top__healing" />
@@ -1306,21 +1293,11 @@ watch(isForwardMessageDialogOpen, (isOpen) => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
-}
-
-.sidebar-top__row--mobile {
   gap: 8px;
   margin-bottom: 0;
 }
 
-.sidebar-top__title {
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.sidebar-top__search--mobile {
+.sidebar-top__search {
   flex: 1;
   min-width: 0;
 }

@@ -66,11 +66,20 @@ test('accepted DM forwards message content to another chat without attribution',
       });
     });
     await threadMessage(bob.page, originalMessage).getByTestId('message-url-link').click();
+    await expect(
+      threadMessage(bob.page, originalMessage).getByTestId('message-url-link')
+    ).toHaveCSS('text-align', 'left');
     await expect
       .poll(() => bob.page.evaluate(() => window.sessionStorage.getItem('e2e:last-opened-url')))
       .toBe(linkedUrl);
 
     await forwardMessage(alice.page, originalMessage, charlie.account.displayName);
+
+    const compactChatRowHeight = await alice.page
+      .getByTestId('chat-item')
+      .first()
+      .evaluate((element) => element.getBoundingClientRect().height);
+    expect(compactChatRowHeight).toBeLessThanOrEqual(64);
 
     await waitForThreadMessage(charlie.page, originalMessage, {
       chatId: alice.session.publicKey,

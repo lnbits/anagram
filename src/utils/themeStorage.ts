@@ -1,3 +1,5 @@
+import { isPackagedAppRuntime } from 'src/utils/runtimePlatform';
+
 const THEME_MODE_STORAGE_KEY = 'ui-theme-mode';
 const PANEL_OPACITY_STORAGE_KEY = 'ui-panel-opacity';
 const DESKTOP_SIDEBAR_WIDTH_STORAGE_KEY = 'ui-desktop-sidebar-width';
@@ -8,6 +10,7 @@ export const DEFAULT_DESKTOP_SIDEBAR_WIDTH = 360;
 export const MIN_DESKTOP_SIDEBAR_WIDTH = 280;
 export const MAX_DESKTOP_SIDEBAR_WIDTH = 4096;
 export const DEFAULT_DESKTOP_MESSAGE_LAYOUT = 'text';
+export const DEFAULT_APP_MESSAGE_LAYOUT = 'bubbles';
 
 export type DesktopMessageLayoutPreference = 'text' | 'bubbles';
 
@@ -193,19 +196,23 @@ export function saveDesktopSidebarWidthPreference(width: number): void {
 }
 
 export function readDesktopMessageLayoutPreference(): DesktopMessageLayoutPreference {
+  const defaultLayout = isPackagedAppRuntime()
+    ? DEFAULT_APP_MESSAGE_LAYOUT
+    : DEFAULT_DESKTOP_MESSAGE_LAYOUT;
   if (!canUseStorage()) {
-    return DEFAULT_DESKTOP_MESSAGE_LAYOUT;
+    return defaultLayout;
   }
 
   try {
-    return normalizeDesktopMessageLayoutPreference(
-      window.localStorage.getItem(DESKTOP_MESSAGE_LAYOUT_STORAGE_KEY)
-    );
+    const storedLayout = window.localStorage.getItem(DESKTOP_MESSAGE_LAYOUT_STORAGE_KEY);
+    return storedLayout === null
+      ? defaultLayout
+      : normalizeDesktopMessageLayoutPreference(storedLayout);
   } catch (error) {
     console.error('Failed to read saved desktop message layout.', error);
   }
 
-  return DEFAULT_DESKTOP_MESSAGE_LAYOUT;
+  return defaultLayout;
 }
 
 export function saveDesktopMessageLayoutPreference(layout: DesktopMessageLayoutPreference): void {

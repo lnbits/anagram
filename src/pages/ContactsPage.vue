@@ -8,12 +8,11 @@
     >
       <aside v-if="!isMobile || !isMobileProfileOpen" class="contacts-sidebar">
         <div class="contacts-sidebar__top">
-          <div class="contacts-sidebar__row" :class="{ 'contacts-sidebar__row--mobile': isMobile }">
-            <div v-if="!isMobile" class="contacts-sidebar__title">{{ $t('contacts.contacts.label') }}</div>
+          <div class="contacts-sidebar__row">
             <q-input
-              v-if="isMobile"
               v-model="contactQueryModel"
-              class="nc-input contacts-sidebar__search contacts-sidebar__search--mobile"
+              class="nc-input contacts-sidebar__search"
+              data-testid="contact-list-search"
               dense
               outlined
               rounded
@@ -45,18 +44,6 @@
               </q-btn>
             </div>
           </div>
-
-          <q-input
-            v-if="!isMobile"
-            v-model="contactQueryModel"
-            class="nc-input"
-            dense
-            outlined
-            rounded
-            clearable
-            clear-icon="close"
-            :placeholder="$t('contacts.filterContacts')"
-          />
 
           <ReconnectHealingBanner class="contacts-sidebar__healing" />
           <StartupHistoryBanner class="contacts-sidebar__healing" />
@@ -1337,10 +1324,6 @@ async function handleContactMenuDelete(contact: ContactRecord): Promise<void> {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
-}
-
-.contacts-sidebar__row--mobile {
   gap: 8px;
   margin-bottom: 0;
 }
@@ -1352,14 +1335,7 @@ async function handleContactMenuDelete(contact: ContactRecord): Promise<void> {
   flex-shrink: 0;
 }
 
-.contacts-sidebar__title {
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1.2;
-  color: var(--nc-text);
-}
-
-.contacts-sidebar__search--mobile {
+.contacts-sidebar__search {
   flex: 1;
   min-width: 0;
 }

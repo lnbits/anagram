@@ -56,6 +56,19 @@ describe('themeStorage', () => {
     expect(readDesktopMessageLayoutPreference()).toBe('text');
   });
 
+  it('defaults packaged apps to bubbles while preserving an explicit text choice', () => {
+    const localStorage = createMockStorage();
+    vi.stubGlobal('window', {
+      localStorage: localStorage.api,
+      desktopRuntime: { isElectron: true },
+    });
+
+    expect(readDesktopMessageLayoutPreference()).toBe('bubbles');
+
+    localStorage.store.set(DESKTOP_MESSAGE_LAYOUT_STORAGE_KEY, 'text');
+    expect(readDesktopMessageLayoutPreference()).toBe('text');
+  });
+
   it('saves the desktop message layout and emits a same-tab change event', () => {
     const localStorage = createMockStorage();
     const dispatchEvent = vi.fn();

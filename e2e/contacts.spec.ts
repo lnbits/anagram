@@ -11,6 +11,59 @@ import {
 
 test.describe.configure({ mode: 'serial' });
 
+test('chat and contact headers place search beside their actions without titles', async ({
+  browser,
+}) => {
+  const alice = await bootstrapUser(browser, TEST_ACCOUNTS.profileRefreshAlice);
+
+  try {
+    await alice.page.goto('/#/chats');
+    const chatHeader = alice.page.locator('.sidebar-top');
+    const chatSearch = alice.page.getByTestId('chat-list-search');
+    await expect(chatSearch).toBeVisible();
+    await expect(chatHeader.locator('.sidebar-top__title')).toHaveCount(0);
+    const chatHeaderAlignment = await chatHeader.evaluate((header) => {
+      const search = header.querySelector<HTMLElement>('[data-testid="chat-list-search"]');
+      const actions = header.querySelector<HTMLElement>('.sidebar-top__actions');
+      if (!search || !actions) {
+        return null;
+      }
+
+      const searchRect = search.getBoundingClientRect();
+      const actionsRect = actions.getBoundingClientRect();
+      return Math.abs(
+        searchRect.top + searchRect.height / 2 - (actionsRect.top + actionsRect.height / 2)
+      );
+    });
+    expect(chatHeaderAlignment).not.toBeNull();
+    expect(chatHeaderAlignment ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(1);
+
+    await alice.page.goto('/#/contacts');
+    const contactsHeader = alice.page.locator('.contacts-sidebar__top');
+    const contactsSearch = alice.page.getByTestId('contact-list-search');
+    await expect(contactsSearch).toBeVisible();
+    await expect(contactsHeader.locator('.contacts-sidebar__title')).toHaveCount(0);
+    const contactsHeaderAlignment = await contactsHeader.evaluate((header) => {
+      const search = header.querySelector<HTMLElement>('[data-testid="contact-list-search"]');
+      const actions = header.querySelector<HTMLElement>('.contacts-sidebar__actions');
+      if (!search || !actions) {
+        return null;
+      }
+
+      const searchRect = search.getBoundingClientRect();
+      const actionsRect = actions.getBoundingClientRect();
+      return Math.abs(
+        searchRect.top + searchRect.height / 2 - (actionsRect.top + actionsRect.height / 2)
+      );
+    });
+    expect(contactsHeaderAlignment).not.toBeNull();
+    expect(contactsHeaderAlignment ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(1);
+    await expectNoUnexpectedBrowserErrors([alice]);
+  } finally {
+    await disposeUsers(alice);
+  }
+});
+
 test('contact refresh pulls newly published remote profile metadata into an existing contact', async ({
   browser,
 }) => {

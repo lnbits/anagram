@@ -122,13 +122,80 @@ test('group owner can create a group, invite a member, and exchange messages bot
     await sendMessage(bob.page, bobGroupMessage, {
       chatId: groupPublicKey,
     });
+    await alice.page.evaluate(() => {
+      window.localStorage.setItem('ui-desktop-message-layout', 'bubbles');
+      window.dispatchEvent(
+        new CustomEvent('nostr-chat:desktop-message-layout-changed', {
+          detail: { layout: 'bubbles' },
+        })
+      );
+    });
     await navigateToChat(alice.page, groupPublicKey);
     await waitForThreadMessage(alice.page, bobGroupMessage, {
       chatId: groupPublicKey,
     });
-    await threadMessage(alice.page, bobGroupMessage)
-      .getByTestId('thread-author-profile-link')
-      .click();
+    const bobGroupMessageEntry = threadMessage(alice.page, bobGroupMessage);
+    const bobAuthorProfileLink = bobGroupMessageEntry.getByTestId('thread-author-profile-link');
+    await expect(bobAuthorProfileLink).toBeVisible();
+    await expect(
+      threadMessage(alice.page, aliceGroupMessage).getByTestId('thread-author-profile-link')
+    ).toBeVisible();
+    await expect(bobGroupMessageEntry.locator('.bubble__author-name')).toHaveCount(0);
+    const authorLayout = await bobGroupMessageEntry.evaluate((entry) => {
+      const author = entry.querySelector<HTMLElement>('.bubble__telegram-author');
+      const content = entry.querySelector<HTMLElement>('.bubble__content');
+      const bubble = entry.querySelector<HTMLElement>('.bubble');
+      if (!author || !content || !bubble) {
+        return null;
+      }
+
+      const authorRect = author.getBoundingClientRect();
+      const contentRect = content.getBoundingClientRect();
+      const bubbleRect = bubble.getBoundingClientRect();
+      return {
+        authorRight: authorRect.right,
+        authorBottom: authorRect.bottom,
+        contentLeft: contentRect.left,
+        bubbleBottom: bubbleRect.bottom,
+      };
+    });
+    expect(authorLayout).not.toBeNull();
+    expect(authorLayout?.authorRight ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(
+      (authorLayout?.contentLeft ?? 0) + 1
+    );
+    expect(
+      Math.abs((authorLayout?.authorBottom ?? 0) - (authorLayout?.bubbleBottom ?? 1_000))
+    ).toBeLessThanOrEqual(2);
+
+    await alice.page.setViewportSize({ width: 390, height: 844 });
+    await expect
+      .poll(async () => {
+        const mineLeft = await threadMessage(alice.page, aliceGroupMessage)
+          .locator('.bubble')
+          .evaluate((bubble) => bubble.getBoundingClientRect().left);
+        const theirLeft = await bobGroupMessageEntry
+          .locator('.bubble')
+          .evaluate((bubble) => bubble.getBoundingClientRect().left);
+        return Math.abs(mineLeft - theirLeft);
+      })
+      .toBeLessThanOrEqual(1);
+    await expect(threadMessage(alice.page, aliceGroupMessage).locator('.bubble')).toHaveCSS(
+      'border-bottom-left-radius',
+      '6px'
+    );
+    await alice.page.setViewportSize({ width: 1440, height: 960 });
+
+    await alice.page.evaluate(() => {
+      window.localStorage.setItem('ui-desktop-message-layout', 'text');
+      window.dispatchEvent(
+        new CustomEvent('nostr-chat:desktop-message-layout-changed', {
+          detail: { layout: 'text' },
+        })
+      );
+    });
+    await expect(bobGroupMessageEntry.locator('.bubble__telegram-author')).toHaveCount(0);
+    await expect(bobGroupMessageEntry.locator('.bubble__author-name')).toBeVisible();
+    await bobGroupMessageEntry.getByTestId('thread-author-profile-link').click();
     await alice.page.waitForURL(new RegExp(`#\\/contacts\\/${bob.session.publicKey}$`));
 
     await navigateToChat(alice.page, groupPublicKey);

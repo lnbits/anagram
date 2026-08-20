@@ -49,15 +49,14 @@
       <div
         class="bubble"
         :class="isMine ? 'bubble--mine' : 'bubble--their'"
-        @click.stop="openActionMenu"
       >
       <q-menu
-        ref="actionMenuRef"
         v-model="isActionMenuOpen"
-        no-parent-event
+        context-menu
         touch-position
         class="nc-pop-menu"
         :transition-duration="0"
+        @show="handleActionMenuShow"
         @hide="handleActionMenuHide"
       >
         <div class="bubble__menu-stack">
@@ -744,7 +743,6 @@ const reserveTelegramAuthorAvatarSpace = computed(
 );
 const showAuthorOnMobile = computed(() => props.showAuthorOnMobile === true);
 const loggedInPublicKey = computed(() => nostrStore.getLoggedInPublicKeyHex()?.toLowerCase() ?? '');
-const actionMenuRef = ref<{ show: (evt?: Event) => void } | null>(null);
 const emojiPickerMenuRef = ref<{ show: (evt?: Event) => void } | null>(null);
 const isActionMenuOpen = ref(false);
 const isEmojiPickerMenuOpen = ref(false);
@@ -1088,18 +1086,23 @@ function openStatusDialog(): void {
   isStatusDialogOpen.value = true;
 }
 
-function openActionMenu(event: MouseEvent): void {
-  if (event.button !== 0) {
-    return;
-  }
-
-  lastActionMenuClickPosition.value = {
-    left: event.clientX,
-    top: event.clientY
-  };
+function handleActionMenuShow(event?: Event): void {
   shouldOpenEmojiPickerAfterActionMenu.value = false;
   isEmojiPickerMenuOpen.value = false;
-  actionMenuRef.value?.show(event);
+
+  const pointerEvent = event as
+    | (Event & {
+        clientX?: number;
+        clientY?: number;
+        touches?: ArrayLike<{ clientX: number; clientY: number }>;
+      })
+    | undefined;
+  const touch = pointerEvent?.touches?.[0];
+  const left = touch?.clientX ?? pointerEvent?.clientX;
+  const top = touch?.clientY ?? pointerEvent?.clientY;
+  if (typeof left === 'number' && typeof top === 'number') {
+    lastActionMenuClickPosition.value = { left, top };
+  }
 }
 
 function openEmojiPickerMenu(): void {

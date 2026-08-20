@@ -79,9 +79,6 @@
               </q-btn>
             </div>
           </div>
-
-          <ReconnectHealingBanner class="sidebar-top__healing" />
-          <StartupHistoryBanner class="sidebar-top__healing" />
         </div>
 
         <ChatList
@@ -146,8 +143,6 @@
           :messages="currentMessages"
           :is-initializing="isThreadInitializing"
           :show-back-button="isMobile"
-          :show-reconnect-healing-banner="isMobile"
-          :show-startup-history-banner="isMobile"
           :keyboard-visible="isVisualViewportKeyboardVisible"
           :mobile-viewport-height="visibleViewportHeight"
           @send="handleSend"
@@ -251,8 +246,6 @@ import type { ContactRecord } from 'src/types/contact';
 import { resolveContactAppRelayFallback } from 'src/utils/messageRelayFallback';
 import { reportUiError } from 'src/utils/uiErrorHandler';
 import ContactLookupDialog from 'src/components/ContactLookupDialog.vue';
-import ReconnectHealingBanner from 'src/components/ReconnectHealingBanner.vue';
-import StartupHistoryBanner from 'src/components/StartupHistoryBanner.vue';
 import { useNostrStore } from 'src/stores/nostrStore';
 import { getDateTimeLocale, t } from 'src/i18n';
 
@@ -1316,15 +1309,6 @@ watch(isForwardMessageDialogOpen, (isOpen) => {
 
 .sidebar-top__action:deep(.q-btn-dropdown__arrow) {
   margin-left: 0;
-}
-
-@media (min-width: 1024px) {
-  .sidebar-top .sidebar-top__healing.reconnect-healing-banner--expanded,
-  .sidebar-top .sidebar-top__healing.startup-history-banner--expanded {
-    margin-right: -12px;
-    margin-bottom: -13px;
-    margin-left: -12px;
-  }
 }
 
 body.body--dark .q-btn.sidebar-top__action {

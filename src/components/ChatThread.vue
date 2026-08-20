@@ -44,9 +44,6 @@
             @click="handleOpenProfile"
           />
         </div>
-
-        <ReconnectHealingBanner v-if="showReconnectHealingBanner" />
-        <StartupHistoryBanner v-if="showStartupHistoryBanner" />
       </div>
 
       <transition name="thread-search-bar">
@@ -294,8 +291,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import MessageBubble from 'src/components/MessageBubble.vue';
 import MessageComposer from 'src/components/MessageComposer.vue';
 import CachedAvatar from 'src/components/CachedAvatar.vue';
-import ReconnectHealingBanner from 'src/components/ReconnectHealingBanner.vue';
-import StartupHistoryBanner from 'src/components/StartupHistoryBanner.vue';
 import { contactsService } from 'src/services/contactsService';
 import { useChatStore } from 'src/stores/chatStore';
 import { useMessageStore } from 'src/stores/messageStore';
@@ -336,16 +331,12 @@ const props = withDefaults(
     messages: Message[];
     isInitializing?: boolean;
     showBackButton?: boolean;
-    showReconnectHealingBanner?: boolean;
-    showStartupHistoryBanner?: boolean;
     keyboardVisible?: boolean;
     mobileViewportHeight?: number | null;
   }>(),
   {
     isInitializing: false,
     showBackButton: false,
-    showReconnectHealingBanner: false,
-    showStartupHistoryBanner: false,
     keyboardVisible: false,
     mobileViewportHeight: null
   }

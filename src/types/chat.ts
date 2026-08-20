@@ -84,6 +84,11 @@ export interface DeletedMessageMetadata {
   deletedEventKind: number;
 }
 
+export interface EditedMessageMetadata {
+  editedAt: string;
+  previousEventIds: string[];
+}
+
 export interface GroupEpochNoticeMetadata {
   epochNumber: number;
 }
@@ -109,6 +114,7 @@ export interface MessageMetadata {
   reply?: MessageReplyPreview;
   reactions?: MessageReaction[];
   deleted?: DeletedMessageMetadata;
+  edited?: EditedMessageMetadata | boolean;
   group_epoch_notice?: GroupEpochNoticeMetadata;
   mentions?: MessageMentionMetadata[];
   mentions_me?: boolean;

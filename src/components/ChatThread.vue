@@ -201,6 +201,7 @@
               @open-profile="handleOpenAuthorChat"
               @open-mention-chat="handleOpenMentionChat"
               @reply="handleReplyToMessage"
+              @edit="handleEditMessage"
               @forward="handleForwardMessage"
               @react="handleReactToMessage"
               @delete-message="handleDeleteMessage"
@@ -260,10 +261,13 @@
         <MessageComposer
           ref="composerRef"
           :chat-id="chat.id"
+          :editing-message="activeEdit"
           :mention-profiles="mentionProfiles"
           :reply-to="activeReply"
           @send="handleSend"
+          @edit="handleSubmitEdit"
           @send-media="handleSendMedia"
+          @cancel-edit="handleCancelEdit"
           @cancel-reply="handleCancelReply"
         />
       </div>
@@ -355,6 +359,7 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   (event: 'send', payload: { text: string; replyTo: MessageReplyPreview | null }): void;
+  (event: 'edit-message', payload: { message: Message; text: string }): void;
   (
     event: 'send-media',
     payload: { attachment: MessageAttachmentMetadata; replyTo: MessageReplyPreview | null }
@@ -381,6 +386,7 @@ const composerRef = ref<{ focusInputAtEnd: () => void } | null>(null);
 const threadSearchInputRef = ref<{ focus: () => void } | null>(null);
 const stickyDayLabel = ref('');
 const activeReply = ref<MessageReplyPreview | null>(null);
+const activeEdit = ref<Message | null>(null);
 const highlightedMessageId = ref<string | null>(null);
 const highlightedMessageKind = ref<'default' | 'search' | null>(null);
 const isThreadScrollLocked = ref(false);
@@ -1729,6 +1735,7 @@ function handleSendMedia(payload: { attachment: MessageAttachmentMetadata }): vo
 
 function handleReplyToMessage(message: Message): void {
   try {
+    activeEdit.value = null;
     const authorIdentity = resolveMessageAuthorIdentity(message);
     const replyContent = buildMessageReplyPreviewContent(message.text, message.meta);
     const canShowReplyImage =
@@ -1753,6 +1760,25 @@ function handleReplyToMessage(message: Message): void {
   } catch (error) {
     reportUiError('Failed to prepare reply target', error);
   }
+}
+
+function handleEditMessage(message: Message): void {
+  activeReply.value = null;
+  activeEdit.value = message;
+  queueComposerFocus();
+}
+
+function handleSubmitEdit(payload: { text: string }): void {
+  const message = activeEdit.value;
+  if (!message) {
+    return;
+  }
+
+  emit('edit-message', {
+    message,
+    text: payload.text,
+  });
+  activeEdit.value = null;
 }
 
 function handleForwardMessage(message: Message): void {
@@ -1808,6 +1834,10 @@ function handleDeleteMessage(message: Message): void {
 
 function handleCancelReply(): void {
   activeReply.value = null;
+}
+
+function handleCancelEdit(): void {
+  activeEdit.value = null;
 }
 
 function clearReplyTargetHighlight(): void {
@@ -2505,6 +2535,7 @@ watch(
     threadSearchQuery.value = '';
     resetThreadSearchResults();
     activeReply.value = null;
+    activeEdit.value = null;
     clearReplyTargetHighlight();
     pendingSentMessageReveal = false;
     pendingPaginationContext = null;

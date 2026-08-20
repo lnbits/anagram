@@ -27,6 +27,7 @@ This list is based on the current app code, especially `src/stores/nostrStore.ts
 - This is the app's main private-message transport.
 - It sends and receives `kind:14` private message rumors inside gift wraps, and it also uses the same DM flow for wrapped reactions (`kind:7`) and deletions (`kind:5`).
 - Group chat messages are also sent as NIP-17 DMs to the group's current epoch public key.
+- Text edits follow NIP-17's delete-and-replace convention: the app sends a wrapped `kind:5` deletion and a replacement wrapped `kind:14` rumor with the original message timestamp. Replacement rumors also carry a private `e` tag marked `edit` so this client can reconcile either relay arrival order without displaying duplicate messages.
 
 ## NIP-19
 

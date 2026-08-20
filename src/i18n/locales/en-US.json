@@ -430,6 +430,8 @@
   "message.forward.noMatches": "No matching chats.",
   "message.forward.search": "Search chats",
   "message.forward.sent": "Message forwarded.",
+  "message.edit.action": "Edit",
+  "message.edited": "edited",
   "message.forward.subtitle": "Choose a chat to send this message to.",
   "message.forward.title": "Forward message",
   "message.forward.toChat": "Forward to {name}",

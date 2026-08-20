@@ -9,12 +9,15 @@ const ndkMocks = vi.hoisted(() => ({
 
 const serviceMocks = vi.hoisted(() => ({
   chatDataService: {
+    applyMessageEdit: vi.fn(),
     createChat: vi.fn(),
     createMessage: vi.fn(),
     getChatByPublicKey: vi.fn(),
     getMessageById: vi.fn(),
     getMessageByEventId: vi.fn(),
+    getMessageByEventIdOrEditReference: vi.fn(),
     init: vi.fn(),
+    listMessages: vi.fn(),
     updateChatPreview: vi.fn(),
     updateChatUnreadCount: vi.fn(),
   },
@@ -193,6 +196,11 @@ describe('privateMessagesIngestRuntime', () => {
     serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue(null);
     serviceMocks.chatDataService.getMessageById.mockResolvedValue(null);
     serviceMocks.chatDataService.getMessageByEventId.mockResolvedValue(null);
+    serviceMocks.chatDataService.getMessageByEventIdOrEditReference.mockImplementation((eventId) =>
+      serviceMocks.chatDataService.getMessageByEventId(eventId)
+    );
+    serviceMocks.chatDataService.listMessages.mockResolvedValue([]);
+    serviceMocks.chatDataService.applyMessageEdit.mockResolvedValue(null);
     serviceMocks.chatDataService.updateChatPreview.mockResolvedValue(undefined);
     serviceMocks.chatDataService.updateChatUnreadCount.mockResolvedValue(undefined);
     serviceMocks.contactsService.init.mockResolvedValue(undefined);
@@ -889,6 +897,84 @@ describe('privateMessagesIngestRuntime', () => {
     });
     expect(deps.applyPendingIncomingDeletionsForMessage).toHaveBeenCalled();
     expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
+  });
+
+  it('applies an explicit edit replacement to the existing message without creating a duplicate', async () => {
+    const deps = createDeps();
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+    const senderPublicKey = 'a'.repeat(64);
+    const recipientPublicKey = 'b'.repeat(64);
+    const originalEventId = 'c'.repeat(64);
+    const replacementEventId = 'd'.repeat(64);
+    const createdAt = '2023-11-14T22:13:20.000Z';
+    const rumorEvent = makeRumorEvent({
+      recipientPubkey: recipientPublicKey,
+      senderPubkey: senderPublicKey,
+      eventId: replacementEventId,
+      content: 'After edit',
+      tags: [
+        ['p', recipientPublicKey],
+        ['e', originalEventId, '', 'edit'],
+      ],
+    });
+    const chat = {
+      id: senderPublicKey,
+      public_key: senderPublicKey,
+      type: 'user',
+      name: 'Alice',
+      last_message: 'Before edit',
+      last_message_at: createdAt,
+      unread_count: 0,
+      meta: {},
+    };
+    const originalMessage = {
+      id: 99,
+      chat_public_key: senderPublicKey,
+      author_public_key: senderPublicKey,
+      message: 'Before edit',
+      created_at: createdAt,
+      event_id: originalEventId,
+      meta: {},
+    };
+    const editedMessage = {
+      ...originalMessage,
+      message: 'After edit',
+      event_id: replacementEventId,
+      meta: {
+        edited: {
+          editedAt: '2023-11-14T22:14:20.000Z',
+          previousEventIds: [originalEventId],
+        },
+      },
+    };
+
+    ndkMocks.giftUnwrap.mockResolvedValue(rumorEvent);
+    serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue(chat);
+    serviceMocks.chatDataService.getMessageByEventId.mockImplementation(async (eventId) =>
+      eventId === originalEventId ? originalMessage : null
+    );
+    serviceMocks.chatDataService.applyMessageEdit.mockResolvedValue(editedMessage);
+
+    runtime.queuePrivateMessageIngestion(makeWrappedEvent(), recipientPublicKey, {
+      uiThrottleMs: 25,
+    });
+    await runtime.getPrivateMessagesIngestQueue();
+
+    expect(serviceMocks.chatDataService.applyMessageEdit).toHaveBeenCalledWith(
+      originalMessage.id,
+      expect.objectContaining({
+        message: 'After edit',
+        event_id: replacementEventId,
+        previous_event_id: originalEventId,
+      })
+    );
+    expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
+    expect(serviceMocks.chatDataService.updateChatPreview).toHaveBeenCalledWith(
+      senderPublicKey,
+      'After edit',
+      createdAt,
+      0
+    );
   });
 
   it('routes inbound reaction rumors through the reaction processor', async () => {

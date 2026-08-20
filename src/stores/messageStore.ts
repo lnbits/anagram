@@ -28,6 +28,7 @@ import {
   buildNip92ImetaTag,
   normalizeMessageAttachment,
 } from 'src/utils/messageAttachments';
+import { buildMessageEditTag } from 'src/utils/messageEdits';
 import {
   areMessageReactionsEqual,
   buildMetaWithReactions,
@@ -930,19 +931,17 @@ export const useMessageStore = defineStore('messageStore', () => {
   async function resolveReplyTargetEventId(
     replyTo: MessageReplyPreview | null
   ): Promise<string | null> {
-    const directEventId = resolveReplyTargetEventIdValue(replyTo, null);
-    if (directEventId) {
-      return directEventId;
-    }
-
     const localMessageId = Number.parseInt(replyTo?.messageId ?? '', 10);
-    if (!Number.isInteger(localMessageId) || localMessageId <= 0) {
-      return null;
+    if (Number.isInteger(localMessageId) && localMessageId > 0) {
+      await chatDataService.init();
+      const replyMessageRow = await chatDataService.getMessageById(localMessageId);
+      const persistedEventId = normalizeEventId(replyMessageRow?.event_id);
+      if (persistedEventId) {
+        return persistedEventId;
+      }
     }
 
-    await chatDataService.init();
-    const replyMessageRow = await chatDataService.getMessageById(localMessageId);
-    return resolveReplyTargetEventIdValue(replyTo, replyMessageRow?.event_id);
+    return resolveReplyTargetEventIdValue(replyTo, null);
   }
 
   function upsertMessageInState(
@@ -1392,7 +1391,7 @@ export const useMessageStore = defineStore('messageStore', () => {
     }
 
     await chatDataService.init();
-    const targetRow = await chatDataService.getMessageByEventId(normalizedEventId);
+    const targetRow = await chatDataService.getMessageByEventIdOrEditReference(normalizedEventId);
     if (!targetRow || normalizeChatIdentifier(targetRow.chat_public_key) !== normalizedChatId) {
       return null;
     }
@@ -1617,6 +1616,150 @@ export const useMessageStore = defineStore('messageStore', () => {
     }
 
     return finalMessage;
+  }
+
+  async function editMessage(
+    chatId: string,
+    messageId: string,
+    text: string,
+    options: RelaySendOptions = {}
+  ): Promise<Message | null> {
+    const normalizedChatId = normalizeChatIdentifier(chatId);
+    const normalizedMessageId = Number.parseInt(messageId, 10);
+    const cleanText = text.trim();
+    const loggedInPublicKey = getLoggedInPublicKey();
+    if (
+      !normalizedChatId ||
+      !Number.isInteger(normalizedMessageId) ||
+      normalizedMessageId <= 0 ||
+      !cleanText ||
+      !loggedInPublicKey
+    ) {
+      return null;
+    }
+
+    await chatDataService.init();
+    const existingRow = await chatDataService.getMessageById(normalizedMessageId);
+    if (
+      !existingRow ||
+      normalizeChatIdentifier(existingRow.chat_public_key) !== normalizedChatId ||
+      normalizeChatIdentifier(existingRow.author_public_key) !== loggedInPublicKey ||
+      existingRow.meta.deleted ||
+      (Array.isArray(existingRow.meta.attachments) && existingRow.meta.attachments.length > 0) ||
+      !existingRow.event_id ||
+      cleanText === existingRow.message.trim()
+    ) {
+      return existingRow ? hydrateMessageRow(existingRow, normalizedChatId) : null;
+    }
+
+    const targetKind = Number.isInteger(existingRow.meta.kind) ? Number(existingRow.meta.kind) : 14;
+    if (targetKind !== 14) {
+      return hydrateMessageRow(existingRow, normalizedChatId);
+    }
+
+    const deliveryTarget = await resolveChatDeliveryTarget(
+      existingRow.chat_public_key,
+      options.relayUrls
+    );
+    if (!deliveryTarget) {
+      return null;
+    }
+
+    const previousEventId = existingRow.event_id;
+    const editedAt = new Date().toISOString();
+    const editTag = buildMessageEditTag(previousEventId);
+    if (!editTag) {
+      return hydrateMessageRow(existingRow, normalizedChatId);
+    }
+
+    const replyMeta =
+      existingRow.meta.reply &&
+      typeof existingRow.meta.reply === 'object' &&
+      !Array.isArray(existingRow.meta.reply)
+        ? (existingRow.meta.reply as Record<string, unknown>)
+        : null;
+    const replyTargetEventId = normalizeEventId(replyMeta?.eventId);
+    const nostrStore = await getNostrStore();
+    const deletionEvent = await nostrStore.sendDirectMessageDeletion(
+      deliveryTarget.recipientPublicKey,
+      previousEventId,
+      targetKind,
+      deliveryTarget.relayUrls,
+      {
+        createdAt: editedAt,
+        publishSelfCopy: deliveryTarget.publishSelfCopy,
+      }
+    );
+
+    let sendError: unknown = null;
+    try {
+      await nostrStore.sendDirectMessage(
+        deliveryTarget.recipientPublicKey,
+        cleanText,
+        deliveryTarget.relayUrls,
+        {
+          localMessageId: existingRow.id,
+          createdAt: existingRow.created_at,
+          replyToEventId: replyTargetEventId,
+          additionalTags: [editTag],
+          publishSelfCopy: deliveryTarget.publishSelfCopy,
+        }
+      );
+    } catch (error) {
+      sendError = error;
+    }
+
+    const replacementBoundRow =
+      (await chatDataService.getMessageById(existingRow.id)) ?? existingRow;
+    const replacementEventId = normalizeEventId(replacementBoundRow.event_id);
+    if (!replacementEventId || replacementEventId === normalizeEventId(previousEventId)) {
+      const deletedRow = await chatDataService.updateMessageMeta(existingRow.id, {
+        ...existingRow.meta,
+        deleted: buildDeletedMessageMeta(
+          loggedInPublicKey,
+          targetKind,
+          editedAt,
+          deletionEvent?.id ?? null
+        ),
+      });
+      if (deletedRow) {
+        replaceMessageInState(
+          normalizedChatId,
+          await hydrateMessageRow(deletedRow, normalizedChatId)
+        );
+      }
+      if (sendError) {
+        throw sendError;
+      }
+      return deletedRow ? hydrateMessageRow(deletedRow, normalizedChatId) : null;
+    }
+
+    const replacementMeta = { ...existingRow.meta };
+    delete replacementMeta.mentions;
+    delete replacementMeta.mentions_me;
+    Object.assign(replacementMeta, buildMentionMetadata(cleanText, loggedInPublicKey));
+    const updatedRow = await chatDataService.applyMessageEdit(existingRow.id, {
+      message: cleanText,
+      created_at: existingRow.created_at,
+      event_id: replacementEventId,
+      previous_event_id: previousEventId,
+      edited_at: editedAt,
+      meta: replacementMeta,
+    });
+    if (!updatedRow) {
+      if (sendError) {
+        throw sendError;
+      }
+      return null;
+    }
+
+    const updatedMessage = await hydrateMessageRow(updatedRow, normalizedChatId);
+    replaceMessageInState(normalizedChatId, updatedMessage);
+    if (sendError) {
+      throw sendError;
+    }
+
+    return updatedMessage;
   }
 
   async function sendMediaAttachment(
@@ -2427,6 +2570,7 @@ export const useMessageStore = defineStore('messageStore', () => {
     getMessages,
     getPaginationState,
     sendMessage,
+    editMessage,
     sendMediaAttachment,
     forwardMessage,
     addReaction,

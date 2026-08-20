@@ -231,7 +231,7 @@ export function createPrivateMessagesBackfillRuntime({
   async function hasStoredDependencyTarget(targetEventId: string): Promise<boolean> {
     await Promise.all([chatDataService.init(), nostrEventDataService.init()]);
 
-    if (await chatDataService.getMessageByEventId(targetEventId)) {
+    if (await chatDataService.getMessageByEventIdOrEditReference(targetEventId)) {
       return true;
     }
 

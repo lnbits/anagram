@@ -79,6 +79,18 @@
               </q-item-section>
               <q-item-section>{{ $t('common.forward') }}</q-item-section>
             </q-item>
+            <q-item
+              v-if="canEditMessage"
+              clickable
+              v-close-popup
+              data-testid="message-edit-action"
+              @click="handleEdit"
+            >
+              <q-item-section avatar>
+                <q-icon name="edit" />
+              </q-item-section>
+              <q-item-section>{{ $t('message.edit.action') }}</q-item-section>
+            </q-item>
             <q-item clickable v-close-popup @click="handlePin">
               <q-item-section avatar>
                 <q-icon name="push_pin" />
@@ -365,6 +377,9 @@
       </div>
 
       <div class="bubble__meta">
+        <span v-if="isEditedMessage" class="bubble__edited" data-testid="message-edited-label">
+          {{ $t('message.edited') }}
+        </span>
         <span class="bubble__time">{{ formattedTime }}</span>
         <div
           v-if="hasRelayStatuses"
@@ -717,6 +732,7 @@ import { useTrustedMediaStore } from 'src/stores/trustedMediaStore';
 import { openExternalHttpUrl } from 'src/utils/externalLinks';
 import type { DesktopMessageLayoutPreference } from 'src/utils/themeStorage';
 import { readImageAttachmentsFromMeta } from 'src/utils/messageAttachments';
+import { readEditedMessageMetadata } from 'src/utils/messageEdits';
 import { isReactionUnseenForAuthor } from 'src/utils/messageReactions';
 import { buildMessageTextParts } from 'src/utils/messageTextParts';
 import {
@@ -753,6 +769,7 @@ const emit = defineEmits<{
   (event: 'open-profile', publicKey: string): void;
   (event: 'open-mention-chat', publicKey: string): void;
   (event: 'forward', message: Message): void;
+  (event: 'edit', message: Message): void;
   (event: 'react', payload: { message: Message; emoji: string }): void;
   (event: 'delete-message', message: Message): void;
   (event: 'remove-reaction', payload: { message: Message; reaction: MessageReaction }): void;
@@ -993,6 +1010,20 @@ const deletedMessageMeta = computed<DeletedMessageMetadata | null>(() => {
 const isDeletedMessage = computed(() => deletedMessageMeta.value !== null);
 const canDeleteMessage = computed(() => {
   return isMine.value && !isDeletedMessage.value && Boolean(props.message.eventId);
+});
+const isEditedMessage = computed(() => readEditedMessageMetadata(props.message.meta.edited) !== null);
+const canEditMessage = computed(() => {
+  const messageKind = Number.isInteger(props.message.meta.kind)
+    ? Number(props.message.meta.kind)
+    : 14;
+  return (
+    isMine.value &&
+    !isDeletedMessage.value &&
+    messageKind === 14 &&
+    Boolean(props.message.eventId) &&
+    props.message.text.trim().length > 0 &&
+    (!Array.isArray(props.message.meta.attachments) || props.message.meta.attachments.length === 0)
+  );
 });
 const localMessageExpanded = ref(false);
 const isMessageExpanded = computed(() => props.isMessageExpanded ?? localMessageExpanded.value);
@@ -1400,6 +1431,14 @@ function handleDelete(): void {
   }
 
   emit('delete-message', props.message);
+}
+
+function handleEdit(): void {
+  if (!canEditMessage.value) {
+    return;
+  }
+
+  emit('edit', props.message);
 }
 
 function openDeletedMessageDialog(): void {
@@ -2525,12 +2564,18 @@ onBeforeUnmount(() => {
   }
 }
 
+.bubble__edited,
 .bubble__time {
   font-size: 11px;
   color: var(--nc-text-secondary);
 }
 
+.bubble__edited::after {
+  content: ' · ';
+}
+
 @media (max-width: 1023px) {
+  .bubble__edited,
   .bubble__time {
     font-size: var(--nc-mobile-small-font-size);
     font-weight: 400;

@@ -10,6 +10,7 @@ const serviceMocks = vi.hoisted(() => ({
   chatDataService: {
     getChatByPublicKey: vi.fn(),
     getMessageByEventId: vi.fn(),
+    getMessageByEventIdOrEditReference: vi.fn(),
     init: vi.fn(),
     listLatestMessages: vi.fn(),
   },
@@ -112,6 +113,9 @@ describe('privateMessagesBackfillRuntime', () => {
     serviceMocks.chatDataService.init.mockResolvedValue(undefined);
     serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue(null);
     serviceMocks.chatDataService.getMessageByEventId.mockResolvedValue(null);
+    serviceMocks.chatDataService.getMessageByEventIdOrEditReference.mockImplementation((eventId) =>
+      serviceMocks.chatDataService.getMessageByEventId(eventId)
+    );
     serviceMocks.chatDataService.listLatestMessages.mockResolvedValue({
       has_more: false,
       rows: [],

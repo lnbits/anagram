@@ -5,6 +5,7 @@ import {
   bootstrapUser,
   createGroup,
   disposeUsers,
+  editMessage,
   expectNoUnexpectedBrowserErrors,
   navigateToChat,
   openGroupContact,
@@ -32,6 +33,7 @@ test('adding a new group member without rotation keeps the current epoch and mes
       about: 'No-rotation add-member coverage',
     });
     const beforeAddMessage = `before-add-${Date.now()}`;
+    const editedBeforeAddMessage = `before-add-edited-${Date.now()}`;
     const afterAddMessage = `after-add-${Date.now()}`;
     const charlieReply = `charlie-reply-${Date.now()}`;
 
@@ -52,6 +54,21 @@ test('adding a new group member without rotation keeps the current epoch and mes
     await waitForThreadMessage(bob.page, beforeAddMessage, {
       chatId: groupPublicKey,
     });
+    await editMessage(owner.page, beforeAddMessage, editedBeforeAddMessage, {
+      chatId: groupPublicKey,
+    });
+    await waitForThreadMessage(bob.page, editedBeforeAddMessage, {
+      chatId: groupPublicKey,
+    });
+    await expect(
+      bob.page.locator('.thread-message-entry').filter({ hasText: beforeAddMessage })
+    ).toHaveCount(0);
+    await expect(
+      bob.page
+        .locator('.thread-message-entry')
+        .filter({ hasText: editedBeforeAddMessage })
+        .getByTestId('message-edited-label')
+    ).toBeVisible();
 
     await openGroupContact(owner.page, groupPublicKey);
     await addGroupMemberAndPublish(owner.page, charlie.session.publicKey);
@@ -72,7 +89,7 @@ test('adding a new group member without rotation keeps the current epoch and mes
     });
 
     await navigateToChat(charlie.page, groupPublicKey);
-    await waitForThreadMessage(charlie.page, beforeAddMessage, {
+    await waitForThreadMessage(charlie.page, editedBeforeAddMessage, {
       chatId: groupPublicKey,
     });
     await waitForThreadMessage(charlie.page, afterAddMessage, {
@@ -80,7 +97,7 @@ test('adding a new group member without rotation keeps the current epoch and mes
     });
 
     await navigateToChat(bob.page, groupPublicKey);
-    await waitForThreadMessage(bob.page, beforeAddMessage, {
+    await waitForThreadMessage(bob.page, editedBeforeAddMessage, {
       chatId: groupPublicKey,
     });
     await waitForThreadMessage(bob.page, afterAddMessage, {

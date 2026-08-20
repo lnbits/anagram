@@ -3,6 +3,11 @@ import type { MessageAttachmentMetadata } from 'src/types/chat';
 const IMETA_TAG_NAME = 'imeta';
 export const IMAGE_ATTACHMENT_PREVIEW_TEXT = 'Picture';
 
+export interface MessageReplyPreviewContent {
+  text: string;
+  imageUrl?: string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -173,4 +178,15 @@ export function buildImageAttachmentPreviewText(
   }
 
   return previewText.replace(/\s+/gu, ' ').trim() || IMAGE_ATTACHMENT_PREVIEW_TEXT;
+}
+
+export function buildMessageReplyPreviewContent(
+  text: string,
+  meta: { attachments?: unknown } | null | undefined
+): MessageReplyPreviewContent {
+  const imageUrl = readImageAttachmentsFromMeta(meta)[0]?.url.trim() ?? '';
+  return {
+    text: buildImageAttachmentPreviewText(text, meta),
+    ...(imageUrl ? { imageUrl } : {}),
+  };
 }

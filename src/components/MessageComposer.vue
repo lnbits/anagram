@@ -62,6 +62,13 @@
 
     <div v-if="replyTo" class="composer__reply">
       <div class="composer__reply-accent" aria-hidden="true" />
+      <img
+        v-if="replyTo.imageUrl"
+        class="composer__reply-image"
+        data-testid="composer-reply-preview-image"
+        :src="replyTo.imageUrl"
+        :alt="$t('message.imageAttachment')"
+      />
       <div class="composer__reply-copy">
         <div class="composer__reply-title">{{ $t('message.reply.toName', { name: replyTo.authorName }) }}</div>
         <div class="composer__reply-text">{{ replyTo.text }}</div>
@@ -1179,6 +1186,14 @@ defineExpose({
 .composer__reply-copy {
   flex: 1;
   min-width: 0;
+}
+
+.composer__reply-image {
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  border-radius: 6px;
+  object-fit: cover;
 }
 
 .composer__reply-title {

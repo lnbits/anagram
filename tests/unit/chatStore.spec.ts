@@ -7,6 +7,7 @@ const {
   buildAcceptedChatMeta,
   buildBlockedChatMeta,
   buildChatActivitySnapshotByPublicKey,
+  buildLastMessageAuthorSnapshotByPublicKey,
   buildUpdatedChatPreview,
   chatMatchesSearch,
   countUnreadMessagesAfter,
@@ -22,6 +23,44 @@ const {
 } = __chatStoreTestUtils;
 
 describe('chatStore logic', () => {
+  it('tracks the latest message author per chat with stable timestamp tie-breaking', () => {
+    const snapshots = buildLastMessageAuthorSnapshotByPublicKey([
+      {
+        id: 1,
+        chat_public_key: 'GROUP-A',
+        author_public_key: 'ALICE',
+        message: 'first',
+        created_at: '2026-01-01T00:00:00.000Z',
+        event_id: null,
+        meta: {},
+      },
+      {
+        id: 3,
+        chat_public_key: 'group-a',
+        author_public_key: 'BOB',
+        message: 'latest',
+        created_at: '2026-01-02T00:00:00.000Z',
+        event_id: null,
+        meta: {},
+      },
+      {
+        id: 2,
+        chat_public_key: 'group-a',
+        author_public_key: 'CHARLIE',
+        message: 'same timestamp, older row',
+        created_at: '2026-01-02T00:00:00.000Z',
+        event_id: null,
+        meta: {},
+      },
+    ]);
+
+    expect(snapshots.get('group-a')).toEqual({
+      authorPublicKey: 'bob',
+      at: '2026-01-02T00:00:00.000Z',
+      rowId: 3,
+    });
+  });
+
   it('classifies blocked chats ahead of accepted and request states', () => {
     expect(
       resolveChatCategory({

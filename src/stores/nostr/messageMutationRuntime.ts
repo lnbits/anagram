@@ -18,6 +18,7 @@ import type {
   NostrEventDirection,
 } from 'src/types/chat';
 import type { ContactRecord } from 'src/types/contact';
+import { buildMessageReplyPreviewContent } from 'src/utils/messageAttachments';
 import { buildMetaWithReactions, normalizeMessageReactions } from 'src/utils/messageReactions';
 
 interface MessageMutationRuntimeDeps {
@@ -171,10 +172,12 @@ export function createMessageMutationRuntime({
     const isOwnTargetMessage = targetAuthorPublicKey === loggedInPubkeyHex;
     const replyContact =
       contact === undefined ? await contactsService.getContactByPublicKey(chatPubkey) : contact;
+    const replyContent = buildMessageReplyPreviewContent(targetMessage.message, targetMessage.meta);
 
     return {
       messageId: String(targetMessage.id),
-      text: targetMessage.message.trim() || UNKNOWN_REPLY_MESSAGE_TEXT,
+      text: replyContent.text || UNKNOWN_REPLY_MESSAGE_TEXT,
+      ...(replyContent.imageUrl ? { imageUrl: replyContent.imageUrl } : {}),
       sender: isOwnTargetMessage ? 'me' : 'them',
       authorName: isOwnTargetMessage ? 'You' : deriveChatName(replyContact, chatPubkey),
       authorPublicKey: targetAuthorPublicKey,
@@ -716,6 +719,8 @@ export function createMessageMutationRuntime({
       const currentMessageId =
         typeof currentReply.messageId === 'string' ? currentReply.messageId.trim() : '';
       const currentText = typeof currentReply.text === 'string' ? currentReply.text.trim() : '';
+      const currentImageUrl =
+        typeof currentReply.imageUrl === 'string' ? currentReply.imageUrl.trim() : '';
       const currentSender = currentReply.sender === 'me' ? 'me' : 'them';
       const currentAuthorName =
         typeof currentReply.authorName === 'string' ? currentReply.authorName.trim() : '';
@@ -726,6 +731,7 @@ export function createMessageMutationRuntime({
       const isUnchanged =
         currentMessageId === nextReplyPreview.messageId &&
         currentText === nextReplyPreview.text &&
+        currentImageUrl === (nextReplyPreview.imageUrl?.trim() ?? '') &&
         currentSender === nextReplyPreview.sender &&
         currentAuthorName === nextReplyPreview.authorName &&
         currentAuthorPublicKey === nextReplyPreview.authorPublicKey &&

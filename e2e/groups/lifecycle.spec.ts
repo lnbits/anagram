@@ -196,7 +196,8 @@ test('group owner can create a group, invite a member, and exchange messages bot
     await expect(bobGroupMessageEntry.locator('.bubble__telegram-author')).toHaveCount(0);
     await expect(bobGroupMessageEntry.locator('.bubble__author-name')).toBeVisible();
     await bobGroupMessageEntry.getByTestId('thread-author-profile-link').click();
-    await alice.page.waitForURL(new RegExp(`#\\/contacts\\/${bob.session.publicKey}$`));
+    await alice.page.waitForURL(new RegExp(`#\\/chats\\/${bob.session.publicKey}$`));
+    await expect(alice.page.getByPlaceholder('Write a message')).toBeVisible();
 
     await navigateToChat(alice.page, groupPublicKey);
     await alice.page.getByPlaceholder('Write a message').click();
@@ -294,6 +295,12 @@ test('group invite survives hard reload before acceptance and still opens a work
     await waitForThreadMessage(alice.page, memberReply, {
       chatId: groupPublicKey,
     });
+    const groupChatItem = alice.page
+      .getByTestId('chat-item')
+      .filter({ hasText: groupName })
+      .first();
+    await expect(groupChatItem).toContainText(memberReply);
+    await expect(groupChatItem.getByTestId('chat-item-preview-author')).toContainText(/:$/);
     await expectNoUnexpectedBrowserErrors([alice, bob]);
   } finally {
     await disposeUsers(alice, bob);

@@ -190,6 +190,44 @@ describe('messageMutationRuntime', () => {
     );
   });
 
+  it('builds an image thumbnail into a reply preview', async () => {
+    const deps = createDeps();
+    const runtime = createMessageMutationRuntime(deps);
+    const imageUrl = 'https://nostr.build/i/reply.png';
+    serviceMocks.chatDataService.getMessageByEventId.mockResolvedValue({
+      id: 44,
+      chat_public_key: CHAT_PUBLIC_KEY,
+      author_public_key: LOGGED_IN_PUBLIC_KEY,
+      message: imageUrl,
+      created_at: '2026-01-01T00:00:00.000Z',
+      event_id: TARGET_EVENT_ID,
+      meta: {
+        attachments: [
+          {
+            type: 'media',
+            url: imageUrl,
+            mimeType: 'image/png',
+            size: 1234,
+          },
+        ],
+      },
+    });
+
+    await expect(
+      runtime.buildReplyPreviewFromTargetEvent(
+        TARGET_EVENT_ID,
+        CHAT_PUBLIC_KEY,
+        LOGGED_IN_PUBLIC_KEY,
+        null
+      )
+    ).resolves.toMatchObject({
+      text: 'Picture',
+      imageUrl,
+      sender: 'me',
+      authorName: 'You',
+    });
+  });
+
   it('refreshes stale reply previews when the target message arrives', async () => {
     const deps = createDeps();
     const runtime = createMessageMutationRuntime(deps);

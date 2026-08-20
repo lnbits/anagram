@@ -198,7 +198,7 @@
               :show-author-name="item.startsSenderGroup"
               :show-author-on-mobile="chat?.type === 'group' && item.message.sender === 'them'"
               :show-telegram-author-avatar="item.showTelegramAuthorAvatar"
-              @open-profile="handleOpenAuthorProfile"
+              @open-profile="handleOpenAuthorChat"
               @open-mention-chat="handleOpenMentionChat"
               @reply="handleReplyToMessage"
               @forward="handleForwardMessage"
@@ -300,6 +300,7 @@ import { contactsService } from 'src/services/contactsService';
 import { useChatStore } from 'src/stores/chatStore';
 import { useMessageStore } from 'src/stores/messageStore';
 import { useNostrStore } from 'src/stores/nostrStore';
+import { useTrustedMediaStore } from 'src/stores/trustedMediaStore';
 import type {
   Chat,
   Message,
@@ -311,6 +312,7 @@ import type { ContactGroupMember, ContactMetadata } from 'src/types/contact';
 import { buildAvatarText } from 'src/utils/avatarText';
 import { resolvePreferredContactRelayUrls } from 'src/utils/contactRelayUrls';
 import { isGroupEpochNoticeMessageMeta } from 'src/utils/messageActivity';
+import { buildMessageReplyPreviewContent } from 'src/utils/messageAttachments';
 import {
   countUnseenReactionsForAuthor,
   normalizeMessageReactions
@@ -386,6 +388,7 @@ const isAutomaticBottomScrollEnabled = ref(true);
 const chatStore = useChatStore();
 const messageStore = useMessageStore();
 const nostrStore = useNostrStore();
+const trustedMediaStore = useTrustedMediaStore();
 const isThreadScrolledUp = ref(false);
 const lastReadMessageId = ref<string | null>(null);
 const hasJumpedToLastReadMessage = ref(false);
@@ -1727,9 +1730,19 @@ function handleSendMedia(payload: { attachment: MessageAttachmentMetadata }): vo
 function handleReplyToMessage(message: Message): void {
   try {
     const authorIdentity = resolveMessageAuthorIdentity(message);
+    const replyContent = buildMessageReplyPreviewContent(message.text, message.meta);
+    const canShowReplyImage =
+      message.sender === 'me' ||
+      trustedMediaStore.isImageSenderTrusted(
+        message.authorPublicKey,
+        loggedInPublicKey.value
+      );
     activeReply.value = {
       messageId: message.id,
-      text: message.text,
+      text: replyContent.text,
+      ...(canShowReplyImage && replyContent.imageUrl
+        ? { imageUrl: replyContent.imageUrl }
+        : {}),
       sender: message.sender,
       authorName: authorIdentity.label,
       authorPublicKey: message.authorPublicKey,
@@ -2382,11 +2395,34 @@ function emitOpenProfile(publicKey: string): void {
   emit('open-profile', normalized);
 }
 
-function handleOpenAuthorProfile(publicKey: string): void {
+function handleOpenAuthorChat(publicKey: string): void {
   try {
-    emitOpenProfile(publicKey);
+    const normalizedPublicKey = publicKey.trim().toLowerCase();
+    if (!normalizedPublicKey) {
+      return;
+    }
+
+    if (props.chat?.type !== 'group') {
+      emitOpenProfile(normalizedPublicKey);
+      return;
+    }
+
+    const isSelf = normalizedPublicKey === loggedInPublicKey.value;
+    const authorIdentity = isSelf
+      ? {
+          label: t('common.you'),
+          avatarSrc: selfAvatarImageUrl.value,
+          avatarFallback: selfAvatarFallback.value
+        }
+      : authorIdentityByPublicKey.value[normalizedPublicKey];
+    emit('open-chat', {
+      publicKey: normalizedPublicKey,
+      ...(authorIdentity?.label ? { displayName: authorIdentity.label } : {}),
+      ...(authorIdentity?.avatarSrc ? { picture: authorIdentity.avatarSrc } : {}),
+      ...(authorIdentity?.avatarFallback ? { avatar: authorIdentity.avatarFallback } : {})
+    });
   } catch (error) {
-    reportUiError('Failed to open message author profile from chat thread', error);
+    reportUiError('Failed to open message author chat from group thread', error);
   }
 }
 

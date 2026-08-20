@@ -13,6 +13,7 @@ import {
   reloadAndWaitForApp,
   sendMessage,
   TEST_ACCOUNTS,
+  threadMessage,
   waitForChatReactionBadge,
   waitForDeletedMessageState,
   waitForReaction,
@@ -44,6 +45,9 @@ test('reactions surface in the chat list and deleted messages stay deleted after
     await waitForThreadMessage(bob.page, targetMessage, {
       chatId: alice.session.publicKey,
     });
+
+    await threadMessage(bob.page, targetMessage).locator('.bubble').click();
+    await expect(bob.page.getByText('Reply', { exact: true })).toHaveCount(0);
 
     await navigateToChat(alice.page, charlie.session.publicKey);
     await reactToMessage(bob.page, targetMessage);

@@ -1,11 +1,11 @@
 <template>
   <div
-    v-if="isVisible"
     class="startup-history-banner"
-    :class="{ 'startup-history-banner--expanded': isDetailsVisible }"
-    :aria-live="isDetailsVisible ? 'polite' : 'off'"
+    :class="{ 'startup-history-banner--expanded': isVisible && isDetailsVisible }"
+    :aria-live="isVisible && isDetailsVisible ? 'polite' : 'off'"
+    :aria-hidden="isVisible ? undefined : 'true'"
   >
-    <div v-if="isDetailsVisible" class="startup-history-banner__details">
+    <div v-if="isVisible && isDetailsVisible" class="startup-history-banner__details">
       <div class="startup-history-banner__header">
         <span class="startup-history-banner__title">{{ $t('startup.startupHistory') }}</span>
         <span class="startup-history-banner__summary">{{ summaryLabel }}</span>
@@ -95,6 +95,7 @@
     </div>
 
     <q-linear-progress
+      v-if="isVisible && isDetailsVisible"
       indeterminate
       color="primary"
       size="1px"
@@ -108,8 +109,11 @@
       size="xs"
       :ripple="false"
       class="startup-history-banner__toggle"
+      :class="{ 'startup-history-banner__toggle--visible': isVisible }"
       :aria-label="detailsButtonLabel"
       :aria-expanded="isDetailsVisible"
+      :aria-hidden="isVisible ? undefined : 'true'"
+      :tabindex="isVisible ? 0 : -1"
       @click="toggleDetails"
     />
   </div>
@@ -541,7 +545,15 @@ watch(isDetailsVisible, (value) => {
   border: 0;
   border-radius: 0;
   box-shadow: none;
-  transition: color 0.2s ease;
+  transition:
+    color 0.2s ease,
+    opacity 2.5s ease;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.q-btn.startup-history-banner__toggle--visible {
+  opacity: 1;
   pointer-events: auto;
 }
 
@@ -561,6 +573,12 @@ watch(isDetailsVisible, (value) => {
 
 .q-btn.startup-history-banner__toggle :deep(.q-focus-helper) {
   display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .q-btn.startup-history-banner__toggle {
+    transition-duration: 0.2s, 0.01ms;
+  }
 }
 
 body.body--dark .startup-history-banner__status-icon--success {

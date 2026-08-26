@@ -1,14 +1,15 @@
 <template>
   <div
-    v-if="isVisible"
     class="reconnect-healing-banner"
-    :class="{ 'reconnect-healing-banner--expanded': isDetailsVisible }"
-    :aria-live="isDetailsVisible ? 'polite' : 'off'"
+    :class="{ 'reconnect-healing-banner--expanded': isVisible && isDetailsVisible }"
+    :aria-live="isVisible && isDetailsVisible ? 'polite' : 'off'"
+    :aria-hidden="isVisible ? undefined : 'true'"
   >
-    <span v-if="isDetailsVisible" class="reconnect-healing-banner__label">
+    <span v-if="isVisible && isDetailsVisible" class="reconnect-healing-banner__label">
       {{ statusLabel }}
     </span>
     <q-linear-progress
+      v-if="isVisible && isDetailsVisible"
       indeterminate
       color="primary"
       size="1px"
@@ -22,8 +23,11 @@
       size="xs"
       :ripple="false"
       class="reconnect-healing-banner__toggle"
+      :class="{ 'reconnect-healing-banner__toggle--visible': isVisible }"
       :aria-label="detailsButtonLabel"
       :aria-expanded="isDetailsVisible"
+      :aria-hidden="isVisible ? undefined : 'true'"
+      :tabindex="isVisible ? 0 : -1"
       @click="toggleDetails"
     />
   </div>
@@ -196,7 +200,15 @@ watch(isDetailsVisible, (value) => {
   border: 0;
   border-radius: 0;
   box-shadow: none;
-  transition: color 0.2s ease;
+  transition:
+    color 0.2s ease,
+    opacity 2.5s ease;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.q-btn.reconnect-healing-banner__toggle--visible {
+  opacity: 1;
   pointer-events: auto;
 }
 
@@ -216,5 +228,11 @@ watch(isDetailsVisible, (value) => {
 
 .q-btn.reconnect-healing-banner__toggle :deep(.q-focus-helper) {
   display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .q-btn.reconnect-healing-banner__toggle {
+    transition-duration: 0.2s, 0.01ms;
+  }
 }
 </style>

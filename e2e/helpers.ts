@@ -1400,9 +1400,13 @@ export async function reactToMessage(
   text: string,
   reactionLabel = 'thumbs up'
 ): Promise<void> {
-  await threadMessage(page, text).locator('.bubble').click();
+  await openMessageActions(page, text);
   await page.getByLabel(`React with ${reactionLabel}`).click();
   await acceptAppRelayFallbackIfVisible(page);
+}
+
+async function openMessageActions(page: Page, text: string): Promise<void> {
+  await threadMessage(page, text).locator('.bubble').click({ button: 'right' });
 }
 
 export async function waitForReaction(
@@ -1432,7 +1436,7 @@ export async function replyToMessage(
     chatId?: string;
   } = {}
 ): Promise<void> {
-  await threadMessage(page, targetText).locator('.bubble').click();
+  await openMessageActions(page, targetText);
   await page.getByText('Reply', { exact: true }).click();
   await expect(page.locator('.composer__reply')).toBeVisible({ timeout: 12_000 });
   await sendMessage(page, replyText, options);
@@ -1446,6 +1450,7 @@ export async function forwardMessage(
   await threadMessage(page, text)
     .locator('.bubble')
     .click({
+      button: 'right',
       position: { x: 4, y: 4 },
     });
   await page.getByText('Forward', { exact: true }).click();
@@ -1477,7 +1482,7 @@ export async function waitForReplyPreviewText(
 }
 
 export async function deleteMessage(page: Page, text: string): Promise<void> {
-  await threadMessage(page, text).locator('.bubble').click();
+  await openMessageActions(page, text);
   await page.getByText('Delete', { exact: true }).click();
 }
 
@@ -1574,7 +1579,7 @@ export async function waitForDeletedMessageState(
   } = {}
 ): Promise<void> {
   await waitForThreadMessage(page, text, options);
-  await threadMessage(page, text).locator('.bubble').click();
+  await openMessageActions(page, text);
   await expect(page.getByText('View Deleted Message', { exact: true })).toBeVisible({
     timeout: 12_000,
   });

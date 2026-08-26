@@ -18,7 +18,7 @@
       type="button"
       class="bubble__telegram-author"
       data-testid="thread-author-profile-link"
-      :aria-label="$t('profile.open.aria', { name: authorLabel })"
+      :aria-label="authorActionAriaLabel"
       @click.stop="handleOpenAuthorProfile"
     >
       <CachedAvatar
@@ -35,7 +35,7 @@
         class="bubble__author"
         :class="isMine ? 'bubble__author--mine' : 'bubble__author--their'"
         data-testid="thread-author-profile-link"
-        :aria-label="$t('profile.open.aria', { name: authorLabel })"
+        :aria-label="authorActionAriaLabel"
         @click.stop="handleOpenAuthorProfile"
       >
         <CachedAvatar
@@ -137,6 +137,29 @@
       </q-menu>
 
       <q-menu
+        ref="linkContextMenuRef"
+        v-model="isLinkContextMenuOpen"
+        no-parent-event
+        touch-position
+        class="nc-pop-menu"
+        :transition-duration="0"
+      >
+        <q-list dense class="nc-pop-menu__list">
+          <q-item
+            clickable
+            v-close-popup
+            data-testid="message-link-copy"
+            @click="handleCopyMessageLink"
+          >
+            <q-item-section avatar>
+              <q-icon name="content_copy" />
+            </q-item-section>
+            <q-item-section>{{ $t('message.copyLink') }}</q-item-section>
+          </q-item>
+        </q-list>
+      </q-menu>
+
+      <q-menu
         ref="emojiPickerMenuRef"
         v-model="isEmojiPickerMenuOpen"
         no-parent-event
@@ -165,6 +188,13 @@
           @click.stop="handleOpenReplyTarget"
         >
           <div class="bubble__reply-preview-accent" aria-hidden="true" />
+          <img
+            v-if="replyPreviewImageUrl"
+            class="bubble__reply-preview-image"
+            data-testid="message-reply-preview-image"
+            :src="replyPreviewImageUrl"
+            :alt="$t('message.imageAttachment')"
+          />
           <div class="bubble__reply-preview-copy">
             <div class="bubble__reply-preview-title">{{ replyPreview.authorName }}</div>
             <div class="bubble__reply-preview-text">{{ replyPreview.text }}</div>
@@ -195,6 +225,7 @@
               class="bubble__link"
               data-testid="message-url-link"
               @click.stop="handleOpenMessageLink(part.href)"
+              @contextmenu.stop.prevent="openMessageLinkContextMenu($event, part.href)"
             >
               {{ part.text }}
             </button>
@@ -745,9 +776,12 @@ const reserveTelegramAuthorAvatarSpace = computed(
 const showAuthorOnMobile = computed(() => props.showAuthorOnMobile === true);
 const loggedInPublicKey = computed(() => nostrStore.getLoggedInPublicKeyHex()?.toLowerCase() ?? '');
 const actionMenuRef = ref<{ show: (evt?: Event) => void } | null>(null);
+const linkContextMenuRef = ref<{ show: (evt?: Event) => void } | null>(null);
 const emojiPickerMenuRef = ref<{ show: (evt?: Event) => void } | null>(null);
 const isActionMenuOpen = ref(false);
+const isLinkContextMenuOpen = ref(false);
 const isEmojiPickerMenuOpen = ref(false);
+const selectedMessageLink = ref('');
 const isInfoDialogOpen = ref(false);
 const isEventJsonViewOpen = ref(false);
 const isDeletedMessageDialogOpen = ref(false);
@@ -795,6 +829,7 @@ function isMessageReplyPreview(value: unknown): value is MessageReplyPreview {
   return (
     typeof candidate.messageId === 'string' &&
     typeof candidate.text === 'string' &&
+    (candidate.imageUrl === undefined || typeof candidate.imageUrl === 'string') &&
     (candidate.sender === 'me' || candidate.sender === 'them') &&
     typeof candidate.authorName === 'string' &&
     typeof candidate.authorPublicKey === 'string' &&
@@ -834,6 +869,9 @@ const authorLabel = computed(() => {
 
   return props.contactName?.trim() || t('contacts.contact.label');
 });
+const authorActionAriaLabel = computed(() =>
+  mobileGroupLayout.value ? t('chat.openChat') : t('profile.open.aria', { name: authorLabel.value })
+);
 const authorAvatarSrc = computed(() => props.authorAvatarSrc?.trim() || '');
 const authorAvatarFallback = computed(() => {
   const explicitFallback = props.authorAvatarFallback?.trim();
@@ -860,6 +898,24 @@ const isRetryingFailedRelays = ref(false);
 const replyPreview = computed(() => {
   const candidate = props.message.meta.reply;
   return isMessageReplyPreview(candidate) ? candidate : null;
+});
+const replyPreviewImageUrl = computed(() => {
+  const preview = replyPreview.value;
+  const imageUrl = preview?.imageUrl?.trim() ?? '';
+  if (!preview || !imageUrl) {
+    return '';
+  }
+
+  if (preview.sender === 'me') {
+    return imageUrl;
+  }
+
+  return trustedMediaStore.isImageSenderTrusted(
+    preview.authorPublicKey,
+    loggedInPublicKey.value
+  )
+    ? imageUrl
+    : '';
 });
 const messageReactions = computed<MessageReaction[]>(() => {
   const candidate = props.message.meta.reactions;
@@ -1102,6 +1158,18 @@ function openActionMenu(event: MouseEvent): void {
   actionMenuRef.value?.show(event);
 }
 
+function openMessageLinkContextMenu(event: MouseEvent, url: string): void {
+  const normalizedUrl = url.trim();
+  if (!normalizedUrl) {
+    return;
+  }
+
+  selectedMessageLink.value = normalizedUrl;
+  isActionMenuOpen.value = false;
+  isEmojiPickerMenuOpen.value = false;
+  linkContextMenuRef.value?.show(event);
+}
+
 function openEmojiPickerMenu(): void {
   shouldOpenEmojiPickerAfterActionMenu.value = true;
   isActionMenuOpen.value = false;
@@ -1281,6 +1349,20 @@ async function handleCopyImageLink(url: string): Promise<void> {
     });
   } catch (error) {
     reportUiError('Failed to copy image link', error, t('errors.failedCopyImageLink'));
+  }
+}
+
+async function handleCopyMessageLink(): Promise<void> {
+  try {
+    await copyText(selectedMessageLink.value);
+    $q.notify({
+      type: 'positive',
+      message: t('message.linkCopied'),
+      position: 'top',
+      timeout: 1600
+    });
+  } catch (error) {
+    reportUiError('Failed to copy message link', error, t('errors.failedCopyLink'));
   }
 }
 
@@ -2046,6 +2128,14 @@ onBeforeUnmount(() => {
 .bubble__reply-preview-copy {
   min-width: 0;
   flex: 1;
+}
+
+.bubble__reply-preview-image {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: 5px;
+  object-fit: cover;
 }
 
 .bubble__reply-preview-title {

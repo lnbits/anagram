@@ -30,7 +30,14 @@
           <AppTooltip>{{ $t('common.mute') }}</AppTooltip>
         </span>
       </div>
-      <q-item-label class="chat-item__caption" caption lines="1">{{ chatPreview }}</q-item-label>
+      <q-item-label class="chat-item__caption" caption lines="1">
+        <span
+          v-if="chatPreviewAuthorLabel"
+          class="chat-item__preview-author"
+          data-testid="chat-item-preview-author"
+        >{{ chatPreviewAuthorLabel }}:</span>
+        <span>{{ chatPreview }}</span>
+      </q-item-label>
     </q-item-section>
 
     <q-item-section v-if="hasMetaBadges" side class="chat-item__meta">
@@ -109,6 +116,7 @@ import { computed } from 'vue';
 import type { Chat } from 'src/types/chat';
 import AppTooltip from 'src/components/AppTooltip.vue';
 import CachedAvatar from 'src/components/CachedAvatar.vue';
+import { resolveChatPreviewAuthorLabel } from 'src/utils/chatPreview';
 import { formatGroupMentionsForDisplay } from 'src/utils/nostrMentions';
 import { reportUiError } from 'src/utils/uiErrorHandler';
 import { getDateTimeLocale, t } from 'src/i18n';
@@ -204,6 +212,9 @@ const chatPreview = computed(() =>
   props.chat.type === 'group'
     ? formatGroupMentionsForDisplay(props.chat.lastMessage, props.chat.meta)
     : props.chat.lastMessage
+);
+const chatPreviewAuthorLabel = computed(() =>
+  resolveChatPreviewAuthorLabel(props.chat, getLoggedInPubkey(), t('common.you'))
 );
 
 function formatReactionCount(value: number): string {
@@ -321,6 +332,11 @@ function emitDeleteChat(): void {
   text-overflow: ellipsis;
   white-space: nowrap;
   line-height: 1.25;
+}
+
+.chat-item__preview-author {
+  margin-right: 0.3em;
+  color: var(--q-primary);
 }
 
 .chat-item__main {
@@ -488,6 +504,10 @@ function emitDeleteChat(): void {
 .chat-item--active :deep(.q-item__label--caption),
 .chat-item--active .q-btn.chat-item__more {
   color: var(--nc-active-subtext);
+}
+
+.chat-item--active .chat-item__preview-author {
+  color: var(--nc-active-text);
 }
 
 .chat-item--active .chat-item__reaction-badge {

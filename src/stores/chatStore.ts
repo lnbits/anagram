@@ -28,6 +28,7 @@ interface AddContactOptions {
 
 interface LiveChatPreviewInput {
   publicKey: string;
+  authorPublicKey: string;
   fallbackName: string;
   messageText: string;
   at: string;
@@ -39,6 +40,12 @@ interface LiveChatPreviewInput {
 interface ChatActivitySnapshot {
   lastIncomingMessageAt: string;
   lastOutgoingMessageAt: string;
+}
+
+interface ChatLastMessageAuthorSnapshot {
+  authorPublicKey: string;
+  at: string;
+  rowId: number;
 }
 
 interface ChatReadCursor {
@@ -332,6 +339,39 @@ function buildIncomingMessageTimestampsByPublicKey(
   return timestampsByPublicKey;
 }
 
+function buildLastMessageAuthorSnapshotByPublicKey(
+  messageRows: Awaited<ReturnType<typeof chatDataService.listAllMessages>>
+): Map<string, ChatLastMessageAuthorSnapshot> {
+  const snapshotsByPublicKey = new Map<string, ChatLastMessageAuthorSnapshot>();
+
+  for (const row of messageRows) {
+    const chatPublicKey = normalizeChatIdentifier(row.chat_public_key);
+    const authorPublicKey = normalizeChatIdentifier(row.author_public_key);
+    if (!chatPublicKey || !authorPublicKey) {
+      continue;
+    }
+
+    const existing = snapshotsByPublicKey.get(chatPublicKey);
+    const rowTimestamp = toComparableTimestamp(row.created_at);
+    const existingTimestamp = toComparableTimestamp(existing?.at);
+    if (
+      existing &&
+      (existingTimestamp > rowTimestamp ||
+        (existingTimestamp === rowTimestamp && existing.rowId >= row.id))
+    ) {
+      continue;
+    }
+
+    snapshotsByPublicKey.set(chatPublicKey, {
+      authorPublicKey,
+      at: row.created_at,
+      rowId: row.id,
+    });
+  }
+
+  return snapshotsByPublicKey;
+}
+
 function countUnreadMessagesAfter(
   timestamps: string[] | undefined,
   lastSeenReceivedActivityAt: string
@@ -602,7 +642,8 @@ function syncChatMeta(
 
 function mapChatRowToChat(
   row: Awaited<ReturnType<typeof chatDataService.listChats>>[number],
-  contactContext?: ChatContactContext
+  contactContext?: ChatContactContext,
+  lastMessageAuthorSnapshot?: ChatLastMessageAuthorSnapshot
 ): Chat {
   const nextName = contactContext?.contactName || row.name;
   const nextMeta = syncChatMeta(
@@ -613,6 +654,13 @@ function mapChatRowToChat(
   const avatarFromMeta = readMetaString(nextMeta, 'avatar');
   const avatar = avatarFromMeta || buildAvatarText(nextName || row.public_key);
   const lastMessage = formatChatLastMessagePreview(row.last_message || '', nextMeta, row.type);
+  const lastMessageAt = row.last_message_at || new Date(0).toISOString();
+  const lastMessageAuthorPublicKey =
+    row.last_message_at &&
+    lastMessageAuthorSnapshot &&
+    toComparableTimestamp(lastMessageAuthorSnapshot.at) === toComparableTimestamp(lastMessageAt)
+      ? lastMessageAuthorSnapshot.authorPublicKey
+      : null;
 
   return {
     id: row.public_key,
@@ -622,7 +670,8 @@ function mapChatRowToChat(
     name: nextName,
     avatar,
     lastMessage,
-    lastMessageAt: row.last_message_at || new Date(0).toISOString(),
+    lastMessageAuthorPublicKey,
+    lastMessageAt,
     unreadCount: row.unread_count,
     meta: nextMeta,
   };
@@ -669,11 +718,13 @@ function buildUpdatedChatPreview(
   text: string,
   at: string,
   isVisible: boolean,
-  messageMeta?: Record<string, unknown>
+  messageMeta?: Record<string, unknown>,
+  authorPublicKey?: string | null
 ): Chat {
   return {
     ...chat,
     lastMessage: formatChatLastMessagePreview(text, chat.meta, chat.type, messageMeta),
+    lastMessageAuthorPublicKey: normalizeChatIdentifier(authorPublicKey),
     lastMessageAt: at,
     unreadCount: isVisible ? 0 : chat.unreadCount,
   };
@@ -704,6 +755,7 @@ export const __chatStoreTestUtils = {
   buildAcceptedChatMeta,
   buildBlockedChatMeta,
   buildChatActivitySnapshotByPublicKey,
+  buildLastMessageAuthorSnapshotByPublicKey,
   buildUpdatedChatPreview,
   chatMatchesSearch,
   countUnreadMessagesAfter,
@@ -768,6 +820,8 @@ export const useChatStore = defineStore('chatStore', () => {
       messageRows,
       getLoggedInPublicKey()
     );
+    const lastMessageAuthorSnapshotByPublicKey =
+      buildLastMessageAuthorSnapshotByPublicKey(messageRows);
     const metaSyncPromises: Promise<void>[] = [];
     const unreadCountSyncPromises: Promise<void>[] = [];
 
@@ -829,7 +883,8 @@ export const useChatStore = defineStore('chatStore', () => {
             unread_count: normalizedUnreadCount,
             meta: nextMeta,
           },
-          contactContext
+          contactContext,
+          lastMessageAuthorSnapshotByPublicKey.get(row.public_key.toLowerCase())
         );
       })
     );
@@ -1410,6 +1465,7 @@ export const useChatStore = defineStore('chatStore', () => {
     }
 
     let nextUnreadCount = 0;
+    const authorPublicKey = getLoggedInPublicKey();
     let previewText = buildImageAttachmentPreviewText(text, options.messageMeta);
     let previewChatType: Chat['type'] | null = null;
     chats.value = sortByLatest(
@@ -1424,7 +1480,8 @@ export const useChatStore = defineStore('chatStore', () => {
           text,
           at,
           visibleChatId.value === normalizedChatId,
-          options.messageMeta
+          options.messageMeta,
+          authorPublicKey
         );
         previewText = nextChat.lastMessage;
         nextUnreadCount = nextChat.unreadCount;
@@ -1524,6 +1581,7 @@ export const useChatStore = defineStore('chatStore', () => {
     }
 
     const fallbackName = input.fallbackName.trim() || nextPublicKey;
+    const authorPublicKey = normalizeChatIdentifier(input.authorPublicKey);
     const nextChatId = nextPublicKey;
     const existingChat = chats.value.find((chat) => chat.id === nextChatId) ?? null;
     const currentMeta = {
@@ -1558,6 +1616,7 @@ export const useChatStore = defineStore('chatStore', () => {
         nextType,
         input.messageMeta
       ),
+      lastMessageAuthorPublicKey: authorPublicKey,
       lastMessageAt: input.at,
       unreadCount: visibleChatId.value === nextChatId ? 0 : Math.max(0, input.unreadCount),
       meta: nextMeta,

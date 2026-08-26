@@ -51,6 +51,7 @@ export interface Chat {
   name: string;
   avatar: string;
   lastMessage: string;
+  lastMessageAuthorPublicKey?: string | null;
   lastMessageAt: string;
   unreadCount: number;
   meta: ChatMetadata;
@@ -59,6 +60,7 @@ export interface Chat {
 export interface MessageReplyPreview {
   messageId: string;
   text: string;
+  imageUrl?: string;
   sender: 'me' | 'them';
   authorName: string;
   authorPublicKey: string;

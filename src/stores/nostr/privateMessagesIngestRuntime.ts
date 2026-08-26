@@ -1045,6 +1045,7 @@ export function createPrivateMessagesIngestRuntime({
       if (shouldUpdateChatPreview) {
         chatStore.applyIncomingMessage({
           publicKey: chat.public_key,
+          authorPublicKey: senderPubkeyHex,
           fallbackName: deriveChatName(contact, chatPubkey),
           messageText: messagePreviewText,
           at: nextPreviewAt,

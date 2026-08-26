@@ -25,6 +25,7 @@ export interface ChatStoreRuntime {
   acceptChat: (publicKey: string, options: { acceptedAt: string }) => Promise<void>;
   applyIncomingMessage: (options: {
     publicKey: string;
+    authorPublicKey: string;
     fallbackName: string;
     messageText: string;
     at: string;

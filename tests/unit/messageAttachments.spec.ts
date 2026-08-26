@@ -3,6 +3,7 @@ import {
   buildAttachmentMessageMeta,
   buildAttachmentMessageText,
   buildImageAttachmentPreviewText,
+  buildMessageReplyPreviewContent,
   buildNip92ImetaTag,
   extractMediaAttachmentsFromTags,
   readImageAttachmentsFromMeta,
@@ -120,5 +121,22 @@ describe('message attachment helpers', () => {
         ],
       })
     ).toBe('https://nostr.build/v/example.mp4');
+  });
+
+  it('builds image reply content with a thumbnail and a readable label', () => {
+    const imageMeta = buildAttachmentMessageMeta(attachment);
+
+    expect(buildMessageReplyPreviewContent('https://nostr.build/i/example.png', imageMeta)).toEqual(
+      {
+        text: 'Picture',
+        imageUrl: 'https://nostr.build/i/example.png',
+      }
+    );
+    expect(
+      buildMessageReplyPreviewContent('Caption https://nostr.build/i/example.png', imageMeta)
+    ).toEqual({
+      text: 'Caption',
+      imageUrl: 'https://nostr.build/i/example.png',
+    });
   });
 });

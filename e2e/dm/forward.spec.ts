@@ -73,6 +73,24 @@ test('accepted DM forwards message content to another chat without attribution',
       .poll(() => bob.page.evaluate(() => window.sessionStorage.getItem('e2e:last-opened-url')))
       .toBe(linkedUrl);
 
+    await bob.page.evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: async (value: string) => {
+            window.sessionStorage.setItem('e2e:last-copied-text', value);
+          },
+        },
+      });
+    });
+    await threadMessage(bob.page, originalMessage)
+      .getByTestId('message-url-link')
+      .click({ button: 'right' });
+    await bob.page.getByTestId('message-link-copy').click();
+    await expect
+      .poll(() => bob.page.evaluate(() => window.sessionStorage.getItem('e2e:last-copied-text')))
+      .toBe(linkedUrl);
+
     await forwardMessage(alice.page, originalMessage, charlie.account.displayName);
 
     const compactChatRowHeight = await alice.page

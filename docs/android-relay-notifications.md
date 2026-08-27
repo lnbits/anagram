@@ -38,3 +38,14 @@ Tapping an alert opens the chats screen and routes to a matching group when the 
 The app declares `INTERNET`, `ACCESS_NETWORK_STATE`, `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED`, `FOREGROUND_SERVICE`, and `FOREGROUND_SERVICE_SPECIAL_USE`. The foreground service is declared as `specialUse`, with its Nostr WebSocket listener purpose documented in the manifest.
 
 The implementation uses the app's custom Capacitor bridge plus OkHttp WebSockets. There are no Google notification dependencies or credentials.
+
+## Debug logging
+
+Debug Android builds emit native listener diagnostics under the `NostrChatRelay` log tag:
+
+```sh
+adb logcat -c
+adb logcat -v threadtime NostrChatRelay:D '*:S'
+```
+
+The trace reports service lifecycle, watch-plan counts, relay connection state, EOSE, gift-wrap validation decisions, foreground suppression, and notification posting. It uses short identifiers for relay URLs and event IDs and never logs message content, private keys, complete public keys, signatures, or encrypted payloads. These diagnostics are omitted from release builds.

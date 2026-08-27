@@ -8,6 +8,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.ServiceInfo;
 import android.net.ConnectivityManager;
 import android.net.Network;
@@ -15,6 +16,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
@@ -43,6 +45,7 @@ import org.json.JSONObject;
 
 public final class RelayNotificationService extends Service {
 
+    private static final String LOG_TAG = "NostrChatRelay";
     static final String ACTION_START_OR_REFRESH = "com.lnbits.nostrchat.notifications.START_OR_REFRESH";
     static final String ACTION_STOP = "com.lnbits.nostrchat.notifications.STOP";
     static final String EXTRA_RECIPIENT_PUBKEY = "nostr_chat_recipient_pubkey";
@@ -70,6 +73,7 @@ public final class RelayNotificationService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        logDebug("service-created");
         if (!isProcessInForeground()) {
             RelayNotificationPreferences.setAppForeground(this, false);
         }
@@ -84,15 +88,18 @@ public final class RelayNotificationService extends Service {
     @Override
     public int onStartCommand(@Nullable Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
+            logDebug("service-stop-requested source=intent");
             stopListener(true);
             return START_NOT_STICKY;
         }
 
         if (!RelayNotificationPreferences.isEnabled(this)) {
+            logDebug("service-start-skipped reason=disabled");
             stopListener(false);
             return START_NOT_STICKY;
         }
 
+        logDebug("service-start startId=" + startId + " flags=" + flags);
         startAsForegroundService();
         reloadWatchPlan();
         return START_STICKY;
@@ -106,6 +113,7 @@ public final class RelayNotificationService extends Service {
 
     @Override
     public void onDestroy() {
+        logDebug("service-destroyed sockets=" + sockets.size());
         isStopping = true;
         handler.removeCallbacksAndMessages(null);
         closeAllSockets();
@@ -144,12 +152,15 @@ public final class RelayNotificationService extends Service {
                 notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             );
+            logDebug("foreground-notification-posted id=" + SERVICE_NOTIFICATION_ID);
             return;
         }
         startForeground(SERVICE_NOTIFICATION_ID, notification);
+        logDebug("foreground-notification-posted id=" + SERVICE_NOTIFICATION_ID);
     }
 
     private void stopListener(boolean disablePreference) {
+        logDebug("listener-stop disablePreference=" + disablePreference);
         isStopping = true;
         if (disablePreference) {
             RelayNotificationPreferences.setEnabled(this, false);
@@ -163,7 +174,12 @@ public final class RelayNotificationService extends Service {
     private void reloadWatchPlan() {
         configuredRelays = RelayNotificationPreferences.getRelays(this);
         recipientPubkeys = RelayNotificationPreferences.getRecipientPubkeys(this);
+        logDebug(
+            "watch-plan-loaded relays=" + configuredRelays.size() +
+            " recipients=" + recipientPubkeys.size()
+        );
         if (configuredRelays.isEmpty() || recipientPubkeys.isEmpty()) {
+            logWarning("watch-plan-rejected reason=empty");
             stopListener(true);
             return;
         }
@@ -184,6 +200,7 @@ public final class RelayNotificationService extends Service {
             return;
         }
 
+        logDebug("relay-connect-start relay=" + relayLogId(relayUrl));
         Request request = new Request.Builder().url(relayUrl).build();
         RelayWebSocketListener listener = new RelayWebSocketListener(relayUrl);
         WebSocket socket = httpClient.newWebSocket(request, listener);
@@ -202,11 +219,19 @@ public final class RelayNotificationService extends Service {
             int attempts = reconnectAttempts.getOrDefault(relayUrl, 0) + 1;
             reconnectAttempts.put(relayUrl, attempts);
             long delay = Math.min(MAX_RECONNECT_DELAY_MILLIS, 1_000L << Math.min(attempts - 1, 5));
+            logWarning(
+                "relay-reconnect-scheduled relay=" + relayLogId(relayUrl) +
+                " attempt=" + attempts +
+                " delayMs=" + delay
+            );
             handler.postDelayed(() -> connectRelay(relayUrl), delay);
         });
     }
 
     private void closeAllSockets() {
+        if (!sockets.isEmpty()) {
+            logDebug("relay-close-all count=" + sockets.size());
+        }
         for (WebSocket socket : sockets.values()) {
             socket.close(1000, "Notification listener refresh");
         }
@@ -221,6 +246,12 @@ public final class RelayNotificationService extends Service {
         filter.put("kinds", new JSONArray().put(1059));
         filter.put("#p", new JSONArray(recipientPubkeys));
         filter.put("since", since);
+
+        logDebug(
+            "relay-subscription-built relay=" + relayLogId(relayUrl) +
+            " recipients=" + recipientPubkeys.size() +
+            " since=" + since
+        );
 
         return new JSONArray().put("REQ").put(subscriptionId).put(filter).toString();
     }
@@ -253,6 +284,7 @@ public final class RelayNotificationService extends Service {
                 source.subscriptionId.equals(envelope.optString(1))
             ) {
                 source.markCaughtUp();
+                logDebug("relay-eose relay=" + relayLogId(source.relayUrl));
                 return;
             }
             if (envelope.length() < 3 || !"EVENT".equals(messageType)) {
@@ -269,29 +301,66 @@ public final class RelayNotificationService extends Service {
             String signature = event.optString("sig", "");
             long createdAt = event.optLong("created_at", 0L);
             long now = System.currentTimeMillis() / 1000L;
-            if (
-                !HEX_64.matcher(eventId).matches() ||
-                !HEX_64.matcher(eventPubkey).matches() ||
-                !HEX_128.matcher(signature).matches() ||
-                !isPlausibleGiftWrapTimestamp(createdAt, now) ||
-                !eventId.equals(computeEventId(event)) ||
-                !SchnorrSignatureVerifier.verify(eventId, eventPubkey, signature)
-            ) {
+            String eventLabel = eventLogId(eventId);
+            logDebug(
+                "gift-wrap-received relay=" + relayLogId(source.relayUrl) +
+                " event=" + eventLabel
+            );
+            if (!HEX_64.matcher(eventId).matches()) {
+                logDebug("gift-wrap-rejected event=" + eventLabel + " reason=event-id-format");
+                return;
+            }
+            if (!HEX_64.matcher(eventPubkey).matches()) {
+                logDebug("gift-wrap-rejected event=" + eventLabel + " reason=pubkey-format");
+                return;
+            }
+            if (!HEX_128.matcher(signature).matches()) {
+                logDebug("gift-wrap-rejected event=" + eventLabel + " reason=signature-format");
+                return;
+            }
+            if (!isPlausibleGiftWrapTimestamp(createdAt, now)) {
+                logDebug(
+                    "gift-wrap-rejected event=" + eventLabel +
+                    " reason=timestamp deltaSeconds=" + (createdAt - now)
+                );
+                return;
+            }
+            if (!eventId.equals(computeEventId(event))) {
+                logDebug("gift-wrap-rejected event=" + eventLabel + " reason=event-id-mismatch");
+                return;
+            }
+            if (!SchnorrSignatureVerifier.verify(eventId, eventPubkey, signature)) {
+                logDebug("gift-wrap-rejected event=" + eventLabel + " reason=signature-invalid");
                 return;
             }
 
             String recipientPubkey = findWatchedRecipient(event.optJSONArray("tags"));
-            if (recipientPubkey == null || !RelayNotificationPreferences.markEventSeen(this, eventId)) {
+            if (recipientPubkey == null) {
+                logDebug("gift-wrap-rejected event=" + eventLabel + " reason=recipient-not-watched");
+                return;
+            }
+            if (!RelayNotificationPreferences.markEventSeen(this, eventId)) {
+                logDebug("gift-wrap-ignored event=" + eventLabel + " reason=duplicate");
                 return;
             }
 
-            if (
-                source.shouldNotifyEvent() &&
-                !RelayNotificationPreferences.isAppForeground(this)
-            ) {
-                showMessageNotification(recipientPubkey);
+            if (!source.shouldNotifyEvent()) {
+                logDebug("gift-wrap-accepted event=" + eventLabel + " action=catch-up-only");
+                return;
             }
-        } catch (JSONException ignored) {}
+            if (RelayNotificationPreferences.isAppForeground(this)) {
+                logDebug("gift-wrap-accepted event=" + eventLabel + " action=foreground-suppressed");
+                return;
+            }
+
+            logDebug("gift-wrap-accepted event=" + eventLabel + " action=notify");
+            showMessageNotification(recipientPubkey);
+        } catch (JSONException exception) {
+            logWarning(
+                "relay-message-rejected relay=" + relayLogId(source.relayUrl) +
+                " reason=json-error " + exceptionSummary(exception)
+            );
+        }
     }
 
     @Nullable
@@ -325,7 +394,12 @@ public final class RelayNotificationService extends Service {
             .put(event.optInt("kind", -1))
             .put(tags)
             .put(event.optString("content", ""));
-        return sha256(serializedEvent.toString());
+        return computeCanonicalEventId(serializedEvent.toString());
+    }
+
+    static String computeCanonicalEventId(String serializedEvent) {
+        // Android's org.json escapes '/', while NIP-01 canonical JSON (JSON.stringify) does not.
+        return sha256(serializedEvent.replace("\\/", "/"));
     }
 
     private void showMessageNotification(String recipientPubkey) {
@@ -356,7 +430,13 @@ public final class RelayNotificationService extends Service {
 
         try {
             NotificationManagerCompat.from(this).notify(MESSAGE_NOTIFICATION_ID, notification);
-        } catch (SecurityException ignored) {}
+            logDebug(
+                "message-notification-posted id=" + MESSAGE_NOTIFICATION_ID +
+                " unreadCount=" + unreadCount
+            );
+        } catch (SecurityException exception) {
+            logWarning("message-notification-failed " + exceptionSummary(exception));
+        }
     }
 
     private Notification createServiceNotification() {
@@ -420,6 +500,7 @@ public final class RelayNotificationService extends Service {
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override
             public void onAvailable(@NonNull Network network) {
+                logDebug("network-available action=refresh-listener");
                 handler.postDelayed(() -> {
                     if (!isStopping && RelayNotificationPreferences.isEnabled(RelayNotificationService.this)) {
                         reloadWatchPlan();
@@ -449,6 +530,46 @@ public final class RelayNotificationService extends Service {
     private static String shortHash(String value) {
         String hash = sha256(value);
         return hash.length() >= 12 ? hash.substring(0, 12) : Integer.toHexString(value.hashCode());
+    }
+
+    private static String relayLogId(String relayUrl) {
+        return shortHash(relayUrl);
+    }
+
+    private static String eventLogId(String eventId) {
+        if (eventId == null || eventId.isEmpty()) {
+            return "missing";
+        }
+        return eventId.length() <= 12 ? eventId : eventId.substring(0, 12);
+    }
+
+    private static String exceptionSummary(Throwable throwable) {
+        String type = throwable.getClass().getSimpleName();
+        String message = throwable.getMessage();
+        if (message == null || message.trim().isEmpty()) {
+            return type;
+        }
+        String normalized = message.replace('\n', ' ').replace('\r', ' ').trim();
+        if (normalized.length() > 160) {
+            normalized = normalized.substring(0, 160);
+        }
+        return type + ": " + normalized;
+    }
+
+    private void logDebug(String message) {
+        if (isDebuggable()) {
+            Log.d(LOG_TAG, message);
+        }
+    }
+
+    private void logWarning(String message) {
+        if (isDebuggable()) {
+            Log.w(LOG_TAG, message);
+        }
+    }
+
+    private boolean isDebuggable() {
+        return (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
     }
 
     private static String sha256(String value) {
@@ -496,9 +617,21 @@ public final class RelayNotificationService extends Service {
         @Override
         public void onOpen(@NonNull WebSocket webSocket, @NonNull Response response) {
             handler.post(() -> reconnectAttempts.remove(relayUrl));
+            logDebug(
+                "relay-open relay=" + relayLogId(relayUrl) +
+                " responseCode=" + response.code()
+            );
             try {
-                webSocket.send(createSubscription(relayUrl));
+                boolean queued = webSocket.send(createSubscription(relayUrl));
+                logDebug(
+                    "relay-subscription-sent relay=" + relayLogId(relayUrl) +
+                    " queued=" + queued
+                );
             } catch (JSONException exception) {
+                logWarning(
+                    "relay-subscription-failed relay=" + relayLogId(relayUrl) +
+                    " " + exceptionSummary(exception)
+                );
                 webSocket.close(1002, "Invalid notification subscription");
             }
         }
@@ -510,12 +643,27 @@ public final class RelayNotificationService extends Service {
 
         @Override
         public void onClosed(@NonNull WebSocket webSocket, int code, @NonNull String reason) {
+            logWarning(
+                "relay-closed relay=" + relayLogId(relayUrl) +
+                " code=" + code +
+                " reason=" + sanitizeLogValue(reason)
+            );
             scheduleReconnect(relayUrl, webSocket);
         }
 
         @Override
         public void onFailure(@NonNull WebSocket webSocket, @NonNull Throwable throwable, @Nullable Response response) {
+            logWarning(
+                "relay-failed relay=" + relayLogId(relayUrl) +
+                " responseCode=" + (response == null ? "none" : response.code()) +
+                " " + exceptionSummary(throwable)
+            );
             scheduleReconnect(relayUrl, webSocket);
         }
+    }
+
+    private static String sanitizeLogValue(String value) {
+        String normalized = value.replace('\n', ' ').replace('\r', ' ').trim();
+        return normalized.length() <= 160 ? normalized : normalized.substring(0, 160);
     }
 }

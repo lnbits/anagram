@@ -439,7 +439,6 @@
   "notifications.android.blockedInstructions": "Android notifikasi diblokir. Izinkan mereka di pengaturan Android, lalu aktifkan kembali.",
   "notifications.android.enablePrompt": "Dapatkan pemberitahuan ketika pesan baru tiba. Jika Anda melanjutkan, Android akan meminta izin notifikasi.",
   "notifications.android.permissionDenied": "Android izin pemberitahuan tidak diberikan.",
-  "notifications.android.pushGatewayMissing": "Android pemberitahuan push memerlukan gateway push yang dikonfigurasi.",
   "notifications.android.toggleCaption": "Mati secara default. Mengaktifkannya akan meminta Android izin notifikasi.",
   "notifications.android.toggleLabel": "Tampilkan pemberitahuan ketika pesan baru masuk saat perangkat ini berada di latar belakang.",
   "notifications.browser.blockedEnableInstructions": "Notifikasi browser diblokir. Izinkan mereka di pengaturan browser untuk mengaktifkan ini.",

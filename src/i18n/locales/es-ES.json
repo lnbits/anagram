@@ -439,7 +439,6 @@
   "notifications.android.blockedInstructions": "Las notificaciones Android están bloqueadas. Permítalos en la configuración Android y luego vuelva a activarlo.",
   "notifications.android.enablePrompt": "Recibe notificaciones cuando lleguen nuevos mensajes. Si continúa, Android le pedirá permiso de notificación.",
   "notifications.android.permissionDenied": "Android no se concedió el permiso de notificación.",
-  "notifications.android.pushGatewayMissing": "Android las notificaciones push necesitan una puerta de enlace push configurada.",
   "notifications.android.toggleCaption": "Desactivado de forma predeterminada. Al activar esto, se le pedirá a Android permiso de notificación.",
   "notifications.android.toggleLabel": "Muestra una notificación cuando lleguen nuevos mensajes mientras este dispositivo está en segundo plano.",
   "notifications.browser.blockedEnableInstructions": "Se bloquearon las notificaciones del navegador. Permítales en la configuración del navegador para habilitar esto.",

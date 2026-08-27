@@ -439,7 +439,6 @@
   "notifications.android.blockedInstructions": "Уведомления Android заблокированы. Разрешите их в настройках Android, затем включите это снова.",
   "notifications.android.enablePrompt": "Получайте уведомления о появлении новых сообщений. Если вы продолжите, Android запросит разрешение на уведомление.",
   "notifications.android.permissionDenied": "Разрешение Android на уведомление не предоставлено.",
-  "notifications.android.pushGatewayMissing": "Для push-уведомлений Android требуется настроенный push-шлюз.",
   "notifications.android.toggleCaption": "По умолчанию выключено. При включении этого параметра Android будет запрашиваться разрешение на уведомление.",
   "notifications.android.toggleLabel": "Показывать уведомление при поступлении новых сообщений, пока это устройство находится в фоновом режиме.",
   "notifications.browser.blockedEnableInstructions": "Уведомления браузера были заблокированы. Разрешите их в настройках браузера, чтобы включить это.",

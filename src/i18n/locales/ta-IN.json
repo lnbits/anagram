@@ -439,7 +439,6 @@
   "notifications.android.blockedInstructions": "Android அறிவிப்புகள் தடுக்கப்பட்டுள்ளன. Android அமைப்புகளில் அவற்றை அனுமதித்து, இதை மீண்டும் இயக்கவும்.",
   "notifications.android.enablePrompt": "புதிய செய்திகள் வரும்போது அறிவிப்பைப் பெறவும். நீங்கள் தொடர்ந்தால், Android அறிவிப்பு அனுமதியைக் கேட்கும்.",
   "notifications.android.permissionDenied": "Android அறிவிப்பு அனுமதி வழங்கப்படவில்லை.",
-  "notifications.android.pushGatewayMissing": "Android புஷ் அறிவிப்புகளுக்கு உள்ளமைக்கப்பட்ட புஷ் கேட்வே தேவை.",
   "notifications.android.toggleCaption": "இயல்பாக ஆஃப். இதை இயக்கினால், அறிவிப்பு அனுமதிக்கு Android கேட்கப்படும்.",
   "notifications.android.toggleLabel": "இந்தச் சாதனம் பின்னணியில் இருக்கும்போது புதிய செய்திகள் வரும்போது அறிவிப்பைக் காட்டு.",
   "notifications.browser.blockedEnableInstructions": "உலாவி அறிவிப்புகள் தடுக்கப்பட்டன. இதை இயக்க உலாவி அமைப்புகளில் அவர்களை அனுமதிக்கவும்.",

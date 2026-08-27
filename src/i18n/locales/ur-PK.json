@@ -439,7 +439,6 @@
   "notifications.android.blockedInstructions": "Android اطلاعات مسدود ہیں۔ انہیں Android ترتیبات میں اجازت دیں، پھر اسے دوبارہ ٹوگل کریں۔",
   "notifications.android.enablePrompt": "نئے پیغامات آنے پر اطلاع حاصل کریں۔ اگر آپ جاری رکھتے ہیں تو Android اطلاع کی اجازت طلب کرے گا۔",
   "notifications.android.permissionDenied": "Android نوٹیفکیشن کی اجازت نہیں دی گئی۔",
-  "notifications.android.pushGatewayMissing": "Android پش اطلاعات کے لیے کنفیگرڈ پش گیٹ وے کی ضرورت ہے۔",
   "notifications.android.toggleCaption": "بطور ڈیفالٹ آف۔ اسے آن کرنے سے Android سے اطلاع کی اجازت طلب کی جائے گی۔",
   "notifications.android.toggleLabel": "نئے پیغامات آنے پر ایک اطلاع دکھائیں جب یہ آلہ پس منظر میں ہو۔",
   "notifications.browser.blockedEnableInstructions": "براؤزر کی اطلاعات کو مسدود کر دیا گیا تھا۔ انہیں براؤزر کی ترتیبات میں اسے فعال کرنے کی اجازت دیں۔",

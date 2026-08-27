@@ -77,11 +77,6 @@ This list is based on the current app code, especially `src/stores/nostrStore.ts
 - The app uses `kind:30078` replaceable events for private preferences, group identity secrets, and per-contact cursor state.
 - Those payloads are encrypted with NIP-44 before publication.
 
-## NIP-98
-
-- Used for HTTP authentication when registering Android push notification devices with the push gateway.
-- The app signs `kind:27235` events that bind the request URL, method, and body hash to the logged-in pubkey.
-
 ## NIP-171
 
 - This appears to be a repo-local draft/private-group scheme layered on top of NIP-17.

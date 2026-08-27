@@ -21,7 +21,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import AppDialog from 'src/components/AppDialog.vue';
-import { isAndroidPushNotificationSupported } from 'src/services/androidPushNotificationService';
+import { isAndroidRelayNotificationSupported } from 'src/services/androidRelayNotificationService';
 import { t } from 'src/i18n';
 
 const props = defineProps<{
@@ -42,7 +42,7 @@ const dialogModel = computed({
 const isDesktopRuntime = computed(
   () => typeof window !== 'undefined' && Boolean(window.desktopRuntime?.isElectron)
 );
-const isAndroidRuntime = computed(() => isAndroidPushNotificationSupported());
+const isAndroidRuntime = computed(() => isAndroidRelayNotificationSupported());
 const dialogTitle = computed(() => {
   if (isAndroidRuntime.value || isDesktopRuntime.value) {
     return t('notifications.enableNotifications');

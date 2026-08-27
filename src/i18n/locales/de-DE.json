@@ -439,7 +439,6 @@
   "notifications.android.blockedInstructions": "Android Benachrichtigungen sind blockiert. Erlauben Sie sie in den Android Einstellungen und schalten Sie dies dann wieder ein.",
   "notifications.android.enablePrompt": "Lassen Sie sich benachrichtigen, wenn neue Nachrichten eingehen. Wenn Sie fortfahren, wird Android Sie um eine Benachrichtigungserlaubnis bitten.",
   "notifications.android.permissionDenied": "Android Benachrichtigungsberechtigung wurde nicht erteilt.",
-  "notifications.android.pushGatewayMissing": "Android Push-Benachrichtigungen benötigen ein konfiguriertes Push-Gateway.",
   "notifications.android.toggleCaption": "Standardmäßig deaktiviert. Wenn Sie dies aktivieren, wird Android um die Erlaubnis zur Benachrichtigung gebeten.",
   "notifications.android.toggleLabel": "Zeigen Sie eine Benachrichtigung an, wenn neue Nachrichten eingehen, während dieses Gerät im Hintergrund läuft.",
   "notifications.browser.blockedEnableInstructions": "Browserbenachrichtigungen wurden blockiert. Lassen Sie sie in den Browsereinstellungen zu, um dies zu aktivieren.",

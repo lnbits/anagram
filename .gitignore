@@ -121,15 +121,6 @@ dist
 # DynamoDB Local files
 .dynamodb/
 
-# Firebase cache directory
-.firebase/
-
-# Firebase app credentials
-src-capacitor/android/app/google-services.json
-
-# Push gateway runtime data
-services/push-gateway/data/
-
 # TernJS port file
 .tern-port
 

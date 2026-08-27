@@ -5,7 +5,6 @@
     "node_modules",
     "src-capacitor",
     "src-cordova",
-    "services/push-gateway",
     "quasar.config.*.temporary.compiled*"
   ]
 }

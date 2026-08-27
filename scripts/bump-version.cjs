@@ -10,8 +10,6 @@ const files = {
   rootLock: path.resolve(projectRoot, 'package-lock.json'),
   capacitorPackage: path.resolve(projectRoot, 'src-capacitor/package.json'),
   capacitorLock: path.resolve(projectRoot, 'src-capacitor/package-lock.json'),
-  pushGatewayPackage: path.resolve(projectRoot, 'services/push-gateway/package.json'),
-  pushGatewayLock: path.resolve(projectRoot, 'services/push-gateway/package-lock.json'),
 };
 
 const args = parseArgs(process.argv.slice(2));
@@ -44,12 +42,6 @@ updatePackageJson(files.capacitorPackage, json => {
 });
 
 updateLockfile(files.capacitorLock, formatVersion(targetVersion));
-
-updatePackageJson(files.pushGatewayPackage, json => {
-  json.version = formatVersion(targetVersion);
-});
-
-updateLockfile(files.pushGatewayLock, formatVersion(targetVersion));
 
 console.log(`Updated app version to ${formatVersion(targetVersion)}.`);
 console.log(`Updated Android versionCode to ${androidVersionCode}.`);

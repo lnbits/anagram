@@ -439,7 +439,6 @@
   "notifications.android.blockedInstructions": "Android 通知はブロックされます。 Android 設定で許可してから、これを再度オンに切り替えてください。",
   "notifications.android.enablePrompt": "新しいメッセージが到着すると通知を受け取ります。続行すると、Android が通知の許可を求めます。",
   "notifications.android.permissionDenied": "Android 通知許可が与えられませんでした。",
-  "notifications.android.pushGatewayMissing": "Android プッシュ通知には、設定されたプッシュ ゲートウェイが必要です。",
   "notifications.android.toggleCaption": "デフォルトではオフです。これをオンにすると、Android に通知の許可が求められます。",
   "notifications.android.toggleLabel": "このデバイスがバックグラウンドにあるときに新しいメッセージが到着したときに通知を表示します。",
   "notifications.browser.blockedEnableInstructions": "ブラウザの通知がブロックされました。これを有効にするには、ブラウザ設定で許可してください。",

@@ -2,9 +2,7 @@
   "appId": "com.lnbits.nostrchat",
   "appName": "Nostr Chat",
   "webDir": "www",
-  "plugins": {
-    "PushNotifications": {
-      "presentationOptions": []
-    }
+  "android": {
+    "loggingBehavior": "none"
   }
 }

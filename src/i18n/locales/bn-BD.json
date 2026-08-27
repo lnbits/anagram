@@ -439,7 +439,6 @@
   "notifications.android.blockedInstructions": "Android বিজ্ঞপ্তিগুলি ব্লক করা হয়েছে৷ তাদের Android সেটিংসে অনুমতি দিন, তারপর এটিকে আবার চালু করুন।",
   "notifications.android.enablePrompt": "নতুন বার্তা এলে বিজ্ঞপ্তি পান। আপনি চালিয়ে গেলে, Android বিজ্ঞপ্তির অনুমতি চাইবে৷",
   "notifications.android.permissionDenied": "Android বিজ্ঞপ্তির অনুমতি দেওয়া হয়নি।",
-  "notifications.android.pushGatewayMissing": "Android পুশ বিজ্ঞপ্তিগুলির জন্য একটি কনফিগার করা পুশ গেটওয়ে প্রয়োজন।",
   "notifications.android.toggleCaption": "ডিফল্টরূপে বন্ধ। এটি চালু করলে Android বিজ্ঞপ্তির অনুমতি চাইবে।",
   "notifications.android.toggleLabel": "এই ডিভাইসটি ব্যাকগ্রাউন্ডে থাকাকালীন নতুন বার্তা এলে একটি বিজ্ঞপ্তি দেখান৷",
   "notifications.browser.blockedEnableInstructions": "ব্রাউজার বিজ্ঞপ্তি ব্লক করা হয়েছে. এটি সক্ষম করতে ব্রাউজার সেটিংসে তাদের অনুমতি দিন।",

@@ -1835,41 +1835,6 @@ export const useNostrStore = defineStore('nostrStore', () => {
     return `Nostr ${encodeBase64Utf8(JSON.stringify(await authEvent.toNostrEvent()))}`;
   }
 
-  async function signHttpAuthHeader(input: {
-    url: string;
-    method: string;
-    body?: string;
-  }): Promise<string> {
-    const loggedInPubkeyHex = getLoggedInPublicKeyHex();
-    if (!loggedInPubkeyHex) {
-      throw new Error('A logged-in public key is required to sign HTTP auth.');
-    }
-
-    const normalizedUrl = input.url.trim();
-    const normalizedMethod = input.method.trim().toUpperCase();
-    if (!normalizedUrl || !normalizedMethod) {
-      throw new Error('A URL and method are required to sign HTTP auth.');
-    }
-
-    const tags = [
-      ['u', normalizedUrl],
-      ['method', normalizedMethod],
-    ];
-    if (input.body !== undefined) {
-      tags.push(['payload', await sha256Hex(input.body)]);
-    }
-
-    const authEvent = new NDKEvent(ndk, {
-      kind: 27235,
-      created_at: Math.floor(Date.now() / 1000),
-      pubkey: loggedInPubkeyHex,
-      content: '',
-      tags,
-    });
-    await authEvent.sign(await getOrCreateSignerRuntime());
-    return `Nostr ${encodeBase64Utf8(JSON.stringify(await authEvent.toNostrEvent()))}`;
-  }
-
   const {
     clearPrivateKey: clearPrivateKeyImpl,
     createRemoteSignerNostrConnectLogin: createRemoteSignerNostrConnectLoginImpl,
@@ -2163,6 +2128,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     isReconnectHealing,
     isRestoringStartupState,
     listDeveloperTraceEntries,
+    listPrivateMessageReadRelayUrls: () => resolvePrivateMessageReadRelayUrls(),
     listPrivateMessageRecipientPubkeys,
     loginWithExtension: loginWithExtensionImpl,
     loginWithRemoteSignerBunker: loginWithRemoteSignerBunkerImpl,
@@ -2222,7 +2188,6 @@ export const useNostrStore = defineStore('nostrStore', () => {
     sendDirectMessage,
     ensureNostrBuildUploadAuthentication,
     signNostrBuildUploadAuthHeader,
-    signHttpAuthHeader,
     sendDirectMessageDeletion,
     sendDirectMessageReaction,
     unblockPubkey: (

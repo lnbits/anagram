@@ -439,7 +439,6 @@
   "notifications.android.blockedInstructions": "Les notifications Android sont bloquées. Autorisez-les dans les paramètres Android, puis réactivez-le.",
   "notifications.android.enablePrompt": "Soyez averti lorsque de nouveaux messages arrivent. Si vous continuez, Android demandera une autorisation de notification.",
   "notifications.android.permissionDenied": "Android l'autorisation de notification n'a pas été accordée.",
-  "notifications.android.pushGatewayMissing": "Android les notifications push nécessitent une passerelle push configurée.",
   "notifications.android.toggleCaption": "Désactivé par défaut. L'activation de cette option demandera à Android l'autorisation de notification.",
   "notifications.android.toggleLabel": "Afficher une notification lorsque de nouveaux messages arrivent alors que cet appareil est en arrière-plan.",
   "notifications.browser.blockedEnableInstructions": "Les notifications du navigateur ont été bloquées. Autorisez-les dans les paramètres du navigateur pour activer cela.",

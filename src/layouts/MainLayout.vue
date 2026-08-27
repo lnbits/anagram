@@ -86,10 +86,10 @@ import {
 } from 'src/router/pageLoaders';
 import { useVisibleViewportHeight } from 'src/composables/useVisibleViewportHeight';
 import {
-  refreshAndroidPushRegistration,
-  resolveAndroidPushNotificationRoute,
-  startAndroidPushNotificationListeners
-} from 'src/services/androidPushNotificationService';
+  refreshAndroidRelayNotificationListener,
+  resolveAndroidRelayNotificationRoute,
+  startAndroidRelayNotificationListeners
+} from 'src/services/androidRelayNotificationService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { useAppUpdateStore } from 'src/stores/appUpdateStore';
 import { useChatStore } from 'src/stores/chatStore';
@@ -234,8 +234,8 @@ let removeDesktopNotificationOpenListener: (() => void) | null = null;
 
 onMounted(() => {
   nostrStore.startAppLifecycleRuntime();
-  startAndroidPushNotificationListeners((recipientPubkey) => {
-    void openAndroidPushNotification(recipientPubkey);
+  startAndroidRelayNotificationListeners((recipientPubkey) => {
+    void openAndroidRelayNotification(recipientPubkey);
   });
   syncNativeViewportCssVariables();
   document.addEventListener('focusin', handleNativeDialogFocusIn);
@@ -323,12 +323,22 @@ watch(isNativeKeyboardVisible, (isVisible) => {
 
 watch(
   [
+    () => nostrStore.getLoggedInPublicKeyHex(),
     () => nostrStore.contactListVersion,
-    () => relayStore.relayEntries.map((entry) => `${entry.url}:${entry.read ? 'r' : '-'}:${entry.write ? 'w' : '-'}`).join('|')
+    () => relayStore.relayEntries.map((entry) => `${entry.url}:${entry.read ? 'r' : '-'}:${entry.write ? 'w' : '-'}`).join('|'),
+    () =>
+      chatStore.chats
+        .filter((chat) => chat.type === 'group')
+        .map(
+          (chat) =>
+            `${chat.publicKey}:${chat.epochPublicKey ?? ''}`
+        )
+        .sort()
+        .join('|')
   ],
   () => {
-    void refreshAndroidPushRegistration().catch((error) => {
-      console.warn('Failed to refresh Android push registration.', error);
+    void refreshAndroidRelayNotificationListener().catch((error) => {
+      console.warn('Failed to refresh the Android relay notification listener.', error);
     });
   }
 );
@@ -571,9 +581,9 @@ async function openChatFromDesktopNotification(chatPubkey: string): Promise<void
   }
 }
 
-async function openAndroidPushNotification(recipientPubkey: string | null): Promise<void> {
+async function openAndroidRelayNotification(recipientPubkey: string | null): Promise<void> {
   try {
-    await router.push(await resolveAndroidPushNotificationRoute(recipientPubkey));
+    await router.push(await resolveAndroidRelayNotificationRoute(recipientPubkey));
   } catch (error) {
     reportUiError('Failed to open chat from Android notification', error);
   }

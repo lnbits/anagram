@@ -439,7 +439,6 @@
   "notifications.android.blockedInstructions": "Android تم حظر الإشعارات. اسمح لهم بالدخول إلى إعدادات Android، ثم قم بتشغيل هذا مرة أخرى.",
   "notifications.android.enablePrompt": "الحصول على إشعار عند وصول رسائل جديدة. إذا تابعت، Android فسوف يطلب منك إذن الإعلام.",
   "notifications.android.permissionDenied": "Android لم يتم منح إذن الإعلام.",
-  "notifications.android.pushGatewayMissing": "Android تحتاج إعلامات الدفع إلى بوابة دفع تم تكوينها.",
   "notifications.android.toggleCaption": "إيقاف بشكل افتراضي. سيؤدي تشغيل هذا إلى مطالبة Android بالحصول على إذن الإعلام.",
   "notifications.android.toggleLabel": "إظهار إشعار عند وصول رسائل جديدة أثناء وجود هذا الجهاز في الخلفية.",
   "notifications.browser.blockedEnableInstructions": "تم حظر إشعارات المتصفح. اسمح لهم في إعدادات المتصفح لتمكين ذلك.",

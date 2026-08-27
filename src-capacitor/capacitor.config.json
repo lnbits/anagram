@@ -1,10 +1,5 @@
 {
   "appId": "com.lnbits.nostrchat",
   "appName": "Nostr Chat",
-  "webDir": "www",
-  "plugins": {
-    "PushNotifications": {
-      "presentationOptions": []
-    }
-  }
+  "webDir": "www"
 }

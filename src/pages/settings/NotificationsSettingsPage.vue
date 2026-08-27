@@ -20,56 +20,51 @@
           />
         </div>
 
-        <div v-if="showPushGatewaySettings" class="notifications-card__gateway">
-          <q-input
-            v-model="pushGatewayUrlInput"
-            outlined
-            dense
-            :label="$t('notifications.android.pushGatewayUrl')"
-            :error="pushGatewayUrlValidationError.length > 0"
-            :error-message="pushGatewayUrlValidationError"
-            :disable="isPushGatewayUrlSaving"
-            data-testid="notifications-push-gateway-url-input"
-          />
+        <template v-if="isAndroidRuntime && notificationsEnabled">
+          <q-separator />
+          <div class="notifications-card__row">
+            <div>
+              <div class="text-body2">
+                {{ $t('notifications.android.startOnBoot') }}
+              </div>
+              <div class="text-caption text-grey-6">
+                {{ $t('notifications.android.startOnBootCaption') }}
+              </div>
+            </div>
 
-          <q-btn
-            unelevated
-            no-caps
-            color="primary"
-            icon="save"
-            :label="$t('notifications.android.savePushGatewayUrl')"
-            :disable="!canSavePushGatewayUrl"
-            :loading="isPushGatewayUrlSaving"
-            data-testid="notifications-push-gateway-url-save"
-            @click="savePushGatewayUrl"
-          />
-        </div>
+            <q-toggle
+              :model-value="startOnBoot"
+              :disable="isStartOnBootUpdating"
+              color="primary"
+              data-testid="notifications-android-start-on-boot-toggle"
+              @update:model-value="handleStartOnBootToggle"
+            />
+          </div>
+
+          <div class="notifications-card__privacy text-caption text-grey-6">
+            <q-icon name="privacy_tip" size="18px" aria-hidden="true" />
+            <span>{{ $t('notifications.android.privacyCaption') }}</span>
+          </div>
+        </template>
       </q-card-section>
     </q-card>
   </SettingsDetailLayout>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
 import { useQuasar } from 'quasar';
 import SettingsDetailLayout from 'src/components/SettingsDetailLayout.vue';
+import { t } from 'src/i18n';
 import {
-  clearAndroidPushNotificationsPreference,
-  getAndroidPushPermission,
-  isAndroidPushNotificationConfigured,
-  isAndroidPushNotificationSupported,
-  readAndroidPushNotificationsPreference,
-  refreshAndroidPushRegistration,
-  requestAndroidPushNotificationsAfterLogin,
-  saveAndroidPushNotificationsPreference,
-  unregisterAndroidPushNotifications,
-  type AndroidPushPermissionState
-} from 'src/services/androidPushNotificationService';
-import {
-  readPushGatewayBaseUrl,
-  savePushGatewayBaseUrl,
-  validatePushGatewayBaseUrl
-} from 'src/services/pushGatewayClient';
+  clearAndroidRelayNotificationsPreference,
+  disableAndroidRelayNotifications,
+  getAndroidRelayNotificationState,
+  isAndroidRelayNotificationSupported,
+  readAndroidRelayStartOnBootPreference,
+  requestAndroidRelayNotificationsAfterLogin,
+  setAndroidRelayNotificationStartOnBoot,
+  type AndroidRelayNotificationPermissionState
+} from 'src/services/androidRelayNotificationService';
 import {
   getBrowserNotificationPermission,
   isBrowserNotificationSupported,
@@ -78,34 +73,29 @@ import {
   saveBrowserNotificationsPreference
 } from 'src/utils/browserNotificationPreference';
 import { reportUiError } from 'src/utils/uiErrorHandler';
-import { t } from 'src/i18n';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 
 const $q = useQuasar();
 
+type BrowserNotificationPermissionState = ReturnType<typeof getBrowserNotificationPermission>;
 type NotificationPermissionState =
   | BrowserNotificationPermissionState
-  | AndroidPushPermissionState;
+  | AndroidRelayNotificationPermissionState;
 
-type BrowserNotificationPermissionState = ReturnType<typeof getBrowserNotificationPermission>;
-
-const isAndroidRuntime = isAndroidPushNotificationSupported();
+const isAndroidRuntime = isAndroidRelayNotificationSupported();
 const storedBrowserNotificationsPreference = readBrowserNotificationsPreference();
-const storedAndroidPushPreference = readAndroidPushNotificationsPreference();
-const notificationsSupported = isAndroidRuntime
-  ? isAndroidPushNotificationConfigured()
-  : isBrowserNotificationSupported();
+const notificationsSupported = isAndroidRuntime || isBrowserNotificationSupported();
 const notificationPermission = ref<NotificationPermissionState>(
   isAndroidRuntime ? 'prompt' : getBrowserNotificationPermission()
 );
 const notificationsEnabled = ref(
-  isAndroidRuntime
-    ? storedAndroidPushPreference && notificationPermission.value === 'granted'
-    : storedBrowserNotificationsPreference &&
-        (notificationPermission.value === 'granted' || notificationPermission.value === 'native')
+  !isAndroidRuntime &&
+    storedBrowserNotificationsPreference &&
+    (notificationPermission.value === 'granted' || notificationPermission.value === 'native')
 );
+const startOnBoot = ref(readAndroidRelayStartOnBootPreference());
 const isPermissionRequestInFlight = ref(false);
-const isPushGatewayUrlSaving = ref(false);
-const pushGatewayUrlInput = ref(readPushGatewayBaseUrl());
+const isStartOnBootUpdating = ref(false);
 const isDesktopRuntime =
   typeof window !== 'undefined' && Boolean(window.desktopRuntime?.isElectron);
 
@@ -118,16 +108,17 @@ if (
 }
 
 onMounted(() => {
-  if (!isAndroidRuntime) {
-    return;
+  if (isAndroidRuntime) {
+    document.addEventListener('visibilitychange', handleAndroidVisibilityChange);
+    void refreshAndroidState().catch((error) => {
+      console.warn('Failed to read Android relay notification state.', error);
+    });
   }
-
-  void refreshAndroidPermissionState();
 });
 
-watch(notificationsEnabled, (isEnabled) => {
-  if (isAndroidRuntime && isEnabled) {
-    pushGatewayUrlInput.value = readPushGatewayBaseUrl();
+onBeforeUnmount(() => {
+  if (isAndroidRuntime) {
+    document.removeEventListener('visibilitychange', handleAndroidVisibilityChange);
   }
 });
 
@@ -136,41 +127,13 @@ const notificationsTitle = computed(() => {
     return t('notifications.showAndroidPushNotifications');
   }
 
-  return isDesktopRuntime ? t('notifications.showDesktopNotifications') : t('notifications.showBrowserNotifications');
+  return isDesktopRuntime
+    ? t('notifications.showDesktopNotifications')
+    : t('notifications.showBrowserNotifications');
 });
-
-const showPushGatewaySettings = computed(() => isAndroidRuntime && notificationsEnabled.value);
-
-const pushGatewayUrlValidation = computed(() =>
-  validatePushGatewayBaseUrl(pushGatewayUrlInput.value)
-);
-
-const pushGatewayUrlValidationError = computed(() => {
-  switch (pushGatewayUrlValidation.value.reason) {
-    case 'empty':
-      return t('notifications.android.pushGatewayUrlRequired');
-    case 'invalid':
-      return t('notifications.android.pushGatewayUrlInvalid');
-    case 'protocol':
-      return t('notifications.android.pushGatewayUrlProtocol');
-    default:
-      return '';
-  }
-});
-
-const canSavePushGatewayUrl = computed(
-  () =>
-    showPushGatewaySettings.value &&
-    pushGatewayUrlValidation.value.isValid &&
-    !isPushGatewayUrlSaving.value
-);
 
 const notificationCaption = computed(() => {
   if (!notificationsSupported) {
-    if (isAndroidRuntime) {
-      return t('notifications.android.pushGatewayMissing');
-    }
-
     return isDesktopRuntime
       ? t('notifications.desktop.unsupportedEnvironment')
       : t('notifications.browser.unsupportedApp');
@@ -201,52 +164,29 @@ const notificationCaption = computed(() => {
     : t('notifications.browser.toggleCaption');
 });
 
-async function refreshAndroidPermissionState(): Promise<void> {
-  notificationPermission.value = await getAndroidPushPermission();
-  notificationsEnabled.value =
-    readAndroidPushNotificationsPreference() && notificationPermission.value === 'granted';
-  if (readAndroidPushNotificationsPreference() && notificationPermission.value !== 'granted') {
-    saveAndroidPushNotificationsPreference(false);
+async function refreshAndroidState(): Promise<void> {
+  const state = await getAndroidRelayNotificationState();
+  notificationPermission.value = state.permission;
+  startOnBoot.value = state.startOnBoot;
+  notificationsEnabled.value = state.enabled && state.permission === 'granted';
+
+  if (state.enabled && state.permission !== 'granted') {
+    await disableAndroidRelayNotifications();
     notificationsEnabled.value = false;
   }
 }
 
-async function savePushGatewayUrl(): Promise<void> {
-  if (!pushGatewayUrlValidation.value.isValid || !pushGatewayUrlValidation.value.normalizedUrl) {
-    $q.notify({
-      type: 'warning',
-      message: pushGatewayUrlValidationError.value,
-      position: 'top',
-      timeout: 3200
+function handleAndroidVisibilityChange(): void {
+  if (document.visibilityState === 'visible') {
+    void refreshAndroidState().catch((error) => {
+      console.warn('Failed to refresh Android relay notification state.', error);
     });
-    return;
-  }
-
-  isPushGatewayUrlSaving.value = true;
-  try {
-    const savedUrl = savePushGatewayBaseUrl(pushGatewayUrlInput.value);
-    pushGatewayUrlInput.value = savedUrl;
-    await refreshAndroidPushRegistration();
-    $q.notify({
-      type: 'positive',
-      message: t('notifications.android.pushGatewayUrlSaved'),
-      position: 'top',
-      timeout: 2400
-    });
-  } catch (error) {
-    reportUiError(
-      'Failed to update Android push gateway URL',
-      error,
-      t('errors.failedUpdatePushGatewayUrl')
-    );
-  } finally {
-    isPushGatewayUrlSaving.value = false;
   }
 }
 
 async function handleNotificationsToggle(nextValue: boolean): Promise<void> {
   if (isAndroidRuntime) {
-    await handleAndroidPushNotificationsToggle(nextValue);
+    await handleAndroidNotificationsToggle(nextValue);
     return;
   }
 
@@ -292,10 +232,10 @@ async function handleNotificationsToggle(nextValue: boolean): Promise<void> {
 
     $q.notify({
       type: permission === 'denied' ? 'warning' : 'info',
-        message:
-          permission === 'denied'
-            ? t('notifications.browser.blockedEnableInstructions')
-            : t('notifications.browser.permissionDenied'),
+      message:
+        permission === 'denied'
+          ? t('notifications.browser.blockedEnableInstructions')
+          : t('notifications.browser.permissionDenied'),
       position: 'top',
       timeout: 3200
     });
@@ -312,49 +252,22 @@ async function handleNotificationsToggle(nextValue: boolean): Promise<void> {
   }
 }
 
-async function handleAndroidPushNotificationsToggle(nextValue: boolean): Promise<void> {
-  if (!nextValue) {
-    isPermissionRequestInFlight.value = true;
-    try {
-      await unregisterAndroidPushNotifications();
-      notificationsEnabled.value = false;
-      notificationPermission.value = await getAndroidPushPermission();
-    } catch (error) {
-      notificationsEnabled.value = readAndroidPushNotificationsPreference();
-      reportUiError(
-        'Failed to disable Android push notifications',
-        error,
-        t('errors.failedDisablePushNotifications')
-      );
-    } finally {
-      isPermissionRequestInFlight.value = false;
-    }
-    return;
-  }
-
-  if (!notificationsSupported) {
-    notificationsEnabled.value = false;
-    clearAndroidPushNotificationsPreference();
-    $q.notify({
-      type: 'warning',
-      message: t('notifications.android.pushGatewayMissing'),
-      position: 'top',
-      timeout: 3200
-    });
-    return;
-  }
-
+async function handleAndroidNotificationsToggle(nextValue: boolean): Promise<void> {
   isPermissionRequestInFlight.value = true;
   try {
-    const permission = await requestAndroidPushNotificationsAfterLogin();
-    notificationPermission.value = permission;
-    notificationsEnabled.value = permission === 'granted';
-    if (permission === 'granted') {
-      pushGatewayUrlInput.value = readPushGatewayBaseUrl();
+    if (!nextValue) {
+      await disableAndroidRelayNotifications();
+      notificationsEnabled.value = false;
+      notificationPermission.value = (await getAndroidRelayNotificationState()).permission;
+      return;
     }
 
+    const permission = await requestAndroidRelayNotificationsAfterLogin();
+    notificationPermission.value = permission;
+    notificationsEnabled.value = permission === 'granted';
+
     if (permission !== 'granted') {
-      clearAndroidPushNotificationsPreference();
+      clearAndroidRelayNotificationsPreference();
       $q.notify({
         type: permission === 'denied' ? 'warning' : 'info',
         message:
@@ -367,14 +280,31 @@ async function handleAndroidPushNotificationsToggle(nextValue: boolean): Promise
     }
   } catch (error) {
     notificationsEnabled.value = false;
-    clearAndroidPushNotificationsPreference();
+    clearAndroidRelayNotificationsPreference();
     reportUiError(
-      'Failed to update Android push notification preference',
+      'Failed to update Android relay notification preference',
       error,
       t('errors.failedUpdatePushNotifications')
     );
   } finally {
     isPermissionRequestInFlight.value = false;
+  }
+}
+
+async function handleStartOnBootToggle(nextValue: boolean): Promise<void> {
+  isStartOnBootUpdating.value = true;
+  try {
+    await setAndroidRelayNotificationStartOnBoot(nextValue);
+    startOnBoot.value = nextValue;
+  } catch (error) {
+    startOnBoot.value = !nextValue;
+    reportUiError(
+      'Failed to update Android notification startup preference',
+      error,
+      t('errors.failedUpdatePushNotifications')
+    );
+  } finally {
+    isStartOnBootUpdating.value = false;
   }
 }
 </script>
@@ -397,16 +327,9 @@ async function handleAndroidPushNotificationsToggle(nextValue: boolean): Promise
   gap: 16px;
 }
 
-.notifications-card__gateway {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 12px;
-}
-
-@media (--nc-mobile-viewport) {
-  .notifications-card__gateway {
-    grid-template-columns: minmax(0, 1fr);
-  }
+.notifications-card__privacy {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
 }
 </style>

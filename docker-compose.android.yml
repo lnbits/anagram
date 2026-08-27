@@ -20,8 +20,6 @@ services:
       ANDROID_KEY_PASSWORD: ${ANDROID_KEY_PASSWORD:-}
       ANDROID_VERSION_CODE: ${ANDROID_VERSION_CODE:-}
       ANDROID_VERSION_NAME: ${ANDROID_VERSION_NAME:-}
-      VITE_PUSH_GATEWAY_URL: ${VITE_PUSH_GATEWAY_URL:-https://push.lnbits.link}
-      PUSH_GATEWAY_URL: ${PUSH_GATEWAY_URL:-https://push.lnbits.link}
     volumes:
       - .:/workspace
       - android-root-node-modules:/workspace/node_modules

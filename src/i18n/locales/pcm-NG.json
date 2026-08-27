@@ -439,7 +439,6 @@
   "notifications.android.blockedInstructions": "Android notifications dey blocked. Allow them in Android settings, then toggle dis back on.",
   "notifications.android.enablePrompt": "Get notified when new messages arrive. If you continue, Android go ask for notification permission.",
   "notifications.android.permissionDenied": "Android notification permission no gree give permission.",
-  "notifications.android.pushGatewayMissing": "Android push notifications need configured push gateway.",
   "notifications.android.toggleCaption": "Off by default. Turning dis on go ask Android for notification permission.",
   "notifications.android.toggleLabel": "Show a notification when new messages arrive as dis device is in the background.",
   "notifications.browser.blockedEnableInstructions": "Browser notifications dem block. Allow them in browser settings to enable dis.",

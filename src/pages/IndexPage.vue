@@ -236,7 +236,7 @@ import { useQuasar } from 'quasar';
 import ChatList from 'src/components/ChatList.vue';
 import { useSectionShell } from 'src/composables/useSectionShell';
 import { useVisibleViewportHeight } from 'src/composables/useVisibleViewportHeight';
-import { scheduleAndroidPushNotificationCountReset } from 'src/services/androidPushNotificationService';
+import { scheduleAndroidRelayNotificationCountReset } from 'src/services/androidRelayNotificationService';
 import { useChatStore } from 'src/stores/chatStore';
 import {
   isMissingContactRelaysError,
@@ -683,7 +683,7 @@ async function handleSend(payload: { text: string; replyTo: MessageReplyPreview 
       await chatStore.acceptChat(activeChatId.value, {
         lastOutgoingMessageAt: created.sentAt
       });
-      scheduleAndroidPushNotificationCountReset();
+      scheduleAndroidRelayNotificationCountReset();
     }
   } catch (error) {
     reportUiError('Failed to send chat message', error, t('errors.failedSendMessage'));
@@ -733,7 +733,7 @@ async function handleSendMedia(payload: {
       await chatStore.acceptChat(activeChatId.value, {
         lastOutgoingMessageAt: created.sentAt
       });
-      scheduleAndroidPushNotificationCountReset();
+      scheduleAndroidRelayNotificationCountReset();
     }
   } catch (error) {
     reportUiError('Failed to send media attachment', error, t('errors.failedSendMessage'));
@@ -776,7 +776,7 @@ async function handleEditMessage(payload: { message: Message; text: string }): P
         messageMeta: updated.meta,
       });
     }
-    scheduleAndroidPushNotificationCountReset();
+    scheduleAndroidRelayNotificationCountReset();
   } catch (error) {
     reportUiError('Failed to edit chat message', error, t('errors.failedSendMessage'));
   }
@@ -828,7 +828,7 @@ async function handleForwardMessageToChat(chatId: string): Promise<void> {
       await chatStore.acceptChat(targetChat.id, {
         lastOutgoingMessageAt: created.sentAt,
       });
-      scheduleAndroidPushNotificationCountReset();
+      scheduleAndroidRelayNotificationCountReset();
       isForwardMessageDialogOpen.value = false;
       forwardingMessage.value = null;
       $q.notify({
@@ -868,7 +868,7 @@ async function handleReactToMessage(payload: { message: Message; emoji: string }
         }
       );
     }
-    scheduleAndroidPushNotificationCountReset();
+    scheduleAndroidRelayNotificationCountReset();
   } catch (error) {
     reportUiError('Failed to add message reaction', error, t('errors.failedAddReaction'));
   }
@@ -877,7 +877,7 @@ async function handleReactToMessage(payload: { message: Message; emoji: string }
 async function handleDeleteMessage(message: Message): Promise<void> {
   try {
     await messageStore.deleteMessage(message.chatId, message.id);
-    scheduleAndroidPushNotificationCountReset();
+    scheduleAndroidRelayNotificationCountReset();
   } catch (error) {
     reportUiError('Failed to delete message', error, t('errors.failedDeleteMessage'));
   }
@@ -893,7 +893,7 @@ async function handleRemoveReaction(payload: {
       payload.message.id,
       payload.reaction
     );
-    scheduleAndroidPushNotificationCountReset();
+    scheduleAndroidRelayNotificationCountReset();
   } catch (error) {
     reportUiError('Failed to remove message reaction', error, t('errors.failedRemoveReaction'));
   }

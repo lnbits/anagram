@@ -1,10 +1,10 @@
 import {
-  isAndroidPushNotificationConfigured,
-  isAndroidPushNotificationSupported,
-  readAndroidPushNotificationsPreference,
-  requestAndroidPushNotificationsAfterLogin,
-  saveAndroidPushNotificationsPreference,
-} from 'src/services/androidPushNotificationService';
+  getAndroidRelayNotificationState,
+  isAndroidRelayNotificationSupported,
+  refreshAndroidRelayNotificationListener,
+  requestAndroidRelayNotificationsAfterLogin,
+  saveAndroidRelayNotificationsPreference,
+} from 'src/services/androidRelayNotificationService';
 import {
   getBrowserNotificationPermission,
   isBrowserNotificationSupported,
@@ -37,25 +37,24 @@ export function useBrowserNotificationsLoginPrompt() {
   }
 
   async function handleBrowserNotificationsAfterLogin(): Promise<void> {
-    if (isAndroidPushNotificationSupported()) {
-      if (!isAndroidPushNotificationConfigured()) {
-        saveAndroidPushNotificationsPreference(false);
-        return;
-      }
-
-      if (readAndroidPushNotificationsPreference()) {
+    if (isAndroidRelayNotificationSupported()) {
+      const state = await getAndroidRelayNotificationState().catch(() => null);
+      if (state?.enabled) {
+        await refreshAndroidRelayNotificationListener().catch((error) => {
+          console.warn('Failed to refresh Android relay notifications after login.', error);
+        });
         return;
       }
 
       const shouldEnableNotifications = await openDialog();
       if (!shouldEnableNotifications) {
-        saveAndroidPushNotificationsPreference(false);
+        saveAndroidRelayNotificationsPreference(false);
         return;
       }
 
-      await requestAndroidPushNotificationsAfterLogin().catch((error) => {
-        console.warn('Failed to enable Android push notifications after login.', error);
-        saveAndroidPushNotificationsPreference(false);
+      await requestAndroidRelayNotificationsAfterLogin().catch((error) => {
+        console.warn('Failed to enable Android relay notifications after login.', error);
+        saveAndroidRelayNotificationsPreference(false);
       });
       return;
     }

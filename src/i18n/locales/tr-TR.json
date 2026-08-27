@@ -439,7 +439,6 @@
   "notifications.android.blockedInstructions": "Android bildirimleri engellendi. Android ayarlarında bunlara izin verin, ardından bunu tekrar açın.",
   "notifications.android.enablePrompt": "Yeni mesajlar geldiğinde bildirim alın. Devam ederseniz Android bildirim izni isteyecektir.",
   "notifications.android.permissionDenied": "Android bildirim izni verilmedi.",
-  "notifications.android.pushGatewayMissing": "Android anında bildirimler yapılandırılmış bir anında iletme ağ geçidine ihtiyaç duyar.",
   "notifications.android.toggleCaption": "Varsayılan olarak kapalıdır. Bunu açmak Android'dan bildirim izni isteyecektir.",
   "notifications.android.toggleLabel": "Bu cihaz arka plandayken yeni mesajlar geldiğinde bildirim göster.",
   "notifications.browser.blockedEnableInstructions": "Tarayıcı bildirimleri engellendi. Bunu etkinleştirmeleri için tarayıcı ayarlarında onlara izin verin.",

@@ -439,7 +439,6 @@
   "notifications.android.blockedInstructions": "Android सूचना अवरोधित केल्या आहेत. त्यांना Android सेटिंग्जमध्ये परवानगी द्या, नंतर हे पुन्हा टॉगल करा.",
   "notifications.android.enablePrompt": "नवीन संदेश आल्यावर सूचना मिळवा. तुम्ही सुरू ठेवल्यास, Android सूचना परवानगीसाठी विचारेल.",
   "notifications.android.permissionDenied": "Android सूचना परवानगी दिली नाही.",
-  "notifications.android.pushGatewayMissing": "Android पुश सूचनांना कॉन्फिगर केलेले पुश गेटवे आवश्यक आहे.",
   "notifications.android.toggleCaption": "डीफॉल्टनुसार बंद. हे चालू केल्याने Android सूचना परवानगीसाठी विचारले जाईल.",
   "notifications.android.toggleLabel": "हे डिव्हाइस बॅकग्राउंडमध्ये असताना नवीन संदेश आल्यावर सूचना दर्शवा.",
   "notifications.browser.blockedEnableInstructions": "ब्राउझर सूचना अवरोधित केल्या होत्या. हे सक्षम करण्यासाठी त्यांना ब्राउझर सेटिंग्जमध्ये अनुमती द्या.",

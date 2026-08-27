@@ -162,7 +162,7 @@ import AppTooltip from 'src/components/AppTooltip.vue';
 import ReconnectHealingBanner from 'src/components/ReconnectHealingBanner.vue';
 import StartupHistoryBanner from 'src/components/StartupHistoryBanner.vue';
 import { useSectionShell } from 'src/composables/useSectionShell';
-import { unregisterAndroidPushNotifications } from 'src/services/androidPushNotificationService';
+import { disableAndroidRelayNotifications } from 'src/services/androidRelayNotificationService';
 import { useAppUpdateStore } from 'src/stores/appUpdateStore';
 import { useNostrStore } from 'src/stores/nostrStore';
 import { schedulePendingLogoutCleanup } from 'src/utils/logoutCleanup';
@@ -305,8 +305,8 @@ async function handleConfirmLogout(): Promise<void> {
   isLoggingOut.value = true;
 
   try {
-    await unregisterAndroidPushNotifications().catch((error) => {
-      console.warn('Failed to unregister Android push notifications during logout.', error);
+    await disableAndroidRelayNotifications().catch((error) => {
+      console.warn('Failed to stop Android relay notifications during logout.', error);
     });
     await nostrStore.logout();
     await router.replace({ name: 'auth' });

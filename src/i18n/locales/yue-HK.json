@@ -439,7 +439,6 @@
   "notifications.android.blockedInstructions": "Android 通知被封鎖。喺 Android 設定入面允許佢哋，然後將佢開返。",
   "notifications.android.enablePrompt": "當新訊息到達嗰陣會收到通知。如果你繼續， Android 會要求通知許可。",
   "notifications.android.permissionDenied": "Android 冇獲得通知許可。",
-  "notifications.android.pushGatewayMissing": "Android 推送通知需要一個配置好嘅推送閘道。",
   "notifications.android.toggleCaption": "預設閂咗。開呢個功能會要求 Android 獲得通知權限。",
   "notifications.android.toggleLabel": "喺呢部裝置喺後台嗰陣，當新訊息到達嗰陣顯示通知。",
   "notifications.browser.blockedEnableInstructions": "瀏覽器通知被封鎖。喺瀏覽器設定入面畀佢哋啟用呢個功能。",

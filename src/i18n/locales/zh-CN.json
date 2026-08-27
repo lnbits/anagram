@@ -439,7 +439,6 @@
   "notifications.android.blockedInstructions": "Android通知被阻止。允许它们进入 Android 设置，然后将其重新打开。",
   "notifications.android.enablePrompt": "当新消息到达时收到通知。如果您继续，Android 将请求通知许可。",
   "notifications.android.permissionDenied": "Android 未授予通知许可。",
-  "notifications.android.pushGatewayMissing": "Android推送通知需要配置推送网关。",
   "notifications.android.toggleCaption": "默认关闭。打开此功能将请求 Android 的通知许可。",
   "notifications.android.toggleLabel": "当此设备处于后台时有新消息到达时显示通知。",
   "notifications.browser.blockedEnableInstructions": "浏览器通知被阻止。在浏览器设置中允许它们来启用此功能。",

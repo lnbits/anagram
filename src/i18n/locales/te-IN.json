@@ -439,7 +439,6 @@
   "notifications.android.blockedInstructions": "Android నోటిఫికేషన్‌లు బ్లాక్ చేయబడ్డాయి. Android సెట్టింగ్‌లలో వారిని అనుమతించండి, ఆపై దీన్ని తిరిగి టోగుల్ చేయండి.",
   "notifications.android.enablePrompt": "కొత్త సందేశాలు వచ్చినప్పుడు నోటిఫికేషన్ పొందండి. మీరు కొనసాగితే, Android నోటిఫికేషన్ అనుమతి కోసం అడుగుతుంది.",
   "notifications.android.permissionDenied": "Android నోటిఫికేషన్ అనుమతి మంజూరు చేయబడలేదు.",
-  "notifications.android.pushGatewayMissing": "Android పుష్ నోటిఫికేషన్‌లకు కాన్ఫిగర్ చేయబడిన పుష్ గేట్‌వే అవసరం.",
   "notifications.android.toggleCaption": "డిఫాల్ట్‌గా ఆఫ్. దీన్ని ఆన్ చేయడం వలన నోటిఫికేషన్ అనుమతి కోసం Android అడుగుతుంది.",
   "notifications.android.toggleLabel": "ఈ పరికరం నేపథ్యంలో ఉన్నప్పుడు కొత్త సందేశాలు వచ్చినప్పుడు నోటిఫికేషన్‌ను చూపండి.",
   "notifications.browser.blockedEnableInstructions": "బ్రౌజర్ నోటిఫికేషన్‌లు బ్లాక్ చేయబడ్డాయి. దీన్ని ప్రారంభించడానికి బ్రౌజర్ సెట్టింగ్‌లలో వారిని అనుమతించండి.",

@@ -783,10 +783,7 @@ public final class RelayNotificationService extends Service {
                 ? "No relay connection · retrying"
                 : "Connecting to relays…";
         }
-        String connectedStatus = connected + " of " + total + " relays on";
-        return connected < total || retrying
-            ? connectedStatus + " · reconnecting"
-            : connectedStatus;
+        return connected + " of " + total + " relays connected";
     }
 
     private void updateServiceNotification() {

@@ -87,6 +87,7 @@ import {
 import { useVisibleViewportHeight } from 'src/composables/useVisibleViewportHeight';
 import {
   clearAndroidRelayNotificationForChat,
+  createAndroidNotificationConversationSignature,
   refreshAndroidRelayNotificationListener,
   resolveAndroidRelayNotificationRoute,
   startAndroidRelayNotificationListeners
@@ -330,15 +331,7 @@ watch(
     () => nostrStore.getLoggedInPublicKeyHex(),
     () => nostrStore.contactListVersion,
     () => relayStore.relayEntries.map((entry) => `${entry.url}:${entry.read ? 'r' : '-'}:${entry.write ? 'w' : '-'}`).join('|'),
-    () =>
-      chatStore.chats
-        .filter((chat) => chat.type === 'group')
-        .map(
-          (chat) =>
-            `${chat.publicKey}:${chat.epochPublicKey ?? ''}`
-        )
-        .sort()
-        .join('|')
+    () => createAndroidNotificationConversationSignature(chatStore.chats)
   ],
   () => {
     void refreshAndroidRelayNotificationListener().catch((error) => {

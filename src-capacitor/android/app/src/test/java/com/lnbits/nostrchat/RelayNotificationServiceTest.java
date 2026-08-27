@@ -65,11 +65,15 @@ public final class RelayNotificationServiceTest {
             RelayNotificationService.serviceStatusText(0, 3, true, true)
         );
         assertEquals(
-            "2 of 3 relays on · reconnecting",
+            "2 of 3 relays connected",
             RelayNotificationService.serviceStatusText(2, 3, true, false)
         );
         assertEquals(
-            "3 of 3 relays on",
+            "2 of 3 relays connected",
+            RelayNotificationService.serviceStatusText(2, 3, true, true)
+        );
+        assertEquals(
+            "3 of 3 relays connected",
             RelayNotificationService.serviceStatusText(3, 3, true, false)
         );
     }

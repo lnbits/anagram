@@ -6,6 +6,7 @@ import { contactsService } from 'src/services/contactsService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { resolveCurrentGroupChatEpochEntryValue } from 'src/stores/nostr/valueUtils';
 import { useNostrStore } from 'src/stores/nostrStore';
+import type { Chat } from 'src/types/chat';
 import { buildAvatarText } from 'src/utils/avatarText';
 import type { RouteLocationRaw } from 'vue-router';
 
@@ -187,6 +188,27 @@ function isConversationNotificationEnabled(meta: Record<string, unknown>): boole
   return meta.muted !== true && meta.blocked !== true && meta.inbox_state !== 'blocked';
 }
 
+export function createAndroidNotificationConversationSignature(
+  chats: Pick<Chat, 'avatar' | 'epochPublicKey' | 'meta' | 'name' | 'publicKey' | 'type'>[]
+): string {
+  return chats
+    .map((chat) =>
+      JSON.stringify({
+        avatar: chat.avatar.trim(),
+        blocked: chat.meta.blocked === true,
+        epochPublicKey: chat.epochPublicKey ?? '',
+        inboxState: readMetaString(chat.meta, 'inbox_state'),
+        muted: chat.meta.muted === true,
+        name: chat.name.trim(),
+        picture: readMetaString(chat.meta, 'picture'),
+        publicKey: chat.publicKey,
+        type: chat.type,
+      })
+    )
+    .sort()
+    .join('|');
+}
+
 async function resolveLocalIdentityPrivateKey(ownerPubkey: string): Promise<string | null> {
   const nostrStore = useNostrStore();
   let securePrivateKey: string | null = null;
@@ -300,7 +322,7 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
       chatPubkey,
       name,
       avatarUrl,
-      avatarText: buildAvatarText(name),
+      avatarText: readMetaString(chat.meta, 'avatar') || buildAvatarText(name),
       notificationsEnabled:
         isConversationNotificationEnabled(chat.meta) && contact?.meta.blocked !== true,
     };

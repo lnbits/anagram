@@ -1,4 +1,5 @@
 import {
+  createAndroidNotificationConversationSignature,
   createAndroidNotificationWatchPlan,
   readAndroidRelayConversationDetailsPreference,
 } from 'src/services/androidRelayNotificationService';
@@ -31,6 +32,36 @@ describe('androidRelayNotificationService', () => {
 
   it('enables per-conversation details by default', () => {
     expect(readAndroidRelayConversationDetailsPreference()).toBe(true);
+  });
+
+  it('refreshes native conversation details when a group avatar changes', () => {
+    const group = {
+      avatar: 'SG',
+      epochPublicKey: GROUP_EPOCH_PUBKEY,
+      meta: {
+        avatar: 'SG',
+        picture: 'https://example.com/group-one.png',
+      },
+      name: 'Study Group',
+      publicKey: '33'.repeat(32),
+      type: 'group' as const,
+    };
+
+    const firstSignature = createAndroidNotificationConversationSignature([group]);
+    const secondSignature = createAndroidNotificationConversationSignature([
+      {
+        ...group,
+        avatar: 'NG',
+        meta: {
+          ...group.meta,
+          avatar: 'NG',
+          picture: 'https://example.com/group-two.png',
+        },
+        name: 'New Group Name',
+      },
+    ]);
+
+    expect(secondSignature).not.toBe(firstSignature);
   });
 
   it('rejects a watch plan without a valid owner public key', () => {

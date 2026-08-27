@@ -151,6 +151,7 @@
           :keyboard-visible="isVisualViewportKeyboardVisible"
           :mobile-viewport-height="visibleViewportHeight"
           @send="handleSend"
+          @edit-message="handleEditMessage"
           @send-media="handleSendMedia"
           @back="handleBackToChatList"
           @open-profile="handleOpenProfile"
@@ -249,6 +250,7 @@ import type {
 } from 'src/types/chat';
 import type { ContactRecord } from 'src/types/contact';
 import { resolveContactAppRelayFallback } from 'src/utils/messageRelayFallback';
+import { areMessageEditTimestampsEqual } from 'src/utils/messageEdits';
 import { reportUiError } from 'src/utils/uiErrorHandler';
 import ContactLookupDialog from 'src/components/ContactLookupDialog.vue';
 import ReconnectHealingBanner from 'src/components/ReconnectHealingBanner.vue';
@@ -735,6 +737,48 @@ async function handleSendMedia(payload: {
     }
   } catch (error) {
     reportUiError('Failed to send media attachment', error, t('errors.failedSendMessage'));
+  }
+}
+
+async function handleEditMessage(payload: { message: Message; text: string }): Promise<void> {
+  try {
+    let updated;
+    try {
+      updated = await messageStore.editMessage(
+        payload.message.chatId,
+        payload.message.id,
+        payload.text
+      );
+    } catch (error) {
+      if (!isMissingContactRelaysError(error)) {
+        throw error;
+      }
+
+      const fallbackRelayUrls = await resolveFallbackRelayUrls(error.chatPublicKey);
+      if (!fallbackRelayUrls) {
+        return;
+      }
+
+      updated = await messageStore.editMessage(
+        payload.message.chatId,
+        payload.message.id,
+        payload.text,
+        { relayUrls: fallbackRelayUrls }
+      );
+    }
+
+    if (
+      updated &&
+      activeChat.value &&
+      areMessageEditTimestampsEqual(activeChat.value.lastMessageAt, payload.message.sentAt)
+    ) {
+      await chatStore.updateChatPreview(updated.chatId, updated.text, updated.sentAt, {
+        messageMeta: updated.meta,
+      });
+    }
+    scheduleAndroidPushNotificationCountReset();
+  } catch (error) {
+    reportUiError('Failed to edit chat message', error, t('errors.failedSendMessage'));
   }
 }
 

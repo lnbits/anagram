@@ -93,6 +93,14 @@ export const TEST_ACCOUNTS = {
     privateKey: '3333333333333333333333333333333333333333333333333333333333333333',
     displayName: 'Charlie Forward',
   },
+  editAlice: {
+    privateKey: '31961dfca6ede2be402f55b0e8c9a224ee208e8cf9500fb4fd4445c56332e875',
+    displayName: 'Alice Edit',
+  },
+  editBob: {
+    privateKey: 'e60da1ec37e515453e1a7c692de57e3cafde5873efb84182835401adc6aaed8a',
+    displayName: 'Bob Edit',
+  },
   markReadAlice: {
     privateKey: '2cdd0f6d4a47bb4502993a61cb0b3cf86cded94311aa87eb0e08652d6d93cd15',
     displayName: 'Alice Mark Read',
@@ -1462,6 +1470,24 @@ export async function forwardMessage(
   await expect(page.getByTestId('forward-message-chat-list')).toHaveCount(0, {
     timeout: 12_000,
   });
+}
+
+export async function editMessage(
+  page: Page,
+  originalText: string,
+  editedText: string,
+  options: {
+    chatId?: string;
+  } = {}
+): Promise<void> {
+  await openMessageActions(page, originalText);
+  await page.getByTestId('message-edit-action').click();
+  await expect(page.getByTestId('composer-edit-preview')).toContainText(originalText);
+  await composerInput(page).fill(editedText);
+  await page.getByTestId('message-composer-send').click();
+  await acceptAppRelayFallbackIfVisible(page);
+  await waitForThreadMessage(page, editedText, options);
+  await expect(threadMessages(page, originalText)).toHaveCount(0);
 }
 
 export async function openReplyPreview(page: Page, replyText: string): Promise<void> {

@@ -16,6 +16,11 @@ import {
   buildImageAttachmentPreviewText,
   extractMediaAttachmentsFromTags,
 } from 'src/utils/messageAttachments';
+import {
+  buildEditedMessageMeta,
+  messageEditReferencesEventId,
+  readMessageEditTargetEventId,
+} from 'src/utils/messageEdits';
 import { buildMentionMetadata, formatGroupMentionsForDisplay } from 'src/utils/nostrMentions';
 
 export function createPrivateMessagesIngestRuntime({
@@ -656,6 +661,48 @@ export function createPrivateMessagesIngestRuntime({
         });
         return;
       }
+
+      const existingEditedMessage =
+        await chatDataService.getMessageByEventIdOrEditReference(rumorEventId);
+      if (
+        existingEditedMessage &&
+        messageEditReferencesEventId(existingEditedMessage.meta, rumorEventId)
+      ) {
+        let refreshedEditedMessage = await applyPendingIncomingReactionsForMessage(
+          existingEditedMessage,
+          { uiThrottleMs }
+        );
+        refreshedEditedMessage = await applyPendingIncomingDeletionsForMessage(
+          refreshedEditedMessage,
+          { uiThrottleMs }
+        );
+        if (rumorNostrEvent) {
+          await nostrEventDataService.upsertEvent({
+            event: rumorNostrEvent,
+            direction,
+            relay_statuses: receivedRelayStatuses,
+          });
+        }
+        await refreshReplyPreviewsForTargetMessage(refreshedEditedMessage, {
+          uiThrottleMs,
+        });
+        logInboundEvent('message-persisted', {
+          persistence: 'ignored-edit-predecessor',
+          direction,
+          messageId: refreshedEditedMessage.id,
+          uiThrottleMs,
+          ...buildInboundTraceDetails({
+            wrappedEvent,
+            rumorEvent,
+            loggedInPubkeyHex,
+            senderPubkeyHex,
+            chatPubkey,
+            relayUrls: wrappedRelayUrls,
+            recipients,
+          }),
+        });
+        return;
+      }
     }
 
     const createdAt = toIsoTimestampFromUnix(rumorEvent.created_at);
@@ -846,7 +893,8 @@ export function createPrivateMessagesIngestRuntime({
         )
       : null;
     const attachments = extractMediaAttachmentsFromTags(rumorEvent.tags);
-    const messageMeta = {
+    const editTargetEventId = readMessageEditTargetEventId(rumorEvent.tags);
+    let messageMeta: Record<string, unknown> = {
       source: 'nostr',
       kind: NDKKind.PrivateDirectMessage,
       wrapper_event_id: wrappedEvent.id ?? '',
@@ -854,6 +902,105 @@ export function createPrivateMessagesIngestRuntime({
       ...(replyPreview ? { reply: replyPreview } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
     };
+    const editedAt = new Date().toISOString();
+    let editTargetMessage = editTargetEventId
+      ? await chatDataService.getMessageByEventId(editTargetEventId)
+      : null;
+    if (
+      editTargetMessage &&
+      (editTargetMessage.chat_public_key !== chat.public_key ||
+        editTargetMessage.author_public_key.trim().toLowerCase() !== senderPubkeyHex ||
+        !isSameNostrSecond(editTargetMessage.created_at, createdAt))
+    ) {
+      editTargetMessage = null;
+    }
+
+    if (!editTargetMessage) {
+      const chatMessages = await chatDataService.listMessages(chat.public_key);
+      editTargetMessage =
+        chatMessages.find((candidate) => {
+          return (
+            candidate.author_public_key.trim().toLowerCase() === senderPubkeyHex &&
+            Boolean(candidate.event_id) &&
+            Boolean(candidate.meta.deleted) &&
+            isSameNostrSecond(candidate.created_at, createdAt)
+          );
+        }) ?? null;
+    }
+
+    if (editTargetMessage?.event_id && rumorEventId) {
+      const editedMessage = await chatDataService.applyMessageEdit(editTargetMessage.id, {
+        message: messageText,
+        created_at: createdAt,
+        event_id: rumorEventId,
+        previous_event_id: editTargetMessage.event_id,
+        edited_at: editedAt,
+        meta: messageMeta,
+      });
+      if (editedMessage) {
+        await appendRelayStatusesToMessageEvent(editedMessage.id, receivedRelayStatuses, {
+          event: rumorNostrEvent ?? undefined,
+          direction,
+          eventId: rumorEventId,
+          uiThrottleMs,
+        });
+        let nextEditedMessage = await applyPendingIncomingReactionsForMessage(editedMessage, {
+          uiThrottleMs,
+        });
+        nextEditedMessage = await applyPendingIncomingDeletionsForMessage(nextEditedMessage, {
+          uiThrottleMs,
+        });
+        await refreshReplyPreviewsForTargetMessage(nextEditedMessage, { uiThrottleMs });
+        if (rumorNostrEvent) {
+          await nostrEventDataService.upsertEvent({
+            event: rumorNostrEvent,
+            direction,
+            relay_statuses: receivedRelayStatuses,
+          });
+        }
+
+        if (isSameNostrSecond(chat.last_message_at ?? '', editTargetMessage.created_at)) {
+          const attachmentPreviewText = buildImageAttachmentPreviewText(messageText, messageMeta);
+          const messagePreviewText = resolvedGroupChatPublicKey
+            ? formatGroupMentionsForDisplay(attachmentPreviewText, contact?.meta ?? null)
+            : attachmentPreviewText;
+          await chatDataService.updateChatPreview(
+            chat.public_key,
+            messagePreviewText,
+            chat.last_message_at,
+            chat.unread_count
+          );
+        }
+        if (uiThrottleMs > 0) {
+          queuePrivateMessagesUiRefresh({
+            throttleMs: uiThrottleMs,
+            reloadChats: true,
+            reloadMessages: true,
+          });
+        }
+        logInboundEvent('message-persisted', {
+          persistence: 'applied-edit',
+          direction,
+          messageId: nextEditedMessage.id,
+          previousEventId: formatSubscriptionLogValue(editTargetMessage.event_id),
+          uiThrottleMs,
+          ...buildInboundTraceDetails({
+            wrappedEvent,
+            rumorEvent,
+            loggedInPubkeyHex,
+            senderPubkeyHex,
+            chatPubkey,
+            relayUrls: wrappedRelayUrls,
+            recipients,
+          }),
+        });
+        return;
+      }
+    }
+
+    if (editTargetEventId) {
+      messageMeta = buildEditedMessageMeta({}, messageMeta, editTargetEventId, editedAt);
+    }
     const createdMessage = await chatDataService.createMessage({
       chat_public_key: chat.public_key,
       author_public_key: senderPubkeyHex,

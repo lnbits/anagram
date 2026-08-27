@@ -1,6 +1,7 @@
 import type { ChatType } from 'src/types/chat';
 import { closeIndexedDbConnection, deleteIndexedDbDatabase } from 'src/utils/indexedDbStorage';
 import { isIncomingUnreadMessageActivity } from 'src/utils/messageActivity';
+import { areMessageEditTimestampsEqual, buildEditedMessageMeta } from 'src/utils/messageEdits';
 import {
   isDeletedMessageMeta,
   messageRecordMatchesSearchQuery,
@@ -76,6 +77,15 @@ export interface CreateMessageInput {
   message: string;
   created_at?: string;
   event_id?: string | null;
+  meta?: Record<string, unknown>;
+}
+
+export interface ApplyMessageEditInput {
+  message: string;
+  created_at: string;
+  event_id: string;
+  previous_event_id: string;
+  edited_at: string;
   meta?: Record<string, unknown>;
 }
 
@@ -898,6 +908,103 @@ class ChatDataService {
     }
   }
 
+  async applyMessageEdit(
+    messageId: number,
+    input: ApplyMessageEditInput
+  ): Promise<MessageRow | null> {
+    const normalizedMessageId = Number(messageId);
+    const replacementEventId = normalizeEventId(input.event_id);
+    const previousEventId = normalizeEventId(input.previous_event_id);
+    const replacementMessage = String(input.message ?? '').trim();
+    const replacementCreatedAt = String(input.created_at ?? '').trim();
+    const editedAt = String(input.edited_at ?? '').trim();
+    if (
+      !Number.isInteger(normalizedMessageId) ||
+      normalizedMessageId <= 0 ||
+      !replacementEventId ||
+      !previousEventId ||
+      !replacementMessage ||
+      !replacementCreatedAt ||
+      !editedAt
+    ) {
+      return null;
+    }
+
+    const db = await this.getDatabase();
+    const transaction = db.transaction(MESSAGES_STORE, 'readwrite');
+    const store = transaction.objectStore(MESSAGES_STORE);
+    const eventIdIndex = store.index(MESSAGES_EVENT_ID_INDEX);
+    const originalRecord = await requestToPromise<MessageRecord | undefined>(
+      store.get(normalizedMessageId) as IDBRequest<MessageRecord | undefined>
+    );
+    if (!originalRecord) {
+      await waitForTransaction(transaction);
+      return null;
+    }
+
+    const persistedReplacement = await requestToPromise<MessageRecord | undefined>(
+      eventIdIndex.get(replacementEventId) as IDBRequest<MessageRecord | undefined>
+    );
+    if (
+      persistedReplacement &&
+      persistedReplacement.id !== originalRecord.id &&
+      (normalizePublicKeyValue(persistedReplacement.chat_public_key) !==
+        normalizePublicKeyValue(originalRecord.chat_public_key) ||
+        persistedReplacement.author_public_key.trim().toLowerCase() !==
+          originalRecord.author_public_key.trim().toLowerCase() ||
+        !areMessageEditTimestampsEqual(persistedReplacement.created_at, originalRecord.created_at))
+    ) {
+      await waitForTransaction(transaction);
+      return null;
+    }
+
+    const effectiveReplacement =
+      persistedReplacement && persistedReplacement.id !== originalRecord.id
+        ? persistedReplacement
+        : {
+            ...originalRecord,
+            message: replacementMessage,
+            created_at: replacementCreatedAt,
+            event_id: replacementEventId,
+            meta: normalizeMeta(input.meta),
+          };
+    if (
+      !areMessageEditTimestampsEqual(effectiveReplacement.created_at, originalRecord.created_at)
+    ) {
+      await waitForTransaction(transaction);
+      return null;
+    }
+
+    const nextRecord: MessageRecord = {
+      ...originalRecord,
+      message: effectiveReplacement.message.trim(),
+      created_at: originalRecord.created_at,
+      event_id: replacementEventId,
+      meta: normalizeMeta(
+        buildEditedMessageMeta(
+          originalRecord.meta,
+          effectiveReplacement.meta,
+          previousEventId,
+          editedAt
+        )
+      ),
+    };
+
+    try {
+      if (persistedReplacement && persistedReplacement.id !== originalRecord.id) {
+        await requestToPromise<undefined>(
+          store.delete(persistedReplacement.id) as IDBRequest<undefined>
+        );
+      }
+      await requestToPromise<IDBValidKey>(store.put(nextRecord) as IDBRequest<IDBValidKey>);
+      await waitForTransaction(transaction);
+      return toMessageRow(nextRecord);
+    } catch (error) {
+      console.error('Failed to apply message edit in IndexedDB.', error);
+      return null;
+    }
+  }
+
   async updateMessageEventId(messageId: number, eventId: string): Promise<MessageRow | null> {
     const normalizedMessageId = Number(messageId);
     const normalizedEventId = normalizeEventId(eventId);
@@ -956,6 +1063,41 @@ class ChatDataService {
     await waitForTransaction(transaction);
 
     return record ? toMessageRow(record) : null;
+  }
+
+  async getMessageByEventIdOrEditReference(eventId: string): Promise<MessageRow | null> {
+    const normalizedEventId = normalizeEventId(eventId);
+    if (!normalizedEventId) {
+      return null;
+    }
+
+    const exactMessage = await this.getMessageByEventId(normalizedEventId);
+    if (exactMessage) {
+      return exactMessage;
+    }
+
+    const db = await this.getDatabase();
+    const transaction = db.transaction(MESSAGES_STORE, 'readonly');
+    const store = transaction.objectStore(MESSAGES_STORE);
+    const records = await requestToPromise<MessageRecord[]>(
+      store.getAll() as IDBRequest<MessageRecord[]>
+    );
+    await waitForTransaction(transaction);
+
+    const matchingRecord = records.find((record) => {
+      const edited = normalizeMeta(record.meta).edited;
+      if (!edited || typeof edited !== 'object' || Array.isArray(edited)) {
+        return false;
+      }
+
+      const previousEventIds = (edited as Record<string, unknown>).previousEventIds;
+      return (
+        Array.isArray(previousEventIds) &&
+        previousEventIds.some((entry) => normalizeEventId(entry) === normalizedEventId)
+      );
+    });
+
+    return matchingRecord ? toMessageRow(matchingRecord) : null;
   }
 
   async deleteMessageByEventId(eventId: string): Promise<boolean> {

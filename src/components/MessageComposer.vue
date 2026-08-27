@@ -60,7 +60,24 @@
       </div>
     </div>
 
-    <div v-if="replyTo" class="composer__reply">
+    <div v-if="editingMessage" class="composer__reply" data-testid="composer-edit-preview">
+      <div class="composer__reply-accent" aria-hidden="true" />
+      <div class="composer__reply-copy">
+        <div class="composer__reply-title">{{ $t('message.edit.action') }}</div>
+        <div class="composer__reply-text">{{ editingMessage.text }}</div>
+      </div>
+      <q-btn
+        flat
+        dense
+        round
+        icon="close"
+        :aria-label="$t('common.cancel')"
+        class="composer__reply-close"
+        @click="$emit('cancel-edit')"
+      />
+    </div>
+
+    <div v-else-if="replyTo" class="composer__reply">
       <div class="composer__reply-accent" aria-hidden="true" />
       <img
         v-if="replyTo.imageUrl"
@@ -124,6 +141,7 @@
             icon="attach_file"
             class="composer__menu-trigger"
             data-testid="message-composer-menu"
+            :disable="Boolean(editingMessage)"
             :aria-label="$t('message.openComposerMenu')"
             @click="rememberSelection"
           >
@@ -282,7 +300,7 @@ import {
 } from 'src/services/nostrBuildUploadService';
 import { useChatStore } from 'src/stores/chatStore';
 import { useNostrStore } from 'src/stores/nostrStore';
-import type { MessageAttachmentMetadata, MessageReplyPreview } from 'src/types/chat';
+import type { Message, MessageAttachmentMetadata, MessageReplyPreview } from 'src/types/chat';
 import {
   hasImageTransferFile,
   hasTransferFiles,
@@ -294,6 +312,7 @@ import { reportUiError } from 'src/utils/uiErrorHandler';
 
 const props = defineProps<{
   chatId?: string | null;
+  editingMessage?: Message | null;
   mentionProfiles?: NostrMentionProfile[];
   replyTo?: MessageReplyPreview | null;
 }>();
@@ -324,10 +343,14 @@ const dismissedEmojiAutocompleteToken = ref('');
 const MAX_MENTION_AUTOCOMPLETE_RESULTS = 8;
 const MAX_EMOJI_AUTOCOMPLETE_RESULTS = 8;
 let suppressNextSendClick = false;
+let draftBeforeEdit = '';
+let editChatId: string | null = null;
 
 const emit = defineEmits<{
   (event: 'send', payload: { text: string }): void;
+  (event: 'edit', payload: { text: string }): void;
   (event: 'send-media', payload: { attachment: MessageAttachmentMetadata }): void;
+  (event: 'cancel-edit'): void;
   (event: 'cancel-reply'): void;
 }>();
 
@@ -341,7 +364,9 @@ function normalizeChatIdentifier(value: string | null | undefined): string | nul
 }
 
 const activeChatId = computed(() => normalizeChatIdentifier(props.chatId));
-const sendButtonIcon = computed(() => ($q.screen.lt.md ? 'north' : 'send'));
+const sendButtonIcon = computed(() =>
+  props.editingMessage ? 'check' : $q.screen.lt.md ? 'north' : 'send'
+);
 const mentionProfiles = computed(() => props.mentionProfiles ?? []);
 const mediaUploadStatusMessage = computed(() => {
   if (mediaUploadError.value) {
@@ -356,7 +381,7 @@ const mediaUploadStatusMessage = computed(() => {
 function setDraftValue(nextDraft: string, options: { persist?: boolean } = {}): void {
   draft.value = nextDraft;
 
-  if (options.persist === false || !activeChatId.value) {
+  if (options.persist === false || props.editingMessage || !activeChatId.value) {
     return;
   }
 
@@ -400,7 +425,7 @@ function rememberSelection(): void {
 }
 
 function handleDraftUpdate(): void {
-  if (activeChatId.value) {
+  if (activeChatId.value && !props.editingMessage) {
     chatStore.setComposerDraft(activeChatId.value, draft.value);
   }
 
@@ -640,6 +665,10 @@ function handleEmojiMenuHide(): void {
 }
 
 function handlePhotoVideoAction(): void {
+  if (props.editingMessage) {
+    return;
+  }
+
   isComposerMenuOpen.value = false;
   openMediaPrivacyDialog();
 }
@@ -720,7 +749,7 @@ async function handleMediaFileInputChange(event: Event): Promise<void> {
   const input = event.target instanceof HTMLInputElement ? event.target : null;
   const file = input?.files?.[0] ?? null;
   resetMediaFileInput();
-  if (!file) {
+  if (!file || props.editingMessage) {
     return;
   }
 
@@ -739,6 +768,10 @@ async function handleMediaFileInputChange(event: Event): Promise<void> {
 
 function handleComposerPaste(event: ClipboardEvent): void {
   try {
+    if (props.editingMessage) {
+      return;
+    }
+
     const imageFile = readFirstImageTransferFile(event.clipboardData);
     if (!imageFile) {
       return;
@@ -755,6 +788,10 @@ function handleComposerPaste(event: ClipboardEvent): void {
 }
 
 function handleComposerDragOver(event: DragEvent): void {
+  if (props.editingMessage) {
+    return;
+  }
+
   const transfer = event.dataTransfer;
   if (!hasTransferFiles(transfer)) {
     return;
@@ -768,6 +805,10 @@ function handleComposerDragOver(event: DragEvent): void {
 
 function handleComposerDrop(event: DragEvent): void {
   try {
+    if (props.editingMessage) {
+      return;
+    }
+
     const transfer = event.dataTransfer;
     const imageFile = readFirstImageTransferFile(transfer);
     if (!imageFile) {
@@ -815,6 +856,10 @@ async function uploadAndSendMediaFile(file: File): Promise<void> {
 }
 
 function handleFileAction(): void {
+  if (props.editingMessage) {
+    return;
+  }
+
   isComposerMenuOpen.value = false;
   $q.notify({
     type: 'info',
@@ -1008,6 +1053,11 @@ function submitDraft(): void {
       return;
     }
 
+    if (props.editingMessage) {
+      emit('edit', { text: cleanText });
+      return;
+    }
+
     emit('send', { text: cleanText });
     setDraftValue('');
     selectionStart.value = 0;
@@ -1039,6 +1089,41 @@ watch(
     shouldRefocusAfterEmojiMenuHide.value = false;
   },
   { immediate: true }
+);
+
+watch(
+  () => props.editingMessage?.id ?? null,
+  (nextMessageId, previousMessageId) => {
+    if (nextMessageId) {
+      if (!previousMessageId) {
+        editChatId = activeChatId.value;
+        draftBeforeEdit = activeChatId.value
+          ? chatStore.getComposerDraft(activeChatId.value)
+          : draft.value;
+      }
+
+      const editText = props.editingMessage?.text ?? '';
+      setDraftValue(editText, { persist: false });
+      selectionStart.value = editText.length;
+      selectionEnd.value = editText.length;
+      focusInputAt(editText.length);
+      return;
+    }
+
+    if (previousMessageId) {
+      const restoredDraft =
+        editChatId === activeChatId.value
+          ? draftBeforeEdit
+          : activeChatId.value
+            ? chatStore.getComposerDraft(activeChatId.value)
+            : '';
+      setDraftValue(restoredDraft, { persist: false });
+      selectionStart.value = restoredDraft.length;
+      selectionEnd.value = restoredDraft.length;
+      draftBeforeEdit = '';
+      editChatId = null;
+    }
+  }
 );
 
 watch(

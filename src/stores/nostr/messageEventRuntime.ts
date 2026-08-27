@@ -67,8 +67,8 @@ export function createMessageEventRuntime({
         continue;
       }
 
-      const normalizedTag = tag.map((entry) => String(entry).trim()).filter(Boolean);
-      if (normalizedTag.length > 0) {
+      const normalizedTag = tag.map((entry) => String(entry).trim());
+      if (normalizedTag[0]) {
         tags.push(normalizedTag);
       }
     }

@@ -31,4 +31,16 @@ public final class SchnorrSignatureVerifierTest {
             )
         );
     }
+
+    @Test
+    public void acceptsSignatureFromNostrToolsGiftWrapEvent() {
+        assertTrue(
+            SchnorrSignatureVerifier.verify(
+                "a1100124de6de8f572e3d5cdffab91d2399c5474a9df4fceee926c4be1f42c71",
+                "d147df4cd839c972c05870cdbe3adfa1f4e5dc5b6854cc2102959d567efedf24",
+                "214116b09f65deb46f4496648b1ca03b10128db92e71c77fd50b849a3781601a" +
+                "44306b113870bb6402c2d8efac1682399b4e355b3e03487b3ab7681441b8d3fe"
+            )
+        );
+    }
 }

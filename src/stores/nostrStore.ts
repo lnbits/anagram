@@ -2128,6 +2128,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     isReconnectHealing,
     isRestoringStartupState,
     listDeveloperTraceEntries,
+    listPrivateMessageReadRelayUrls: () => resolvePrivateMessageReadRelayUrls(),
     listPrivateMessageRecipientPubkeys,
     loginWithExtension: loginWithExtensionImpl,
     loginWithRemoteSignerBunker: loginWithRemoteSignerBunkerImpl,

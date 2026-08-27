@@ -4,7 +4,6 @@ import { chatDataService } from 'src/services/chatDataService';
 import { FOREGROUND_MESSAGE_ACTIVITY_EVENT } from 'src/services/foregroundMessageActivityService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { useNostrStore } from 'src/stores/nostrStore';
-import { type RelayListEntry, useRelayStore } from 'src/stores/relayStore';
 import type { RouteLocationRaw } from 'vue-router';
 
 const ANDROID_RELAY_NOTIFICATIONS_STORAGE_KEY = 'ui-android-relay-notifications';
@@ -101,7 +100,7 @@ export function clearAndroidRelayNotificationsPreference(): void {
 
 export function createAndroidNotificationWatchPlan(input: {
   ownerPubkey: string;
-  relayEntries: RelayListEntry[];
+  relayUrls: string[];
   watchedPubkeys: string[];
 }): AndroidNotificationWatchPlan {
   const ownerPubkey = inputSanitizerService.normalizeHexKey(input.ownerPubkey);
@@ -110,12 +109,9 @@ export function createAndroidNotificationWatchPlan(input: {
   }
 
   const relays = new Set<string>();
-  for (const entry of input.relayEntries) {
-    if (entry.read === false) {
-      continue;
-    }
+  for (const value of input.relayUrls) {
     try {
-      const relayUrl = normalizeRelayUrl(entry.url);
+      const relayUrl = normalizeRelayUrl(value);
       if (relayUrl.startsWith('ws://') || relayUrl.startsWith('wss://')) {
         relays.add(relayUrl);
       }
@@ -141,13 +137,15 @@ export function createAndroidNotificationWatchPlan(input: {
 
 async function buildAndroidNotificationWatchPlan(): Promise<AndroidNotificationWatchPlan> {
   const nostrStore = useNostrStore();
-  const relayStore = useRelayStore();
-  relayStore.init();
+  const [relayUrls, watchedPubkeys] = await Promise.all([
+    nostrStore.listPrivateMessageReadRelayUrls(),
+    nostrStore.listPrivateMessageRecipientPubkeys(),
+  ]);
 
   return createAndroidNotificationWatchPlan({
     ownerPubkey: nostrStore.getLoggedInPublicKeyHex() ?? '',
-    relayEntries: relayStore.relayEntries,
-    watchedPubkeys: await nostrStore.listPrivateMessageRecipientPubkeys(),
+    relayUrls,
+    watchedPubkeys,
   });
 }
 

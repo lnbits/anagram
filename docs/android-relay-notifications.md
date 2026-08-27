@@ -9,7 +9,9 @@ When the user opts in, the Android app starts a foreground service with a persis
 - the logged-in user's public key; and
 - the current public epoch key for each group chat.
 
-The watch plan is refreshed when the logged-in identity, readable relay list, or current group epoch changes. Old group epoch keys are not retained for live notifications.
+The watch plan uses the same read-relay resolution as the in-app private-message subscription, including the user's advertised read relays and group relays. It is refreshed when the logged-in identity, readable relay list, or current group epoch changes. Old group epoch keys are not retained for live notifications.
+
+NIP-59 gift wraps intentionally use randomized timestamps up to two days in the past. Each relay subscription therefore includes that full lookback window. Stored events received before a relay's initial `EOSE` are validated and deduplicated without notifying; events received after catch-up, and unseen events recovered on later reconnects, can produce alerts.
 
 The service persists only relay URLs, public recipient keys, subscription cursors, seen event IDs, and an unread count. It does not receive or store account private keys, group epoch private keys, plaintext messages, sender names, or chat names.
 

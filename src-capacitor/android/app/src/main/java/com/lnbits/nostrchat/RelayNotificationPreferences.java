@@ -17,12 +17,11 @@ final class RelayNotificationPreferences {
     private static final String KEY_START_ON_BOOT = "start_on_boot";
     private static final String KEY_RELAYS = "relays";
     private static final String KEY_RECIPIENT_PUBKEYS = "recipient_pubkeys";
-    private static final String KEY_LISTENING_SINCE = "listening_since";
-    private static final String KEY_LAST_EVENT_CREATED_AT = "last_event_created_at";
+    private static final String KEY_INITIALIZED_RELAYS = "initialized_relays";
     private static final String KEY_SEEN_EVENT_IDS = "seen_event_ids";
     private static final String KEY_UNREAD_NOTIFICATION_COUNT = "unread_notification_count";
     private static final String KEY_APP_FOREGROUND = "app_foreground";
-    private static final int MAX_SEEN_EVENT_IDS = 512;
+    private static final int MAX_SEEN_EVENT_IDS = 8192;
 
     private RelayNotificationPreferences() {}
 
@@ -35,8 +34,7 @@ final class RelayNotificationPreferences {
         SharedPreferences.Editor editor = prefs.edit().putBoolean(KEY_ENABLED, enabled);
         if (enabled && !prefs.getBoolean(KEY_ENABLED, false)) {
             editor
-                .putLong(KEY_LISTENING_SINCE, nowSeconds())
-                .putLong(KEY_LAST_EVENT_CREATED_AT, 0L)
+                .putString(KEY_INITIALIZED_RELAYS, "[]")
                 .putString(KEY_SEEN_EVENT_IDS, "[]")
                 .putInt(KEY_UNREAD_NOTIFICATION_COUNT, 0);
         }
@@ -67,18 +65,22 @@ final class RelayNotificationPreferences {
         return new LinkedHashSet<>(fromJson(preferences(context).getString(KEY_RECIPIENT_PUBKEYS, "[]")));
     }
 
-    static long getListeningSince(Context context) {
-        return preferences(context).getLong(KEY_LISTENING_SINCE, nowSeconds());
+    static boolean isRelayInitialized(Context context, String relayUrl) {
+        return new LinkedHashSet<>(
+            fromJson(preferences(context).getString(KEY_INITIALIZED_RELAYS, "[]"))
+        ).contains(relayUrl);
     }
 
-    static long getLastEventCreatedAt(Context context) {
-        return preferences(context).getLong(KEY_LAST_EVENT_CREATED_AT, 0L);
-    }
-
-    static void updateLastEventCreatedAt(Context context, long createdAt) {
+    static synchronized void markRelayInitialized(Context context, String relayUrl) {
         SharedPreferences prefs = preferences(context);
-        if (createdAt > prefs.getLong(KEY_LAST_EVENT_CREATED_AT, 0L)) {
-            prefs.edit().putLong(KEY_LAST_EVENT_CREATED_AT, createdAt).apply();
+        LinkedHashSet<String> initializedRelays = new LinkedHashSet<>(
+            fromJson(prefs.getString(KEY_INITIALIZED_RELAYS, "[]"))
+        );
+        if (initializedRelays.add(relayUrl)) {
+            prefs
+                .edit()
+                .putString(KEY_INITIALIZED_RELAYS, toJson(new ArrayList<>(initializedRelays)))
+                .apply();
         }
     }
 
@@ -140,7 +142,4 @@ final class RelayNotificationPreferences {
         return result;
     }
 
-    private static long nowSeconds() {
-        return System.currentTimeMillis() / 1000L;
-    }
 }

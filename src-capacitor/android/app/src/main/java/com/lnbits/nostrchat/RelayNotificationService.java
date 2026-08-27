@@ -1,11 +1,11 @@
 package com.lnbits.nostrchat;
 
+import android.app.ActivityManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
-import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
@@ -51,8 +51,8 @@ public final class RelayNotificationService extends Service {
     private static final String MESSAGE_CHANNEL_ID = "nostr_chat_messages";
     private static final int SERVICE_NOTIFICATION_ID = 4101;
     private static final int MESSAGE_NOTIFICATION_ID = 4102;
-    private static final long SUBSCRIPTION_OVERLAP_SECONDS = 60L;
-    private static final long MAX_FUTURE_EVENT_SECONDS = 300L;
+    private static final long GIFT_WRAP_RANDOMIZATION_WINDOW_SECONDS = 2L * 24L * 60L * 60L;
+    private static final long EVENT_TIMESTAMP_TOLERANCE_SECONDS = 300L;
     private static final long MAX_RECONNECT_DELAY_MILLIS = 30_000L;
     private static final Pattern HEX_64 = Pattern.compile("^[0-9a-fA-F]{64}$");
     private static final Pattern HEX_128 = Pattern.compile("^[0-9a-fA-F]{128}$");
@@ -215,9 +215,7 @@ public final class RelayNotificationService extends Service {
 
     private String createSubscription(String relayUrl) throws JSONException {
         String subscriptionId = "notifications-" + shortHash(relayUrl);
-        long listeningSince = RelayNotificationPreferences.getListeningSince(this);
-        long lastEventCreatedAt = RelayNotificationPreferences.getLastEventCreatedAt(this);
-        long since = Math.max(listeningSince, Math.max(0L, lastEventCreatedAt - SUBSCRIPTION_OVERLAP_SECONDS));
+        long since = subscriptionSince(System.currentTimeMillis() / 1000L);
 
         JSONObject filter = new JSONObject();
         filter.put("kinds", new JSONArray().put(1059));
@@ -227,10 +225,37 @@ public final class RelayNotificationService extends Service {
         return new JSONArray().put("REQ").put(subscriptionId).put(filter).toString();
     }
 
-    private void handleRelayMessage(String message) {
+    static long subscriptionSince(long nowSeconds) {
+        return Math.max(
+            0L,
+            nowSeconds - GIFT_WRAP_RANDOMIZATION_WINDOW_SECONDS - EVENT_TIMESTAMP_TOLERANCE_SECONDS
+        );
+    }
+
+    static boolean isPlausibleGiftWrapTimestamp(long createdAt, long nowSeconds) {
+        return (
+            createdAt >= subscriptionSince(nowSeconds) &&
+            createdAt <= nowSeconds + EVENT_TIMESTAMP_TOLERANCE_SECONDS
+        );
+    }
+
+    static boolean shouldNotifyEvent(boolean relayInitializedAtConnect, boolean relayCaughtUp) {
+        return relayInitializedAtConnect || relayCaughtUp;
+    }
+
+    private void handleRelayMessage(RelayWebSocketListener source, String message) {
         try {
             JSONArray envelope = new JSONArray(message);
-            if (envelope.length() < 3 || !"EVENT".equals(envelope.optString(0))) {
+            String messageType = envelope.optString(0);
+            if (
+                "EOSE".equals(messageType) &&
+                envelope.length() >= 2 &&
+                source.subscriptionId.equals(envelope.optString(1))
+            ) {
+                source.markCaughtUp();
+                return;
+            }
+            if (envelope.length() < 3 || !"EVENT".equals(messageType)) {
                 return;
             }
 
@@ -248,8 +273,7 @@ public final class RelayNotificationService extends Service {
                 !HEX_64.matcher(eventId).matches() ||
                 !HEX_64.matcher(eventPubkey).matches() ||
                 !HEX_128.matcher(signature).matches() ||
-                createdAt < RelayNotificationPreferences.getListeningSince(this) ||
-                createdAt > now + MAX_FUTURE_EVENT_SECONDS ||
+                !isPlausibleGiftWrapTimestamp(createdAt, now) ||
                 !eventId.equals(computeEventId(event)) ||
                 !SchnorrSignatureVerifier.verify(eventId, eventPubkey, signature)
             ) {
@@ -261,8 +285,10 @@ public final class RelayNotificationService extends Service {
                 return;
             }
 
-            RelayNotificationPreferences.updateLastEventCreatedAt(this, createdAt);
-            if (!RelayNotificationPreferences.isAppForeground(this)) {
+            if (
+                source.shouldNotifyEvent() &&
+                !RelayNotificationPreferences.isAppForeground(this)
+            ) {
                 showMessageNotification(recipientPubkey);
             }
         } catch (JSONException ignored) {}
@@ -442,9 +468,29 @@ public final class RelayNotificationService extends Service {
     private final class RelayWebSocketListener extends WebSocketListener {
 
         private final String relayUrl;
+        private final String subscriptionId;
+        private final boolean initializedAtConnect;
+        private boolean caughtUp;
 
         private RelayWebSocketListener(String relayUrl) {
             this.relayUrl = relayUrl;
+            this.subscriptionId = "notifications-" + shortHash(relayUrl);
+            this.initializedAtConnect = RelayNotificationPreferences.isRelayInitialized(
+                RelayNotificationService.this,
+                relayUrl
+            );
+        }
+
+        private void markCaughtUp() {
+            caughtUp = true;
+            RelayNotificationPreferences.markRelayInitialized(
+                RelayNotificationService.this,
+                relayUrl
+            );
+        }
+
+        private boolean shouldNotifyEvent() {
+            return RelayNotificationService.shouldNotifyEvent(initializedAtConnect, caughtUp);
         }
 
         @Override
@@ -459,7 +505,7 @@ public final class RelayNotificationService extends Service {
 
         @Override
         public void onMessage(@NonNull WebSocket webSocket, @NonNull String text) {
-            handleRelayMessage(text);
+            handleRelayMessage(this, text);
         }
 
         @Override

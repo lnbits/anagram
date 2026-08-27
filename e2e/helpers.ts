@@ -1480,7 +1480,7 @@ export async function editMessage(
     chatId?: string;
   } = {}
 ): Promise<void> {
-  await threadMessage(page, originalText).locator('.bubble').click();
+  await openMessageActions(page, originalText);
   await page.getByTestId('message-edit-action').click();
   await expect(page.getByTestId('composer-edit-preview')).toContainText(originalText);
   await composerInput(page).fill(editedText);

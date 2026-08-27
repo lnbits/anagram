@@ -25,6 +25,26 @@
           <div class="notifications-card__row">
             <div>
               <div class="text-body2">
+                {{ $t('notifications.android.showConversationDetails') }}
+              </div>
+              <div class="text-caption text-grey-6">
+                {{ $t('notifications.android.showConversationDetailsCaption') }}
+              </div>
+            </div>
+
+            <q-toggle
+              :model-value="showConversationDetails"
+              :disable="isConversationDetailsUpdating"
+              color="primary"
+              data-testid="notifications-android-conversation-details-toggle"
+              @update:model-value="handleConversationDetailsToggle"
+            />
+          </div>
+
+          <q-separator />
+          <div class="notifications-card__row">
+            <div>
+              <div class="text-body2">
                 {{ $t('notifications.android.startOnBoot') }}
               </div>
               <div class="text-caption text-grey-6">
@@ -60,8 +80,10 @@ import {
   disableAndroidRelayNotifications,
   getAndroidRelayNotificationState,
   isAndroidRelayNotificationSupported,
+  readAndroidRelayConversationDetailsPreference,
   readAndroidRelayStartOnBootPreference,
   requestAndroidRelayNotificationsAfterLogin,
+  setAndroidRelayNotificationConversationDetails,
   setAndroidRelayNotificationStartOnBoot,
   type AndroidRelayNotificationPermissionState
 } from 'src/services/androidRelayNotificationService';
@@ -94,8 +116,10 @@ const notificationsEnabled = ref(
     (notificationPermission.value === 'granted' || notificationPermission.value === 'native')
 );
 const startOnBoot = ref(readAndroidRelayStartOnBootPreference());
+const showConversationDetails = ref(readAndroidRelayConversationDetailsPreference());
 const isPermissionRequestInFlight = ref(false);
 const isStartOnBootUpdating = ref(false);
+const isConversationDetailsUpdating = ref(false);
 const isDesktopRuntime =
   typeof window !== 'undefined' && Boolean(window.desktopRuntime?.isElectron);
 
@@ -168,6 +192,7 @@ async function refreshAndroidState(): Promise<void> {
   const state = await getAndroidRelayNotificationState();
   notificationPermission.value = state.permission;
   startOnBoot.value = state.startOnBoot;
+  showConversationDetails.value = state.showConversationDetails;
   notificationsEnabled.value = state.enabled && state.permission === 'granted';
 
   if (state.enabled && state.permission !== 'granted') {
@@ -305,6 +330,23 @@ async function handleStartOnBootToggle(nextValue: boolean): Promise<void> {
     );
   } finally {
     isStartOnBootUpdating.value = false;
+  }
+}
+
+async function handleConversationDetailsToggle(nextValue: boolean): Promise<void> {
+  isConversationDetailsUpdating.value = true;
+  try {
+    await setAndroidRelayNotificationConversationDetails(nextValue);
+    showConversationDetails.value = nextValue;
+  } catch (error) {
+    showConversationDetails.value = !nextValue;
+    reportUiError(
+      'Failed to update Android notification details preference',
+      error,
+      t('errors.failedUpdatePushNotifications')
+    );
+  } finally {
+    isConversationDetailsUpdating.value = false;
   }
 }
 </script>

@@ -44,7 +44,7 @@
         </receiver>
 
         <receiver
-            android:name=".StopRelayNotificationReceiver"
+            android:name=".NotificationDismissReceiver"
             android:exported="false" />
 
         <provider

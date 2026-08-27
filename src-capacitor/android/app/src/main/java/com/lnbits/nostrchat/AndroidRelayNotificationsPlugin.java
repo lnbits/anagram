@@ -16,12 +16,16 @@ import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.security.GeneralSecurityException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+import org.json.JSONObject;
 
 @CapacitorPlugin(
     name = "AndroidRelayNotifications",
@@ -63,19 +67,49 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
     public void configure(PluginCall call) {
         List<String> relays = normalizeRelays(call.getArray("relays"));
         List<String> recipientPubkeys = normalizePubkeys(call.getArray("recipientPubkeys"));
+        String ownerPubkey = normalizePubkey(call.getString("ownerPubkey"));
         if (relays.isEmpty()) {
             call.reject("At least one readable ws:// or wss:// relay is required.");
             return;
         }
-        if (recipientPubkeys.isEmpty()) {
+        if (ownerPubkey == null || recipientPubkeys.isEmpty() || !recipientPubkeys.contains(ownerPubkey)) {
             call.reject("At least one recipient public key is required.");
             return;
         }
 
         boolean startOnBoot = Boolean.TRUE.equals(call.getBoolean("startOnBoot", true));
-        RelayNotificationPreferences.saveWatchPlan(getContext(), relays, recipientPubkeys);
+        boolean showConversationDetails = Boolean.TRUE.equals(
+            call.getBoolean("showConversationDetails", true)
+        );
+        boolean didChangeConversationDetails =
+            RelayNotificationPreferences.shouldShowConversationDetails(getContext()) !=
+            showConversationDetails;
+        List<NotificationConversation> conversations = normalizeConversations(
+            call.getArray("conversations")
+        );
+        Map<String, String> recipientKeys = showConversationDetails
+            ? normalizeRecipientKeys(call.getArray("recipientKeys"), recipientPubkeys)
+            : new LinkedHashMap<>();
+        try {
+            NotificationSecureStore.saveRecipientKeys(getContext(), recipientKeys);
+        } catch (GeneralSecurityException exception) {
+            call.reject("Failed to protect notification decryption keys.", exception);
+            return;
+        }
+        RelayNotificationPreferences.saveWatchPlan(
+            getContext(),
+            relays,
+            ownerPubkey,
+            recipientPubkeys,
+            conversations,
+            showConversationDetails
+        );
         RelayNotificationPreferences.setStartOnBoot(getContext(), startOnBoot);
         RelayNotificationPreferences.setEnabled(getContext(), true);
+        if (didChangeConversationDetails) {
+            RelayNotificationService.clearMessageNotifications(getContext());
+        }
+        NotificationAvatarCache.refreshAsync(getContext(), conversations);
         RelayNotificationService.startOrRefresh(getContext());
         call.resolve(createState());
     }
@@ -104,24 +138,51 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
 
     @PluginMethod
     public void clearDeliveredNotifications(PluginCall call) {
-        RelayNotificationService.clearMessageNotification(getContext());
+        String chatPubkey = normalizePubkey(call.getString("chatPubkey"));
+        if (chatPubkey == null) {
+            RelayNotificationService.clearMessageNotifications(getContext());
+        } else {
+            RelayNotificationService.clearMessageNotification(getContext(), chatPubkey);
+        }
         call.resolve();
+    }
+
+    @Override
+    public void load() {
+        super.load();
+        dispatchNotificationIntent(getActivity().getIntent());
     }
 
     @Override
     protected void handleOnNewIntent(Intent intent) {
         super.handleOnNewIntent(intent);
-        String recipientPubkey = normalizePubkey(
-            intent.getStringExtra(RelayNotificationService.EXTRA_RECIPIENT_PUBKEY)
-        );
-        if (recipientPubkey == null) {
+        dispatchNotificationIntent(intent);
+    }
+
+    private void dispatchNotificationIntent(@Nullable Intent intent) {
+        if (intent == null) {
             return;
         }
 
-        intent.removeExtra(RelayNotificationService.EXTRA_RECIPIENT_PUBKEY);
-        RelayNotificationService.clearMessageNotification(getContext());
+        String chatPubkey = normalizePubkey(
+            intent.getStringExtra(RelayNotificationService.EXTRA_CHAT_PUBKEY)
+        );
+        boolean openChats = intent.getBooleanExtra(
+            RelayNotificationService.EXTRA_OPEN_CHATS_LIST,
+            false
+        );
+        if (chatPubkey == null && !openChats) {
+            return;
+        }
+
+        intent.removeExtra(RelayNotificationService.EXTRA_CHAT_PUBKEY);
+        intent.removeExtra(RelayNotificationService.EXTRA_OPEN_CHATS_LIST);
         JSObject event = new JSObject();
-        event.put("recipientPubkey", recipientPubkey);
+        if (chatPubkey != null) {
+            RelayNotificationService.clearMessageNotification(getContext(), chatPubkey);
+            event.put("chatPubkey", chatPubkey);
+        }
+        event.put("openChats", openChats);
         notifyListeners(ACTION_EVENT, event, true);
     }
 
@@ -145,6 +206,10 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
         JSObject state = new JSObject();
         state.put("enabled", RelayNotificationPreferences.isEnabled(getContext()));
         state.put("startOnBoot", RelayNotificationPreferences.shouldStartOnBoot(getContext()));
+        state.put(
+            "showConversationDetails",
+            RelayNotificationPreferences.shouldShowConversationDetails(getContext())
+        );
         state.put("permission", notificationPermissionState());
         return state;
     }
@@ -183,6 +248,54 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
             }
         }
         return new ArrayList<>(normalized);
+    }
+
+    private static List<NotificationConversation> normalizeConversations(
+        @Nullable JSArray values
+    ) {
+        Map<String, NotificationConversation> normalized = new LinkedHashMap<>();
+        if (values == null) {
+            return new ArrayList<>();
+        }
+        for (int index = 0; index < values.length(); index += 1) {
+            NotificationConversation conversation = NotificationConversation.fromJson(
+                values.optJSONObject(index)
+            );
+            if (conversation == null) {
+                continue;
+            }
+            String key = conversation.chatPubkey + ":" + String.valueOf(conversation.recipientPubkey);
+            normalized.put(key, conversation);
+        }
+        return new ArrayList<>(normalized.values());
+    }
+
+    private static Map<String, String> normalizeRecipientKeys(
+        @Nullable JSArray values,
+        List<String> recipientPubkeys
+    ) {
+        Map<String, String> normalized = new LinkedHashMap<>();
+        if (values == null) {
+            return normalized;
+        }
+        Set<String> recipients = new LinkedHashSet<>(recipientPubkeys);
+        for (int index = 0; index < values.length(); index += 1) {
+            JSONObject value = values.optJSONObject(index);
+            if (value == null) {
+                continue;
+            }
+            String recipientPubkey = normalizePubkey(value.optString("recipientPubkey", ""));
+            String privateKey = normalizePubkey(value.optString("privateKey", ""));
+            if (recipientPubkey == null || privateKey == null || !recipients.contains(recipientPubkey)) {
+                continue;
+            }
+            try {
+                if (recipientPubkey.equals(Nip44Decryptor.derivePublicKeyHex(privateKey))) {
+                    normalized.put(recipientPubkey, privateKey);
+                }
+            } catch (GeneralSecurityException ignored) {}
+        }
+        return normalized;
     }
 
     @Nullable

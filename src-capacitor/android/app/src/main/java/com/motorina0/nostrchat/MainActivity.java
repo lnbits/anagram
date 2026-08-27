@@ -15,7 +15,7 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         RelayNotificationPreferences.setAppForeground(this, true);
-        RelayNotificationService.clearMessageNotification(this);
+        RelayNotificationService.clearGenericMessageNotification(this);
     }
 
     @Override

@@ -12,6 +12,7 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.ServiceInfo;
 import android.net.ConnectivityManager;
 import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -23,11 +24,13 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -47,28 +50,42 @@ public final class RelayNotificationService extends Service {
 
     private static final String LOG_TAG = "NostrChatRelay";
     static final String ACTION_START_OR_REFRESH = "com.lnbits.nostrchat.notifications.START_OR_REFRESH";
-    static final String ACTION_STOP = "com.lnbits.nostrchat.notifications.STOP";
-    static final String EXTRA_RECIPIENT_PUBKEY = "nostr_chat_recipient_pubkey";
+    static final String EXTRA_CHAT_PUBKEY = "nostr_chat_chat_pubkey";
+    static final String EXTRA_OPEN_CHATS_LIST = "nostr_chat_open_chats_list";
+    static final String EXTRA_NOTIFICATION_COUNT_KEY = "nostr_chat_notification_count_key";
 
     private static final String SERVICE_CHANNEL_ID = "nostr_chat_background_listener";
     private static final String MESSAGE_CHANNEL_ID = "nostr_chat_messages";
     private static final int SERVICE_NOTIFICATION_ID = 4101;
-    private static final int MESSAGE_NOTIFICATION_ID = 4102;
+    private static final int GENERIC_MESSAGE_NOTIFICATION_ID = 4102;
+    private static final String GENERIC_NOTIFICATION_COUNT_KEY = "generic";
+    private static final String MESSAGE_NOTIFICATION_GROUP = "nostr_chat_conversations";
     private static final long GIFT_WRAP_RANDOMIZATION_WINDOW_SECONDS = 2L * 24L * 60L * 60L;
     private static final long EVENT_TIMESTAMP_TOLERANCE_SECONDS = 300L;
     private static final long MAX_RECONNECT_DELAY_MILLIS = 30_000L;
+    private static final long SERVICE_NOTIFICATION_UPDATE_DELAY_MILLIS = 250L;
     private static final Pattern HEX_64 = Pattern.compile("^[0-9a-fA-F]{64}$");
     private static final Pattern HEX_128 = Pattern.compile("^[0-9a-fA-F]{128}$");
 
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable serviceNotificationUpdateTask = this::postServiceNotificationUpdate;
     private final Map<String, WebSocket> sockets = new HashMap<>();
     private final Map<String, Integer> reconnectAttempts = new HashMap<>();
+    private final Map<String, Runnable> reconnectTasks = new HashMap<>();
+    private final Set<String> openRelays = new HashSet<>();
+    private final Map<String, NotificationConversation> directConversations = new HashMap<>();
+    private final Map<String, NotificationConversation> groupConversations = new HashMap<>();
     private List<String> configuredRelays = new ArrayList<>();
     private Set<String> recipientPubkeys = new HashSet<>();
+    private Map<String, String> recipientPrivateKeys = new LinkedHashMap<>();
+    private String ownerPubkey = "";
+    private boolean showConversationDetails = true;
     private OkHttpClient httpClient;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private boolean isStopping;
+    private boolean hasNetworkConnection;
+    private boolean hasPostedForegroundNotification;
 
     @Override
     public void onCreate() {
@@ -78,6 +95,7 @@ public final class RelayNotificationService extends Service {
             RelayNotificationPreferences.setAppForeground(this, false);
         }
         createNotificationChannels();
+        hasNetworkConnection = hasUsableNetwork();
         httpClient = new OkHttpClient.Builder()
             .pingInterval(30L, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
@@ -87,12 +105,6 @@ public final class RelayNotificationService extends Service {
 
     @Override
     public int onStartCommand(@Nullable Intent intent, int flags, int startId) {
-        if (intent != null && ACTION_STOP.equals(intent.getAction())) {
-            logDebug("service-stop-requested source=intent");
-            stopListener(true);
-            return START_NOT_STICKY;
-        }
-
         if (!RelayNotificationPreferences.isEnabled(this)) {
             logDebug("service-start-skipped reason=disabled");
             stopListener(false);
@@ -115,6 +127,7 @@ public final class RelayNotificationService extends Service {
     public void onDestroy() {
         logDebug("service-destroyed sockets=" + sockets.size());
         isStopping = true;
+        hasPostedForegroundNotification = false;
         handler.removeCallbacksAndMessages(null);
         closeAllSockets();
         unregisterNetworkCallback();
@@ -135,13 +148,45 @@ public final class RelayNotificationService extends Service {
         if (disablePreference) {
             RelayNotificationPreferences.setEnabled(context, false);
         }
-        clearMessageNotification(context);
+        clearMessageNotifications(context);
+        if (disablePreference) {
+            NotificationSecureStore.clear(context);
+            NotificationAvatarCache.clear(context);
+            RelayNotificationPreferences.clearNotificationContext(context);
+        }
         context.stopService(new Intent(context, RelayNotificationService.class));
     }
 
-    static void clearMessageNotification(Context context) {
-        RelayNotificationPreferences.resetUnreadNotificationCount(context);
-        NotificationManagerCompat.from(context).cancel(MESSAGE_NOTIFICATION_ID);
+    static void clearMessageNotification(Context context, String chatPubkey) {
+        String normalizedChatPubkey = NotificationConversation.normalizePubkey(chatPubkey);
+        if (normalizedChatPubkey == null) {
+            return;
+        }
+        RelayNotificationPreferences.resetUnreadNotificationCount(context, normalizedChatPubkey);
+        NotificationManagerCompat.from(context).cancel(notificationIdForChat(normalizedChatPubkey));
+    }
+
+    static void clearGenericMessageNotification(Context context) {
+        RelayNotificationPreferences.resetUnreadNotificationCount(
+            context,
+            GENERIC_NOTIFICATION_COUNT_KEY
+        );
+        NotificationManagerCompat.from(context).cancel(GENERIC_MESSAGE_NOTIFICATION_ID);
+    }
+
+    static void clearMessageNotifications(Context context) {
+        NotificationManagerCompat manager = NotificationManagerCompat.from(context);
+        for (String key : RelayNotificationPreferences.getUnreadConversationKeys(context)) {
+            if (GENERIC_NOTIFICATION_COUNT_KEY.equals(key)) {
+                manager.cancel(GENERIC_MESSAGE_NOTIFICATION_ID);
+                continue;
+            }
+            String chatPubkey = NotificationConversation.normalizePubkey(key);
+            if (chatPubkey != null) {
+                manager.cancel(notificationIdForChat(chatPubkey));
+            }
+        }
+        RelayNotificationPreferences.resetUnreadNotificationCounts(context);
     }
 
     private void startAsForegroundService() {
@@ -152,10 +197,12 @@ public final class RelayNotificationService extends Service {
                 notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             );
+            hasPostedForegroundNotification = true;
             logDebug("foreground-notification-posted id=" + SERVICE_NOTIFICATION_ID);
             return;
         }
         startForeground(SERVICE_NOTIFICATION_ID, notification);
+        hasPostedForegroundNotification = true;
         logDebug("foreground-notification-posted id=" + SERVICE_NOTIFICATION_ID);
     }
 
@@ -165,20 +212,45 @@ public final class RelayNotificationService extends Service {
         if (disablePreference) {
             RelayNotificationPreferences.setEnabled(this, false);
         }
-        clearMessageNotification(this);
+        clearMessageNotifications(this);
+        if (disablePreference) {
+            NotificationSecureStore.clear(this);
+            NotificationAvatarCache.clear(this);
+            RelayNotificationPreferences.clearNotificationContext(this);
+        }
         closeAllSockets();
         stopForeground(STOP_FOREGROUND_REMOVE);
+        hasPostedForegroundNotification = false;
         stopSelf();
     }
 
     private void reloadWatchPlan() {
         configuredRelays = RelayNotificationPreferences.getRelays(this);
         recipientPubkeys = RelayNotificationPreferences.getRecipientPubkeys(this);
+        ownerPubkey = RelayNotificationPreferences.getOwnerPubkey(this);
+        showConversationDetails = RelayNotificationPreferences.shouldShowConversationDetails(this);
+        recipientPrivateKeys = showConversationDetails
+            ? NotificationSecureStore.loadRecipientKeys(this)
+            : new LinkedHashMap<>();
+        directConversations.clear();
+        groupConversations.clear();
+        List<NotificationConversation> conversations = RelayNotificationPreferences.getConversations(
+            this
+        );
+        for (NotificationConversation conversation : conversations) {
+            if (conversation.recipientPubkey == null) {
+                directConversations.put(conversation.chatPubkey, conversation);
+            } else {
+                groupConversations.put(conversation.recipientPubkey, conversation);
+            }
+        }
         logDebug(
             "watch-plan-loaded relays=" + configuredRelays.size() +
-            " recipients=" + recipientPubkeys.size()
+            " recipients=" + recipientPubkeys.size() +
+            " conversations=" + conversations.size() +
+            " decryptableRecipients=" + recipientPrivateKeys.size()
         );
-        if (configuredRelays.isEmpty() || recipientPubkeys.isEmpty()) {
+        if (configuredRelays.isEmpty() || recipientPubkeys.isEmpty() || ownerPubkey.isEmpty()) {
             logWarning("watch-plan-rejected reason=empty");
             stopListener(true);
             return;
@@ -187,6 +259,10 @@ public final class RelayNotificationService extends Service {
         isStopping = false;
         closeAllSockets();
         reconnectAttempts.clear();
+        updateServiceNotification();
+        if (!hasNetworkConnection) {
+            return;
+        }
         for (String relayUrl : configuredRelays) {
             connectRelay(relayUrl);
         }
@@ -200,6 +276,7 @@ public final class RelayNotificationService extends Service {
             return;
         }
 
+        cancelReconnectTask(relayUrl);
         logDebug("relay-connect-start relay=" + relayLogId(relayUrl));
         Request request = new Request.Builder().url(relayUrl).build();
         RelayWebSocketListener listener = new RelayWebSocketListener(relayUrl);
@@ -213,7 +290,13 @@ public final class RelayNotificationService extends Service {
                 return;
             }
             sockets.remove(relayUrl);
-            if (isStopping || !configuredRelays.contains(relayUrl)) {
+            openRelays.remove(relayUrl);
+            if (
+                isStopping ||
+                !configuredRelays.contains(relayUrl) ||
+                reconnectTasks.containsKey(relayUrl)
+            ) {
+                updateServiceNotification();
                 return;
             }
             int attempts = reconnectAttempts.getOrDefault(relayUrl, 0) + 1;
@@ -224,7 +307,16 @@ public final class RelayNotificationService extends Service {
                 " attempt=" + attempts +
                 " delayMs=" + delay
             );
-            handler.postDelayed(() -> connectRelay(relayUrl), delay);
+            Runnable reconnectTask = () -> {
+                reconnectTasks.remove(relayUrl);
+                if (hasNetworkConnection) {
+                    connectRelay(relayUrl);
+                }
+                updateServiceNotification();
+            };
+            reconnectTasks.put(relayUrl, reconnectTask);
+            handler.postDelayed(reconnectTask, delay);
+            updateServiceNotification();
         });
     }
 
@@ -236,6 +328,18 @@ public final class RelayNotificationService extends Service {
             socket.close(1000, "Notification listener refresh");
         }
         sockets.clear();
+        openRelays.clear();
+        for (Runnable reconnectTask : reconnectTasks.values()) {
+            handler.removeCallbacks(reconnectTask);
+        }
+        reconnectTasks.clear();
+    }
+
+    private void cancelReconnectTask(String relayUrl) {
+        Runnable reconnectTask = reconnectTasks.remove(relayUrl);
+        if (reconnectTask != null) {
+            handler.removeCallbacks(reconnectTask);
+        }
     }
 
     private String createSubscription(String relayUrl) throws JSONException {
@@ -353,8 +457,16 @@ public final class RelayNotificationService extends Service {
                 return;
             }
 
-            logDebug("gift-wrap-accepted event=" + eventLabel + " action=notify");
-            showMessageNotification(recipientPubkey);
+            NotificationTarget target = resolveNotificationTarget(event, recipientPubkey);
+            if (target == null) {
+                logDebug("gift-wrap-accepted event=" + eventLabel + " action=notification-suppressed");
+                return;
+            }
+            logDebug(
+                "gift-wrap-accepted event=" + eventLabel +
+                " action=notify mode=" + (target.conversation == null ? "generic" : "conversation")
+            );
+            showMessageNotification(target);
         } catch (JSONException exception) {
             logWarning(
                 "relay-message-rejected relay=" + relayLogId(source.relayUrl) +
@@ -402,23 +514,162 @@ public final class RelayNotificationService extends Service {
         return sha256(serializedEvent.replace("\\/", "/"));
     }
 
-    private void showMessageNotification(String recipientPubkey) {
-        int unreadCount = RelayNotificationPreferences.incrementUnreadNotificationCount(this);
+    @Nullable
+    private NotificationTarget resolveNotificationTarget(JSONObject wrappedEvent, String recipientPubkey) {
+        if (!showConversationDetails) {
+            return NotificationTarget.generic();
+        }
+
+        String recipientPrivateKey = recipientPrivateKeys.get(recipientPubkey);
+        if (recipientPrivateKey == null) {
+            return NotificationTarget.generic();
+        }
+
+        try {
+            String sealPlaintext = Nip44Decryptor.decrypt(
+                wrappedEvent.optString("content", ""),
+                recipientPrivateKey,
+                wrappedEvent.optString("pubkey", "")
+            );
+            JSONObject seal = new JSONObject(sealPlaintext);
+            if (!isValidSignedEvent(seal, 13)) {
+                return null;
+            }
+
+            String senderPubkey = seal.optString("pubkey", "").toLowerCase(Locale.ROOT);
+            String rumorPlaintext = Nip44Decryptor.decrypt(
+                seal.optString("content", ""),
+                recipientPrivateKey,
+                senderPubkey
+            );
+            JSONObject rumor = new JSONObject(rumorPlaintext);
+            if (
+                rumor.optInt("kind", -1) != 14 ||
+                !senderPubkey.equals(rumor.optString("pubkey", "").toLowerCase(Locale.ROOT)) ||
+                !isValidRumor(rumor) ||
+                senderPubkey.equals(ownerPubkey) ||
+                !hasRecipientTag(rumor.optJSONArray("tags"), recipientPubkey) ||
+                rumor.optString("content", "").trim().isEmpty()
+            ) {
+                return null;
+            }
+
+            NotificationConversation groupConversation = groupConversations.get(recipientPubkey);
+            if (groupConversation != null) {
+                return groupConversation.notificationsEnabled
+                    ? NotificationTarget.conversation(groupConversation)
+                    : null;
+            }
+            if (!recipientPubkey.equals(ownerPubkey)) {
+                return null;
+            }
+
+            NotificationConversation directConversation = directConversations.get(senderPubkey);
+            if (directConversation != null) {
+                return directConversation.notificationsEnabled
+                    ? NotificationTarget.conversation(directConversation)
+                    : null;
+            }
+            String fallbackName = senderPubkey.substring(0, 8) + "…" + senderPubkey.substring(60);
+            return NotificationTarget.conversation(
+                new NotificationConversation(
+                    senderPubkey,
+                    null,
+                    fallbackName,
+                    "",
+                    fallbackName.substring(0, 2),
+                    true
+                )
+            );
+        } catch (GeneralSecurityException | JSONException exception) {
+            logDebug("gift-wrap-details-rejected reason=" + exceptionSummary(exception));
+            return null;
+        }
+    }
+
+    private boolean isValidSignedEvent(JSONObject event, int expectedKind) throws JSONException {
+        String eventId = event.optString("id", "").toLowerCase(Locale.ROOT);
+        String pubkey = event.optString("pubkey", "").toLowerCase(Locale.ROOT);
+        String signature = event.optString("sig", "").toLowerCase(Locale.ROOT);
+        return (
+            event.optInt("kind", -1) == expectedKind &&
+            HEX_64.matcher(eventId).matches() &&
+            HEX_64.matcher(pubkey).matches() &&
+            HEX_128.matcher(signature).matches() &&
+            eventId.equals(computeEventId(event)) &&
+            SchnorrSignatureVerifier.verify(eventId, pubkey, signature)
+        );
+    }
+
+    private boolean isValidRumor(JSONObject event) throws JSONException {
+        String eventId = event.optString("id", "").toLowerCase(Locale.ROOT);
+        String pubkey = event.optString("pubkey", "").toLowerCase(Locale.ROOT);
+        return (
+            HEX_64.matcher(eventId).matches() &&
+            HEX_64.matcher(pubkey).matches() &&
+            eventId.equals(computeEventId(event))
+        );
+    }
+
+    private boolean hasRecipientTag(@Nullable JSONArray tags, String recipientPubkey) {
+        if (tags == null) {
+            return false;
+        }
+        for (int index = 0; index < tags.length(); index += 1) {
+            JSONArray tag = tags.optJSONArray(index);
+            if (
+                tag != null &&
+                tag.length() >= 2 &&
+                "p".equals(tag.optString(0)) &&
+                recipientPubkey.equals(tag.optString(1, "").toLowerCase(Locale.ROOT))
+            ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void showMessageNotification(NotificationTarget target) {
+        NotificationConversation conversation = target.conversation;
+        String countKey = conversation == null
+            ? GENERIC_NOTIFICATION_COUNT_KEY
+            : conversation.chatPubkey;
+        int unreadCount = RelayNotificationPreferences.incrementUnreadNotificationCount(
+            this,
+            countKey
+        );
         Intent openIntent = new Intent(this, MainActivity.class);
         openIntent.setAction(Intent.ACTION_VIEW);
-        openIntent.putExtra(EXTRA_RECIPIENT_PUBKEY, recipientPubkey);
+        if (conversation == null) {
+            openIntent.putExtra(EXTRA_OPEN_CHATS_LIST, true);
+        } else {
+            openIntent.putExtra(EXTRA_CHAT_PUBKEY, conversation.chatPubkey);
+        }
         openIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        int notificationId = conversation == null
+            ? GENERIC_MESSAGE_NOTIFICATION_ID
+            : notificationIdForChat(conversation.chatPubkey);
         PendingIntent pendingIntent = PendingIntent.getActivity(
             this,
-            0,
+            notificationId,
             openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
-        String message = unreadCount == 1 ? "New message" : unreadCount + " new messages";
-        Notification notification = new NotificationCompat.Builder(this, MESSAGE_CHANNEL_ID)
+        Intent dismissIntent = new Intent(this, NotificationDismissReceiver.class);
+        dismissIntent.putExtra(EXTRA_NOTIFICATION_COUNT_KEY, countKey);
+        PendingIntent dismissPendingIntent = PendingIntent.getBroadcast(
+            this,
+            notificationId,
+            dismissIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+        String message = unreadCount == 1 ? "1 new message" : unreadCount + " new messages";
+        String title = conversation == null ? "Nostr Chat" : conversation.name;
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, MESSAGE_CHANNEL_ID)
             .setSmallIcon(R.drawable.nostr_chat_notification)
-            .setContentTitle("Nostr Chat")
+            .setContentTitle(title)
             .setContentText(message)
             .setNumber(unreadCount)
             .setAutoCancel(true)
@@ -426,12 +677,18 @@ public final class RelayNotificationService extends Service {
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setContentIntent(pendingIntent)
-            .build();
+            .setDeleteIntent(dismissPendingIntent)
+            .setGroup(MESSAGE_NOTIFICATION_GROUP)
+            .setPublicVersion(createRedactedMessageNotification(unreadCount, pendingIntent));
+        if (conversation != null) {
+            builder.setLargeIcon(NotificationAvatarCache.load(this, conversation));
+        }
+        Notification notification = builder.build();
 
         try {
-            NotificationManagerCompat.from(this).notify(MESSAGE_NOTIFICATION_ID, notification);
+            NotificationManagerCompat.from(this).notify(notificationId, notification);
             logDebug(
-                "message-notification-posted id=" + MESSAGE_NOTIFICATION_ID +
+                "message-notification-posted id=" + notificationId +
                 " unreadCount=" + unreadCount
             );
         } catch (SecurityException exception) {
@@ -439,32 +696,50 @@ public final class RelayNotificationService extends Service {
         }
     }
 
+    private Notification createRedactedMessageNotification(
+        int unreadCount,
+        PendingIntent pendingIntent
+    ) {
+        String message = unreadCount == 1 ? "1 new message" : unreadCount + " new messages";
+        return new NotificationCompat.Builder(this, MESSAGE_CHANNEL_ID)
+            .setSmallIcon(R.drawable.nostr_chat_notification)
+            .setContentTitle("Nostr Chat")
+            .setContentText(message)
+            .setNumber(unreadCount)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setContentIntent(pendingIntent)
+            .build();
+    }
+
     private Notification createServiceNotification() {
         Intent openIntent = new Intent(this, MainActivity.class);
+        openIntent.setAction(Intent.ACTION_VIEW);
+        openIntent.putExtra(EXTRA_OPEN_CHATS_LIST, true);
+        openIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent openPendingIntent = PendingIntent.getActivity(
             this,
             1,
             openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
-        Intent stopIntent = new Intent(this, StopRelayNotificationReceiver.class);
-        PendingIntent stopPendingIntent = PendingIntent.getBroadcast(
-            this,
-            2,
-            stopIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-        );
 
         return new NotificationCompat.Builder(this, SERVICE_CHANNEL_ID)
             .setSmallIcon(R.drawable.nostr_chat_notification)
-            .setContentTitle("Nostr Chat notifications")
-            .setContentText("Listening for new messages")
+            .setContentTitle("Standing by for messages")
+            .setContentText(
+                serviceStatusText(
+                    openRelays.size(),
+                    configuredRelays.size(),
+                    hasNetworkConnection,
+                    !reconnectTasks.isEmpty() || !reconnectAttempts.isEmpty()
+                )
+            )
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(openPendingIntent)
-            .addAction(0, "Stop", stopPendingIntent)
             .build();
     }
 
@@ -479,7 +754,7 @@ public final class RelayNotificationService extends Service {
             "Background message listener",
             NotificationManager.IMPORTANCE_LOW
         );
-        serviceChannel.setDescription("Keeps the private Nostr relay listener running");
+        serviceChannel.setDescription("Keeps direct Nostr relay connections ready for messages");
         serviceChannel.setShowBadge(false);
         manager.createNotificationChannel(serviceChannel);
 
@@ -488,8 +763,55 @@ public final class RelayNotificationService extends Service {
             "Messages",
             NotificationManager.IMPORTANCE_HIGH
         );
-        messageChannel.setDescription("Generic alerts for incoming Nostr Chat messages");
+        messageChannel.setDescription("Incoming Nostr Chat message counts");
         manager.createNotificationChannel(messageChannel);
+    }
+
+    static String serviceStatusText(
+        int connectedRelays,
+        int totalRelays,
+        boolean networkAvailable,
+        boolean retrying
+    ) {
+        int connected = Math.max(0, connectedRelays);
+        int total = Math.max(0, totalRelays);
+        if (!networkAvailable) {
+            return "Offline · waiting for network";
+        }
+        if (connected == 0) {
+            return retrying
+                ? "No relay connection · retrying"
+                : "Connecting to relays…";
+        }
+        String connectedStatus = connected + " of " + total + " relays on";
+        return connected < total || retrying
+            ? connectedStatus + " · reconnecting"
+            : connectedStatus;
+    }
+
+    private void updateServiceNotification() {
+        if (!hasPostedForegroundNotification || isStopping) {
+            return;
+        }
+        handler.removeCallbacks(serviceNotificationUpdateTask);
+        handler.postDelayed(
+            serviceNotificationUpdateTask,
+            SERVICE_NOTIFICATION_UPDATE_DELAY_MILLIS
+        );
+    }
+
+    private void postServiceNotificationUpdate() {
+        if (!hasPostedForegroundNotification || isStopping) {
+            return;
+        }
+        try {
+            NotificationManagerCompat.from(this).notify(
+                SERVICE_NOTIFICATION_ID,
+                createServiceNotification()
+            );
+        } catch (SecurityException exception) {
+            logWarning("foreground-notification-update-failed " + exceptionSummary(exception));
+        }
     }
 
     private void registerNetworkCallback() {
@@ -500,15 +822,49 @@ public final class RelayNotificationService extends Service {
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override
             public void onAvailable(@NonNull Network network) {
-                logDebug("network-available action=refresh-listener");
-                handler.postDelayed(() -> {
-                    if (!isStopping && RelayNotificationPreferences.isEnabled(RelayNotificationService.this)) {
-                        reloadWatchPlan();
-                    }
-                }, 500L);
+                logDebug("network-available action=connect-relays");
+                handler.postDelayed(() -> syncNetworkState(true), 500L);
+            }
+
+            @Override
+            public void onLost(@NonNull Network network) {
+                logDebug("network-lost action=wait");
+                handler.postDelayed(() -> syncNetworkState(hasUsableNetwork()), 250L);
             }
         };
         connectivityManager.registerDefaultNetworkCallback(networkCallback);
+    }
+
+    private void syncNetworkState(boolean isAvailable) {
+        hasNetworkConnection = isAvailable;
+        if (isStopping || !RelayNotificationPreferences.isEnabled(this)) {
+            updateServiceNotification();
+            return;
+        }
+        if (!hasNetworkConnection) {
+            closeAllSockets();
+            updateServiceNotification();
+            return;
+        }
+        for (String relayUrl : configuredRelays) {
+            connectRelay(relayUrl);
+        }
+        updateServiceNotification();
+    }
+
+    private boolean hasUsableNetwork() {
+        ConnectivityManager manager = connectivityManager != null
+            ? connectivityManager
+            : (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (manager == null) {
+            return true;
+        }
+        Network activeNetwork = manager.getActiveNetwork();
+        if (activeNetwork == null) {
+            return false;
+        }
+        NetworkCapabilities capabilities = manager.getNetworkCapabilities(activeNetwork);
+        return capabilities != null && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
     }
 
     private void unregisterNetworkCallback() {
@@ -530,6 +886,23 @@ public final class RelayNotificationService extends Service {
     private static String shortHash(String value) {
         String hash = sha256(value);
         return hash.length() >= 12 ? hash.substring(0, 12) : Integer.toHexString(value.hashCode());
+    }
+
+    static int notificationIdForChat(String chatPubkey) {
+        byte[] hash;
+        try {
+            hash = MessageDigest.getInstance("SHA-256").digest(
+                chatPubkey.getBytes(StandardCharsets.UTF_8)
+            );
+        } catch (NoSuchAlgorithmException exception) {
+            return 100_000 + Math.floorMod(chatPubkey.hashCode(), 900_000);
+        }
+        int value =
+            ((hash[0] & 0x7f) << 24) |
+            ((hash[1] & 0xff) << 16) |
+            ((hash[2] & 0xff) << 8) |
+            (hash[3] & 0xff);
+        return 100_000 + Math.floorMod(value, 2_000_000_000);
     }
 
     private static String relayLogId(String relayUrl) {
@@ -616,7 +989,16 @@ public final class RelayNotificationService extends Service {
 
         @Override
         public void onOpen(@NonNull WebSocket webSocket, @NonNull Response response) {
-            handler.post(() -> reconnectAttempts.remove(relayUrl));
+            handler.post(() -> {
+                if (sockets.get(relayUrl) != webSocket) {
+                    webSocket.close(1000, "Stale notification connection");
+                    return;
+                }
+                reconnectAttempts.remove(relayUrl);
+                cancelReconnectTask(relayUrl);
+                openRelays.add(relayUrl);
+                updateServiceNotification();
+            });
             logDebug(
                 "relay-open relay=" + relayLogId(relayUrl) +
                 " responseCode=" + response.code()
@@ -665,5 +1047,23 @@ public final class RelayNotificationService extends Service {
     private static String sanitizeLogValue(String value) {
         String normalized = value.replace('\n', ' ').replace('\r', ' ').trim();
         return normalized.length() <= 160 ? normalized : normalized.substring(0, 160);
+    }
+
+    private static final class NotificationTarget {
+
+        @Nullable
+        private final NotificationConversation conversation;
+
+        private NotificationTarget(@Nullable NotificationConversation conversation) {
+            this.conversation = conversation;
+        }
+
+        private static NotificationTarget generic() {
+            return new NotificationTarget(null);
+        }
+
+        private static NotificationTarget conversation(NotificationConversation conversation) {
+            return new NotificationTarget(conversation);
+        }
     }
 }

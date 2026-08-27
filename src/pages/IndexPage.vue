@@ -236,7 +236,7 @@ import { useQuasar } from 'quasar';
 import ChatList from 'src/components/ChatList.vue';
 import { useSectionShell } from 'src/composables/useSectionShell';
 import { useVisibleViewportHeight } from 'src/composables/useVisibleViewportHeight';
-import { scheduleAndroidRelayNotificationCountReset } from 'src/services/androidRelayNotificationService';
+import { clearAndroidRelayNotificationForChat } from 'src/services/androidRelayNotificationService';
 import { useChatStore } from 'src/stores/chatStore';
 import {
   isMissingContactRelaysError,
@@ -683,7 +683,7 @@ async function handleSend(payload: { text: string; replyTo: MessageReplyPreview 
       await chatStore.acceptChat(activeChatId.value, {
         lastOutgoingMessageAt: created.sentAt
       });
-      scheduleAndroidRelayNotificationCountReset();
+      clearAndroidChatNotification(activeChatId.value);
     }
   } catch (error) {
     reportUiError('Failed to send chat message', error, t('errors.failedSendMessage'));
@@ -733,7 +733,7 @@ async function handleSendMedia(payload: {
       await chatStore.acceptChat(activeChatId.value, {
         lastOutgoingMessageAt: created.sentAt
       });
-      scheduleAndroidRelayNotificationCountReset();
+      clearAndroidChatNotification(activeChatId.value);
     }
   } catch (error) {
     reportUiError('Failed to send media attachment', error, t('errors.failedSendMessage'));
@@ -776,7 +776,7 @@ async function handleEditMessage(payload: { message: Message; text: string }): P
         messageMeta: updated.meta,
       });
     }
-    scheduleAndroidRelayNotificationCountReset();
+    clearAndroidChatNotification(payload.message.chatId);
   } catch (error) {
     reportUiError('Failed to edit chat message', error, t('errors.failedSendMessage'));
   }
@@ -828,7 +828,7 @@ async function handleForwardMessageToChat(chatId: string): Promise<void> {
       await chatStore.acceptChat(targetChat.id, {
         lastOutgoingMessageAt: created.sentAt,
       });
-      scheduleAndroidRelayNotificationCountReset();
+      clearAndroidChatNotification(targetChat.id);
       isForwardMessageDialogOpen.value = false;
       forwardingMessage.value = null;
       $q.notify({
@@ -868,7 +868,7 @@ async function handleReactToMessage(payload: { message: Message; emoji: string }
         }
       );
     }
-    scheduleAndroidRelayNotificationCountReset();
+    clearAndroidChatNotification(payload.message.chatId);
   } catch (error) {
     reportUiError('Failed to add message reaction', error, t('errors.failedAddReaction'));
   }
@@ -877,7 +877,7 @@ async function handleReactToMessage(payload: { message: Message; emoji: string }
 async function handleDeleteMessage(message: Message): Promise<void> {
   try {
     await messageStore.deleteMessage(message.chatId, message.id);
-    scheduleAndroidRelayNotificationCountReset();
+    clearAndroidChatNotification(message.chatId);
   } catch (error) {
     reportUiError('Failed to delete message', error, t('errors.failedDeleteMessage'));
   }
@@ -893,10 +893,16 @@ async function handleRemoveReaction(payload: {
       payload.message.id,
       payload.reaction
     );
-    scheduleAndroidRelayNotificationCountReset();
+    clearAndroidChatNotification(payload.message.chatId);
   } catch (error) {
     reportUiError('Failed to remove message reaction', error, t('errors.failedRemoveReaction'));
   }
+}
+
+function clearAndroidChatNotification(chatId: string): void {
+  void clearAndroidRelayNotificationForChat(chatId).catch((error) => {
+    console.warn('Failed to clear the active Android chat notification.', error);
+  });
 }
 
 function handleOpenProfile(publicKey: string): void {

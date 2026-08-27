@@ -49,4 +49,37 @@ public final class RelayNotificationServiceTest {
             RelayNotificationService.computeCanonicalEventId(androidSerializedEvent)
         );
     }
+
+    @Test
+    public void formatsForegroundRelayConnectivityStates() {
+        assertEquals(
+            "Offline · waiting for network",
+            RelayNotificationService.serviceStatusText(0, 3, false, false)
+        );
+        assertEquals(
+            "Connecting to relays…",
+            RelayNotificationService.serviceStatusText(0, 3, true, false)
+        );
+        assertEquals(
+            "No relay connection · retrying",
+            RelayNotificationService.serviceStatusText(0, 3, true, true)
+        );
+        assertEquals(
+            "2 of 3 relays on · reconnecting",
+            RelayNotificationService.serviceStatusText(2, 3, true, false)
+        );
+        assertEquals(
+            "3 of 3 relays on",
+            RelayNotificationService.serviceStatusText(3, 3, true, false)
+        );
+    }
+
+    @Test
+    public void assignsStableDistinctConversationNotificationIds() {
+        int first = RelayNotificationService.notificationIdForChat("11".repeat(32));
+        int second = RelayNotificationService.notificationIdForChat("22".repeat(32));
+
+        assertEquals(first, RelayNotificationService.notificationIdForChat("11".repeat(32)));
+        assertFalse(first == second);
+    }
 }

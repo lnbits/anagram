@@ -86,6 +86,7 @@ import {
 } from 'src/router/pageLoaders';
 import { useVisibleViewportHeight } from 'src/composables/useVisibleViewportHeight';
 import {
+  clearAndroidRelayNotificationForChat,
   refreshAndroidRelayNotificationListener,
   resolveAndroidRelayNotificationRoute,
   startAndroidRelayNotificationListeners
@@ -208,6 +209,7 @@ watch(
   routeChatId,
   (chatId) => {
     nostrStore.setAppLifecycleRouteChatId(chatId);
+    clearVisibleAndroidChatNotification(chatId);
   },
   { immediate: true }
 );
@@ -240,6 +242,7 @@ onMounted(() => {
   syncNativeViewportCssVariables();
   document.addEventListener('focusin', handleNativeDialogFocusIn);
   document.addEventListener('focusout', handleNativeFocusOut);
+  document.addEventListener('visibilitychange', handleAndroidNotificationVisibilityChange);
 
   if (
     typeof window !== 'undefined' &&
@@ -274,6 +277,7 @@ onBeforeUnmount(() => {
   removeDesktopNotificationOpenListener = null;
   document.removeEventListener('focusin', handleNativeDialogFocusIn);
   document.removeEventListener('focusout', handleNativeFocusOut);
+  document.removeEventListener('visibilitychange', handleAndroidNotificationVisibilityChange);
   clearPendingDialogFocusScrolls();
   clearPendingNativeKeyboardScrollResets();
   resetNativeViewportCssVariables();
@@ -586,6 +590,21 @@ async function openAndroidRelayNotification(recipientPubkey: string | null): Pro
     await router.push(await resolveAndroidRelayNotificationRoute(recipientPubkey));
   } catch (error) {
     reportUiError('Failed to open chat from Android notification', error);
+  }
+}
+
+function clearVisibleAndroidChatNotification(chatId: string | null): void {
+  if (!chatId || (typeof document !== 'undefined' && document.visibilityState !== 'visible')) {
+    return;
+  }
+  void clearAndroidRelayNotificationForChat(chatId).catch((error) => {
+    console.warn('Failed to clear the visible Android chat notification.', error);
+  });
+}
+
+function handleAndroidNotificationVisibilityChange(): void {
+  if (document.visibilityState === 'visible') {
+    clearVisibleAndroidChatNotification(routeChatId.value);
   }
 }
 

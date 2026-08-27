@@ -1,11 +1,14 @@
-import { createAndroidNotificationWatchPlan } from 'src/services/androidRelayNotificationService';
+import {
+  createAndroidNotificationWatchPlan,
+  readAndroidRelayConversationDetailsPreference,
+} from 'src/services/androidRelayNotificationService';
 import { describe, expect, it } from 'vitest';
 
 const OWNER_PUBKEY = '11'.repeat(32);
 const GROUP_EPOCH_PUBKEY = '22'.repeat(32);
 
 describe('androidRelayNotificationService', () => {
-  it('builds a normalized, keyless watch plan from private-message relays and recipient pubkeys', () => {
+  it('builds a normalized watch plan from private-message relays and recipient pubkeys', () => {
     const watchPlan = createAndroidNotificationWatchPlan({
       ownerPubkey: OWNER_PUBKEY.toUpperCase(),
       relayUrls: [
@@ -19,10 +22,15 @@ describe('androidRelayNotificationService', () => {
     });
 
     expect(watchPlan).toEqual({
+      ownerPubkey: OWNER_PUBKEY,
       relays: ['ws://localhost:8080/nostr/', 'wss://group-relay.example/', 'wss://relay.example/'],
       recipientPubkeys: [OWNER_PUBKEY, GROUP_EPOCH_PUBKEY],
     });
-    expect(Object.keys(watchPlan)).toEqual(['relays', 'recipientPubkeys']);
+    expect(Object.keys(watchPlan)).toEqual(['ownerPubkey', 'relays', 'recipientPubkeys']);
+  });
+
+  it('enables per-conversation details by default', () => {
+    expect(readAndroidRelayConversationDetailsPreference()).toBe(true);
   });
 
   it('rejects a watch plan without a valid owner public key', () => {

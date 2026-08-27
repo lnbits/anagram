@@ -404,7 +404,7 @@ async function handleAndroidPushNotificationsToggle(nextValue: boolean): Promise
   gap: 12px;
 }
 
-@media (max-width: 599px) {
+@media (--nc-mobile-viewport) {
   .notifications-card__gateway {
     grid-template-columns: minmax(0, 1fr);
   }

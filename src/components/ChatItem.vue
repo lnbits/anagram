@@ -526,7 +526,7 @@ function emitDeleteChat(): void {
   color: var(--nc-active-text) !important;
 }
 
-@media (max-width: 1023px) {
+@media (--nc-mobile-viewport) {
   .chat-item {
     font-family: var(--nc-mobile-font);
   }

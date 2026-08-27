@@ -1362,7 +1362,7 @@ watch(isForwardMessageDialogOpen, (isOpen) => {
   margin-left: 0;
 }
 
-@media (min-width: 1024px) {
+@media (--nc-desktop-viewport) {
   .sidebar-top .sidebar-top__healing.reconnect-healing-banner--expanded,
   .sidebar-top .sidebar-top__healing.startup-history-banner--expanded {
     margin-right: -12px;
@@ -1405,7 +1405,7 @@ body.body--dark .q-btn.sidebar-top__action {
   border-top: 1px solid var(--nc-border);
 }
 
-@media (max-width: 1023px) {
+@media (--nc-mobile-viewport) {
   .sidebar-top {
     font-family: var(--nc-mobile-font);
   }

@@ -294,6 +294,7 @@
 </template>
 
 <script setup lang="ts">
+import { useQuasar } from 'quasar';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import MessageBubble from 'src/components/MessageBubble.vue';
 import MessageComposer from 'src/components/MessageComposer.vue';
@@ -391,6 +392,7 @@ const highlightedMessageId = ref<string | null>(null);
 const highlightedMessageKind = ref<'default' | 'search' | null>(null);
 const isThreadScrollLocked = ref(false);
 const isAutomaticBottomScrollEnabled = ref(true);
+const $q = useQuasar();
 const chatStore = useChatStore();
 const messageStore = useMessageStore();
 const nostrStore = useNostrStore();
@@ -1185,11 +1187,7 @@ function setAutomaticBottomScrollEnabled(enabled: boolean): void {
 }
 
 function shouldPinMobileThreadToAbsoluteBottom(): boolean {
-  if (typeof window === 'undefined') {
-    return false;
-  }
-
-  return window.matchMedia('(max-width: 1023px)').matches;
+  return $q.screen.lt.sm;
 }
 
 async function scrollToBottom(mode: 'auto' | 'explicit' = 'auto'): Promise<void> {
@@ -2962,7 +2960,7 @@ body.body--dark .thread-header__action {
   transform: translateY(6px);
 }
 
-@media (max-width: 1023px) {
+@media (--nc-mobile-viewport) {
   .thread-header {
     min-height: 56px;
     padding: 8px 10px;
@@ -3133,7 +3131,7 @@ body.body--dark .q-btn.thread-scroll-jump:hover {
     0 0 0 2px color-mix(in srgb, var(--q-primary) 24%, transparent);
 }
 
-@media (max-width: 1023px) {
+@media (--nc-mobile-viewport) {
   .thread-day-sticky__label,
   .thread-day-separator__label,
   .thread-unread-separator__label {
@@ -3153,7 +3151,7 @@ body.body--dark .q-btn.thread-scroll-jump:hover {
   margin-top: 4px;
 }
 
-@media (max-width: 1023px) {
+@media (--nc-mobile-viewport) {
   .thread-message-entry--sender-change {
     margin-top: 0;
   }

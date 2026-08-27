@@ -105,7 +105,7 @@ const appUpdateStore = useAppUpdateStore();
 const chatStore = useChatStore();
 const nostrStore = useNostrStore();
 const relayStore = useRelayStore();
-const isMobile = computed(() => $q.screen.lt.md);
+const isMobile = computed(() => $q.screen.lt.sm);
 const isNativeMobile = computed(() => $q.platform.is.nativeMobile === true);
 const NATIVE_KEYBOARD_INSET_THRESHOLD_PX = 80;
 const nativeViewportBaselineHeight = ref(0);

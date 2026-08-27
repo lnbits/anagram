@@ -784,7 +784,7 @@ const mobileGroupLayout = computed(() => props.mobileGroupLayout === true);
 const isPackagedRuntime = isPackagedAppRuntime();
 const isDesktopBubbleLayout = computed(() => props.desktopMessageLayout === 'bubbles');
 const usesTelegramAvatarLayout = computed(
-  () => isDesktopBubbleLayout.value && (isPackagedRuntime || $q.screen.width >= 1024)
+  () => isDesktopBubbleLayout.value && (isPackagedRuntime || !$q.screen.lt.sm)
 );
 const reserveTelegramAuthorAvatarSpace = computed(
   () => props.reserveTelegramAuthorAvatarSpace === true
@@ -2208,7 +2208,7 @@ onBeforeUnmount(() => {
   z-index: 1;
 }
 
-@media (min-width: 1024px) {
+@media (--nc-desktop-viewport) {
   .bubble-row--desktop-bubbles {
     margin-bottom: 8px;
   }
@@ -2293,7 +2293,7 @@ onBeforeUnmount(() => {
   }
 }
 
-@media (max-width: 1023px) {
+@media (--nc-mobile-viewport) {
   .bubble-row,
   .bubble-stack,
   .bubble {
@@ -2574,7 +2574,7 @@ onBeforeUnmount(() => {
   content: ' · ';
 }
 
-@media (max-width: 1023px) {
+@media (--nc-mobile-viewport) {
   .bubble__edited,
   .bubble__time {
     font-size: var(--nc-mobile-small-font-size);

@@ -468,7 +468,7 @@ body.body--dark .settings-menu__item--danger {
   border-top: 1px solid var(--nc-border);
 }
 
-@media (max-width: 1023px) {
+@media (--nc-mobile-viewport) {
   .settings-sidebar,
   .settings-content-panel {
     border-right: 0;

@@ -4,6 +4,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { configure } from 'quasar/wrappers';
 import type { Plugin } from 'vite';
+import {
+  DESKTOP_VIEWPORT_MEDIA_TOKEN,
+  MOBILE_BREAKPOINT_PX,
+  MOBILE_VIEWPORT_MEDIA_TOKEN,
+} from './src/config/responsiveBreakpoints';
 
 interface PackageJson {
   name?: string;
@@ -23,6 +28,32 @@ const packageJson = JSON.parse(
   readFileSync(path.join(projectRoot, 'package.json'), 'utf-8')
 ) as PackageJson;
 const appVersion = packageJson.version ?? '0.0.0';
+const MOBILE_VIEWPORT_MAX_WIDTH_PX = MOBILE_BREAKPOINT_PX - 0.02;
+
+function createResponsiveMediaQueryPlugin(): Plugin {
+  const replacements = [
+    [MOBILE_VIEWPORT_MEDIA_TOKEN, `(max-width: ${MOBILE_VIEWPORT_MAX_WIDTH_PX}px)`],
+    [DESKTOP_VIEWPORT_MEDIA_TOKEN, `(min-width: ${MOBILE_BREAKPOINT_PX}px)`],
+  ] as const;
+
+  return {
+    name: 'nostr-chat-responsive-media-queries',
+    enforce: 'pre',
+    transform(source, id) {
+      const sourcePath = id.split('?', 1)[0] ?? '';
+      if (!sourcePath.endsWith('.css') && !sourcePath.endsWith('.vue')) {
+        return null;
+      }
+
+      const transformedSource = replacements.reduce(
+        (result, [token, query]) => result.replaceAll(token, query),
+        source
+      );
+
+      return transformedSource === source ? null : { code: transformedSource, map: null };
+    },
+  };
+}
 
 function readGitSha(): string {
   try {
@@ -248,7 +279,7 @@ export default configure((ctx) => {
   const enableAppShell = ctx.modeName === 'spa' && ctx.prod;
 
   return {
-    boot: ['i18n'],
+    boot: ['screen', 'i18n'],
 
     css: ['app.css'],
     extras: ['material-icons'],
@@ -266,7 +297,10 @@ export default configure((ctx) => {
         APP_ENABLE_APP_SHELL: enableAppShell,
         APP_E2E_DISABLE_NDK_OUTBOX: process.env.APP_E2E_DISABLE_NDK_OUTBOX === 'true',
       },
-      vitePlugins: enableAppShell ? [createAppShellBuildPlugin(buildInfo)] : [],
+      vitePlugins: [
+        createResponsiveMediaQueryPlugin(),
+        ...(enableAppShell ? [createAppShellBuildPlugin(buildInfo)] : []),
+      ],
     },
 
     devServer: {

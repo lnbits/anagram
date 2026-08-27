@@ -213,7 +213,7 @@ const requestCountLabel = computed(() => {
   line-height: 1.5;
 }
 
-@media (max-width: 1023px) {
+@media (--nc-mobile-viewport) {
   .requests-page__header {
     padding: 16px 16px 18px;
   }

@@ -41,7 +41,7 @@ const route = useRoute();
 const router = useRouter();
 
 const showMobileBackButton = computed(() => {
-  return $q.screen.lt.md && String(route.name ?? '').startsWith('settings-');
+  return $q.screen.lt.sm && String(route.name ?? '').startsWith('settings-');
 });
 
 function goBack(): void {

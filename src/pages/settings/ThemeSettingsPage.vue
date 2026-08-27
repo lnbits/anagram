@@ -144,7 +144,7 @@ watch(desktopMessageLayout, (value) => {
   width: min(100%, 360px);
 }
 
-@media (max-width: 599px) {
+@media (--nc-mobile-viewport) {
   .theme-card__setting {
     align-items: stretch;
     flex-direction: column;

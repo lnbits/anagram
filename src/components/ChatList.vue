@@ -154,7 +154,7 @@ function formatRequestCount(value: number): string {
   background: rgba(255, 255, 255, 0.18);
 }
 
-@media (max-width: 1023px) {
+@media (--nc-mobile-viewport) {
   .requests-row {
     font-family: var(--nc-mobile-font);
   }

@@ -1193,7 +1193,7 @@ const pubkeyFormatToggleAriaLabel = computed(() => {
 const pubkeyFormatToggleTooltip = computed(() => {
   return displayedPubkeyFormat.value === 'npub' ? t('common.showHex') : t('contacts.showNpub');
 });
-const isMobileTabs = computed(() => $q.screen.lt.md);
+const isMobileTabs = computed(() => $q.screen.lt.sm);
 const isGroupContact = computed(() => currentContact.value?.type === 'group');
 const isOwnedGroupContact = computed(() => {
   const loggedInPubkey = nostrStore.getLoggedInPublicKeyHex()?.trim().toLowerCase() ?? '';

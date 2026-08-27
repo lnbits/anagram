@@ -206,7 +206,7 @@ body {
   background-attachment: scroll;
 }
 
-@media (max-width: 1023px), (pointer: coarse) {
+@media (--nc-mobile-viewport) {
   body {
     font-family: var(--nc-mobile-font);
     background: var(--nc-app-background-mobile);
@@ -509,7 +509,7 @@ body.body--dark .nc-pop-menu__list .q-item:hover {
   background: var(--nc-hover);
 }
 
-@media (max-width: 1023px) {
+@media (--nc-mobile-viewport) {
   .app-shell__resize-handle {
     display: none;
   }

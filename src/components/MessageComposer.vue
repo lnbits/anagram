@@ -365,7 +365,7 @@ function normalizeChatIdentifier(value: string | null | undefined): string | nul
 
 const activeChatId = computed(() => normalizeChatIdentifier(props.chatId));
 const sendButtonIcon = computed(() =>
-  props.editingMessage ? 'check' : $q.screen.lt.md ? 'north' : 'send'
+  props.editingMessage ? 'check' : $q.screen.lt.sm ? 'north' : 'send'
 );
 const mentionProfiles = computed(() => props.mentionProfiles ?? []);
 const mediaUploadStatusMessage = computed(() => {
@@ -927,7 +927,7 @@ function handleEnterKey(event: KeyboardEvent): void {
     return;
   }
 
-  if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches) {
+  if ($q.screen.lt.sm) {
     return;
   }
 
@@ -1384,7 +1384,7 @@ defineExpose({
   box-shadow: none !important;
 }
 
-@media (max-width: 1023px) {
+@media (--nc-mobile-viewport) {
   .composer {
     gap: 5px;
     font-family: var(--nc-mobile-font);
@@ -1542,7 +1542,7 @@ body.body--dark .composer__reply {
   box-shadow: none;
 }
 
-@media (max-width: 1023px) {
+@media (--nc-mobile-viewport) {
   body.body--dark .composer {
     background: transparent;
   }

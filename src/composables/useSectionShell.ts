@@ -25,7 +25,7 @@ export function useSectionShell({
 }: UseSectionShellOptions) {
   const $q = useQuasar();
   const router = useRouter();
-  const isMobile = computed(() => $q.screen.lt.md);
+  const isMobile = computed(() => $q.screen.lt.sm);
   const desktopSidebar = useDesktopSidebarWidth(isMobile);
 
   function buildPageStyle(offset: number, height: number): Record<string, string> {

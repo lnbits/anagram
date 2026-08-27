@@ -709,7 +709,7 @@ body.body--dark .app-status__status-icon--pending {
   }
 }
 
-@media (max-width: 1023px) {
+@media (--nc-mobile-viewport) {
   .app-status {
     --app-status-history-item-height: 52px;
   }

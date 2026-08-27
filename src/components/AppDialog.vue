@@ -223,7 +223,7 @@ body.body--dark .app-dialog__grabber {
   background: rgba(148, 163, 184, 0.28);
 }
 
-@media (max-width: 599px) {
+@media (--nc-mobile-viewport) {
   .app-dialog-root :deep(.q-dialog__inner) {
     padding: 0;
   }

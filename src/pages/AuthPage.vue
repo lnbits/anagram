@@ -882,7 +882,10 @@ const isAndroidAppRuntime = computed(
   () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android'
 );
 const showExtensionLoginOption = computed(
-  () => !isDesktopAppRuntime.value && !isAndroidAppRuntime.value
+  () =>
+    !isDesktopAppRuntime.value &&
+    !isAndroidAppRuntime.value &&
+    nostrStore.hasNip07Extension()
 );
 const onboardingTitle = computed(() => {
   if (onboardingStatus.value === 'found') {

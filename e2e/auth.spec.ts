@@ -89,6 +89,27 @@ async function startTestNip46BunkerBackend(
   };
 }
 
+test('extension login is hidden when the browser has no NIP-07 provider', async ({ browser }) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  try {
+    await page.goto('/#/auth');
+    expect(await page.evaluate(() => typeof window.nostr)).toBe('undefined');
+
+    await page.getByRole('button', { name: 'Login', exact: true }).click();
+
+    await expect(
+      page.getByRole('button', { name: 'Login with Extension', exact: true })
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole('button', { name: 'Login with Remote Signer', exact: true })
+    ).toBeVisible();
+  } finally {
+    await context.close();
+  }
+});
+
 test('generated key login opens profile onboarding before chats', async ({ browser }) => {
   const context = await browser.newContext();
   await context.addInitScript(

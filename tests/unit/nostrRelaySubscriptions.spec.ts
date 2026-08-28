@@ -284,6 +284,7 @@ describe('relay and subscription runtimes', () => {
       } as never);
 
     const beginStartupStep = vi.fn();
+    const bumpContactListVersion = vi.fn();
     const completeStartupStep = vi.fn();
     const failStartupStep = vi.fn();
     const ensureRelayConnections = vi.fn(async () => {});
@@ -297,6 +298,7 @@ describe('relay and subscription runtimes', () => {
 
     const runtime = createMyRelayListRuntime({
       beginStartupStep,
+      bumpContactListVersion,
       buildSubscriptionEventDetails: (event) => ({
         eventId: event.id ?? null,
       }),
@@ -402,6 +404,7 @@ describe('relay and subscription runtimes', () => {
     ]);
     expect(contactsServiceMock.createContact).toHaveBeenCalledTimes(1);
     expect(contactsServiceMock.updateContact).toHaveBeenCalledTimes(1);
+    expect(bumpContactListVersion).toHaveBeenCalledTimes(2);
     expect(subscribePrivateMessagesForLoggedInUser).toHaveBeenCalledWith(true);
     expect(queueTrackedContactSubscriptionsRefresh).toHaveBeenCalled();
 

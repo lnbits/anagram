@@ -1136,6 +1136,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     updateLoggedInUserRelayList,
   } = createMyRelayListRuntime({
     beginStartupStep,
+    bumpContactListVersion,
     buildSubscriptionEventDetails,
     buildSubscriptionRelayDetails,
     completeStartupStep,

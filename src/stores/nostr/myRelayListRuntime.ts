@@ -18,6 +18,7 @@ const DIRECT_MESSAGE_RECEIVE_RELAY_TAG = 'relay';
 
 interface MyRelayListRuntimeDeps {
   beginStartupStep: (stepId: 'my-relay-list') => void;
+  bumpContactListVersion: () => void;
   buildSubscriptionEventDetails: (
     event: Pick<NDKEvent, 'id' | 'kind' | 'created_at' | 'pubkey'>
   ) => Record<string, unknown>;
@@ -60,6 +61,7 @@ interface ApplyMyRelayListEntriesOptions {
 
 export function createMyRelayListRuntime({
   beginStartupStep,
+  bumpContactListVersion,
   buildSubscriptionEventDetails,
   buildSubscriptionRelayDetails,
   completeStartupStep,
@@ -160,6 +162,7 @@ export function createMyRelayListRuntime({
         meta: {},
         relays: normalizedRelayEntries,
       });
+      bumpContactListVersion();
       if (shouldRefreshSubscriptions) {
         try {
           await subscribePrivateMessagesForLoggedInUser(true);
@@ -174,6 +177,7 @@ export function createMyRelayListRuntime({
     await contactsService.updateContact(existingContact.id, {
       relays: normalizedRelayEntries,
     });
+    bumpContactListVersion();
     if (shouldRefreshSubscriptions) {
       await subscribePrivateMessagesForLoggedInUser(true);
       queueTrackedContactSubscriptionsRefresh();

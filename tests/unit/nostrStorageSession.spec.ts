@@ -177,6 +177,20 @@ describe('storageSession runtime', () => {
     expect(runtime.readPrivateMessagesBackfillState()).toBeNull();
   });
 
+  it('bounds the cold-start private-message live window when no event was stored', () => {
+    const localStorage = createMockStorage();
+    (globalThis as Record<string, unknown>).window = {
+      localStorage: localStorage.api,
+    };
+
+    const { runtime } = createRuntimeHarness();
+    const now = PRIVATE_MESSAGES_STARTUP_LIVE_LOOKBACK_SECONDS * 2;
+
+    expect(runtime.getPrivateMessagesStartupLiveSince(now)).toBe(
+      now - PRIVATE_MESSAGES_STARTUP_LIVE_LOOKBACK_SECONDS
+    );
+  });
+
   it('buffers eventSince updates during startup restore and resets storage on fresh login', () => {
     const localStorage = createMockStorage({
       [EVENT_SINCE_STORAGE_KEY]: '100',

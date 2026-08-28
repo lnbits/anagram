@@ -13,6 +13,7 @@ import type { Ref } from 'vue';
 
 export type ReconnectHealingReason =
   | 'browser-online'
+  | 'session-resume'
   | 'window-focus'
   | 'visibility-regain'
   | 'relay-connected'
@@ -20,10 +21,16 @@ export type ReconnectHealingReason =
 
 interface RefreshDirectMessagesOptions {
   forceLiveSubscriptionRecreate?: boolean;
+  sinceMode?: 'reconnect' | 'startup';
 }
 
 interface RefreshDirectMessagesResult {
   recreatedLiveSubscription: boolean;
+}
+
+export interface ReconnectHealingRunOptions {
+  propagateError?: boolean;
+  sessionRelayUrls?: string[];
 }
 
 export interface ReconnectHealingChatTarget {
@@ -45,6 +52,7 @@ interface ReconnectHealingRuntimeDeps {
   refreshDirectMessages: (
     options?: RefreshDirectMessagesOptions
   ) => Promise<RefreshDirectMessagesResult>;
+  restartSessionSubscriptions: (relayUrls: string[]) => Promise<void>;
   setIsReconnectHealing: (value: boolean) => void;
   setReconnectHealingStatusLabel: (value: string | null) => void;
   waitForPrivateMessagesIngestQueue: () => Promise<void>;
@@ -52,6 +60,7 @@ interface ReconnectHealingRuntimeDeps {
 
 const RECONNECT_HEALING_STATUS_LABELS = {
   preparingSync: 'sync.preparing',
+  resumingSession: 'sync.resumingSession',
   checkingSessionAndNetwork: 'sync.checkingSessionNetwork',
   checkingMessageRelays: 'sync.checkingMessageRelays',
   retryingUnsentMessages: 'sync.retryingUnsentMessages',
@@ -62,6 +71,7 @@ const RECONNECT_HEALING_STATUS_LABELS = {
 const RECONNECT_HEALING_QUEUED_STATUS_LABEL_PREFIX = 'sync.started:';
 const RECONNECT_HEALING_REASON_LABELS: Record<ReconnectHealingReason, string> = {
   'browser-online': 'sync.reason.browserOnline',
+  'session-resume': 'sync.reason.sessionResume',
   'window-focus': 'sync.reason.windowFocus',
   'visibility-regain': 'sync.reason.visibilityRestored',
   'relay-connected': 'sync.reason.relayConnected',
@@ -147,6 +157,7 @@ export function createReconnectHealingRuntime({
   queuePrivateMessagesWatchdog,
   refreshDeveloperPendingQueues,
   refreshDirectMessages,
+  restartSessionSubscriptions,
   setIsReconnectHealing,
   setReconnectHealingStatusLabel,
   waitForPrivateMessagesIngestQueue,
@@ -300,7 +311,7 @@ export function createReconnectHealingRuntime({
   }
 
   function deferReconnectHealingWhileStartupRestores(reason: ReconnectHealingReason): boolean {
-    if (!isRestoringStartupState.value) {
+    if (!isRestoringStartupState.value || reason === 'session-resume') {
       return false;
     }
 
@@ -441,7 +452,10 @@ export function createReconnectHealingRuntime({
     }, normalizedDelayMs);
   }
 
-  async function runReconnectHealing(reason: ReconnectHealingReason): Promise<void> {
+  async function runReconnectHealing(
+    reason: ReconnectHealingReason,
+    options: ReconnectHealingRunOptions = {}
+  ): Promise<void> {
     if (reconnectHealingRunPromise) {
       rememberPendingReconnectHealing(reason);
       return reconnectHealingRunPromise;
@@ -451,7 +465,8 @@ export function createReconnectHealingRuntime({
       return;
     }
 
-    const cooldownRemainingMs = getReconnectHealingCooldownRemainingMs();
+    const cooldownRemainingMs =
+      reason === 'session-resume' ? 0 : getReconnectHealingCooldownRemainingMs();
     if (cooldownRemainingMs > 0) {
       rememberPendingReconnectHealing(reason);
       scheduleReconnectHealing(reconnectHealingPendingReason ?? reason, cooldownRemainingMs, {
@@ -467,7 +482,11 @@ export function createReconnectHealingRuntime({
     consumePendingReconnectHealing(reason);
     clearReconnectHealingTimer();
     reconnectHealingRunPromise = (async () => {
-      await showReconnectHealingStatusLabel(RECONNECT_HEALING_STATUS_LABELS.preparingSync);
+      await showReconnectHealingStatusLabel(
+        reason === 'session-resume'
+          ? RECONNECT_HEALING_STATUS_LABELS.resumingSession
+          : RECONNECT_HEALING_STATUS_LABELS.preparingSync
+      );
       setIsReconnectHealing(true);
 
       const loggedInPublicKeyHex = getLoggedInPublicKeyHex();
@@ -487,7 +506,7 @@ export function createReconnectHealingRuntime({
         reason,
         ...getReconnectHealingSessionNetworkSnapshot(),
       });
-      if (isRestoringStartupState.value) {
+      if (isRestoringStartupState.value && reason !== 'session-resume') {
         logReconnectHealing('skip', {
           reason,
           skipReason: 'startup-restore-in-progress',
@@ -516,12 +535,19 @@ export function createReconnectHealingRuntime({
 
       let refreshedDirectMessages = false;
 
+      if (reason === 'session-resume') {
+        await restartSessionSubscriptions(
+          inputSanitizerService.normalizeStringArray(options.sessionRelayUrls ?? [])
+        );
+      }
+
       await showReconnectHealingStatusLabel(
         RECONNECT_HEALING_STATUS_LABELS.refreshingDirectMessages
       );
       const previousPrivateMessagesLiveEoseAt = getPrivateMessagesLiveEoseAt();
       const directMessagesRefreshResult = await refreshDirectMessages({
         forceLiveSubscriptionRecreate: isNativeAndroid(),
+        sinceMode: reason === 'session-resume' ? 'startup' : 'reconnect',
       });
       if (directMessagesRefreshResult.recreatedLiveSubscription) {
         await waitForRefreshedPrivateMessagesLiveEose(previousPrivateMessagesLiveEoseAt);
@@ -549,6 +575,9 @@ export function createReconnectHealingRuntime({
           reason,
           error: error instanceof Error ? error.message : String(error ?? ''),
         });
+        if (options.propagateError === true) {
+          throw error;
+        }
       })
       .finally(async () => {
         await hideReconnectHealingStatus();

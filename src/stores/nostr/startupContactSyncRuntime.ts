@@ -2,6 +2,11 @@ import { chatDataService } from 'src/services/chatDataService';
 import { contactsService } from 'src/services/contactsService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS } from 'src/stores/nostr/constants';
+import {
+  isStartupCheckpointCurrent,
+  readStartupCheckpoint,
+  writeStartupCheckpoint,
+} from 'src/stores/nostr/startupCheckpoint';
 import type { StartupStepId } from 'src/stores/nostr/startupState';
 import type {
   ContactCursorContent,
@@ -89,6 +94,7 @@ interface StartupContactSyncRuntimeDeps {
   ) => Promise<Map<string, ContactCursorContent>>;
   failStartupStep: (stepId: StartupStepId, error: unknown) => void;
   flushPendingEventSinceUpdate: () => void;
+  getConfiguredRelayUrls: () => string[];
   getLoggedInPublicKeyHex: () => string | null;
   getRestoreStartupStatePromise: () => Promise<void> | null;
   getSyncLoggedInContactProfilePromise: () => Promise<void> | null;
@@ -110,6 +116,7 @@ interface StartupContactSyncRuntimeDeps {
   restoreMuteList: (seedRelayUrls?: string[]) => Promise<void>;
   restorePrivateContactList: (seedRelayUrls?: string[]) => Promise<void>;
   restorePrivatePreferences: (seedRelayUrls?: string[]) => Promise<void>;
+  runLightweightSessionResume: (seedRelayUrls?: string[]) => Promise<void>;
   startOutboundMessageReplay: () => Promise<void>;
   setRestoreStartupStatePromise: (promise: Promise<void> | null) => void;
   setSyncLoggedInContactProfilePromise: (promise: Promise<void> | null) => void;
@@ -148,6 +155,7 @@ export function createStartupContactSyncRuntime({
   fetchContactCursorEvents,
   failStartupStep,
   flushPendingEventSinceUpdate,
+  getConfiguredRelayUrls,
   getLoggedInPublicKeyHex,
   getRestoreStartupStatePromise,
   getSyncLoggedInContactProfilePromise,
@@ -165,6 +173,7 @@ export function createStartupContactSyncRuntime({
   restoreMuteList,
   restorePrivateContactList,
   restorePrivatePreferences,
+  runLightweightSessionResume,
   startOutboundMessageReplay,
   setRestoreStartupStatePromise,
   setSyncLoggedInContactProfilePromise,
@@ -176,6 +185,16 @@ export function createStartupContactSyncRuntime({
   subscribePrivateContactListUpdates,
   subscribePrivateMessagesForLoggedInUser,
 }: StartupContactSyncRuntimeDeps) {
+  let initializeSessionStatePromise: Promise<void> | null = null;
+  let initializedSessionPubkey: string | null = null;
+
+  function getCheckpointRelayUrls(fallbackRelayUrls: string[]): string[] {
+    const configuredRelayUrls = inputSanitizerService.normalizeStringArray(
+      getConfiguredRelayUrls()
+    );
+    return configuredRelayUrls.length > 0 ? configuredRelayUrls : fallbackRelayUrls;
+  }
+
   async function refreshAllStoredContacts(): Promise<RefreshAllStoredContactsSummary> {
     await contactsService.init();
     const storedContacts = await contactsService.listContacts();
@@ -463,7 +482,7 @@ export function createStartupContactSyncRuntime({
     stepId: StartupStepId,
     seedRelayUrls: string[],
     options: StartupTaskRunOptions = {}
-  ): Promise<void> {
+  ): Promise<boolean> {
     const taskStartedAt = Date.now();
     if (options.resetStep === true) {
       resetStartupStep(stepId);
@@ -482,6 +501,7 @@ export function createStartupContactSyncRuntime({
         task: stepId,
         durationMs: Date.now() - taskStartedAt,
       });
+      return true;
     } catch (error) {
       failStartupStep(stepId, error);
       console.error(STARTUP_TASK_ERROR_MESSAGES[stepId], error);
@@ -494,6 +514,8 @@ export function createStartupContactSyncRuntime({
       if (options.propagateError === true) {
         throw error;
       }
+
+      return false;
     }
   }
 
@@ -522,6 +544,11 @@ export function createStartupContactSyncRuntime({
     ensureStoredEventSince();
     resetStartupStepTracking();
     const startupRestoreStartedAt = Date.now();
+    const loggedInPubkeyHex = getLoggedInPublicKeyHex();
+    const checkpointRelayUrls = getCheckpointRelayUrls(seedRelayUrls);
+    if (loggedInPubkeyHex) {
+      writeStartupCheckpoint(loggedInPubkeyHex, checkpointRelayUrls, 'in_progress');
+    }
 
     isRestoringStartupState.value = true;
     logStartupRestore('start', {
@@ -529,16 +556,28 @@ export function createStartupContactSyncRuntime({
       seedRelayCount: seedRelayUrls.length,
     });
     const nextPromise = (async () => {
+      let didCompleteEveryTask = true;
       try {
         for (const stepId of STARTUP_RESTORE_STEP_ORDER) {
-          await runStartupTask(stepId, seedRelayUrls);
+          didCompleteEveryTask =
+            (await runStartupTask(stepId, seedRelayUrls)) && didCompleteEveryTask;
         }
       } finally {
         isRestoringStartupState.value = false;
         flushPendingEventSinceUpdate();
         setRestoreStartupStatePromise(null);
+        if (loggedInPubkeyHex) {
+          const finalCheckpoint = writeStartupCheckpoint(
+            loggedInPubkeyHex,
+            getCheckpointRelayUrls(seedRelayUrls),
+            didCompleteEveryTask ? 'complete' : 'failed'
+          );
+          initializedSessionPubkey =
+            finalCheckpoint?.status === 'complete' ? loggedInPubkeyHex : null;
+        }
         logStartupRestore('complete', {
           durationMs: Date.now() - startupRestoreStartedAt,
+          success: didCompleteEveryTask,
         });
       }
     })();
@@ -547,8 +586,62 @@ export function createStartupContactSyncRuntime({
     return nextPromise;
   }
 
+  async function initializeSessionState(seedRelayUrls: string[] = []): Promise<void> {
+    const loggedInPubkeyHex = getLoggedInPublicKeyHex();
+    if (!loggedInPubkeyHex) {
+      await restoreStartupState(seedRelayUrls);
+      return;
+    }
+
+    if (initializedSessionPubkey === loggedInPubkeyHex) {
+      return;
+    }
+
+    if (initializeSessionStatePromise) {
+      return initializeSessionStatePromise;
+    }
+
+    initializeSessionStatePromise = (async () => {
+      const checkpointRelayUrls = getCheckpointRelayUrls(seedRelayUrls);
+      const checkpoint = readStartupCheckpoint();
+      if (!isStartupCheckpointCurrent(checkpoint, loggedInPubkeyHex, checkpointRelayUrls)) {
+        await restoreStartupState(seedRelayUrls);
+        return;
+      }
+
+      ensureStoredEventSince();
+      logStartupRestore('lightweight-resume-start', {
+        relayCount: checkpointRelayUrls.length,
+      });
+      try {
+        await runLightweightSessionResume(checkpointRelayUrls);
+        initializedSessionPubkey = loggedInPubkeyHex;
+        logStartupRestore('lightweight-resume-complete', {
+          relayCount: checkpointRelayUrls.length,
+        });
+      } catch (error) {
+        writeStartupCheckpoint(loggedInPubkeyHex, checkpointRelayUrls, 'failed');
+        logStartupRestore('lightweight-resume-fallback', {
+          error: formatStartupRestoreError(error),
+        });
+        await restoreStartupState(seedRelayUrls);
+      }
+    })().finally(() => {
+      initializeSessionStatePromise = null;
+    });
+
+    return initializeSessionStatePromise;
+  }
+
+  function resetStartupSessionInitialization(): void {
+    initializeSessionStatePromise = null;
+    initializedSessionPubkey = null;
+  }
+
   return {
+    initializeSessionState,
     refreshAllStoredContacts,
+    resetStartupSessionInitialization,
     rerunStartupStep,
     restoreStartupState,
     syncLoggedInContactProfile,

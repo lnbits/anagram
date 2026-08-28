@@ -466,9 +466,9 @@
   "notifications.android.blockedInstructions": "Android notifications are blocked. Allow them in Android settings, then toggle this back on.",
   "notifications.android.enablePrompt": "Get notified when new messages arrive. If you continue, Android will ask for notification permission.",
   "notifications.android.permissionDenied": "Android notification permission was not granted.",
-  "notifications.android.privacyCaption": "With sender details on, decryption keys are protected by Android Keystore. Message text is never shown; Android can use a generic preview when sensitive lock-screen content is hidden.",
+  "notifications.android.privacyCaption": "Android verifies the sender before every alert. Only contacts, groups, and conversations you accepted or replied to can notify you; muted or blocked conversations stay silent. Decryption keys are protected by Android Keystore; message text is never shown.",
   "notifications.android.showConversationDetails": "Show who messaged",
-  "notifications.android.showConversationDetailsCaption": "On by default for local-key accounts. Show the person or group icon, name, and new-message count; remote signers keep generic alerts.",
+  "notifications.android.showConversationDetailsCaption": "Show the eligible person or group icon, name, and new-message count. When off, sender checks still run and alerts stay generic.",
   "notifications.android.startOnBoot": "Start after device restart",
   "notifications.android.startOnBootCaption": "Recommended. Restarts the listener automatically after Android boots.",
   "notifications.android.toggleCaption": "Off by default. Turning this on will ask Android for notification permission.",
@@ -657,9 +657,11 @@
   "sync.reason.browserOnline": "browser online",
   "sync.reason.relayConnected": "relay connected",
   "sync.reason.relayListChanged": "relay list changed",
+  "sync.reason.sessionResume": "session resume",
   "sync.reason.visibilityRestored": "visibility restored",
   "sync.reason.windowFocus": "window focus",
   "sync.refreshingDirectMessages": "Refreshing direct messages",
+  "sync.resumingSession": "Resuming session",
   "sync.retryingUnsentMessages": "Retrying unsent messages",
   "sync.started": "Sync started: {reason}"
 }

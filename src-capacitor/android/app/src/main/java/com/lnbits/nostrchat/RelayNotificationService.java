@@ -62,6 +62,7 @@ public final class RelayNotificationService extends Service {
     private static final String MESSAGE_NOTIFICATION_GROUP = "nostr_chat_conversations";
     private static final long GIFT_WRAP_RANDOMIZATION_WINDOW_SECONDS = 2L * 24L * 60L * 60L;
     private static final long EVENT_TIMESTAMP_TOLERANCE_SECONDS = 300L;
+    private static final long LIVE_MESSAGE_CATCH_UP_GRACE_SECONDS = 300L;
     private static final long MAX_RECONNECT_DELAY_MILLIS = 30_000L;
     private static final long SERVICE_NOTIFICATION_UPDATE_DELAY_MILLIS = 250L;
     private static final Pattern HEX_64 = Pattern.compile("^[0-9a-fA-F]{64}$");
@@ -229,9 +230,7 @@ public final class RelayNotificationService extends Service {
         recipientPubkeys = RelayNotificationPreferences.getRecipientPubkeys(this);
         ownerPubkey = RelayNotificationPreferences.getOwnerPubkey(this);
         showConversationDetails = RelayNotificationPreferences.shouldShowConversationDetails(this);
-        recipientPrivateKeys = showConversationDetails
-            ? NotificationSecureStore.loadRecipientKeys(this)
-            : new LinkedHashMap<>();
+        recipientPrivateKeys = NotificationSecureStore.loadRecipientKeys(this);
         directConversations.clear();
         groupConversations.clear();
         List<NotificationConversation> conversations = RelayNotificationPreferences.getConversations(
@@ -374,8 +373,21 @@ public final class RelayNotificationService extends Service {
         );
     }
 
-    static boolean shouldNotifyEvent(boolean relayInitializedAtConnect, boolean relayCaughtUp) {
-        return relayInitializedAtConnect || relayCaughtUp;
+    static boolean shouldNotifyEvent(
+        boolean relayInitializedAtConnect,
+        boolean relayCaughtUp,
+        long messageCreatedAt,
+        long listenerStartedAt,
+        long nowSeconds
+    ) {
+        if (relayInitializedAtConnect || relayCaughtUp) {
+            return true;
+        }
+        return (
+            messageCreatedAt > 0L &&
+            messageCreatedAt >= listenerStartedAt - LIVE_MESSAGE_CATCH_UP_GRACE_SECONDS &&
+            messageCreatedAt <= nowSeconds + EVENT_TIMESTAMP_TOLERANCE_SECONDS
+        );
     }
 
     private void handleRelayMessage(RelayWebSocketListener source, String message) {
@@ -443,21 +455,31 @@ public final class RelayNotificationService extends Service {
                 logDebug("gift-wrap-rejected event=" + eventLabel + " reason=recipient-not-watched");
                 return;
             }
-            if (!RelayNotificationPreferences.markEventSeen(this, eventId)) {
+            if (RelayNotificationPreferences.hasSeenEvent(this, eventId)) {
                 logDebug("gift-wrap-ignored event=" + eventLabel + " reason=duplicate");
                 return;
             }
 
-            if (!source.shouldNotifyEvent()) {
-                logDebug("gift-wrap-accepted event=" + eventLabel + " action=catch-up-only");
-                return;
-            }
             if (RelayNotificationPreferences.isAppForeground(this)) {
+                if (!RelayNotificationPreferences.markEventSeen(this, eventId)) {
+                    logDebug("gift-wrap-ignored event=" + eventLabel + " reason=duplicate");
+                    return;
+                }
                 logDebug("gift-wrap-accepted event=" + eventLabel + " action=foreground-suppressed");
                 return;
             }
 
             NotificationTarget target = resolveNotificationTarget(event, recipientPubkey);
+            long messageCreatedAt = target == null ? 0L : target.messageCreatedAt;
+            boolean shouldNotifyEvent = source.shouldNotifyEvent(messageCreatedAt, now);
+            if (!RelayNotificationPreferences.markEventSeen(this, eventId)) {
+                logDebug("gift-wrap-ignored event=" + eventLabel + " reason=duplicate");
+                return;
+            }
+            if (!shouldNotifyEvent) {
+                logDebug("gift-wrap-accepted event=" + eventLabel + " action=catch-up-only");
+                return;
+            }
             if (target == null) {
                 logDebug("gift-wrap-accepted event=" + eventLabel + " action=notification-suppressed");
                 return;
@@ -516,13 +538,9 @@ public final class RelayNotificationService extends Service {
 
     @Nullable
     private NotificationTarget resolveNotificationTarget(JSONObject wrappedEvent, String recipientPubkey) {
-        if (!showConversationDetails) {
-            return NotificationTarget.generic();
-        }
-
         String recipientPrivateKey = recipientPrivateKeys.get(recipientPubkey);
         if (recipientPrivateKey == null) {
-            return NotificationTarget.generic();
+            return null;
         }
 
         try {
@@ -543,6 +561,7 @@ public final class RelayNotificationService extends Service {
                 senderPubkey
             );
             JSONObject rumor = new JSONObject(rumorPlaintext);
+            long messageCreatedAt = rumor.optLong("created_at", 0L);
             if (
                 rumor.optInt("kind", -1) != 14 ||
                 !senderPubkey.equals(rumor.optString("pubkey", "").toLowerCase(Locale.ROOT)) ||
@@ -556,35 +575,53 @@ public final class RelayNotificationService extends Service {
 
             NotificationConversation groupConversation = groupConversations.get(recipientPubkey);
             if (groupConversation != null) {
-                return groupConversation.notificationsEnabled
-                    ? NotificationTarget.conversation(groupConversation)
+                return isNotificationConversationEligible(groupConversation)
+                    ? notificationTargetForEligibleConversation(groupConversation, messageCreatedAt)
                     : null;
             }
             if (!recipientPubkey.equals(ownerPubkey)) {
                 return null;
             }
 
-            NotificationConversation directConversation = directConversations.get(senderPubkey);
-            if (directConversation != null) {
-                return directConversation.notificationsEnabled
-                    ? NotificationTarget.conversation(directConversation)
-                    : null;
-            }
-            String fallbackName = senderPubkey.substring(0, 8) + "…" + senderPubkey.substring(60);
-            return NotificationTarget.conversation(
-                new NotificationConversation(
-                    senderPubkey,
-                    null,
-                    fallbackName,
-                    "",
-                    fallbackName.substring(0, 2),
-                    true
-                )
+            NotificationConversation directConversation = resolveEligibleDirectConversation(
+                directConversations,
+                senderPubkey
             );
+            return directConversation == null
+                ? null
+                : notificationTargetForEligibleConversation(directConversation, messageCreatedAt);
         } catch (GeneralSecurityException | JSONException exception) {
             logDebug("gift-wrap-details-rejected reason=" + exceptionSummary(exception));
             return null;
         }
+    }
+
+    private NotificationTarget notificationTargetForEligibleConversation(
+        NotificationConversation conversation,
+        long messageCreatedAt
+    ) {
+        return showConversationDetails
+            ? NotificationTarget.conversation(conversation, messageCreatedAt)
+            : NotificationTarget.generic(messageCreatedAt);
+    }
+
+    private static boolean isNotificationConversationEligible(
+        @Nullable NotificationConversation conversation
+    ) {
+        return (
+            conversation != null &&
+            conversation.policyEligible &&
+            conversation.notificationsEnabled
+        );
+    }
+
+    @Nullable
+    static NotificationConversation resolveEligibleDirectConversation(
+        Map<String, NotificationConversation> conversations,
+        String senderPubkey
+    ) {
+        NotificationConversation conversation = conversations.get(senderPubkey);
+        return isNotificationConversationEligible(conversation) ? conversation : null;
     }
 
     private boolean isValidSignedEvent(JSONObject event, int expectedKind) throws JSONException {
@@ -754,7 +791,9 @@ public final class RelayNotificationService extends Service {
             "Background message listener",
             NotificationManager.IMPORTANCE_LOW
         );
-        serviceChannel.setDescription("Keeps direct Nostr relay connections ready for messages");
+        serviceChannel.setDescription(
+            "Keeps app, account, and group message-relay connections ready"
+        );
         serviceChannel.setShowBadge(false);
         manager.createNotificationChannel(serviceChannel);
 
@@ -780,10 +819,10 @@ public final class RelayNotificationService extends Service {
         }
         if (connected == 0) {
             return retrying
-                ? "No relay connection · retrying"
-                : "Connecting to relays…";
+                ? "No message relay connection · retrying"
+                : "Connecting to message relays…";
         }
-        return connected + " of " + total + " relays connected";
+        return connected + " of " + total + " message relays connected";
     }
 
     private void updateServiceNotification() {
@@ -961,11 +1000,13 @@ public final class RelayNotificationService extends Service {
         private final String relayUrl;
         private final String subscriptionId;
         private final boolean initializedAtConnect;
+        private final long listenerStartedAt;
         private boolean caughtUp;
 
         private RelayWebSocketListener(String relayUrl) {
             this.relayUrl = relayUrl;
             this.subscriptionId = "notifications-" + shortHash(relayUrl);
+            this.listenerStartedAt = System.currentTimeMillis() / 1000L;
             this.initializedAtConnect = RelayNotificationPreferences.isRelayInitialized(
                 RelayNotificationService.this,
                 relayUrl
@@ -980,8 +1021,14 @@ public final class RelayNotificationService extends Service {
             );
         }
 
-        private boolean shouldNotifyEvent() {
-            return RelayNotificationService.shouldNotifyEvent(initializedAtConnect, caughtUp);
+        private boolean shouldNotifyEvent(long messageCreatedAt, long nowSeconds) {
+            return RelayNotificationService.shouldNotifyEvent(
+                initializedAtConnect,
+                caughtUp,
+                messageCreatedAt,
+                listenerStartedAt,
+                nowSeconds
+            );
         }
 
         @Override
@@ -1050,17 +1097,25 @@ public final class RelayNotificationService extends Service {
 
         @Nullable
         private final NotificationConversation conversation;
+        private final long messageCreatedAt;
 
-        private NotificationTarget(@Nullable NotificationConversation conversation) {
+        private NotificationTarget(
+            @Nullable NotificationConversation conversation,
+            long messageCreatedAt
+        ) {
             this.conversation = conversation;
+            this.messageCreatedAt = messageCreatedAt;
         }
 
-        private static NotificationTarget generic() {
-            return new NotificationTarget(null);
+        private static NotificationTarget generic(long messageCreatedAt) {
+            return new NotificationTarget(null, messageCreatedAt);
         }
 
-        private static NotificationTarget conversation(NotificationConversation conversation) {
-            return new NotificationTarget(conversation);
+        private static NotificationTarget conversation(
+            NotificationConversation conversation,
+            long messageCreatedAt
+        ) {
+            return new NotificationTarget(conversation, messageCreatedAt);
         }
     }
 }

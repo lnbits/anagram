@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
 
 const chatDataServiceMock = vi.hoisted(() => ({
@@ -21,11 +21,99 @@ vi.mock('src/services/contactsService', () => ({
 }));
 
 import { PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS } from 'src/stores/nostr/constants';
+import { writeStartupCheckpoint } from 'src/stores/nostr/startupCheckpoint';
 import { createStartupContactSyncRuntime } from 'src/stores/nostr/startupContactSyncRuntime';
 
 const PUBKEY = 'a'.repeat(64);
 
+function installLocalStorage(): void {
+  const values = new Map<string, string>();
+  vi.stubGlobal('window', {
+    localStorage: {
+      getItem: (key: string) => values.get(key) ?? null,
+      removeItem: (key: string) => values.delete(key),
+      setItem: (key: string, value: string) => values.set(key, value),
+    },
+  });
+}
+
+function createSessionInitializationRuntime(options: { resumeError?: Error } = {}) {
+  let restoreStartupStatePromise: Promise<void> | null = null;
+  let syncLoggedInContactProfilePromise: Promise<void> | null = null;
+  let syncRecentChatContactsPromise: Promise<void> | null = null;
+  const beginStartupStep = vi.fn();
+  const runLightweightSessionResume = options.resumeError
+    ? vi.fn(async () => {
+        throw options.resumeError;
+      })
+    : vi.fn(async () => {});
+  const task = () => vi.fn(async () => {});
+
+  const runtime = createStartupContactSyncRuntime({
+    applyContactCursorStateToContact: vi.fn(async () => false),
+    beginStartupStep,
+    bumpContactListVersion: vi.fn(),
+    completeStartupStep: vi.fn(),
+    createStartupBatchTracker: vi.fn(() => ({
+      beginItem: vi.fn(),
+      finishItem: vi.fn(),
+      seal: vi.fn(),
+    })),
+    deriveContactCursorDTag: vi.fn(async () => null),
+    ensureRelayConnections: vi.fn(async () => {}),
+    ensureStoredEventSince: vi.fn(),
+    fetchContactCursorEvents: vi.fn(async () => new Map()),
+    failStartupStep: vi.fn(),
+    flushPendingEventSinceUpdate: vi.fn(),
+    getConfiguredRelayUrls: vi.fn(() => ['wss://relay.one/']),
+    getLoggedInPublicKeyHex: vi.fn(() => PUBKEY),
+    getRestoreStartupStatePromise: () => restoreStartupStatePromise,
+    getSyncLoggedInContactProfilePromise: () => syncLoggedInContactProfilePromise,
+    getSyncRecentChatContactsPromise: () => syncRecentChatContactsPromise,
+    isRestoringStartupState: ref(false),
+    readPrivatePreferencesFromStorage: vi.fn(() => null),
+    reloadChats: vi.fn(async () => {}),
+    refreshContactByPublicKey: task(),
+    refreshGroupRelayListsOnStartup: task(),
+    resetStartupStep: vi.fn(),
+    resetStartupStepTracking: vi.fn(),
+    restoreContactCursorState: task(),
+    restoreGroupIdentitySecrets: task(),
+    restoreMyRelayList: task(),
+    restoreMuteList: task(),
+    restorePrivateContactList: task(),
+    restorePrivatePreferences: task(),
+    runLightweightSessionResume,
+    startOutboundMessageReplay: task(),
+    setRestoreStartupStatePromise: (promise) => {
+      restoreStartupStatePromise = promise;
+    },
+    setSyncLoggedInContactProfilePromise: (promise) => {
+      syncLoggedInContactProfilePromise = promise;
+    },
+    setSyncRecentChatContactsPromise: (promise) => {
+      syncRecentChatContactsPromise = promise;
+    },
+    subscribeContactProfileUpdates: task(),
+    subscribeContactRelayListUpdates: task(),
+    subscribeGroupMembershipRosterUpdates: task(),
+    subscribeMyRelayListUpdates: task(),
+    subscribePrivateContactListUpdates: task(),
+    subscribePrivateMessagesForLoggedInUser: task(),
+  });
+
+  return {
+    beginStartupStep,
+    runLightweightSessionResume,
+    runtime,
+  };
+}
+
 describe('startup contact sync runtime', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('runs startup restore tasks in dependency order', async () => {
     const taskOrder: string[] = [];
     let restoreStartupStatePromise: Promise<void> | null = null;
@@ -62,6 +150,7 @@ describe('startup contact sync runtime', () => {
       fetchContactCursorEvents: vi.fn(async () => new Map()),
       failStartupStep: vi.fn(),
       flushPendingEventSinceUpdate: vi.fn(),
+      getConfiguredRelayUrls: vi.fn(() => ['wss://relay.one/']),
       getLoggedInPublicKeyHex: vi.fn(() => PUBKEY),
       getRestoreStartupStatePromise: () => restoreStartupStatePromise,
       getSyncLoggedInContactProfilePromise: () => syncLoggedInContactProfilePromise,
@@ -79,6 +168,7 @@ describe('startup contact sync runtime', () => {
       restoreMuteList: task('mute-list'),
       restorePrivateContactList: task('private-contact-list-restore'),
       restorePrivatePreferences: task('private-preferences'),
+      runLightweightSessionResume: vi.fn(async () => {}),
       startOutboundMessageReplay: task('outbound-message-replay'),
       setRestoreStartupStatePromise: (promise) => {
         restoreStartupStatePromise = promise;
@@ -155,6 +245,7 @@ describe('startup contact sync runtime', () => {
       fetchContactCursorEvents: vi.fn(async () => new Map()),
       failStartupStep: vi.fn(),
       flushPendingEventSinceUpdate: vi.fn(),
+      getConfiguredRelayUrls: vi.fn(() => ['wss://relay.one/']),
       getLoggedInPublicKeyHex: vi.fn(() => PUBKEY),
       getRestoreStartupStatePromise: () => restoreStartupStatePromise,
       getSyncLoggedInContactProfilePromise: () => syncLoggedInContactProfilePromise,
@@ -172,6 +263,7 @@ describe('startup contact sync runtime', () => {
       restoreMuteList: task('mute-list'),
       restorePrivateContactList: task('private-contact-list-restore'),
       restorePrivatePreferences: task('private-preferences'),
+      runLightweightSessionResume: vi.fn(async () => {}),
       startOutboundMessageReplay: task('outbound-message-replay'),
       setRestoreStartupStatePromise: (promise) => {
         restoreStartupStatePromise = promise;
@@ -198,5 +290,34 @@ describe('startup contact sync runtime', () => {
     expect(beginStartupStep).toHaveBeenCalledWith('my-relays-subscribe');
     expect(subscribeMyRelayListUpdates).toHaveBeenCalledWith(['wss://relay.one/'], true);
     expect(completeStartupStep).toHaveBeenCalledWith('my-relays-subscribe');
+  });
+
+  it('uses a completed checkpoint for one lightweight resume per runtime', async () => {
+    installLocalStorage();
+    writeStartupCheckpoint(PUBKEY, ['wss://relay.one/'], 'complete');
+    const { beginStartupStep, runLightweightSessionResume, runtime } =
+      createSessionInitializationRuntime();
+
+    await runtime.initializeSessionState(['wss://relay.one/']);
+    await runtime.initializeSessionState(['wss://relay.one/']);
+
+    expect(runLightweightSessionResume).toHaveBeenCalledTimes(1);
+    expect(runLightweightSessionResume).toHaveBeenCalledWith(['wss://relay.one/']);
+    expect(beginStartupStep).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a full restore when lightweight resume fails', async () => {
+    installLocalStorage();
+    writeStartupCheckpoint(PUBKEY, ['wss://relay.one/'], 'complete');
+    const { beginStartupStep, runLightweightSessionResume, runtime } =
+      createSessionInitializationRuntime({
+        resumeError: new Error('resume failed'),
+      });
+
+    await runtime.initializeSessionState(['wss://relay.one/']);
+
+    expect(runLightweightSessionResume).toHaveBeenCalledTimes(1);
+    expect(beginStartupStep).toHaveBeenCalledWith('my-relays-restore');
+    expect(beginStartupStep).toHaveBeenCalledWith('private-messages-subscribe');
   });
 });

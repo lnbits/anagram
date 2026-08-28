@@ -258,7 +258,7 @@ onMounted(() => {
 
   startupRestoreFrameId = window.requestAnimationFrame(() => {
     startupRestoreFrameId = null;
-    void restoreStartupState();
+    void initializeSessionState();
   });
 
   if (!isMobile.value) {
@@ -534,12 +534,12 @@ function updateNativeViewportBaseline(): void {
   }
 }
 
-async function restoreStartupState(): Promise<void> {
+async function initializeSessionState(): Promise<void> {
   try {
     relayStore.init();
-    await nostrStore.restoreStartupState(relayStore.relays);
+    await nostrStore.initializeSessionState(relayStore.relays);
   } catch (error) {
-    console.error('Failed to restore app state on startup', error);
+    console.error('Failed to initialize app session state', error);
   }
 }
 

@@ -173,6 +173,7 @@ describe('reconnectHealingRuntime', () => {
     expect(queueOutboundMessageReplay).toHaveBeenCalledWith('reconnect-healing', 0);
     expect(refreshDirectMessages).toHaveBeenCalledWith({
       forceLiveSubscriptionRecreate: false,
+      sinceMode: 'reconnect',
     });
     expect(refreshDeveloperPendingQueues).toHaveBeenCalledTimes(1);
     expect(console.log).toHaveBeenCalledWith(
@@ -205,12 +206,16 @@ describe('reconnectHealingRuntime', () => {
 
     expect(refreshDirectMessages).toHaveBeenCalledWith({
       forceLiveSubscriptionRecreate: true,
+      sinceMode: 'reconnect',
     });
     expectStatusLabelsWereVisibleForMinimumDuration(statusLabelUpdates);
   });
 
   it('restarts persisted session subscriptions during a lightweight resume', async () => {
-    const { restartSessionSubscriptions, runtime, statusLabelUpdates } = createRuntime();
+    const { refreshDirectMessages, restartSessionSubscriptions, runtime, statusLabelUpdates } =
+      createRuntime({
+        isNativeAndroid: true,
+      });
 
     const runPromise = runtime.runReconnectHealing('session-resume', {
       propagateError: true,
@@ -220,6 +225,10 @@ describe('reconnectHealingRuntime', () => {
     await runPromise;
 
     expect(restartSessionSubscriptions).toHaveBeenCalledWith(['wss://relay.one/']);
+    expect(refreshDirectMessages).toHaveBeenCalledWith({
+      forceLiveSubscriptionRecreate: true,
+      sinceMode: 'startup',
+    });
     expectStatusLabels(statusLabelUpdates, [
       'sync.resumingSession',
       'sync.checkingSessionNetwork',

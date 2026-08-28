@@ -21,6 +21,7 @@ export type ReconnectHealingReason =
 
 interface RefreshDirectMessagesOptions {
   forceLiveSubscriptionRecreate?: boolean;
+  sinceMode?: 'reconnect' | 'startup';
 }
 
 interface RefreshDirectMessagesResult {
@@ -546,6 +547,7 @@ export function createReconnectHealingRuntime({
       const previousPrivateMessagesLiveEoseAt = getPrivateMessagesLiveEoseAt();
       const directMessagesRefreshResult = await refreshDirectMessages({
         forceLiveSubscriptionRecreate: isNativeAndroid(),
+        sinceMode: reason === 'session-resume' ? 'startup' : 'reconnect',
       });
       if (directMessagesRefreshResult.recreatedLiveSubscription) {
         await waitForRefreshedPrivateMessagesLiveEose(previousPrivateMessagesLiveEoseAt);

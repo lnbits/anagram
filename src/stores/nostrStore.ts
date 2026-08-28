@@ -539,11 +539,14 @@ export const useNostrStore = defineStore('nostrStore', () => {
   }
 
   function refreshPrivateMessagesLiveSubscriptionForReconnect(
-    options: { forceRecreate?: boolean } = {}
+    options: { forceRecreate?: boolean; sinceMode?: 'reconnect' | 'startup' } = {}
   ): Promise<RefreshPrivateMessagesLiveSubscriptionResult> {
     return refreshPrivateMessagesLiveSubscriptionRuntime({
       forceRecreate: options.forceRecreate,
-      sinceOverride: getPrivateMessagesReconnectSince(),
+      sinceOverride:
+        options.sinceMode === 'startup'
+          ? getPrivateMessagesStartupLiveSince()
+          : getPrivateMessagesReconnectSince(),
     });
   }
 
@@ -2048,6 +2051,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     refreshDirectMessages: (options) =>
       refreshPrivateMessagesLiveSubscriptionForReconnect({
         forceRecreate: options?.forceLiveSubscriptionRecreate,
+        sinceMode: options?.sinceMode,
       }),
     restartSessionSubscriptions: async (relayUrls) => {
       ensureStoredEventSince();

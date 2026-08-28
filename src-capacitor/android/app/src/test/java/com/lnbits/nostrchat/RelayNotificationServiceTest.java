@@ -2,8 +2,12 @@ package com.lnbits.nostrchat;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
+import java.util.HashMap;
+import java.util.Map;
 import org.junit.Test;
 
 public final class RelayNotificationServiceTest {
@@ -31,10 +35,123 @@ public final class RelayNotificationServiceTest {
     }
 
     @Test
-    public void suppressesInitialHistoryUntilRelayEndOfStoredEvents() {
-        assertFalse(RelayNotificationService.shouldNotifyEvent(false, false));
-        assertTrue(RelayNotificationService.shouldNotifyEvent(false, true));
-        assertTrue(RelayNotificationService.shouldNotifyEvent(true, false));
+    public void suppressesInitialHistoryButAllowsLiveMessagesDuringCatchUp() {
+        long listenerStartedAt = NOW - 60L;
+
+        assertFalse(
+            RelayNotificationService.shouldNotifyEvent(
+                false,
+                false,
+                NOW - 600L,
+                listenerStartedAt,
+                NOW
+            )
+        );
+        assertTrue(
+            RelayNotificationService.shouldNotifyEvent(
+                false,
+                false,
+                NOW - 30L,
+                listenerStartedAt,
+                NOW
+            )
+        );
+        assertFalse(
+            RelayNotificationService.shouldNotifyEvent(
+                false,
+                false,
+                NOW + TOLERANCE + 1L,
+                listenerStartedAt,
+                NOW
+            )
+        );
+        assertTrue(
+            RelayNotificationService.shouldNotifyEvent(
+                false,
+                true,
+                0L,
+                listenerStartedAt,
+                NOW
+            )
+        );
+        assertTrue(
+            RelayNotificationService.shouldNotifyEvent(
+                true,
+                false,
+                0L,
+                listenerStartedAt,
+                NOW
+            )
+        );
+    }
+
+    @Test
+    public void directNotificationsRequireAnEligibleEnabledConversation() {
+        String unknownSender = "11".repeat(32);
+        String unverifiedSender = "22".repeat(32);
+        String mutedSender = "33".repeat(32);
+        String contactSender = "44".repeat(32);
+        Map<String, NotificationConversation> conversations = new HashMap<>();
+        conversations.put(
+            unverifiedSender,
+            new NotificationConversation(
+                unverifiedSender,
+                null,
+                "Unverified",
+                "",
+                "UN",
+                false,
+                true
+            )
+        );
+        conversations.put(
+            mutedSender,
+            new NotificationConversation(
+                mutedSender,
+                null,
+                "Muted",
+                "",
+                "MU",
+                true,
+                false
+            )
+        );
+        NotificationConversation contact = new NotificationConversation(
+            contactSender,
+            null,
+            "Contact",
+            "",
+            "CO",
+            true,
+            true
+        );
+        conversations.put(contactSender, contact);
+
+        assertNull(
+            RelayNotificationService.resolveEligibleDirectConversation(
+                conversations,
+                unknownSender
+            )
+        );
+        assertNull(
+            RelayNotificationService.resolveEligibleDirectConversation(
+                conversations,
+                unverifiedSender
+            )
+        );
+        assertNull(
+            RelayNotificationService.resolveEligibleDirectConversation(
+                conversations,
+                mutedSender
+            )
+        );
+        assertSame(
+            contact,
+            RelayNotificationService.resolveEligibleDirectConversation(
+                conversations,
+                contactSender
+            )
+        );
     }
 
     @Test
@@ -57,23 +174,23 @@ public final class RelayNotificationServiceTest {
             RelayNotificationService.serviceStatusText(0, 3, false, false)
         );
         assertEquals(
-            "Connecting to relays…",
+            "Connecting to message relays…",
             RelayNotificationService.serviceStatusText(0, 3, true, false)
         );
         assertEquals(
-            "No relay connection · retrying",
+            "No message relay connection · retrying",
             RelayNotificationService.serviceStatusText(0, 3, true, true)
         );
         assertEquals(
-            "2 of 3 relays connected",
+            "2 of 3 message relays connected",
             RelayNotificationService.serviceStatusText(2, 3, true, false)
         );
         assertEquals(
-            "2 of 3 relays connected",
+            "2 of 3 message relays connected",
             RelayNotificationService.serviceStatusText(2, 3, true, true)
         );
         assertEquals(
-            "3 of 3 relays connected",
+            "3 of 3 message relays connected",
             RelayNotificationService.serviceStatusText(3, 3, true, false)
         );
     }

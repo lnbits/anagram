@@ -9,6 +9,7 @@ public class MainActivity extends BridgeActivity {
     protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(AndroidRelayNotificationsPlugin.class);
         super.onCreate(savedInstanceState);
+        RelayNotificationPreferences.setAppForeground(this, true);
     }
 
     @Override

@@ -87,9 +87,10 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
         List<NotificationConversation> conversations = normalizeConversations(
             call.getArray("conversations")
         );
-        Map<String, String> recipientKeys = showConversationDetails
-            ? normalizeRecipientKeys(call.getArray("recipientKeys"), recipientPubkeys)
-            : new LinkedHashMap<>();
+        Map<String, String> recipientKeys = normalizeRecipientKeys(
+            call.getArray("recipientKeys"),
+            recipientPubkeys
+        );
         try {
             NotificationSecureStore.saveRecipientKeys(getContext(), recipientKeys);
         } catch (GeneralSecurityException exception) {

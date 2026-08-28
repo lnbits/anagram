@@ -18,6 +18,7 @@ final class NotificationConversation {
     final String name;
     final String avatarUrl;
     final String avatarText;
+    final boolean policyEligible;
     final boolean notificationsEnabled;
 
     NotificationConversation(
@@ -26,6 +27,7 @@ final class NotificationConversation {
         String name,
         String avatarUrl,
         String avatarText,
+        boolean policyEligible,
         boolean notificationsEnabled
     ) {
         this.chatPubkey = chatPubkey;
@@ -33,6 +35,7 @@ final class NotificationConversation {
         this.name = normalizeText(name, MAX_NAME_LENGTH, "Nostr contact");
         this.avatarUrl = normalizeText(avatarUrl, 2048, "");
         this.avatarText = normalizeText(avatarText, MAX_AVATAR_TEXT_LENGTH, "NC");
+        this.policyEligible = policyEligible;
         this.notificationsEnabled = notificationsEnabled;
     }
 
@@ -45,6 +48,7 @@ final class NotificationConversation {
         result.put("name", name);
         result.put("avatarUrl", avatarUrl);
         result.put("avatarText", avatarText);
+        result.put("policyEligible", policyEligible);
         result.put("notificationsEnabled", notificationsEnabled);
         return result;
     }
@@ -64,7 +68,8 @@ final class NotificationConversation {
             value.optString("name", ""),
             value.optString("avatarUrl", ""),
             value.optString("avatarText", ""),
-            value.optBoolean("notificationsEnabled", true)
+            value.optBoolean("policyEligible", false),
+            value.optBoolean("notificationsEnabled", false)
         );
     }
 

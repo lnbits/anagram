@@ -7,6 +7,7 @@ import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { resolveCurrentGroupChatEpochEntryValue } from 'src/stores/nostr/valueUtils';
 import { useNostrStore } from 'src/stores/nostrStore';
 import type { Chat } from 'src/types/chat';
+import type { ContactRecord } from 'src/types/contact';
 import { buildAvatarText } from 'src/utils/avatarText';
 import type { RouteLocationRaw } from 'vue-router';
 
@@ -40,6 +41,7 @@ interface AndroidNotificationConversation {
   name: string;
   avatarUrl: string;
   avatarText: string;
+  policyEligible: boolean;
   notificationsEnabled: boolean;
 }
 
@@ -185,7 +187,51 @@ function readMetaString(meta: Record<string, unknown>, key: string): string {
 }
 
 function isConversationNotificationEnabled(meta: Record<string, unknown>): boolean {
-  return meta.muted !== true && meta.blocked !== true && meta.inbox_state !== 'blocked';
+  return (
+    meta.muted !== true &&
+    meta.blocked !== true &&
+    meta.inbox_state !== 'blocked' &&
+    !readMetaString(meta, 'blocked_at')
+  );
+}
+
+function isContactNotificationSuppressed(
+  contact: Pick<ContactRecord, 'meta'> | null | undefined
+): boolean {
+  return (
+    contact?.meta.muted === true ||
+    contact?.meta.blocked === true ||
+    Boolean(contact?.meta.blocked_at?.trim())
+  );
+}
+
+export function isAndroidDirectNotificationContactEligible(
+  contact: Pick<ContactRecord, 'meta' | 'type'> | null | undefined
+): boolean {
+  return contact?.type === 'user' && contact.meta.private_contact_list_member === true;
+}
+
+export function isAndroidDirectNotificationConversationPolicyEligible(input: {
+  chatMeta: Record<string, unknown>;
+  contact: Pick<ContactRecord, 'meta' | 'type'> | null | undefined;
+}): boolean {
+  return (
+    isAndroidDirectNotificationContactEligible(input.contact) ||
+    readMetaString(input.chatMeta, 'inbox_state') === 'accepted' ||
+    Boolean(readMetaString(input.chatMeta, 'accepted_at')) ||
+    Boolean(readMetaString(input.chatMeta, 'last_outgoing_message_at'))
+  );
+}
+
+export function isAndroidDirectNotificationConversationEnabled(input: {
+  chatMeta: Record<string, unknown>;
+  contact: Pick<ContactRecord, 'meta' | 'type'> | null | undefined;
+}): boolean {
+  return (
+    isAndroidDirectNotificationConversationPolicyEligible(input) &&
+    !isContactNotificationSuppressed(input.contact) &&
+    isConversationNotificationEnabled(input.chatMeta)
+  );
 }
 
 export function createAndroidNotificationConversationSignature(
@@ -195,9 +241,12 @@ export function createAndroidNotificationConversationSignature(
     .map((chat) =>
       JSON.stringify({
         avatar: chat.avatar.trim(),
+        acceptedAt: readMetaString(chat.meta, 'accepted_at'),
         blocked: chat.meta.blocked === true,
+        blockedAt: readMetaString(chat.meta, 'blocked_at'),
         epochPublicKey: chat.epochPublicKey ?? '',
         inboxState: readMetaString(chat.meta, 'inbox_state'),
+        lastOutgoingMessageAt: readMetaString(chat.meta, 'last_outgoing_message_at'),
         muted: chat.meta.muted === true,
         name: chat.name.trim(),
         picture: readMetaString(chat.meta, 'picture'),
@@ -271,14 +320,6 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
     watchedPubkeys,
   });
   const showConversationDetails = readAndroidRelayConversationDetailsPreference();
-  if (!showConversationDetails) {
-    return {
-      ...watchPlan,
-      conversations: [],
-      recipientKeys: [],
-      showConversationDetails: false,
-    };
-  }
 
   await Promise.all([chatDataService.init(), contactsService.init()]);
   const [chats, contacts, identityPrivateKey] = await Promise.all([
@@ -318,13 +359,26 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
       chat.name.trim() ||
       chatPubkey;
     const avatarUrl = readMetaString(chat.meta, 'picture') || contact?.meta.picture?.trim() || '';
+    const policyEligible =
+      chat.type === 'group' ||
+      isAndroidDirectNotificationConversationPolicyEligible({
+        chatMeta: chat.meta,
+        contact,
+      });
     const baseConversation = {
       chatPubkey,
       name,
       avatarUrl,
       avatarText: readMetaString(chat.meta, 'avatar') || buildAvatarText(name),
+      policyEligible,
       notificationsEnabled:
-        isConversationNotificationEnabled(chat.meta) && contact?.meta.blocked !== true,
+        chat.type === 'group'
+          ? isConversationNotificationEnabled(chat.meta) &&
+            !isContactNotificationSuppressed(contact)
+          : isAndroidDirectNotificationConversationEnabled({
+              chatMeta: chat.meta,
+              contact,
+            }),
     };
 
     if (chat.type !== 'group') {
@@ -359,6 +413,9 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
     if (!contactPubkey || contact.type === 'group' || chatPubkeys.has(contactPubkey)) {
       continue;
     }
+    if (!isAndroidDirectNotificationContactEligible(contact)) {
+      continue;
+    }
     const name =
       contact.given_name?.trim() ||
       contact.meta.display_name?.trim() ||
@@ -370,7 +427,8 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
       name,
       avatarUrl: contact.meta.picture?.trim() || '',
       avatarText: buildAvatarText(name),
-      notificationsEnabled: contact.meta.blocked !== true && contact.meta.muted !== true,
+      policyEligible: true,
+      notificationsEnabled: !isContactNotificationSuppressed(contact),
     });
   }
 
@@ -378,7 +436,7 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
     ...watchPlan,
     conversations,
     recipientKeys,
-    showConversationDetails: true,
+    showConversationDetails,
   };
 }
 

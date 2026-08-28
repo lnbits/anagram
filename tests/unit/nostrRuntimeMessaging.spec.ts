@@ -226,6 +226,7 @@ function createAuthSessionHarness() {
     resetPrivateMessagesIngestRuntimeState: vi.fn(),
     resetPrivateMessagesSubscriptionRuntimeState: vi.fn(),
     resetPrivateMessagesUiRuntimeState: vi.fn(),
+    resetStartupSessionInitialization: vi.fn(),
     resetStartupStepTracking: vi.fn(),
     resetTrackedContactEventState: vi.fn(),
     restoreRuntimeState,

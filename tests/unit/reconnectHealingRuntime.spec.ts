@@ -58,6 +58,7 @@ describe('reconnectHealingRuntime', () => {
           recreatedLiveSubscription: options.refreshRecreatedLiveSubscription ?? false,
         }))
     );
+    const restartSessionSubscriptions = vi.fn(async (_relayUrls: string[]) => {});
     const waitForPrivateMessagesIngestQueue = vi.fn(async () => {});
     const isRestoringStartupState = ref(options.isRestoringStartupState ?? false);
 
@@ -71,6 +72,7 @@ describe('reconnectHealingRuntime', () => {
       queuePrivateMessagesWatchdog,
       refreshDeveloperPendingQueues,
       refreshDirectMessages,
+      restartSessionSubscriptions,
       setIsReconnectHealing: (value) => {
         healingState.value = value;
       },
@@ -98,6 +100,7 @@ describe('reconnectHealingRuntime', () => {
       queuePrivateMessagesWatchdog,
       refreshDeveloperPendingQueues,
       refreshDirectMessages,
+      restartSessionSubscriptions,
       runtime,
       waitForPrivateMessagesIngestQueue,
     };
@@ -204,6 +207,29 @@ describe('reconnectHealingRuntime', () => {
       forceLiveSubscriptionRecreate: true,
     });
     expectStatusLabelsWereVisibleForMinimumDuration(statusLabelUpdates);
+  });
+
+  it('restarts persisted session subscriptions during a lightweight resume', async () => {
+    const { restartSessionSubscriptions, runtime, statusLabelUpdates } = createRuntime();
+
+    const runPromise = runtime.runReconnectHealing('session-resume', {
+      propagateError: true,
+      sessionRelayUrls: ['wss://relay.one/'],
+    });
+    await runQueuedTimersForStatusSteps(8);
+    await runPromise;
+
+    expect(restartSessionSubscriptions).toHaveBeenCalledWith(['wss://relay.one/']);
+    expectStatusLabels(statusLabelUpdates, [
+      'sync.resumingSession',
+      'sync.checkingSessionNetwork',
+      'sync.refreshingDirectMessages',
+      'sync.checkingMessageRelays',
+      'sync.retryingUnsentMessages',
+      'sync.applyingPendingMessageUpdates',
+      'sync.finishing',
+      null,
+    ]);
   });
 
   it('waits for live private-message EOSE after a recreated subscription', async () => {

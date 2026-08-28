@@ -89,6 +89,7 @@ interface AuthSessionRuntimeDeps {
     clearLastEventState?: boolean;
   }) => void;
   resetPrivateMessagesUiRuntimeState: (options?: { includeRefreshQueue?: boolean }) => void;
+  resetStartupSessionInitialization: () => void;
   resetStartupStepTracking: () => void;
   resetTrackedContactEventState: () => void;
   restoreRuntimeState: RestoreRuntimeState;
@@ -147,6 +148,7 @@ export function createAuthSessionRuntime({
   resetPrivateMessagesIngestRuntimeState,
   resetPrivateMessagesSubscriptionRuntimeState,
   resetPrivateMessagesUiRuntimeState,
+  resetStartupSessionInitialization,
   resetStartupStepTracking,
   resetTrackedContactEventState,
   restoreRuntimeState,
@@ -430,6 +432,7 @@ export function createAuthSessionRuntime({
     setCachedSignerSessionKey(null);
     ndk.signer = undefined;
     resetPrivateMessagesSubscriptionRuntimeState({ clearLastEventState: true });
+    resetStartupSessionInitialization();
     resetStartupStepTracking();
     pendingIncomingReactions.clear();
     pendingIncomingDeletions.clear();

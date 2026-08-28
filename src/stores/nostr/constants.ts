@@ -7,6 +7,7 @@ export const PRIVATE_MESSAGES_LAST_RECEIVED_EVENT_STORAGE_KEY =
   'nostr-private-messages-last-received-event';
 export const PRIVATE_MESSAGES_BACKFILL_STATE_STORAGE_KEY = 'nostr-private-messages-backfill-state';
 export const PRIVATE_PREFERENCES_STORAGE_KEY = 'privatePreferences';
+export const STARTUP_CHECKPOINT_STORAGE_KEY = 'nostr-startup-checkpoint';
 export const DEVELOPER_DIAGNOSTICS_STORAGE_KEY = 'developer-diagnostics-enabled';
 export const RELAY_STORAGE_KEYS = ['relays', 'nip65_relays'] as const;
 export const PRIVATE_CONTACT_LIST_D_TAG = 'contacts';

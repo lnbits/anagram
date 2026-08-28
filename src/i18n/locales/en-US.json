@@ -657,9 +657,11 @@
   "sync.reason.browserOnline": "browser online",
   "sync.reason.relayConnected": "relay connected",
   "sync.reason.relayListChanged": "relay list changed",
+  "sync.reason.sessionResume": "session resume",
   "sync.reason.visibilityRestored": "visibility restored",
   "sync.reason.windowFocus": "window focus",
   "sync.refreshingDirectMessages": "Refreshing direct messages",
+  "sync.resumingSession": "Resuming session",
   "sync.retryingUnsentMessages": "Retrying unsent messages",
   "sync.started": "Sync started: {reason}"
 }

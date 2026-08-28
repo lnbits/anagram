@@ -56,7 +56,11 @@ import { createPrivateMessagesIngestRuntime } from 'src/stores/nostr/privateMess
 import { createPrivateMessagesSubscriptionRuntime } from 'src/stores/nostr/privateMessagesSubscriptionRuntime';
 import { createPrivateMessagesUiRuntime } from 'src/stores/nostr/privateMessagesUiRuntime';
 import { createPrivateStateRuntime } from 'src/stores/nostr/privateStateRuntime';
-import { createReconnectHealingRuntime } from 'src/stores/nostr/reconnectHealingRuntime';
+import {
+  createReconnectHealingRuntime,
+  type ReconnectHealingReason,
+  type ReconnectHealingRunOptions,
+} from 'src/stores/nostr/reconnectHealingRuntime';
 import { createRelayConnectionRuntime } from 'src/stores/nostr/relayConnectionRuntime';
 import { createRelayPublishRuntime } from 'src/stores/nostr/relayPublishRuntime';
 import { createStartupContactSyncRuntime } from 'src/stores/nostr/startupContactSyncRuntime';
@@ -252,6 +256,12 @@ export const useNostrStore = defineStore('nostrStore', () => {
   let notifyReconnectHealingRelayListChangedRuntime: () => void = () => {};
   let resetAppLifecycleRuntimeStateRuntime: () => void = () => {};
   let resetReconnectHealingRuntimeStateRuntime: () => void = () => {};
+  let runReconnectHealingRuntime: (
+    reason: ReconnectHealingReason,
+    options?: ReconnectHealingRunOptions
+  ) => Promise<void> = async () => {
+    throw new Error('Reconnect healing runtime is not initialized.');
+  };
   let setAppLifecycleRouteChatIdRuntime: (chatId: string | null) => void = () => {};
   let startAppLifecycleRuntimeRuntime: () => void = () => {};
   let resetOutboundMessageReplayRuntimeStateRuntime: () => void = () => {};
@@ -1728,7 +1738,9 @@ export const useNostrStore = defineStore('nostrStore', () => {
   subscribeGroupMembershipRosterUpdatesRuntime = subscribeGroupMembershipRosterUpdatesImpl;
 
   const {
+    initializeSessionState,
     refreshAllStoredContacts: refreshAllStoredContactsImpl,
+    resetStartupSessionInitialization,
     rerunStartupStep,
     restoreStartupState,
     syncLoggedInContactProfile,
@@ -1745,6 +1757,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     fetchContactCursorEvents,
     failStartupStep,
     flushPendingEventSinceUpdate,
+    getConfiguredRelayUrls: () => relayStore.relays,
     getLoggedInPublicKeyHex,
     getRestoreStartupStatePromise: () => restoreStartupStatePromise,
     getSyncLoggedInContactProfilePromise: () => syncLoggedInContactProfilePromise,
@@ -1762,6 +1775,11 @@ export const useNostrStore = defineStore('nostrStore', () => {
     restorePrivateContactList,
     restorePrivatePreferences,
     restoreMuteList,
+    runLightweightSessionResume: (seedRelayUrls) =>
+      runReconnectHealingRuntime('session-resume', {
+        propagateError: true,
+        sessionRelayUrls: seedRelayUrls,
+      }),
     startOutboundMessageReplay: () => startOutboundMessageReplayRuntime(),
     setRestoreStartupStatePromise: (promise) => {
       restoreStartupStatePromise = promise;
@@ -1896,6 +1914,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     resetPrivateMessagesIngestRuntimeState,
     resetPrivateMessagesSubscriptionRuntimeState,
     resetPrivateMessagesUiRuntimeState,
+    resetStartupSessionInitialization,
     resetStartupStepTracking,
     resetTrackedContactEventState,
     restoreRuntimeState,
@@ -1996,6 +2015,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     notifyWindowBlur: notifyReconnectHealingWindowBlurImpl,
     notifyWindowFocus: notifyReconnectHealingWindowFocusImpl,
     resetReconnectHealingRuntimeState: resetReconnectHealingRuntimeStateImpl,
+    runReconnectHealing: runReconnectHealingImpl,
   } = createReconnectHealingRuntime({
     getLoggedInPublicKeyHex,
     getPrivateMessagesLiveEoseAt: () => privateMessagesSubscriptionLastEoseAt.value,
@@ -2029,6 +2049,16 @@ export const useNostrStore = defineStore('nostrStore', () => {
       refreshPrivateMessagesLiveSubscriptionForReconnect({
         forceRecreate: options?.forceLiveSubscriptionRecreate,
       }),
+    restartSessionSubscriptions: async (relayUrls) => {
+      ensureStoredEventSince();
+      await Promise.all([
+        subscribeMyRelayListUpdates(relayUrls, true),
+        subscribePrivateContactListUpdates(relayUrls, true),
+        subscribeGroupMembershipRosterUpdatesRuntime(relayUrls, true),
+        subscribeContactProfileUpdates(relayUrls, true),
+        subscribeContactRelayListUpdates(relayUrls, true),
+      ]);
+    },
     setIsReconnectHealing: (value) => {
       isReconnectHealing.value = value;
     },
@@ -2044,6 +2074,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
   notifyReconnectHealingWindowFocusRuntime = notifyReconnectHealingWindowFocusImpl;
   notifyReconnectHealingRelayListChangedRuntime = notifyReconnectHealingRelayListChangedImpl;
   resetReconnectHealingRuntimeStateRuntime = resetReconnectHealingRuntimeStateImpl;
+  runReconnectHealingRuntime = runReconnectHealingImpl;
 
   const {
     getDeveloperDiagnosticsSnapshot,
@@ -2118,6 +2149,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     getDeveloperDiagnosticsSnapshot,
     getNip05Data,
     hasNip07Extension,
+    initializeSessionState,
     getLoggedInPublicKeyHex,
     getPrivateKeyHex: getPrivateKeyHexRuntime,
     refreshDeveloperPendingQueues,

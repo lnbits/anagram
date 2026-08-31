@@ -1,5 +1,9 @@
 import { Capacitor, type PluginListenerHandle, registerPlugin } from '@capacitor/core';
 import { NDKPrivateKeySigner, normalizeRelayUrl } from '@nostr-dev-kit/ndk';
+import {
+  AndroidNotificationRelaySelectionError,
+  resolveSelectedAndroidNotificationRelayUrls,
+} from 'src/services/androidNotificationRelaySelectionService';
 import { readAndroidSecurePrivateKeyHex } from 'src/services/androidSecurePrivateKeyStorage';
 import { chatDataService } from 'src/services/chatDataService';
 import { contactsService } from 'src/services/contactsService';
@@ -310,7 +314,7 @@ async function decryptGroupEpochPrivateKey(input: {
 async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificationConfiguration> {
   const nostrStore = useNostrStore();
   const [relayUrls, watchedPubkeys] = await Promise.all([
-    nostrStore.listPrivateMessageReadRelayUrls(),
+    resolveSelectedAndroidNotificationRelayUrls(),
     nostrStore.listPrivateMessageRecipientPubkeys(),
   ]);
 
@@ -501,10 +505,18 @@ export async function refreshAndroidRelayNotificationListener(): Promise<void> {
     return;
   }
 
-  await AndroidRelayNotifications.configure({
-    ...(await buildAndroidNotificationConfiguration()),
-    startOnBoot: state.startOnBoot,
-  });
+  try {
+    await AndroidRelayNotifications.configure({
+      ...(await buildAndroidNotificationConfiguration()),
+      startOnBoot: state.startOnBoot,
+    });
+  } catch (error) {
+    if (!(error instanceof AndroidNotificationRelaySelectionError)) {
+      throw error;
+    }
+    await AndroidRelayNotifications.stop();
+    saveAndroidRelayNotificationsPreference(false);
+  }
 }
 
 export async function setAndroidRelayNotificationStartOnBoot(enabled: boolean): Promise<void> {

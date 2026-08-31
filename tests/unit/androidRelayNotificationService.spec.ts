@@ -1,11 +1,16 @@
 import { NDKPrivateKeySigner } from '@nostr-dev-kit/ndk';
 import {
+  createAndroidNotificationRelayCandidates,
+  createDefaultAndroidNotificationRelaySelection,
+} from 'src/services/androidNotificationRelaySelectionService';
+import {
   createAndroidNotificationConversationSignature,
   createAndroidNotificationWatchPlan,
   isAndroidDirectNotificationContactEligible,
   isAndroidDirectNotificationConversationEnabled,
   isAndroidDirectNotificationConversationPolicyEligible,
   readAndroidRelayConversationDetailsPreference,
+  refreshAndroidRelayNotificationListener,
   requestAndroidRelayNotificationsAfterLogin,
 } from 'src/services/androidRelayNotificationService';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,7 +19,12 @@ const moduleMocks = vi.hoisted(() => ({
   chats: [] as unknown[],
   contacts: [] as unknown[],
   privateKey: `${'0'.repeat(63)}1`,
-  relayUrls: ['wss://relay.example'],
+  appRelayEntries: [] as Array<{ url: string; read: boolean; write: boolean }>,
+  userRelayEntries: [{ url: 'wss://relay.example', read: true, write: true }] as Array<{
+    url: string;
+    read: boolean;
+    write: boolean;
+  }>,
   watchedPubkeys: [] as string[],
   plugin: {
     requestPermissions: vi.fn(async () => ({ receive: 'granted' })),
@@ -26,6 +36,7 @@ const moduleMocks = vi.hoisted(() => ({
           policyEligible: boolean;
         }>;
         recipientKeys: Array<{ privateKey: string; recipientPubkey: string }>;
+        relays: string[];
         showConversationDetails: boolean;
       }) => ({
         enabled: true,
@@ -34,6 +45,18 @@ const moduleMocks = vi.hoisted(() => ({
         permission: 'granted',
       })
     ),
+    getState: vi.fn(async () => ({
+      enabled: true,
+      startOnBoot: true,
+      showConversationDetails: true,
+      permission: 'granted',
+    })),
+    stop: vi.fn(async () => ({
+      enabled: false,
+      startOnBoot: true,
+      showConversationDetails: true,
+      permission: 'granted',
+    })),
   },
 }));
 
@@ -67,8 +90,22 @@ vi.mock('src/stores/nostrStore', () => ({
   useNostrStore: () => ({
     getLoggedInPublicKeyHex: () => new NDKPrivateKeySigner(moduleMocks.privateKey).pubkey,
     getPrivateKeyHex: () => moduleMocks.privateKey,
-    listPrivateMessageReadRelayUrls: async () => moduleMocks.relayUrls,
+    getRelayConnectionState: () => 'connected',
     listPrivateMessageRecipientPubkeys: async () => moduleMocks.watchedPubkeys,
+  }),
+}));
+
+vi.mock('src/stores/nip65RelayStore', () => ({
+  useNip65RelayStore: () => ({
+    init: vi.fn(),
+    relayEntries: moduleMocks.userRelayEntries,
+  }),
+}));
+
+vi.mock('src/stores/relayStore', () => ({
+  useRelayStore: () => ({
+    init: vi.fn(),
+    relayEntries: moduleMocks.appRelayEntries,
   }),
 }));
 
@@ -82,11 +119,23 @@ describe('androidRelayNotificationService', () => {
     moduleMocks.chats.length = 0;
     moduleMocks.contacts.length = 0;
     moduleMocks.watchedPubkeys.length = 0;
+    moduleMocks.appRelayEntries.length = 0;
+    moduleMocks.userRelayEntries.splice(0, moduleMocks.userRelayEntries.length, {
+      url: 'wss://relay.example',
+      read: true,
+      write: true,
+    });
     localStorageValues.clear();
+    localStorageValues.set(
+      'ui-android-relay-notifications-selected-relays',
+      JSON.stringify({
+        [new NDKPrivateKeySigner(moduleMocks.privateKey).pubkey]: ['wss://relay.example'],
+      })
+    );
     vi.stubGlobal('window', {
       localStorage: {
         getItem: vi.fn((key: string) => localStorageValues.get(key) ?? null),
-        setItem: vi.fn(),
+        setItem: vi.fn((key: string, value: string) => localStorageValues.set(key, value)),
       },
     });
   });
@@ -114,6 +163,71 @@ describe('androidRelayNotificationService', () => {
       recipientPubkeys: [OWNER_PUBKEY, GROUP_EPOCH_PUBKEY],
     });
     expect(Object.keys(watchPlan)).toEqual(['ownerPubkey', 'relays', 'recipientPubkeys']);
+  });
+
+  it('deduplicates notification relay candidates while retaining every source', () => {
+    expect(
+      createAndroidNotificationRelayCandidates({
+        userRelayUrls: ['wss://shared.example', 'wss://user.example'],
+        appRelayUrls: ['wss://shared.example/', 'wss://app.example'],
+        groupRelayUrls: ['wss://shared.example', 'wss://group.example'],
+        selectedRelayUrls: ['wss://removed.example'],
+      })
+    ).toEqual([
+      {
+        url: 'wss://shared.example/',
+        sources: ['user', 'app', 'group'],
+        available: true,
+      },
+      {
+        url: 'wss://user.example/',
+        sources: ['user'],
+        available: true,
+      },
+      {
+        url: 'wss://app.example/',
+        sources: ['app'],
+        available: true,
+      },
+      {
+        url: 'wss://group.example/',
+        sources: ['group'],
+        available: true,
+      },
+      {
+        url: 'wss://removed.example/',
+        sources: [],
+        available: false,
+      },
+    ]);
+  });
+
+  it('defaults to at most three user relays, then one app relay, without selecting groups', () => {
+    const candidates = createAndroidNotificationRelayCandidates({
+      userRelayUrls: [
+        'wss://user-one.example',
+        'wss://user-two.example',
+        'wss://user-three.example',
+        'wss://user-four.example',
+      ],
+      appRelayUrls: ['wss://app.example'],
+      groupRelayUrls: ['wss://group.example'],
+    });
+    expect(createDefaultAndroidNotificationRelaySelection(candidates)).toEqual([
+      'wss://user-one.example/',
+      'wss://user-two.example/',
+      'wss://user-three.example/',
+    ]);
+
+    expect(
+      createDefaultAndroidNotificationRelaySelection(
+        createAndroidNotificationRelayCandidates({
+          userRelayUrls: [],
+          appRelayUrls: ['wss://app.example', 'wss://second-app.example'],
+          groupRelayUrls: ['wss://group.example'],
+        })
+      )
+    ).toEqual(['wss://app.example/']);
   });
 
   it('enables per-conversation details by default', () => {
@@ -337,6 +451,45 @@ describe('androidRelayNotificationService', () => {
         notificationsEnabled: false,
       }),
     ]);
+  });
+
+  it('configures the foreground listener with only the saved available relay selection', async () => {
+    moduleMocks.userRelayEntries.push({
+      url: 'wss://unselected-user.example',
+      read: true,
+      write: true,
+    });
+    moduleMocks.appRelayEntries.push({
+      url: 'wss://selected-app.example',
+      read: true,
+      write: true,
+    });
+    localStorageValues.set(
+      'ui-android-relay-notifications-selected-relays',
+      JSON.stringify({
+        [new NDKPrivateKeySigner(moduleMocks.privateKey).pubkey]: ['wss://selected-app.example'],
+      })
+    );
+
+    await expect(requestAndroidRelayNotificationsAfterLogin()).resolves.toBe('granted');
+
+    expect(moduleMocks.plugin.configure.mock.calls[0]?.[0]?.relays).toEqual([
+      'wss://selected-app.example/',
+    ]);
+  });
+
+  it('stops the foreground listener when every saved relay becomes unavailable', async () => {
+    localStorageValues.set(
+      'ui-android-relay-notifications-selected-relays',
+      JSON.stringify({
+        [new NDKPrivateKeySigner(moduleMocks.privateKey).pubkey]: ['wss://removed-relay.example'],
+      })
+    );
+
+    await expect(refreshAndroidRelayNotificationListener()).resolves.toBeUndefined();
+
+    expect(moduleMocks.plugin.configure).not.toHaveBeenCalled();
+    expect(moduleMocks.plugin.stop).toHaveBeenCalledOnce();
   });
 
   it('rejects a watch plan without a valid owner public key', () => {

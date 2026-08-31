@@ -9,7 +9,7 @@ The two earlier dependency and release blockers are resolved and remain resolved
 1. Android notifications now connect directly to Nostr relays without Firebase Cloud Messaging, Google Services or the Capacitor push-notifications package.
 2. NDK's unused Sandpack dependency is replaced during npm resolution by the empty, MIT-licensed `@gitlab/noop` package, so non-FLOSS Nodebox is not fetched.
 
-Remaining release work includes reconciling the Blossom store description with the implementation, a tested `fdroiddata` recipe, a genuine release APK strategy, deterministic build inputs if reproducible builds are pursued, and network/asset review.
+The current source now implements the configurable Blossom server described by the store listing. Remaining release work includes publishing that change in a new immutable release, a tested `fdroiddata` recipe, a genuine release APK strategy, deterministic build inputs if reproducible builds are pursued, and network/asset review.
 
 F-Droid’s governing requirements are in its [Inclusion Policy](https://f-droid.org/en/docs/Inclusion_Policy/).
 
@@ -24,7 +24,7 @@ F-Droid’s governing requirements are in its [Inclusion Policy](https://f-droid
 | Required | Current GitHub Android “release” is a debug APK | Publish a genuine release APK or make it unambiguously test-only. |
 | Done | Android identity was inconsistent | Normalized Android, Capacitor, and Electron IDs to `com.nostr.chat`. |
 | Important | Production bundles contain the current build timestamp | Make build-time inputs deterministic if reproducible builds are desired. |
-| Review | The `v0.6.1` listing says Blossom uploads are configurable, but the tagged implementation still uses fixed `blossom.nostr.build` | Align the implementation and listing in a new release by making the server configurable/discoverable, or correct the listing and disclose the network dependency. |
+| Done in current source | The `v0.6.1` listing says Blossom uploads are configurable, but the tagged implementation still uses fixed `blossom.nostr.build` | Added a configurable HTTPS server saved in encrypted NIP-78 preferences; publish it in a new release rather than moving `v0.6.1`. |
 | Legal review | LNbits identifier, name, logo, screenshots and other assets | Confirm that the repository license and distribution permissions cover them all. |
 
 ### 1. NDK dependency resolution
@@ -78,7 +78,7 @@ The listing discloses:
 - A configurable Blossom media-upload server.
 - That notifications are direct relay notifications rather than FCM.
 
-The Blossom statement does not match the published `v0.6.1` source: [nostrBuildUploadService.ts](../src/services/nostrBuildUploadService.ts) still fixes the server to `blossom.nostr.build`. Align the implementation and listing in the next release rather than moving the published `v0.6.1` tag.
+The published `v0.6.1` source predates this feature, but the current source now matches the listing. Users can select an HTTPS base URL under Media & Data Storage; [blossomUploadService.ts](../src/services/blossomUploadService.ts) applies it to the upload request and signed authorization event. The choice is stored in encrypted NIP-78 private preferences so it is restored with the account. Publish the implementation under a new tag rather than moving `v0.6.1`.
 
 ### 4. Create the F-Droid build recipe
 
@@ -115,7 +115,7 @@ The timestamp generated in [quasar.config.ts](../quasar.config.ts) should be der
 
 The default Nostr relays in [relays.ts](../src/constants/relays.ts) are user-configurable, so they should not normally make the whole application dependent on one fixed provider.
 
-Media upload is different: the published `v0.6.1` implementation in [nostrBuildUploadService.ts](../src/services/nostrBuildUploadService.ts) is tied to `blossom.nostr.build`, despite the store description saying the server is configurable. The safer approach is to let users configure or discover Blossom servers and publish that change under a new version and tag. Otherwise, correct the listing and expect F-Droid to consider a `TetheredNet` or `NonFreeNet` disclosure. Anti-features are warnings and do not automatically cause rejection; see the [Anti-Features policy](https://f-droid.org/en/docs/Anti-Features/).
+The current media-upload implementation defaults to `blossom.nostr.build` but lets users replace it with another HTTPS Blossom server. The selection is restored from encrypted NIP-78 preferences and is used for both the upload endpoint and server-scoped authorization. This removes the fixed-provider dependency, although the default service and general network behavior should remain clearly disclosed to reviewers. Anti-features are warnings and do not automatically cause rejection; see the [Anti-Features policy](https://f-droid.org/en/docs/Anti-Features/).
 
 ## What is already in good shape
 
@@ -129,13 +129,13 @@ Media upload is different: the published `v0.6.1` implementation in [nostrBuildU
 ## Recommended release sequence
 
 1. Complete the remaining asset and brand licensing review.
-2. Make the Blossom upload server configurable or document the requested anti-feature.
+2. Confirm with reviewers whether the configurable Blossom default needs any anti-feature disclosure.
 3. Make build inputs deterministic if reproducible builds are pursued.
 4. Produce and test a genuine unsigned release build from a clean checkout.
 5. Run the complete project validation and Android smoke tests.
-6. Bump the version and create a new immutable release tag (normally `v0.6.2`) after the Blossom implementation and listing agree; do not move `v0.6.1`.
+6. Bump the version and create a new immutable release tag (normally `v0.6.2`) containing the configurable Blossom implementation; do not move `v0.6.1`.
 7. Test the F-Droid build recipe in an fdroidserver environment.
 8. Submit a merge request to the official `fdroiddata` repository.
 9. Respond to scanner/reviewer feedback and document any requested anti-features.
 
-With the NDK dependency and Firebase-free release issues resolved, the application looks like a reasonable F-Droid candidate once the remaining build, signing and disclosure work is complete.
+With the NDK dependency, Firebase-free release and configurable Blossom issues resolved in current source, the application looks like a reasonable F-Droid candidate once the remaining release, build, signing and disclosure work is complete.

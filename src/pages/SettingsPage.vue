@@ -44,7 +44,7 @@
             :key="item.key"
             clickable
             class="settings-menu__item"
-            :data-testid="item.action === 'logout' ? 'settings-logout-item' : undefined"
+            :data-testid="`settings-${item.key}-item`"
             :class="{ 'settings-menu__item--danger': item.action === 'logout' }"
             :active="item.routeName ? activeSettingKey === item.key : false"
             active-class="settings-menu__item--active"
@@ -201,6 +201,7 @@ type SettingsRouteName =
   | 'settings-relays'
   | 'settings-language'
   | 'settings-notifications'
+  | 'settings-media-data-storage'
   | 'settings-developer';
 
 interface SettingsItem {
@@ -214,14 +215,20 @@ interface SettingsItem {
 const settingsItems: SettingsItem[] = [
   { key: 'profile', labelKey: 'profile.profile', icon: 'face', routeName: 'settings-profile' },
   { key: 'relays', labelKey: 'relays.title', icon: 'satellite_alt', routeName: 'settings-relays' },
-  { key: 'theme', labelKey: 'settings.appearance', icon: 'wallpaper', routeName: 'settings-theme' },
-  { key: 'language', labelKey: 'settings.language.titlePlural', icon: 'language', routeName: 'settings-language' },
   {
     key: 'notifications',
     labelKey: 'notifications.notifications',
     icon: 'notifications',
     routeName: 'settings-notifications'
   },
+  {
+    key: 'media-data-storage',
+    labelKey: 'mediaDataStorage.title',
+    icon: 'storage',
+    routeName: 'settings-media-data-storage'
+  },
+  { key: 'theme', labelKey: 'settings.appearance', icon: 'wallpaper', routeName: 'settings-theme' },
+  { key: 'language', labelKey: 'settings.language.titlePlural', icon: 'language', routeName: 'settings-language' },
   {
     key: 'developer',
     labelKey: 'developer.developer',

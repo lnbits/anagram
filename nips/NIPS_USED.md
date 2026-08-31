@@ -76,6 +76,13 @@ This list is based on the current app code, especially `src/stores/nostrStore.ts
 - Used for app-specific private storage on Nostr.
 - The app uses `kind:30078` replaceable events for private preferences, group identity secrets, and per-contact cursor state.
 - Those payloads are encrypted with NIP-44 before publication.
+- The user's configured Blossom upload server is stored in the encrypted private-preferences payload and restored with the account.
+
+## NIP-B7
+
+- Used for Blossom media uploads.
+- The app uploads blobs through the configured HTTPS Blossom server and signs server-scoped `kind:24242` upload authorization events.
+- The server choice remains private in the app's NIP-78 preferences; the app does not currently publish a public `kind:10063` Blossom server list.
 
 ## NIP-171
 

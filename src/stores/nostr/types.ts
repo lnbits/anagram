@@ -222,6 +222,7 @@ export type SubscriptionLogName =
 
 export interface PrivatePreferences {
   contactSecret: string;
+  blossomServerUrl?: string;
   [key: string]: unknown;
 }
 

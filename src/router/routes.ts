@@ -62,14 +62,19 @@ const routes: RouteRecordRaw[] = [
             component: () => import('pages/settings/RelaysSettingsPage.vue'),
           },
           {
-            path: 'language',
-            name: 'settings-language',
-            component: () => import('pages/settings/LanguageSettingsPage.vue'),
-          },
-          {
             path: 'notifications',
             name: 'settings-notifications',
             component: () => import('pages/settings/NotificationsSettingsPage.vue'),
+          },
+          {
+            path: 'media-data-storage',
+            name: 'settings-media-data-storage',
+            component: () => import('pages/settings/MediaDataStorageSettingsPage.vue'),
+          },
+          {
+            path: 'language',
+            name: 'settings-language',
+            component: () => import('pages/settings/LanguageSettingsPage.vue'),
           },
           {
             path: 'developer',

@@ -1,24 +1,23 @@
 import {
-  NOSTR_BUILD_BLOSSOM_UPLOAD_URL,
   sha256HexFromBlob,
-  uploadNostrBuildMedia,
-  validateNostrBuildMediaFile,
-} from 'src/services/nostrBuildUploadService';
+  uploadBlossomMedia,
+  validateBlossomMediaFile,
+} from 'src/services/blossomUploadService';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-describe('nostrBuildUploadService', () => {
+describe('blossomUploadService', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('validates common media files for the free upload flow', () => {
-    expect(
-      validateNostrBuildMediaFile(new File(['image'], 'image.png', { type: 'image/png' }))
-    ).toBe(null);
-    expect(
-      validateNostrBuildMediaFile(new File(['text'], 'note.txt', { type: 'text/plain' }))
-    ).toBe('Only image, video, and audio files are supported.');
-    expect(validateNostrBuildMediaFile(new File([], 'empty.png', { type: 'image/png' }))).toBe(
+  it('validates common media files for the upload flow', () => {
+    expect(validateBlossomMediaFile(new File(['image'], 'image.png', { type: 'image/png' }))).toBe(
+      null
+    );
+    expect(validateBlossomMediaFile(new File(['text'], 'note.txt', { type: 'text/plain' }))).toBe(
+      'Only image, video, and audio files are supported.'
+    );
+    expect(validateBlossomMediaFile(new File([], 'empty.png', { type: 'image/png' }))).toBe(
       'The selected file is empty.'
     );
   });
@@ -29,13 +28,13 @@ describe('nostrBuildUploadService', () => {
     );
   });
 
-  it('uploads media with a signed Blossom auth header', async () => {
+  it('uploads media to the configured server with server-scoped authentication', async () => {
     const file = new File(['hello'], 'hello.png', { type: 'image/png' });
     const signUploadAuthHeader = vi.fn(async () => 'Nostr signed-auth');
     const fetchMock = vi.fn(async () => {
       return new Response(
         JSON.stringify({
-          url: 'https://nostr.build/i/hello.png',
+          url: 'https://cdn.example.com/hello.png',
           sha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
           size: 5,
           type: 'image/png',
@@ -46,13 +45,17 @@ describe('nostrBuildUploadService', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await uploadNostrBuildMedia(file, { signUploadAuthHeader });
+    const result = await uploadBlossomMedia(file, {
+      serverUrl: 'https://media.example.com/',
+      signUploadAuthHeader,
+    });
 
     expect(signUploadAuthHeader).toHaveBeenCalledWith({
+      serverUrl: 'https://media.example.com',
       sha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      NOSTR_BUILD_BLOSSOM_UPLOAD_URL,
+      'https://media.example.com/upload',
       expect.objectContaining({
         method: 'PUT',
         headers: {
@@ -65,12 +68,12 @@ describe('nostrBuildUploadService', () => {
     );
     expect(result.attachment).toEqual({
       type: 'media',
-      url: 'https://nostr.build/i/hello.png',
+      url: 'https://cdn.example.com/hello.png',
       mimeType: 'image/png',
       size: 5,
       sha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
       name: 'hello.png',
-      service: 'nostr.build',
+      service: 'media.example.com',
       uploadedAt: '2026-06-08T10:00:00.000Z',
     });
   });

@@ -1,4 +1,4 @@
-package com.lnbits.nostrchat;
+package com.nostr.chat;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;

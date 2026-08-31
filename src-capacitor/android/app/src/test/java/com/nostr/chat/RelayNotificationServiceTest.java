@@ -1,4 +1,4 @@
-package com.lnbits.nostrchat;
+package com.nostr.chat;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertEquals;

@@ -1,0 +1,8 @@
+Version 0.6.0
+
+- Added direct Android notifications over Nostr relays without Firebase or FCM.
+- Added configurable notification relays and a foreground relay service.
+- Added message editing and improved mobile navigation and chat presentation.
+- Added configurable Blossom media uploads.
+- Changed the application ID to com.nostr.chat.
+- Removed the non-FLOSS Nodebox package from the dependency graph.

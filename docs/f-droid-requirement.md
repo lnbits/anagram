@@ -16,48 +16,44 @@ F-Droid’s governing requirements are in its [Inclusion Policy](https://f-droid
 | Priority | Finding | Required action |
 |---|---|---|
 | Blocker | Published `v0.5.3` contains Firebase/GMS push support | Do not submit that tag. Publish a new release from the current Firebase-free notification implementation. |
-| Blocker | NDK pulls non-FLOSS Nodebox through Sandpack | Remove it from the complete npm dependency closure. |
-| Required | No F-Droid/Fastlane store metadata | Add descriptions, icon, screenshots, and version-code changelogs upstream. |
+| Done | NDK declared Sandpack and non-FLOSS Nodebox | Replaced the unused Sandpack dependency with an empty MIT-licensed package through npm overrides. |
+| Done | F-Droid/Fastlane store metadata was missing | Added English descriptions, an icon, phone screenshots, and the version-code `5` changelog upstream. |
 | Required | No tested `fdroiddata` build recipe | Create and test a recipe that builds an unsigned release APK entirely from source. |
 | Required | Current GitHub Android “release” is a debug APK | Publish a genuine release APK or make it unambiguously test-only. |
-| Important | Android identity contains stale `com.motorina0.nostrchat` values | Normalize everything to the intended `com.lnbits.nostrchat` identity. |
+| Done | Android identity was inconsistent | Normalized Android, Capacitor, and Electron IDs to `com.nostr.chat`. |
 | Important | Production bundles contain the current build timestamp | Make build-time inputs deterministic if reproducible builds are desired. |
 | Review | Media uploads use fixed `blossom.nostr.build` | Make the server configurable/discoverable or disclose the network dependency. |
 | Legal review | LNbits identifier, name, logo, screenshots and other assets | Confirm that the repository license and distribution permissions cover them all. |
 
-### 1. Resolve the NDK dependency
+### 1. NDK dependency resolution
 
-The app directly uses NDK in [package.json](../package.json). NDK 3.0.3 declares Sandpack, which installs Nodebox; the installed `node_modules/@codesandbox/nodebox/LICENSE` is not a normal FLOSS license.
+The app directly uses NDK in [package.json](../package.json). NDK 3.0.3 declares Sandpack, which normally installs non-FLOSS Nodebox even though the application and NDK runtime do not use Sandpack.
 
-Treat this as a blocker even though the dependency appears unused by the NDK runtime code. `npm ci` still downloads it, and F-Droid requires build dependencies to be FLOSS.
+The root npm override now replaces NDK's Sandpack dependency with dependency-free, MIT-licensed `@gitlab/noop@1.0.1`. The lockfile contains no Nodebox package or CodeSandbox tarball resolution, so the restricted package is not fetched during installation.
 
-The viable options are:
+This differs from deleting the package after installation: npm resolves and downloads the FLOSS no-op package in its place. The override can be removed when an upstream NDK release drops the unused dependency.
 
-- Preferably, update to an upstream NDK release that removes the unused Sandpack dependency.
-- Pin an older compatible NDK version without it—2.14.38 appears to predate this dependency, but compatibility must be tested.
-- Maintain a minimal FOSS fork of NDK without Sandpack/Nodebox.
-
-An npm override or post-install deletion is unlikely to be sufficient because the restricted package would still be fetched during the build.
+The final `fdroid build` and scanner review still need to confirm the complete release dependency closure.
 
 ### 2. Make a new Firebase-free release
 
-The current Capacitor application is already configured as `com.lnbits.nostrchat` in [capacitor.config.json](../src-capacitor/capacitor.config.json), and the current native notification design explicitly avoids Google services in [android-relay-notifications.md](android-relay-notifications.md).
+The current Capacitor application is configured as `com.nostr.chat` in [capacitor.config.json](../src-capacitor/capacitor.config.json), and the current native notification design explicitly avoids Google services in [android-relay-notifications.md](android-relay-notifications.md).
 
 Before submission:
 
-- Bump the application version and Android `versionCode`; the current values are in [src-capacitor/package.json](../src-capacitor/package.json).
+- Keep the staged `0.6.0` version and Android version code `5` synchronized across the root and Capacitor manifests and lockfiles.
 - Ensure all package and lock files agree.
 - Tag the exact clean commit.
 - Verify the tag contains no Firebase, Google Services plugin or Capacitor push-notification dependency.
 - Use a monotonically increasing Android version code for every future release.
 
-The stale package strings in [strings.xml](../src-capacitor/android/app/src/main/res/values/strings.xml) should also be corrected before release.
+The package strings in [strings.xml](../src-capacitor/android/app/src/main/res/values/strings.xml) are normalized to `com.nostr.chat`.
 
-### 3. Add store metadata
+### 3. Store metadata
 
-F-Droid strongly expects upstream metadata before inclusion. Its [Quick Start Guide](https://f-droid.org/en/docs/Submitting_to_F-Droid_Quick_Start_Guide/) and [graphics/description guide](https://f-droid.org/docs/All_About_Descriptions_Graphics_and_Screenshots/) describe the layout.
+English upstream metadata is available under `fastlane/metadata/android/en-US/`, following F-Droid's [Quick Start Guide](https://f-droid.org/en/docs/Submitting_to_F-Droid_Quick_Start_Guide/) and [graphics/description guide](https://f-droid.org/docs/All_About_Descriptions_Graphics_and_Screenshots/).
 
-Add something like:
+The current layout is:
 
 ```text
 fastlane/metadata/android/en-US/
@@ -65,25 +61,27 @@ fastlane/metadata/android/en-US/
 ├── short_description.txt
 ├── full_description.txt
 ├── changelogs/
-│   └── <versionCode>.txt
+│   └── 5.txt
 └── images/
     ├── icon.png
     └── phoneScreenshots/
+        ├── 1.png
+        └── 2.png
 ```
 
-Existing files under `docs/screenshots/` and `public/nostr_chat.png` may be reusable after checking ownership, dimensions and whether they expose private user data.
+The approved icon and mobile screenshots are sourced from `public/nostr_chat.png` and `docs/screenshots/`.
 
-The listing should accurately disclose:
+The listing discloses:
 
 - Nostr relay usage.
 - Background relay connection and notification behavior.
 - Foreground-service and boot permissions.
-- The fixed Blossom upload service, unless it becomes configurable.
+- Configurable Blossom media uploads planned for version `0.6.0`.
 - That notifications are direct relay notifications rather than FCM.
 
 ### 4. Create the F-Droid build recipe
 
-A new file such as `metadata/com.lnbits.nostrchat.yml` will be submitted to the `fdroiddata` repository. It will need:
+A new file such as `metadata/com.nostr.chat.yml` will be submitted to the `fdroiddata` repository. It will need:
 
 - Public Git repository URL.
 - MIT license declaration.

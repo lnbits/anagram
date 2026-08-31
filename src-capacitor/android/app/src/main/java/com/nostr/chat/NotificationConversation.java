@@ -1,4 +1,4 @@
-package com.lnbits.nostrchat;
+package com.nostr.chat;
 
 import androidx.annotation.Nullable;
 import java.util.Locale;

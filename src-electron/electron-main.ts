@@ -13,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const platform = process.platform || os.platform();
-const appId = 'com.lnbits.nostrchat';
+const appId = 'com.nostr.chat';
 const currentDir = fileURLToPath(new URL('.', import.meta.url));
 const MAX_UNREAD_CHAT_BADGE_COUNT = 99;
 const PRIVATE_KEY_HEX_PATTERN = /^[0-9a-f]{64}$/;

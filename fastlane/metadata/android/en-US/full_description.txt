@@ -1,0 +1,16 @@
+Nostr Chat is a private messaging client for the Nostr protocol. Connect directly to Nostr relays and choose which relays the app uses.
+
+Features include:
+<ul>
+<li>Create a Nostr account or sign in with an existing identity</li>
+<li>Exchange encrypted one-to-one messages</li>
+<li>Create and join private group conversations</li>
+<li>Review new chat requests before accepting, blocking, or deleting them</li>
+<li>Search chats and react to, edit, forward, or delete messages</li>
+<li>Manage contacts, profile details, relays, themes, and notifications</li>
+<li>Upload media through a configurable Blossom server</li>
+</ul>
+
+On Android, optional background notifications maintain direct connections to your configured Nostr relays using a foreground service. The service can restart after device boot when enabled. Notifications are delivered directly from Nostr relays without Firebase Cloud Messaging or Google Play Services.
+
+Nostr Chat contains no advertising, analytics, or tracking SDKs.

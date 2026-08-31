@@ -49,13 +49,13 @@ test('Blossom server preference is encrypted, restored, and shown in Settings or
 
   try {
     await alice.page.goto('/#/settings/profile');
-    await expect(alice.page.locator('.settings-menu__item')).toHaveText([
+    await expect(alice.page.locator('.settings-menu__item .q-item__label')).toHaveText([
       'Profile',
       'Relays',
       'Notifications',
       'Media & Data Storage',
       'Appearance',
-      'Language',
+      'Languages',
       'Developer',
       'Log Out',
     ]);

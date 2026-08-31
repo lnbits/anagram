@@ -5,23 +5,51 @@
     :subtitle="dialogSubtitle"
     :persistent="true"
     :show-close="false"
-    max-width="440px"
+    :max-width="isAndroidRuntime ? '560px' : '440px'"
   >
     <div class="browser-notifications-login-dialog__body">
-      {{ $t('notifications.manageLaterHint') }}
+      <AndroidNotificationRelayPicker
+        v-if="isAndroidRuntime"
+        :candidates="notificationRelayCandidates"
+        :model-value="selectedNotificationRelayUrls"
+        :loading="areNotificationRelayChoicesLoading"
+        :disabled="isSavingRelaySelection"
+        @update:model-value="selectedNotificationRelayUrls = $event"
+      />
+      <span v-else>{{ $t('notifications.manageLaterHint') }}</span>
+      <div v-if="relaySelectionError" class="text-caption text-negative">
+        {{ relaySelectionError }}
+      </div>
     </div>
 
     <template #actions>
       <q-btn flat no-caps :label="$t('common.now')" @click="handleSkip" />
-      <q-btn unelevated no-caps color="primary" :label="$t('common.enable')" @click="handleEnable" />
+      <q-btn
+        unelevated
+        no-caps
+        color="primary"
+        :label="$t('common.enable')"
+        :loading="isSavingRelaySelection"
+        :disable="
+          isAndroidRuntime &&
+          (areNotificationRelayChoicesLoading || !hasAvailableSelectedRelay)
+        "
+        @click="handleEnable"
+      />
     </template>
   </AppDialog>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
+import AndroidNotificationRelayPicker from 'src/components/AndroidNotificationRelayPicker.vue';
 import AppDialog from 'src/components/AppDialog.vue';
 import { isAndroidRelayNotificationSupported } from 'src/services/androidRelayNotificationService';
+import {
+  loadAndroidNotificationRelayChoices,
+  saveAndroidNotificationRelaySelection,
+  type AndroidNotificationRelayCandidate,
+} from 'src/services/androidNotificationRelaySelectionService';
 import { t } from 'src/i18n';
 
 const props = defineProps<{
@@ -43,6 +71,17 @@ const isDesktopRuntime = computed(
   () => typeof window !== 'undefined' && Boolean(window.desktopRuntime?.isElectron)
 );
 const isAndroidRuntime = computed(() => isAndroidRelayNotificationSupported());
+const areNotificationRelayChoicesLoading = ref(false);
+const isSavingRelaySelection = ref(false);
+const notificationRelayCandidates = ref<AndroidNotificationRelayCandidate[]>([]);
+const selectedNotificationRelayUrls = ref<string[]>([]);
+const relaySelectionError = ref('');
+const hasAvailableSelectedRelay = computed(() => {
+  const selectedRelayUrls = new Set(selectedNotificationRelayUrls.value);
+  return notificationRelayCandidates.value.some(
+    (candidate) => candidate.available && selectedRelayUrls.has(candidate.url)
+  );
+});
 const dialogTitle = computed(() => {
   if (isAndroidRuntime.value || isDesktopRuntime.value) {
     return t('notifications.enableNotifications');
@@ -60,7 +99,57 @@ const dialogSubtitle = computed(() => {
     : t('notifications.browser.enablePrompt');
 });
 
-function handleEnable(): void {
+watch(
+  () => props.modelValue,
+  (isOpen) => {
+    if (!isOpen || !isAndroidRuntime.value) {
+      return;
+    }
+    void loadRelayChoices();
+  },
+  { immediate: true }
+);
+
+async function loadRelayChoices(): Promise<void> {
+  areNotificationRelayChoicesLoading.value = true;
+  relaySelectionError.value = '';
+  try {
+    const choices = await loadAndroidNotificationRelayChoices();
+    notificationRelayCandidates.value = choices.candidates;
+    selectedNotificationRelayUrls.value = choices.selectedRelayUrls;
+  } catch (error) {
+    relaySelectionError.value =
+      error instanceof Error
+        ? error.message
+        : t('errors.failedUpdatePushNotifications');
+  } finally {
+    areNotificationRelayChoicesLoading.value = false;
+  }
+}
+
+async function handleEnable(): Promise<void> {
+  if (isAndroidRuntime.value) {
+    if (!hasAvailableSelectedRelay.value) {
+      relaySelectionError.value = t('notifications.android.relays.required');
+      return;
+    }
+    isSavingRelaySelection.value = true;
+    relaySelectionError.value = '';
+    try {
+      selectedNotificationRelayUrls.value = saveAndroidNotificationRelaySelection(
+        selectedNotificationRelayUrls.value
+      );
+    } catch (error) {
+      relaySelectionError.value =
+        error instanceof Error
+          ? error.message
+          : t('errors.failedUpdatePushNotifications');
+      return;
+    } finally {
+      isSavingRelaySelection.value = false;
+    }
+  }
+
   emit('update:modelValue', false);
   emit('enable');
 }
@@ -73,6 +162,8 @@ function handleSkip(): void {
 
 <style scoped>
 .browser-notifications-login-dialog__body {
+  display: grid;
+  gap: 12px;
   color: var(--nc-text);
   line-height: 1.5;
 }

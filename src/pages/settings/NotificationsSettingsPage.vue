@@ -12,13 +12,28 @@
 
           <q-toggle
             :model-value="notificationsEnabled"
-            :disable="isPermissionRequestInFlight || !notificationsSupported"
+            :disable="
+              isPermissionRequestInFlight ||
+              !notificationsSupported ||
+              areNotificationRelayChoicesLoading
+            "
             color="primary"
             checked-icon="notifications_active"
             unchecked-icon="notifications_off"
             @update:model-value="handleNotificationsToggle"
           />
         </div>
+
+        <template v-if="isAndroidRuntime">
+          <q-separator />
+          <AndroidNotificationRelayPicker
+            :candidates="notificationRelayCandidates"
+            :model-value="selectedNotificationRelayUrls"
+            :loading="areNotificationRelayChoicesLoading"
+            :disabled="isPermissionRequestInFlight || isRelaySelectionUpdating"
+            @update:model-value="handleNotificationRelaySelectionUpdate"
+          />
+        </template>
 
         <template v-if="isAndroidRuntime && notificationsEnabled">
           <q-separator />
@@ -73,8 +88,14 @@
 
 <script setup lang="ts">
 import { useQuasar } from 'quasar';
+import AndroidNotificationRelayPicker from 'src/components/AndroidNotificationRelayPicker.vue';
 import SettingsDetailLayout from 'src/components/SettingsDetailLayout.vue';
 import { t } from 'src/i18n';
+import {
+  loadAndroidNotificationRelayChoices,
+  saveAndroidNotificationRelaySelection,
+  type AndroidNotificationRelayCandidate,
+} from 'src/services/androidNotificationRelaySelectionService';
 import {
   clearAndroidRelayNotificationsPreference,
   disableAndroidRelayNotifications,
@@ -82,6 +103,7 @@ import {
   isAndroidRelayNotificationSupported,
   readAndroidRelayConversationDetailsPreference,
   readAndroidRelayStartOnBootPreference,
+  refreshAndroidRelayNotificationListener,
   requestAndroidRelayNotificationsAfterLogin,
   setAndroidRelayNotificationConversationDetails,
   setAndroidRelayNotificationStartOnBoot,
@@ -120,6 +142,10 @@ const showConversationDetails = ref(readAndroidRelayConversationDetailsPreferenc
 const isPermissionRequestInFlight = ref(false);
 const isStartOnBootUpdating = ref(false);
 const isConversationDetailsUpdating = ref(false);
+const isRelaySelectionUpdating = ref(false);
+const areNotificationRelayChoicesLoading = ref(isAndroidRuntime);
+const notificationRelayCandidates = ref<AndroidNotificationRelayCandidate[]>([]);
+const selectedNotificationRelayUrls = ref<string[]>([]);
 const isDesktopRuntime =
   typeof window !== 'undefined' && Boolean(window.desktopRuntime?.isElectron);
 
@@ -134,8 +160,8 @@ if (
 onMounted(() => {
   if (isAndroidRuntime) {
     document.addEventListener('visibilitychange', handleAndroidVisibilityChange);
-    void refreshAndroidState().catch((error) => {
-      console.warn('Failed to read Android relay notification state.', error);
+    void Promise.all([refreshAndroidState(), refreshAndroidRelayChoices()]).catch((error) => {
+      console.warn('Failed to initialize Android relay notification settings.', error);
     });
   }
 });
@@ -201,9 +227,27 @@ async function refreshAndroidState(): Promise<void> {
   }
 }
 
+async function refreshAndroidRelayChoices(): Promise<void> {
+  areNotificationRelayChoicesLoading.value = true;
+  try {
+    const choices = await loadAndroidNotificationRelayChoices();
+    notificationRelayCandidates.value = choices.candidates;
+    selectedNotificationRelayUrls.value = choices.selectedRelayUrls;
+  } finally {
+    areNotificationRelayChoicesLoading.value = false;
+  }
+}
+
+function hasAvailableSelectedRelay(relayUrls: string[]): boolean {
+  const selectedRelayUrls = new Set(relayUrls);
+  return notificationRelayCandidates.value.some(
+    (candidate) => candidate.available && selectedRelayUrls.has(candidate.url)
+  );
+}
+
 function handleAndroidVisibilityChange(): void {
   if (document.visibilityState === 'visible') {
-    void refreshAndroidState().catch((error) => {
+    void Promise.all([refreshAndroidState(), refreshAndroidRelayChoices()]).catch((error) => {
       console.warn('Failed to refresh Android relay notification state.', error);
     });
   }
@@ -287,6 +331,21 @@ async function handleAndroidNotificationsToggle(nextValue: boolean): Promise<voi
       return;
     }
 
+    if (!hasAvailableSelectedRelay(selectedNotificationRelayUrls.value)) {
+      notificationsEnabled.value = false;
+      $q.notify({
+        type: 'warning',
+        message: t('notifications.android.relays.required'),
+        position: 'top',
+        timeout: 3200,
+      });
+      return;
+    }
+
+    selectedNotificationRelayUrls.value = saveAndroidNotificationRelaySelection(
+      selectedNotificationRelayUrls.value
+    );
+
     const permission = await requestAndroidRelayNotificationsAfterLogin();
     notificationPermission.value = permission;
     notificationsEnabled.value = permission === 'granted';
@@ -313,6 +372,41 @@ async function handleAndroidNotificationsToggle(nextValue: boolean): Promise<voi
     );
   } finally {
     isPermissionRequestInFlight.value = false;
+  }
+}
+
+async function handleNotificationRelaySelectionUpdate(relayUrls: string[]): Promise<void> {
+  if (notificationsEnabled.value && !hasAvailableSelectedRelay(relayUrls)) {
+    $q.notify({
+      type: 'warning',
+      message: t('notifications.android.relays.required'),
+      position: 'top',
+      timeout: 3200,
+    });
+    return;
+  }
+
+  const previousSelection = selectedNotificationRelayUrls.value;
+  isRelaySelectionUpdating.value = true;
+  try {
+    selectedNotificationRelayUrls.value = saveAndroidNotificationRelaySelection(relayUrls);
+    if (notificationsEnabled.value) {
+      await refreshAndroidRelayNotificationListener();
+    }
+  } catch (error) {
+    selectedNotificationRelayUrls.value = previousSelection;
+    try {
+      saveAndroidNotificationRelaySelection(previousSelection);
+    } catch (rollbackError) {
+      console.warn('Failed to restore the Android notification relay selection.', rollbackError);
+    }
+    reportUiError(
+      'Failed to update Android notification relay selection',
+      error,
+      t('errors.failedUpdatePushNotifications')
+    );
+  } finally {
+    isRelaySelectionUpdating.value = false;
   }
 }
 

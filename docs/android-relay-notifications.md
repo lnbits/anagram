@@ -4,12 +4,14 @@ Android notifications are delivered without Google Play Services, Firebase Cloud
 
 ## Runtime model
 
-When the user opts in, the Android app starts a foreground service with a persistent `Listening for new messages` notification. The service opens WebSocket connections directly to the user's readable Nostr relays and subscribes to NIP-59 gift wraps (`kind:1059`) addressed to:
+When the user opts in, the Android app starts a foreground service with a persistent `Listening for new messages` notification. Before it starts, the user chooses individual readable relays from the user's NIP-65 relays, app relays, and relays advertised by joined groups. The service opens WebSocket connections only to that saved selection and subscribes to NIP-59 gift wraps (`kind:1059`) addressed to:
 
 - the logged-in user's public key; and
 - the current public epoch key for each group chat.
 
-The watch plan uses the same read-relay resolution as the in-app private-message subscription, including the user's advertised read relays and group relays. It is refreshed when the logged-in identity, readable relay list, or current group epoch changes. Old group epoch keys are not retained for live notifications.
+The selection is stored per account and is not expanded automatically when new user, app, or group relays are discovered. Duplicate URLs are shown once with all applicable source labels. When no selection exists, the UI initially suggests up to three user relays, or one app relay when no user relay is available; group relays remain opt-in. Relays that disappear from every source stay visible as unavailable selections but are excluded from the foreground-service watch plan.
+
+The watch plan is refreshed when the logged-in identity, readable relay candidates, saved selection, or current group epoch changes. Old group epoch keys are not retained for live notifications. Normal relay use while the app is open is unaffected by the notification-only selection.
 
 NIP-59 gift wraps intentionally use randomized timestamps up to two days in the past. Each relay subscription therefore includes that full lookback window. Stored events received before a relay's initial `EOSE` are validated and deduplicated without notifying; events received after catch-up, and unseen events recovered on later reconnects, can produce alerts.
 
@@ -29,6 +31,9 @@ Tapping an alert opens the chats screen and routes to a matching group when the 
 ## User controls
 
 - Notifications are off by default and require Android notification permission.
+- At least one currently available notification relay must be selected before notifications can be enabled.
+- Changing the notification relay selection while the listener is enabled immediately refreshes its WebSocket connections.
+- Selecting more than five relays shows a battery and data use warning but is not blocked.
 - `Start after device restart` is enabled by default and can be disabled separately.
 - The foreground-service notification has a `Stop` action. Stopping disables the native preference, and the settings toggle synchronizes to off when the app resumes.
 - Logging out stops the service and clears delivered message alerts.

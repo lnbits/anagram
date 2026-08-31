@@ -20,6 +20,7 @@ final class RelayNotificationPreferences {
     private static final String KEY_ENABLED = "enabled";
     private static final String KEY_START_ON_BOOT = "start_on_boot";
     private static final String KEY_RELAYS = "relays";
+    private static final String KEY_EXPLICIT_RELAY_SELECTION = "explicit_relay_selection";
     private static final String KEY_OWNER_PUBKEY = "owner_pubkey";
     private static final String KEY_RECIPIENT_PUBKEYS = "recipient_pubkeys";
     private static final String KEY_CONVERSATIONS = "conversations";
@@ -33,7 +34,9 @@ final class RelayNotificationPreferences {
     private RelayNotificationPreferences() {}
 
     static boolean isEnabled(Context context) {
-        return preferences(context).getBoolean(KEY_ENABLED, false);
+        SharedPreferences prefs = preferences(context);
+        return prefs.getBoolean(KEY_ENABLED, false) &&
+            prefs.getBoolean(KEY_EXPLICIT_RELAY_SELECTION, false);
     }
 
     static void setEnabled(Context context, boolean enabled) {
@@ -64,14 +67,22 @@ final class RelayNotificationPreferences {
         List<NotificationConversation> conversations,
         boolean showConversationDetails
     ) {
-        preferences(context)
+        SharedPreferences prefs = preferences(context);
+        SharedPreferences.Editor editor = prefs
             .edit()
             .putString(KEY_RELAYS, toJson(relays))
+            .putBoolean(KEY_EXPLICIT_RELAY_SELECTION, true)
             .putString(KEY_OWNER_PUBKEY, ownerPubkey)
             .putString(KEY_RECIPIENT_PUBKEYS, toJson(recipientPubkeys))
             .putString(KEY_CONVERSATIONS, conversationsToJson(conversations))
-            .putBoolean(KEY_SHOW_CONVERSATION_DETAILS, showConversationDetails)
-            .apply();
+            .putBoolean(KEY_SHOW_CONVERSATION_DETAILS, showConversationDetails);
+        if (!prefs.getBoolean(KEY_EXPLICIT_RELAY_SELECTION, false)) {
+            editor
+                .putString(KEY_INITIALIZED_RELAYS, "[]")
+                .putString(KEY_SEEN_EVENT_IDS, "[]")
+                .putString(KEY_UNREAD_NOTIFICATION_COUNTS, "{}");
+        }
+        editor.apply();
     }
 
     static List<String> getRelays(Context context) {
@@ -200,6 +211,7 @@ final class RelayNotificationPreferences {
             .remove(KEY_RECIPIENT_PUBKEYS)
             .remove(KEY_CONVERSATIONS)
             .remove(KEY_RELAYS)
+            .remove(KEY_EXPLICIT_RELAY_SELECTION)
             .remove(KEY_INITIALIZED_RELAYS)
             .remove(KEY_SEEN_EVENT_IDS)
             .remove(KEY_UNREAD_NOTIFICATION_COUNTS)

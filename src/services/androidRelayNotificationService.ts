@@ -83,6 +83,15 @@ const AndroidRelayNotifications = registerPlugin<AndroidRelayNotificationsPlugin
 );
 
 let didInstallNotificationListeners = false;
+const ANDROID_NOTIFICATION_REFRESH_DEBOUNCE_MS = 250;
+const decryptedGroupEpochPrivateKeyCache = new Map<string, string | null>();
+let lastAppliedConfigurationSignature: string | null = null;
+let refreshCoordinatorPromise: Promise<void> | null = null;
+let resolveRefreshCoordinator: (() => void) | null = null;
+let rejectRefreshCoordinator: ((error: unknown) => void) | null = null;
+let refreshDebounceTimeoutId: ReturnType<typeof setTimeout> | null = null;
+let isRefreshInProgress = false;
+let isRefreshRequested = false;
 
 function canUseStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
@@ -292,7 +301,13 @@ async function decryptGroupEpochPrivateKey(input: {
   encryptedPrivateKey: string;
   epochPubkey: string;
   identityPrivateKey: string;
+  ownerPubkey: string;
 }): Promise<string | null> {
+  const cacheKey = `${input.ownerPubkey}:${input.epochPubkey}:${input.encryptedPrivateKey}`;
+  if (decryptedGroupEpochPrivateKeyCache.has(cacheKey)) {
+    return decryptedGroupEpochPrivateKeyCache.get(cacheKey) ?? null;
+  }
+
   try {
     const identitySigner = new NDKPrivateKeySigner(input.identityPrivateKey);
     const identityUser = await identitySigner.user();
@@ -300,13 +315,18 @@ async function decryptGroupEpochPrivateKey(input: {
       await identitySigner.decrypt(identityUser, input.encryptedPrivateKey, 'nip44')
     );
     if (!decrypted) {
+      decryptedGroupEpochPrivateKeyCache.set(cacheKey, null);
       return null;
     }
-    return inputSanitizerService.normalizeHexKey(new NDKPrivateKeySigner(decrypted).pubkey) ===
+    const result =
+      inputSanitizerService.normalizeHexKey(new NDKPrivateKeySigner(decrypted).pubkey) ===
       input.epochPubkey
-      ? decrypted
-      : null;
+        ? decrypted
+        : null;
+    decryptedGroupEpochPrivateKeyCache.set(cacheKey, result);
+    return result;
   } catch {
+    decryptedGroupEpochPrivateKeyCache.set(cacheKey, null);
     return null;
   }
 }
@@ -406,6 +426,7 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
       encryptedPrivateKey: epochEntry.epoch_private_key_encrypted,
       epochPubkey,
       identityPrivateKey,
+      ownerPubkey: watchPlan.ownerPubkey,
     });
     if (epochPrivateKey) {
       recipientKeys.push({ recipientPubkey: epochPubkey, privateKey: epochPrivateKey });
@@ -442,6 +463,111 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
     recipientKeys,
     showConversationDetails,
   };
+}
+
+function createAndroidNotificationConfigurationSignature(
+  configuration: AndroidNotificationConfiguration
+): string {
+  return JSON.stringify({
+    ...configuration,
+    conversations: [...configuration.conversations].sort((first, second) =>
+      `${first.chatPubkey}:${first.recipientPubkey ?? ''}`.localeCompare(
+        `${second.chatPubkey}:${second.recipientPubkey ?? ''}`
+      )
+    ),
+    recipientKeys: [...configuration.recipientKeys].sort((first, second) =>
+      first.recipientPubkey.localeCompare(second.recipientPubkey)
+    ),
+  });
+}
+
+async function configureAndroidNotificationListener(input: {
+  configuration: AndroidNotificationConfiguration;
+  startOnBoot: boolean;
+}): Promise<AndroidRelayNotificationState> {
+  const state = await AndroidRelayNotifications.configure({
+    ...input.configuration,
+    startOnBoot: input.startOnBoot,
+  });
+  lastAppliedConfigurationSignature = state.enabled
+    ? createAndroidNotificationConfigurationSignature(input.configuration)
+    : null;
+  return state;
+}
+
+async function performAndroidNotificationRefresh(): Promise<void> {
+  const state = await getAndroidRelayNotificationState();
+  if (!state.enabled || state.permission !== 'granted') {
+    lastAppliedConfigurationSignature = null;
+    return;
+  }
+
+  try {
+    const configuration = await buildAndroidNotificationConfiguration();
+    const signature = createAndroidNotificationConfigurationSignature(configuration);
+    if (signature === lastAppliedConfigurationSignature) {
+      return;
+    }
+    await configureAndroidNotificationListener({
+      configuration,
+      startOnBoot: state.startOnBoot,
+    });
+  } catch (error) {
+    if (!(error instanceof AndroidNotificationRelaySelectionError)) {
+      throw error;
+    }
+    await AndroidRelayNotifications.stop();
+    lastAppliedConfigurationSignature = null;
+    saveAndroidRelayNotificationsPreference(false);
+  }
+}
+
+function resetRefreshCoordinator(): void {
+  if (refreshDebounceTimeoutId !== null) {
+    clearTimeout(refreshDebounceTimeoutId);
+  }
+  refreshDebounceTimeoutId = null;
+  refreshCoordinatorPromise = null;
+  resolveRefreshCoordinator = null;
+  rejectRefreshCoordinator = null;
+  isRefreshInProgress = false;
+  isRefreshRequested = false;
+}
+
+function scheduleAndroidNotificationRefresh(): void {
+  if (isRefreshInProgress) {
+    return;
+  }
+  if (refreshDebounceTimeoutId !== null) {
+    clearTimeout(refreshDebounceTimeoutId);
+  }
+  refreshDebounceTimeoutId = setTimeout(() => {
+    refreshDebounceTimeoutId = null;
+    void runAndroidNotificationRefresh();
+  }, ANDROID_NOTIFICATION_REFRESH_DEBOUNCE_MS);
+}
+
+async function runAndroidNotificationRefresh(): Promise<void> {
+  isRefreshInProgress = true;
+  isRefreshRequested = false;
+  try {
+    await performAndroidNotificationRefresh();
+  } catch (error) {
+    const reject = rejectRefreshCoordinator;
+    resetRefreshCoordinator();
+    reject?.(error);
+    return;
+  }
+  isRefreshInProgress = false;
+
+  if (isRefreshRequested) {
+    scheduleAndroidNotificationRefresh();
+    return;
+  }
+
+  const resolve = resolveRefreshCoordinator;
+  resetRefreshCoordinator();
+  resolve?.();
 }
 
 export async function getAndroidRelayNotificationPermission(): Promise<AndroidRelayNotificationPermissionState> {
@@ -486,8 +612,8 @@ export async function requestAndroidRelayNotificationsAfterLogin(): Promise<Andr
     return permission;
   }
 
-  const state = await AndroidRelayNotifications.configure({
-    ...(await buildAndroidNotificationConfiguration()),
+  const state = await configureAndroidNotificationListener({
+    configuration: await buildAndroidNotificationConfiguration(),
     startOnBoot: readAndroidRelayStartOnBootPreference(),
   });
   saveAndroidRelayNotificationsPreference(state.enabled);
@@ -500,23 +626,15 @@ export async function refreshAndroidRelayNotificationListener(): Promise<void> {
     return;
   }
 
-  const state = await getAndroidRelayNotificationState();
-  if (!state.enabled || state.permission !== 'granted') {
-    return;
-  }
-
-  try {
-    await AndroidRelayNotifications.configure({
-      ...(await buildAndroidNotificationConfiguration()),
-      startOnBoot: state.startOnBoot,
+  isRefreshRequested = true;
+  if (!refreshCoordinatorPromise) {
+    refreshCoordinatorPromise = new Promise<void>((resolve, reject) => {
+      resolveRefreshCoordinator = resolve;
+      rejectRefreshCoordinator = reject;
     });
-  } catch (error) {
-    if (!(error instanceof AndroidNotificationRelaySelectionError)) {
-      throw error;
-    }
-    await AndroidRelayNotifications.stop();
-    saveAndroidRelayNotificationsPreference(false);
   }
+  scheduleAndroidNotificationRefresh();
+  return refreshCoordinatorPromise;
 }
 
 export async function setAndroidRelayNotificationStartOnBoot(enabled: boolean): Promise<void> {
@@ -541,8 +659,8 @@ export async function setAndroidRelayNotificationConversationDetails(
   }
 
   try {
-    await AndroidRelayNotifications.configure({
-      ...(await buildAndroidNotificationConfiguration()),
+    await configureAndroidNotificationListener({
+      configuration: await buildAndroidNotificationConfiguration(),
       startOnBoot: state.startOnBoot,
     });
   } catch (error) {
@@ -573,9 +691,19 @@ export async function disableAndroidRelayNotifications(): Promise<void> {
   try {
     await AndroidRelayNotifications.stop();
   } finally {
+    lastAppliedConfigurationSignature = null;
+    decryptedGroupEpochPrivateKeyCache.clear();
     saveAndroidRelayNotificationsPreference(false);
   }
 }
+
+export const __androidRelayNotificationServiceTestUtils = {
+  resetRefreshState(): void {
+    resetRefreshCoordinator();
+    lastAppliedConfigurationSignature = null;
+    decryptedGroupEpochPrivateKeyCache.clear();
+  },
+};
 
 export function startAndroidRelayNotificationListeners(
   onNotificationAction: (chatPubkey: string | null) => void

@@ -158,10 +158,10 @@ final class RelayNotificationPreferences {
         return true;
     }
 
-    static synchronized boolean hasSeenEvent(Context context, String eventId) {
+    static synchronized Set<String> getSeenEventIds(Context context) {
         return new LinkedHashSet<>(
             fromJson(preferences(context).getString(KEY_SEEN_EVENT_IDS, "[]"))
-        ).contains(eventId.toLowerCase(Locale.ROOT));
+        );
     }
 
     static synchronized int incrementUnreadNotificationCount(Context context, String chatPubkey) {

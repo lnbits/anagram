@@ -4,6 +4,7 @@ import {
   createDefaultAndroidNotificationRelaySelection,
 } from 'src/services/androidNotificationRelaySelectionService';
 import {
+  __androidRelayNotificationServiceTestUtils,
   createAndroidNotificationConversationSignature,
   createAndroidNotificationWatchPlan,
   isAndroidDirectNotificationContactEligible,
@@ -116,6 +117,7 @@ const localStorageValues = new Map<string, string>();
 describe('androidRelayNotificationService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __androidRelayNotificationServiceTestUtils.resetRefreshState();
     moduleMocks.chats.length = 0;
     moduleMocks.contacts.length = 0;
     moduleMocks.watchedPubkeys.length = 0;
@@ -141,6 +143,8 @@ describe('androidRelayNotificationService', () => {
   });
 
   afterEach(() => {
+    __androidRelayNotificationServiceTestUtils.resetRefreshState();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -490,6 +494,32 @@ describe('androidRelayNotificationService', () => {
 
     expect(moduleMocks.plugin.configure).not.toHaveBeenCalled();
     expect(moduleMocks.plugin.stop).toHaveBeenCalledOnce();
+  });
+
+  it('coalesces a burst of listener refresh requests into one configuration', async () => {
+    vi.useFakeTimers();
+
+    const firstRefresh = refreshAndroidRelayNotificationListener();
+    const secondRefresh = refreshAndroidRelayNotificationListener();
+    const thirdRefresh = refreshAndroidRelayNotificationListener();
+
+    await vi.advanceTimersByTimeAsync(250);
+    await Promise.all([firstRefresh, secondRefresh, thirdRefresh]);
+
+    expect(moduleMocks.plugin.getState).toHaveBeenCalledOnce();
+    expect(moduleMocks.plugin.configure).toHaveBeenCalledOnce();
+  });
+
+  it('skips native reconfiguration when notification inputs are unchanged', async () => {
+    vi.useFakeTimers();
+    await expect(requestAndroidRelayNotificationsAfterLogin()).resolves.toBe('granted');
+    moduleMocks.plugin.configure.mockClear();
+
+    const refresh = refreshAndroidRelayNotificationListener();
+    await vi.advanceTimersByTimeAsync(250);
+    await refresh;
+
+    expect(moduleMocks.plugin.configure).not.toHaveBeenCalled();
   });
 
   it('rejects a watch plan without a valid owner public key', () => {

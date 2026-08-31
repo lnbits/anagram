@@ -10,18 +10,26 @@
             </div>
           </div>
 
-          <q-toggle
-            :model-value="notificationsEnabled"
-            :disable="
-              isPermissionRequestInFlight ||
-              !notificationsSupported ||
-              areNotificationRelayChoicesLoading
-            "
-            color="primary"
-            checked-icon="notifications_active"
-            unchecked-icon="notifications_off"
-            @update:model-value="handleNotificationsToggle"
-          />
+          <div class="notifications-card__control">
+            <q-spinner
+              v-if="isPermissionRequestInFlight"
+              color="primary"
+              size="20px"
+              aria-hidden="true"
+            />
+            <q-toggle
+              :model-value="notificationsEnabled"
+              :disable="
+                isPermissionRequestInFlight ||
+                !notificationsSupported ||
+                areNotificationRelayChoicesLoading
+              "
+              color="primary"
+              checked-icon="notifications_active"
+              unchecked-icon="notifications_off"
+              @update:model-value="handleNotificationsToggle"
+            />
+          </div>
         </div>
 
         <template v-if="isAndroidRuntime">
@@ -254,6 +262,9 @@ function handleAndroidVisibilityChange(): void {
 }
 
 async function handleNotificationsToggle(nextValue: boolean): Promise<void> {
+  if (isPermissionRequestInFlight.value) {
+    return;
+  }
   if (isAndroidRuntime) {
     await handleAndroidNotificationsToggle(nextValue);
     return;
@@ -461,6 +472,12 @@ async function handleConversationDetailsToggle(nextValue: boolean): Promise<void
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+.notifications-card__control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .notifications-card__privacy {

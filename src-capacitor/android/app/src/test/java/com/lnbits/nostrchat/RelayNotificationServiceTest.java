@@ -7,7 +7,9 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.junit.Test;
 
 public final class RelayNotificationServiceTest {
@@ -202,5 +204,53 @@ public final class RelayNotificationServiceTest {
 
         assertEquals(first, RelayNotificationService.notificationIdForChat("11".repeat(32)));
         assertFalse(first == second);
+    }
+
+    @Test
+    public void reconnectsOnlyWhenTheRelaySubscriptionPlanChanges() {
+        List<String> relays = List.of("wss://one.example/", "wss://two.example/");
+        Set<String> recipients = Set.of("11".repeat(32), "22".repeat(32));
+        String owner = "11".repeat(32);
+
+        assertTrue(
+            RelayNotificationService.hasSameConnectionPlan(
+                relays,
+                recipients,
+                owner,
+                List.of("wss://two.example/", "wss://one.example/"),
+                Set.of("22".repeat(32), "11".repeat(32)),
+                owner
+            )
+        );
+        assertFalse(
+            RelayNotificationService.hasSameConnectionPlan(
+                relays,
+                recipients,
+                owner,
+                List.of("wss://three.example/"),
+                recipients,
+                owner
+            )
+        );
+        assertFalse(
+            RelayNotificationService.hasSameConnectionPlan(
+                relays,
+                recipients,
+                owner,
+                relays,
+                Set.of("11".repeat(32)),
+                owner
+            )
+        );
+        assertFalse(
+            RelayNotificationService.hasSameConnectionPlan(
+                relays,
+                recipients,
+                owner,
+                relays,
+                recipients,
+                "33".repeat(32)
+            )
+        );
     }
 }

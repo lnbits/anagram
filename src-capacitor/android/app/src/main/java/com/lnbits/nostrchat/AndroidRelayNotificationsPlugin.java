@@ -39,6 +39,8 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
     static final String NOTIFICATION_PERMISSION = "receive";
     private static final String ACTION_EVENT = "notificationActionPerformed";
     private static final Pattern HEX_64 = Pattern.compile("^[0-9a-fA-F]{64}$");
+    private final Map<String, String> validatedRecipientKeys = new LinkedHashMap<>();
+    private boolean hasSavedRecipientKeySnapshot;
 
     @PluginMethod
     public void checkPermissions(PluginCall call) {
@@ -65,6 +67,12 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
 
     @PluginMethod
     public void configure(PluginCall call) {
+        boolean wasEnabled = RelayNotificationPreferences.isEnabled(getContext());
+        List<String> previousRelays = RelayNotificationPreferences.getRelays(getContext());
+        Set<String> previousRecipientPubkeys = RelayNotificationPreferences.getRecipientPubkeys(
+            getContext()
+        );
+        String previousOwnerPubkey = RelayNotificationPreferences.getOwnerPubkey(getContext());
         List<String> relays = normalizeRelays(call.getArray("relays"));
         List<String> recipientPubkeys = normalizePubkeys(call.getArray("recipientPubkeys"));
         String ownerPubkey = normalizePubkey(call.getString("ownerPubkey"));
@@ -89,14 +97,22 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
         );
         Map<String, String> recipientKeys = normalizeRecipientKeys(
             call.getArray("recipientKeys"),
-            recipientPubkeys
+            recipientPubkeys,
+            validatedRecipientKeys
         );
-        try {
-            NotificationSecureStore.saveRecipientKeys(getContext(), recipientKeys);
-        } catch (GeneralSecurityException exception) {
-            call.reject("Failed to protect notification decryption keys.", exception);
-            return;
+        boolean didChangeRecipientKeys =
+            !hasSavedRecipientKeySnapshot || !recipientKeys.equals(validatedRecipientKeys);
+        if (didChangeRecipientKeys) {
+            try {
+                NotificationSecureStore.saveRecipientKeys(getContext(), recipientKeys);
+            } catch (GeneralSecurityException exception) {
+                call.reject("Failed to protect notification decryption keys.", exception);
+                return;
+            }
         }
+        validatedRecipientKeys.clear();
+        validatedRecipientKeys.putAll(recipientKeys);
+        hasSavedRecipientKeySnapshot = true;
         RelayNotificationPreferences.saveWatchPlan(
             getContext(),
             relays,
@@ -111,13 +127,24 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
             RelayNotificationService.clearMessageNotifications(getContext());
         }
         NotificationAvatarCache.refreshAsync(getContext(), conversations);
-        RelayNotificationService.startOrRefresh(getContext());
+        boolean shouldReconnect =
+            !wasEnabled ||
+            !RelayNotificationService.hasSameConnectionPlan(
+                previousRelays,
+                previousRecipientPubkeys,
+                previousOwnerPubkey,
+                relays,
+                new LinkedHashSet<>(recipientPubkeys),
+                ownerPubkey
+            );
+        RelayNotificationService.startOrRefresh(getContext(), shouldReconnect);
         call.resolve(createState());
     }
 
     @PluginMethod
     public void stop(PluginCall call) {
         RelayNotificationService.requestStop(getContext(), true);
+        hasSavedRecipientKeySnapshot = false;
         call.resolve(createState());
     }
 
@@ -273,7 +300,8 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
 
     private static Map<String, String> normalizeRecipientKeys(
         @Nullable JSArray values,
-        List<String> recipientPubkeys
+        List<String> recipientPubkeys,
+        Map<String, String> previouslyValidatedKeys
     ) {
         Map<String, String> normalized = new LinkedHashMap<>();
         if (values == null) {
@@ -288,6 +316,10 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
             String recipientPubkey = normalizePubkey(value.optString("recipientPubkey", ""));
             String privateKey = normalizePubkey(value.optString("privateKey", ""));
             if (recipientPubkey == null || privateKey == null || !recipients.contains(recipientPubkey)) {
+                continue;
+            }
+            if (privateKey.equals(previouslyValidatedKeys.get(recipientPubkey))) {
+                normalized.put(recipientPubkey, privateKey);
                 continue;
             }
             try {

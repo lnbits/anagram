@@ -17,6 +17,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.Process;
 import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -31,10 +32,14 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import okhttp3.OkHttpClient;
@@ -50,6 +55,7 @@ public final class RelayNotificationService extends Service {
 
     private static final String LOG_TAG = "NostrChatRelay";
     static final String ACTION_START_OR_REFRESH = "com.lnbits.nostrchat.notifications.START_OR_REFRESH";
+    private static final String EXTRA_RECONNECT_RELAYS = "nostr_chat_reconnect_notification_relays";
     static final String EXTRA_CHAT_PUBKEY = "nostr_chat_chat_pubkey";
     static final String EXTRA_OPEN_CHATS_LIST = "nostr_chat_open_chats_list";
     static final String EXTRA_NOTIFICATION_COUNT_KEY = "nostr_chat_notification_count_key";
@@ -74,17 +80,20 @@ public final class RelayNotificationService extends Service {
     private final Map<String, Integer> reconnectAttempts = new HashMap<>();
     private final Map<String, Runnable> reconnectTasks = new HashMap<>();
     private final Set<String> openRelays = new HashSet<>();
-    private final Map<String, NotificationConversation> directConversations = new HashMap<>();
-    private final Map<String, NotificationConversation> groupConversations = new HashMap<>();
-    private List<String> configuredRelays = new ArrayList<>();
-    private Set<String> recipientPubkeys = new HashSet<>();
-    private Map<String, String> recipientPrivateKeys = new LinkedHashMap<>();
-    private String ownerPubkey = "";
-    private boolean showConversationDetails = true;
+    private volatile Map<String, NotificationConversation> directConversations = new HashMap<>();
+    private volatile Map<String, NotificationConversation> groupConversations = new HashMap<>();
+    private volatile List<String> configuredRelays = new ArrayList<>();
+    private volatile Set<String> recipientPubkeys = new HashSet<>();
+    private volatile Map<String, String> recipientPrivateKeys = new LinkedHashMap<>();
+    private volatile Set<String> seenEventIds = new LinkedHashSet<>();
+    private volatile String ownerPubkey = "";
+    private volatile boolean showConversationDetails = true;
+    private volatile boolean isStopping;
+    private volatile long connectionGeneration;
     private OkHttpClient httpClient;
+    private ExecutorService eventExecutor;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
-    private boolean isStopping;
     private boolean hasNetworkConnection;
     private boolean hasPostedForegroundNotification;
 
@@ -101,6 +110,16 @@ public final class RelayNotificationService extends Service {
             .pingInterval(30L, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build();
+        eventExecutor = Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(
+                () -> {
+                    Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);
+                    runnable.run();
+                },
+                "NostrRelayEvents"
+            );
+            return thread;
+        });
         registerNetworkCallback();
     }
 
@@ -112,9 +131,15 @@ public final class RelayNotificationService extends Service {
             return START_NOT_STICKY;
         }
 
-        logDebug("service-start startId=" + startId + " flags=" + flags);
+        boolean shouldReconnect =
+            intent == null || intent.getBooleanExtra(EXTRA_RECONNECT_RELAYS, true);
+        logDebug(
+            "service-start startId=" + startId +
+            " flags=" + flags +
+            " reconnect=" + shouldReconnect
+        );
         startAsForegroundService();
-        reloadWatchPlan();
+        reloadWatchPlan(shouldReconnect);
         return START_STICKY;
     }
 
@@ -132,6 +157,9 @@ public final class RelayNotificationService extends Service {
         handler.removeCallbacksAndMessages(null);
         closeAllSockets();
         unregisterNetworkCallback();
+        if (eventExecutor != null) {
+            eventExecutor.shutdownNow();
+        }
         if (httpClient != null) {
             httpClient.dispatcher().executorService().shutdown();
             httpClient.connectionPool().evictAll();
@@ -140,9 +168,29 @@ public final class RelayNotificationService extends Service {
     }
 
     static void startOrRefresh(Context context) {
+        startOrRefresh(context, true);
+    }
+
+    static void startOrRefresh(Context context, boolean shouldReconnect) {
         Intent intent = new Intent(context, RelayNotificationService.class);
         intent.setAction(ACTION_START_OR_REFRESH);
+        intent.putExtra(EXTRA_RECONNECT_RELAYS, shouldReconnect);
         ContextCompat.startForegroundService(context, intent);
+    }
+
+    static boolean hasSameConnectionPlan(
+        List<String> firstRelays,
+        Set<String> firstRecipientPubkeys,
+        String firstOwnerPubkey,
+        List<String> secondRelays,
+        Set<String> secondRecipientPubkeys,
+        String secondOwnerPubkey
+    ) {
+        return (
+            new LinkedHashSet<>(firstRelays).equals(new LinkedHashSet<>(secondRelays)) &&
+            firstRecipientPubkeys.equals(secondRecipientPubkeys) &&
+            firstOwnerPubkey.equals(secondOwnerPubkey)
+        );
     }
 
     static void requestStop(Context context, boolean disablePreference) {
@@ -225,29 +273,41 @@ public final class RelayNotificationService extends Service {
         stopSelf();
     }
 
-    private void reloadWatchPlan() {
-        configuredRelays = RelayNotificationPreferences.getRelays(this);
-        recipientPubkeys = RelayNotificationPreferences.getRecipientPubkeys(this);
-        ownerPubkey = RelayNotificationPreferences.getOwnerPubkey(this);
-        showConversationDetails = RelayNotificationPreferences.shouldShowConversationDetails(this);
-        recipientPrivateKeys = NotificationSecureStore.loadRecipientKeys(this);
-        directConversations.clear();
-        groupConversations.clear();
+    private void reloadWatchPlan(boolean shouldReconnect) {
+        List<String> nextConfiguredRelays = RelayNotificationPreferences.getRelays(this);
+        Set<String> nextRecipientPubkeys = RelayNotificationPreferences.getRecipientPubkeys(this);
+        String nextOwnerPubkey = RelayNotificationPreferences.getOwnerPubkey(this);
+        boolean nextShowConversationDetails =
+            RelayNotificationPreferences.shouldShowConversationDetails(this);
+        Map<String, String> nextRecipientPrivateKeys = NotificationSecureStore.loadRecipientKeys(
+            this
+        );
+        Map<String, NotificationConversation> nextDirectConversations = new HashMap<>();
+        Map<String, NotificationConversation> nextGroupConversations = new HashMap<>();
         List<NotificationConversation> conversations = RelayNotificationPreferences.getConversations(
             this
         );
         for (NotificationConversation conversation : conversations) {
             if (conversation.recipientPubkey == null) {
-                directConversations.put(conversation.chatPubkey, conversation);
+                nextDirectConversations.put(conversation.chatPubkey, conversation);
             } else {
-                groupConversations.put(conversation.recipientPubkey, conversation);
+                nextGroupConversations.put(conversation.recipientPubkey, conversation);
             }
         }
+        configuredRelays = nextConfiguredRelays;
+        recipientPubkeys = nextRecipientPubkeys;
+        ownerPubkey = nextOwnerPubkey;
+        showConversationDetails = nextShowConversationDetails;
+        recipientPrivateKeys = nextRecipientPrivateKeys;
+        directConversations = nextDirectConversations;
+        groupConversations = nextGroupConversations;
+        seenEventIds = new LinkedHashSet<>(RelayNotificationPreferences.getSeenEventIds(this));
         logDebug(
             "watch-plan-loaded relays=" + configuredRelays.size() +
             " recipients=" + recipientPubkeys.size() +
             " conversations=" + conversations.size() +
-            " decryptableRecipients=" + recipientPrivateKeys.size()
+            " decryptableRecipients=" + recipientPrivateKeys.size() +
+            " reconnect=" + shouldReconnect
         );
         if (configuredRelays.isEmpty() || recipientPubkeys.isEmpty() || ownerPubkey.isEmpty()) {
             logWarning("watch-plan-rejected reason=empty");
@@ -256,6 +316,12 @@ public final class RelayNotificationService extends Service {
         }
 
         isStopping = false;
+        if (!shouldReconnect && (!sockets.isEmpty() || !reconnectTasks.isEmpty())) {
+            updateServiceNotification();
+            return;
+        }
+
+        connectionGeneration += 1L;
         closeAllSockets();
         reconnectAttempts.clear();
         updateServiceNotification();
@@ -390,6 +456,20 @@ public final class RelayNotificationService extends Service {
         );
     }
 
+    private void enqueueRelayMessage(RelayWebSocketListener source, String message) {
+        ExecutorService executor = eventExecutor;
+        if (isStopping || executor == null) {
+            return;
+        }
+        try {
+            executor.execute(() -> {
+                if (!isStopping && source.connectionGeneration == connectionGeneration) {
+                    handleRelayMessage(source, message);
+                }
+            });
+        } catch (RejectedExecutionException ignored) {}
+    }
+
     private void handleRelayMessage(RelayWebSocketListener source, String message) {
         try {
             JSONArray envelope = new JSONArray(message);
@@ -441,6 +521,15 @@ public final class RelayNotificationService extends Service {
                 );
                 return;
             }
+            String recipientPubkey = findWatchedRecipient(event.optJSONArray("tags"));
+            if (recipientPubkey == null) {
+                logDebug("gift-wrap-rejected event=" + eventLabel + " reason=recipient-not-watched");
+                return;
+            }
+            if (seenEventIds.contains(eventId)) {
+                logDebug("gift-wrap-ignored event=" + eventLabel + " reason=duplicate");
+                return;
+            }
             if (!eventId.equals(computeEventId(event))) {
                 logDebug("gift-wrap-rejected event=" + eventLabel + " reason=event-id-mismatch");
                 return;
@@ -450,21 +539,13 @@ public final class RelayNotificationService extends Service {
                 return;
             }
 
-            String recipientPubkey = findWatchedRecipient(event.optJSONArray("tags"));
-            if (recipientPubkey == null) {
-                logDebug("gift-wrap-rejected event=" + eventLabel + " reason=recipient-not-watched");
-                return;
-            }
-            if (RelayNotificationPreferences.hasSeenEvent(this, eventId)) {
-                logDebug("gift-wrap-ignored event=" + eventLabel + " reason=duplicate");
-                return;
-            }
-
             if (RelayNotificationPreferences.isAppForeground(this)) {
                 if (!RelayNotificationPreferences.markEventSeen(this, eventId)) {
+                    seenEventIds.add(eventId);
                     logDebug("gift-wrap-ignored event=" + eventLabel + " reason=duplicate");
                     return;
                 }
+                seenEventIds.add(eventId);
                 logDebug("gift-wrap-accepted event=" + eventLabel + " action=foreground-suppressed");
                 return;
             }
@@ -473,9 +554,11 @@ public final class RelayNotificationService extends Service {
             long messageCreatedAt = target == null ? 0L : target.messageCreatedAt;
             boolean shouldNotifyEvent = source.shouldNotifyEvent(messageCreatedAt, now);
             if (!RelayNotificationPreferences.markEventSeen(this, eventId)) {
+                seenEventIds.add(eventId);
                 logDebug("gift-wrap-ignored event=" + eventLabel + " reason=duplicate");
                 return;
             }
+            seenEventIds.add(eventId);
             if (!shouldNotifyEvent) {
                 logDebug("gift-wrap-accepted event=" + eventLabel + " action=catch-up-only");
                 return;
@@ -1001,12 +1084,14 @@ public final class RelayNotificationService extends Service {
         private final String subscriptionId;
         private final boolean initializedAtConnect;
         private final long listenerStartedAt;
+        private final long connectionGeneration;
         private boolean caughtUp;
 
         private RelayWebSocketListener(String relayUrl) {
             this.relayUrl = relayUrl;
             this.subscriptionId = "notifications-" + shortHash(relayUrl);
             this.listenerStartedAt = System.currentTimeMillis() / 1000L;
+            this.connectionGeneration = RelayNotificationService.this.connectionGeneration;
             this.initializedAtConnect = RelayNotificationPreferences.isRelayInitialized(
                 RelayNotificationService.this,
                 relayUrl
@@ -1064,7 +1149,7 @@ public final class RelayNotificationService extends Service {
 
         @Override
         public void onMessage(@NonNull WebSocket webSocket, @NonNull String text) {
-            handleRelayMessage(this, text);
+            enqueueRelayMessage(this, text);
         }
 
         @Override

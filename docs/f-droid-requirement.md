@@ -2,14 +2,14 @@
 
 ## Bottom line
 
-The app is viable for F-Droid, but the repository is not submission-ready yet. The published `v0.6.0` tag is the first Firebase-free F-Droid candidate and supersedes `v0.5.3`; the next release is staged as `0.6.1`.
+The app is viable for F-Droid, but the repository is not submission-ready yet. The published `v0.6.1` tag is the latest Firebase-free F-Droid candidate and supersedes both `v0.6.0` and `v0.5.3`.
 
-The two earlier dependency and release blockers are resolved in `v0.6.0`:
+The two earlier dependency and release blockers are resolved and remain resolved in `v0.6.1`:
 
 1. Android notifications now connect directly to Nostr relays without Firebase Cloud Messaging, Google Services or the Capacitor push-notifications package.
 2. NDK's unused Sandpack dependency is replaced during npm resolution by the empty, MIT-licensed `@gitlab/noop` package, so non-FLOSS Nodebox is not fetched.
 
-Remaining release work includes the tested `fdroiddata` recipe, a genuine release APK strategy, deterministic build inputs if reproducible builds are pursued, and network/asset review.
+Remaining release work includes reconciling the Blossom store description with the implementation, a tested `fdroiddata` recipe, a genuine release APK strategy, deterministic build inputs if reproducible builds are pursued, and network/asset review.
 
 F-Droid’s governing requirements are in its [Inclusion Policy](https://f-droid.org/en/docs/Inclusion_Policy/).
 
@@ -17,14 +17,14 @@ F-Droid’s governing requirements are in its [Inclusion Policy](https://f-droid
 
 | Priority | Finding | Required action |
 |---|---|---|
-| Done | Published `v0.5.3` contained Firebase/GMS push support | Published Firebase-free `v0.6.0`; submit `v0.6.0` or a later release, never `v0.5.3`. |
+| Done | Published `v0.5.3` contained Firebase/GMS push support | Published Firebase-free `v0.6.1`; use `v0.6.1` or a later release as the submission baseline, never `v0.5.3`. |
 | Done | NDK declared Sandpack and non-FLOSS Nodebox | Replaced the unused Sandpack dependency with an empty MIT-licensed package through npm overrides. |
 | Done | F-Droid/Fastlane store metadata was missing | Added English descriptions, an icon, phone screenshots, and version-code changelogs upstream. |
 | Required | No tested `fdroiddata` build recipe | Create and test a recipe that builds an unsigned release APK entirely from source. |
 | Required | Current GitHub Android “release” is a debug APK | Publish a genuine release APK or make it unambiguously test-only. |
 | Done | Android identity was inconsistent | Normalized Android, Capacitor, and Electron IDs to `com.nostr.chat`. |
 | Important | Production bundles contain the current build timestamp | Make build-time inputs deterministic if reproducible builds are desired. |
-| Review | Media uploads use fixed `blossom.nostr.build` | Make the server configurable/discoverable or disclose the network dependency. |
+| Review | The `v0.6.1` listing says Blossom uploads are configurable, but the tagged implementation still uses fixed `blossom.nostr.build` | Align the implementation and listing in a new release by making the server configurable/discoverable, or correct the listing and disclose the network dependency. |
 | Legal review | LNbits identifier, name, logo, screenshots and other assets | Confirm that the repository license and distribution permissions cover them all. |
 
 ### 1. NDK dependency resolution
@@ -39,11 +39,11 @@ The final `fdroid build` and scanner review still need to confirm the complete r
 
 ### 2. Firebase-free release
 
-The annotated `v0.6.0` tag is published on `origin` and points to commit `dccf7c7af87c4aaf8d44a5c6d9b802a8494b7b9a`. The tagged source declares version `0.6.0`, Android version code `5`, and application ID `com.nostr.chat`.
+The annotated `v0.6.1` tag is published on `origin` and points to commit `c818fb278f0b709d4b149dd5191ae8de0182f35e`. The tagged source declares version `0.6.1`, Android version code `6`, and application ID `com.nostr.chat`.
 
 The tagged manifests, lockfiles, Gradle configuration and application source contain no Firebase SDK, Google Services plugin, Google Mobile Services dependency or Capacitor push-notifications package. The native notification design instead uses direct Nostr relay connections as described in [android-relay-notifications.md](android-relay-notifications.md).
 
-The next release is staged consistently across the root and Capacitor manifests and lockfiles as version `0.6.1` with Android version code `6`. Do not submit `v0.5.3`; use `v0.6.0`, `v0.6.1` once tagged, or a later clean release.
+Version `0.6.1` is consistent across the root and Capacitor manifests and lockfiles. Do not submit `v0.5.3`; use `v0.6.1` or a later clean release after the remaining submission issues are addressed.
 
 The package strings in [strings.xml](../src-capacitor/android/app/src/main/res/values/strings.xml) are normalized to `com.nostr.chat`.
 
@@ -75,8 +75,10 @@ The listing discloses:
 - Nostr relay usage.
 - Background relay connection and notification behavior.
 - Foreground-service and boot permissions.
-- Configurable Blossom media uploads planned for version `0.6.1`.
+- A configurable Blossom media-upload server.
 - That notifications are direct relay notifications rather than FCM.
+
+The Blossom statement does not match the published `v0.6.1` source: [nostrBuildUploadService.ts](../src/services/nostrBuildUploadService.ts) still fixes the server to `blossom.nostr.build`. Align the implementation and listing in the next release rather than moving the published `v0.6.1` tag.
 
 ### 4. Create the F-Droid build recipe
 
@@ -113,7 +115,7 @@ The timestamp generated in [quasar.config.ts](../quasar.config.ts) should be der
 
 The default Nostr relays in [relays.ts](../src/constants/relays.ts) are user-configurable, so they should not normally make the whole application dependent on one fixed provider.
 
-Media upload is different: [nostrBuildUploadService.ts](../src/services/nostrBuildUploadService.ts) is tied to `blossom.nostr.build`. The safer approach is to let users configure or discover Blossom servers. Otherwise, F-Droid may request a `TetheredNet` or `NonFreeNet` disclosure. Anti-features are warnings and do not automatically cause rejection; see the [Anti-Features policy](https://f-droid.org/en/docs/Anti-Features/).
+Media upload is different: the published `v0.6.1` implementation in [nostrBuildUploadService.ts](../src/services/nostrBuildUploadService.ts) is tied to `blossom.nostr.build`, despite the store description saying the server is configurable. The safer approach is to let users configure or discover Blossom servers and publish that change under a new version and tag. Otherwise, correct the listing and expect F-Droid to consider a `TetheredNet` or `NonFreeNet` disclosure. Anti-features are warnings and do not automatically cause rejection; see the [Anti-Features policy](https://f-droid.org/en/docs/Anti-Features/).
 
 ## What is already in good shape
 
@@ -121,7 +123,7 @@ Media upload is different: [nostrBuildUploadService.ts](../src/services/nostrBui
 - The current Android implementation includes meaningful native behavior: foreground service, boot handling and relay notifications.
 - The root repository is MIT licensed in [LICENSE](../LICENSE).
 - No current ads, analytics or tracking SDKs were found.
-- The published `v0.6.0` notification implementation no longer depends on Google services.
+- The published `v0.6.1` notification implementation does not depend on Google services.
 - Android versioning and release signing are already parameterized through Gradle in [build.gradle](../src-capacitor/android/app/build.gradle).
 
 ## Recommended release sequence
@@ -131,7 +133,7 @@ Media upload is different: [nostrBuildUploadService.ts](../src/services/nostrBui
 3. Make build inputs deterministic if reproducible builds are pursued.
 4. Produce and test a genuine unsigned release build from a clean checkout.
 5. Run the complete project validation and Android smoke tests.
-6. Create the clean `v0.6.1` tag after its planned changes are complete.
+6. Bump the version and create a new immutable release tag (normally `v0.6.2`) after the Blossom implementation and listing agree; do not move `v0.6.1`.
 7. Test the F-Droid build recipe in an fdroidserver environment.
 8. Submit a merge request to the official `fdroiddata` repository.
 9. Respond to scanner/reviewer feedback and document any requested anti-features.

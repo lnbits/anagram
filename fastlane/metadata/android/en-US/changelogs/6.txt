@@ -1,0 +1,4 @@
+Version 0.6.1
+
+- Updated F-Droid release metadata and release-candidate documentation.
+- No application behavior changes.

@@ -1,4 +1,4 @@
-package com.lnbits.nostrchat;
+package com.nostr.chat;
 
 import android.app.ActivityManager;
 import android.app.Notification;
@@ -54,7 +54,7 @@ import org.json.JSONObject;
 public final class RelayNotificationService extends Service {
 
     private static final String LOG_TAG = "NostrChatRelay";
-    static final String ACTION_START_OR_REFRESH = "com.lnbits.nostrchat.notifications.START_OR_REFRESH";
+    static final String ACTION_START_OR_REFRESH = "com.nostr.chat.notifications.START_OR_REFRESH";
     private static final String EXTRA_RECONNECT_RELAYS = "nostr_chat_reconnect_notification_relays";
     static final String EXTRA_CHAT_PUBKEY = "nostr_chat_chat_pubkey";
     static final String EXTRA_OPEN_CHATS_LIST = "nostr_chat_open_chats_list";

@@ -34,10 +34,10 @@ if (releaseKeystoreFile != null && releaseKeystoreFile.exists() == false) {
 }
 
 android {
-    namespace "com.lnbits.nostrchat"
+    namespace "com.nostr.chat"
     compileSdk rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.lnbits.nostrchat"
+        applicationId "com.nostr.chat"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode resolvedVersionCode

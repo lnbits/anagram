@@ -1,4 +1,4 @@
-package com.lnbits.nostrchat;
+package com.nostr.chat;
 
 import android.Manifest;
 import android.content.Intent;

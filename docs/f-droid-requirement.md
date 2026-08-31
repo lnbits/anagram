@@ -20,7 +20,7 @@ F-Droid’s governing requirements are in its [Inclusion Policy](https://f-droid
 | Required | No F-Droid/Fastlane store metadata | Add descriptions, icon, screenshots, and version-code changelogs upstream. |
 | Required | No tested `fdroiddata` build recipe | Create and test a recipe that builds an unsigned release APK entirely from source. |
 | Required | Current GitHub Android “release” is a debug APK | Publish a genuine release APK or make it unambiguously test-only. |
-| Important | Android identity contains stale `com.motorina0.nostrchat` values | Normalize everything to the intended `com.lnbits.nostrchat` identity. |
+| Done | Android identity was inconsistent | Normalized Android, Capacitor, and Electron IDs to `com.nostr.chat`. |
 | Important | Production bundles contain the current build timestamp | Make build-time inputs deterministic if reproducible builds are desired. |
 | Review | Media uploads use fixed `blossom.nostr.build` | Make the server configurable/discoverable or disclose the network dependency. |
 | Legal review | LNbits identifier, name, logo, screenshots and other assets | Confirm that the repository license and distribution permissions cover them all. |
@@ -41,7 +41,7 @@ An npm override or post-install deletion is unlikely to be sufficient because th
 
 ### 2. Make a new Firebase-free release
 
-The current Capacitor application is already configured as `com.lnbits.nostrchat` in [capacitor.config.json](../src-capacitor/capacitor.config.json), and the current native notification design explicitly avoids Google services in [android-relay-notifications.md](android-relay-notifications.md).
+The current Capacitor application is configured as `com.nostr.chat` in [capacitor.config.json](../src-capacitor/capacitor.config.json), and the current native notification design explicitly avoids Google services in [android-relay-notifications.md](android-relay-notifications.md).
 
 Before submission:
 
@@ -83,7 +83,7 @@ The listing should accurately disclose:
 
 ### 4. Create the F-Droid build recipe
 
-A new file such as `metadata/com.lnbits.nostrchat.yml` will be submitted to the `fdroiddata` repository. It will need:
+A new file such as `metadata/com.nostr.chat.yml` will be submitted to the `fdroiddata` repository. It will need:
 
 - Public Git repository URL.
 - MIT license declaration.

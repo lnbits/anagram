@@ -318,7 +318,7 @@ export default configure((ctx) => {
     electron: {
       bundler: 'builder',
       builder: {
-        appId: 'com.lnbits.nostrchat',
+        appId: 'com.nostr.chat',
         productName: 'Nostr Chat',
         artifactName: `\${productName}-\${version}-\${os}-\${arch}.\${ext}`,
         mac: {

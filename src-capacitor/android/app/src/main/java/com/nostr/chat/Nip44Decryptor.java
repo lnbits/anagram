@@ -1,4 +1,4 @@
-package com.lnbits.nostrchat;
+package com.nostr.chat;
 
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;

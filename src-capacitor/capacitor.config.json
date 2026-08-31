@@ -1,5 +1,5 @@
 {
-  "appId": "com.lnbits.nostrchat",
+  "appId": "com.nostr.chat",
   "appName": "Nostr Chat",
   "webDir": "www",
   "android": {

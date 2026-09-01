@@ -34,7 +34,7 @@ This is a normal replaceable event, so there is one canonical chat contact list
 per author and no `d` tag is needed. Relays require no behavior beyond the
 replaceable-event handling defined by NIP-01.
 
-[Nostr Chat](https://github.com/lnbits/nostr-chat) currently uses an encrypted
+[Nostr Chat](https://github.com/lnbits/anagram) currently uses an encrypted
 `kind:30000` follow set with a client-selected `d` tag for the same purpose and
 can migrate to this standard kind. During migration, clients can read both
 formats, merge their entries, and publish `kind:10022` as the canonical list

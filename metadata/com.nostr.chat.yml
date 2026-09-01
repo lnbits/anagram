@@ -3,13 +3,13 @@ Categories:
   - Internet
 License: MIT
 AuthorName: LNbits
-WebSite: https://github.com/lnbits/nostr-chat
-SourceCode: https://github.com/lnbits/nostr-chat
-IssueTracker: https://github.com/lnbits/nostr-chat/issues
-Changelog: https://github.com/lnbits/nostr-chat/releases
+WebSite: https://github.com/lnbits/anagram
+SourceCode: https://github.com/lnbits/anagram
+IssueTracker: https://github.com/lnbits/anagram/issues
+Changelog: https://github.com/lnbits/anagram/releases
 
 RepoType: git
-Repo: https://github.com/lnbits/nostr-chat.git
+Repo: https://github.com/lnbits/anagram.git
 
 Builds:
   - versionName: 0.6.1

@@ -6,6 +6,7 @@ import {
   expectNoUnexpectedBrowserErrors,
   expectPrivateContactListMember,
   publishOwnProfile,
+  pullToRefresh,
   TEST_ACCOUNTS,
 } from './helpers';
 
@@ -80,7 +81,12 @@ test('contact refresh pulls newly published remote profile metadata into an exis
       about: refreshedAbout,
     });
 
-    await alice.page.goto(`/#/contacts/${bob.session.publicKey}`);
+    await alice.page.goto('/#/contacts');
+    await pullToRefresh(alice.page, 'contacts-list-pull-to-refresh');
+    await expect(alice.page.getByText(refreshedName, { exact: true })).toBeVisible({
+      timeout: 20_000,
+    });
+    await alice.page.getByText(refreshedName, { exact: true }).click();
     await expect(alice.page.getByTestId('contact-profile-refresh-button')).toBeVisible();
     await expect(alice.page.getByPlaceholder('Your profile name').first()).toHaveValue(
       refreshedName,

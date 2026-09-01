@@ -2,7 +2,7 @@
 
 ## Project Snapshot
 
-- Quasar 2 + Vue 3.5 + TypeScript app for Nostr chat, with both web and Electron targets.
+- Quasar 2 + Vue 3.5 + TypeScript app for Anagram, with both web and Electron targets.
 - Primary state lives in Pinia stores backed by IndexedDB persistence and NDK-based relay/runtime code.
 - `README.md` still reflects an older mock-data version of the app. Trust `src/`, `package.json`, `NIPS_USED.md`, and the test suite first.
 

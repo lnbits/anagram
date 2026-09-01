@@ -4,6 +4,7 @@ import {
   disposeUsers,
   establishAcceptedDirectChat,
   expectNoUnexpectedBrowserErrors,
+  pullToRefresh,
   sendMessage,
   TEST_ACCOUNTS,
   threadMessage,
@@ -34,6 +35,21 @@ test('manual healing and message reloads do not close the image viewer', async (
       )
       .toBe(true);
     await expect(refreshButton).toBeDisabled();
+    await expect
+      .poll(
+        () =>
+          alice.page.evaluate(async () => (await window.__appE2E__?.isReconnectHealing()) ?? false),
+        { timeout: 20_000 }
+      )
+      .toBe(false);
+
+    await pullToRefresh(alice.page, 'chat-list-pull-to-refresh');
+    await expect
+      .poll(() =>
+        alice.page.evaluate(async () => (await window.__appE2E__?.isReconnectHealing()) ?? false)
+      )
+      .toBe(true);
+    await expect(refreshButton.locator('.q-spinner')).toHaveCount(0);
     await expect
       .poll(
         () =>

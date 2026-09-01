@@ -1,0 +1,6 @@
+Version 0.7.0
+
+- Rebranded the app as Anagram.
+- Improved chat and message presentation, media handling, and unread badges.
+- Added pull-to-refresh to chat and contact views.
+- Improved relay reconnection reliability and fixed navigation issues.

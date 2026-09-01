@@ -82,15 +82,28 @@ test('a second upward scroll at the top loads older messages', async ({ browser 
     const threadBody = bob.page.locator('.thread-body');
     await expect(bob.page.getByTestId('thread-load-older')).toBeVisible();
 
-    // Reaching the top during an existing gesture should only reveal the control.
+    // Dispatch both events in one browser task so host load cannot turn them into
+    // separate gestures by stretching their timestamps beyond the gesture gap.
     await threadBody.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
-    });
-    await threadBody.dispatchEvent('wheel', { deltaY: -20, deltaMode: 0 });
-    await threadBody.evaluate((element) => {
+      element.dispatchEvent(
+        new WheelEvent('wheel', {
+          bubbles: true,
+          cancelable: true,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+          deltaY: -20,
+        })
+      );
       element.scrollTop = 0;
+      element.dispatchEvent(
+        new WheelEvent('wheel', {
+          bubbles: true,
+          cancelable: true,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+          deltaY: -48,
+        })
+      );
     });
-    await threadBody.dispatchEvent('wheel', { deltaY: -48, deltaMode: 0 });
     await expect(threadMessage(bob.page, olderMessages[0] ?? '')).toHaveCount(0);
 
     // A fresh pull/scroll while already at the top acts like pressing More.

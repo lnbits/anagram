@@ -32,8 +32,8 @@
                 class="sidebar-top__action"
                 data-testid="refresh-chats-button"
                 :aria-label="$t('chat.refreshChats')"
-                :loading="nostrStore.isReconnectHealing"
-                :disable="nostrStore.isReconnectHealing"
+                :loading="isManualRefreshPending"
+                :disable="isManualRefreshPending || nostrStore.isReconnectHealing"
                 @click="handleRunReconnectHealing"
               />
               <q-btn
@@ -296,6 +296,7 @@ const {
 const isNewChatDialogOpen = ref(false);
 const isCreateGroupDialogOpen = ref(false);
 const isCreatingGroup = ref(false);
+const isManualRefreshPending = ref(false);
 const isForwardMessageDialogOpen = ref(false);
 const isForwardingMessage = ref(false);
 const forwardingMessage = ref<Message | null>(null);
@@ -985,12 +986,19 @@ async function handleRefreshChat(chatId: string): Promise<void> {
 }
 
 async function handleRunReconnectHealing(): Promise<void> {
+  if (isManualRefreshPending.value || nostrStore.isReconnectHealing) {
+    return;
+  }
+
+  isManualRefreshPending.value = true;
   try {
     await nostrStore.runReconnectHealing('manual-refresh', {
       propagateError: true,
     });
   } catch (error) {
     reportUiError('Failed to run reconnect healing manually', error, t('errors.failedRefreshChats'));
+  } finally {
+    isManualRefreshPending.value = false;
   }
 }
 

@@ -12,6 +12,7 @@ import type { ChatType } from 'src/types/chat';
 import type { Ref } from 'vue';
 
 export type ReconnectHealingReason =
+  | 'manual-refresh'
   | 'browser-online'
   | 'session-resume'
   | 'window-focus'
@@ -70,6 +71,7 @@ const RECONNECT_HEALING_STATUS_LABELS = {
 } as const;
 const RECONNECT_HEALING_QUEUED_STATUS_LABEL_PREFIX = 'sync.started:';
 const RECONNECT_HEALING_REASON_LABELS: Record<ReconnectHealingReason, string> = {
+  'manual-refresh': 'chat.refreshChats',
   'browser-online': 'sync.reason.browserOnline',
   'session-resume': 'sync.reason.sessionResume',
   'window-focus': 'sync.reason.windowFocus',
@@ -466,7 +468,9 @@ export function createReconnectHealingRuntime({
     }
 
     const cooldownRemainingMs =
-      reason === 'session-resume' ? 0 : getReconnectHealingCooldownRemainingMs();
+      reason === 'session-resume' || reason === 'manual-refresh'
+        ? 0
+        : getReconnectHealingCooldownRemainingMs();
     if (cooldownRemainingMs > 0) {
       rememberPendingReconnectHealing(reason);
       scheduleReconnectHealing(reconnectHealingPendingReason ?? reason, cooldownRemainingMs, {

@@ -1,6 +1,7 @@
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { PRIVATE_CONTACT_LIST_MEMBER_CONTACT_META_KEY } from 'src/stores/nostr/constants';
 import type { DeveloperDiagnosticsSnapshot } from 'src/stores/nostr/types';
+import type { MessageAttachmentMetadata } from 'src/types/chat';
 import { saveBrowserNotificationsPreference } from 'src/utils/browserNotificationPreference';
 
 export interface AppE2EBootstrapOptions {
@@ -42,6 +43,12 @@ export interface AppE2ERemoveStoredMessageOptions {
   eventId: string;
 }
 
+export interface AppE2ESetStoredMessageAttachmentsOptions {
+  chatId: string;
+  messageText: string;
+  attachments: MessageAttachmentMetadata[];
+}
+
 export interface AppE2ESendMessagesOptions {
   chatId: string;
   texts: string[];
@@ -79,6 +86,9 @@ export interface AppE2EBridge {
   ): Promise<DeveloperDiagnosticsSnapshot>;
   logout(): Promise<void>;
   removeStoredMessageByEventId(options: AppE2ERemoveStoredMessageOptions): Promise<boolean>;
+  setStoredMessageAttachments(options: AppE2ESetStoredMessageAttachmentsOptions): Promise<void>;
+  startManualReconnectHealing(): void;
+  isReconnectHealing(): Promise<boolean>;
   rotateGroupEpoch(options: AppE2ERotateGroupEpochOptions): Promise<void>;
   sendMessages(options: AppE2ESendMessagesOptions): Promise<AppE2ESentMessageSnapshot[]>;
   replaceStoredGroupMembers(options: AppE2EReplaceStoredGroupMembersOptions): Promise<void>;
@@ -564,6 +574,56 @@ async function removeStoredMessageByEventId(
   return true;
 }
 
+async function setStoredMessageAttachments(
+  options: AppE2ESetStoredMessageAttachmentsOptions
+): Promise<void> {
+  const normalizedChatId = inputSanitizerService.normalizeHexKey(options.chatId);
+  const messageText = options.messageText.trim();
+  if (!normalizedChatId || !messageText) {
+    throw new Error('A valid chat id and message text are required to set stored attachments.');
+  }
+
+  const [{ chatDataService }, { useMessageStore }, { normalizeMessageAttachment }] =
+    await Promise.all([
+      import('src/services/chatDataService'),
+      import('src/stores/messageStore'),
+      import('src/utils/messageAttachments'),
+    ]);
+  await chatDataService.init();
+  const messageStore = useMessageStore();
+  await messageStore.init();
+
+  const messages = await chatDataService.listMessages(normalizedChatId);
+  const message = [...messages].reverse().find((entry) => entry.message === messageText) ?? null;
+  if (!message) {
+    throw new Error(`Stored message was not found in chat ${normalizedChatId}.`);
+  }
+
+  const attachments = options.attachments
+    .map((attachment) => normalizeMessageAttachment(attachment))
+    .filter((attachment): attachment is MessageAttachmentMetadata => Boolean(attachment));
+  if (attachments.length === 0) {
+    throw new Error('At least one valid stored attachment is required.');
+  }
+
+  await chatDataService.updateMessageMeta(message.id, {
+    ...message.meta,
+    attachments,
+  });
+  await messageStore.loadMessages(normalizedChatId, true);
+}
+
+function startManualReconnectHealing(): void {
+  void import('src/stores/nostrStore').then(({ useNostrStore }) =>
+    useNostrStore().runReconnectHealing('manual-refresh')
+  );
+}
+
+async function isReconnectHealing(): Promise<boolean> {
+  const { useNostrStore } = await import('src/stores/nostrStore');
+  return useNostrStore().isReconnectHealing;
+}
+
 async function updateContactRelays(options: AppE2EUpdateContactRelaysOptions): Promise<void> {
   const normalizedPublicKey = inputSanitizerService.normalizeHexKey(options.publicKey);
   if (!normalizedPublicKey) {
@@ -648,6 +708,9 @@ export function installAppE2EBridge(): void {
     refreshPrivateMessagesLiveReconnect,
     logout,
     removeStoredMessageByEventId,
+    setStoredMessageAttachments,
+    startManualReconnectHealing,
+    isReconnectHealing,
     rotateGroupEpoch,
     replaceStoredGroupMembers,
     sendMessages,

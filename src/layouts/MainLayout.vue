@@ -97,8 +97,12 @@ import { useAppUpdateStore } from 'src/stores/appUpdateStore';
 import { useChatStore } from 'src/stores/chatStore';
 import { useNostrStore } from 'src/stores/nostrStore';
 import { useRelayStore } from 'src/stores/relayStore';
-import { formatUnreadChatBadgeLabel } from 'src/utils/unreadChatBadge';
+import {
+  formatUnreadChatBadgeLabel,
+  formatUnreadDocumentTitle,
+} from 'src/utils/unreadChatBadge';
 import { reportUiError } from 'src/utils/uiErrorHandler';
+import { t } from 'src/i18n';
 
 const $q = useQuasar();
 const route = useRoute();
@@ -163,6 +167,7 @@ const routeLoaders: Record<NavigationSection, RouteLoader> = {
 };
 const unreadChatCount = computed(() => chatStore.unreadChatCount);
 const unreadChatBadgeLabel = computed(() => formatUnreadChatBadgeLabel(unreadChatCount.value));
+const unreadMessageCount = computed(() => chatStore.unreadMessageCount);
 const hasUpdateAvailable = computed(() => appUpdateStore.hasUpdateAvailable);
 
 function hasActivePubkeyParam(value: unknown): boolean {
@@ -227,6 +232,18 @@ watch(
   { immediate: true }
 );
 
+watch(
+  unreadMessageCount,
+  (count) => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+
+    document.title = formatUnreadDocumentTitle(t('app.name'), count);
+  },
+  { immediate: true }
+);
+
 const removeAfterEachHook = router.afterEach(() => {
   pendingMobileSection.value = null;
 });
@@ -272,6 +289,10 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  if (typeof document !== 'undefined') {
+    document.title = t('app.name');
+  }
+
   nostrStore.stopAppLifecycleRuntime();
   removeAfterEachHook();
   removeDesktopNotificationOpenListener?.();

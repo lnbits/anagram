@@ -1,4 +1,4 @@
-import { test } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import {
   bootstrapUser,
   disposeUsers,
@@ -89,6 +89,7 @@ test('active thread only marks incoming messages as read after the app regains f
     await waitForChatPreview(bob.page, hiddenMessage);
     await waitForChatUnreadCount(bob.page, 1);
     await waitForUnreadChatTotalBadge(bob.page, 1);
+    await expect.poll(() => bob.page.title()).toBe('(1) Anagram');
 
     await setAppVisibility(bob.page, {
       visibilityState: 'visible',
@@ -97,6 +98,7 @@ test('active thread only marks incoming messages as read after the app regains f
 
     await waitForNoChatUnreadBadge(bob.page);
     await waitForNoUnreadChatTotalBadge(bob.page);
+    await expect.poll(() => bob.page.title()).toBe('Anagram');
     await expectNoUnexpectedBrowserErrors([alice, bob]);
   } finally {
     await disposeUsers(alice, bob);

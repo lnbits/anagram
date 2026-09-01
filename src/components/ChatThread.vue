@@ -194,6 +194,7 @@
               :is-message-expanded="isMessageTextExpanded(item.message.id)"
               :mention-profiles="mentionProfiles"
               :mobile-group-layout="chat.type === 'group'"
+              :reaction-author-labels="reactionAuthorLabels"
               :reserve-telegram-author-avatar-space="item.reserveTelegramAuthorAvatarSpace"
               :show-author-name="item.startsSenderGroup"
               :show-author-on-mobile="chat?.type === 'group' && item.message.sender === 'them'"
@@ -206,6 +207,7 @@
               @react="handleReactToMessage"
               @delete-message="handleDeleteMessage"
               @remove-reaction="handleRemoveReaction"
+              @open-image="openImageAttachmentDialog"
               @open-reply-target="handleOpenReplyTarget"
               @update-message-expanded="handleMessageExpandedUpdate"
             />
@@ -290,6 +292,63 @@
         <div>{{ $t('chat.selectChatStartMessaging') }}</div>
       </template>
     </div>
+
+    <q-dialog
+      v-model="isImageDialogOpen"
+      persistent
+      maximized
+      class="thread-image-dialog"
+    >
+      <q-card class="thread-image-dialog__card">
+        <div class="thread-image-dialog__toolbar">
+          <q-btn
+            flat
+            dense
+            round
+            icon="download"
+            color="white"
+            data-testid="message-image-download"
+            :aria-label="$t('common.save')"
+            :title="$t('common.save')"
+            :loading="isDownloadingImage"
+            class="thread-image-dialog__action"
+            @click="downloadFullscreenImage"
+          />
+          <a
+            v-if="fullscreenImageAttachment"
+            class="thread-image-dialog__action"
+            :href="fullscreenImageAttachment.url"
+            target="_blank"
+            rel="noopener noreferrer"
+            :aria-label="$t('common.open')"
+            :title="$t('common.open')"
+            @click.stop
+          >
+            <q-icon name="open_in_new" size="20px" />
+          </a>
+          <q-btn
+            flat
+            dense
+            round
+            icon="close"
+            color="white"
+            data-testid="message-image-close"
+            :aria-label="$t('common.closeDialog')"
+            class="thread-image-dialog__action"
+            @click="closeImageAttachmentDialog"
+          />
+        </div>
+        <div class="thread-image-dialog__body">
+          <img
+            v-if="fullscreenImageAttachment"
+            class="thread-image-dialog__media"
+            data-testid="message-image-fullscreen"
+            :src="fullscreenImageAttachment.url"
+            :alt="resolveImageAttachmentAlt(fullscreenImageAttachment)"
+          />
+        </div>
+      </q-card>
+    </q-dialog>
   </div>
 </template>
 
@@ -398,6 +457,9 @@ const messageStore = useMessageStore();
 const nostrStore = useNostrStore();
 const trustedMediaStore = useTrustedMediaStore();
 const isThreadScrolledUp = ref(false);
+const isImageDialogOpen = ref(false);
+const isDownloadingImage = ref(false);
+const fullscreenImageAttachment = ref<MessageAttachmentMetadata | null>(null);
 const lastReadMessageId = ref<string | null>(null);
 const hasJumpedToLastReadMessage = ref(false);
 const pendingInitialPositionChatId = ref<string | null>(null);
@@ -497,6 +559,76 @@ function readMetaString(
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function resolveImageAttachmentAlt(attachment: MessageAttachmentMetadata): string {
+  return attachment.name?.trim() || t('message.imageAttachment');
+}
+
+function resolveImageDownloadName(attachment: MessageAttachmentMetadata): string {
+  const attachmentName = attachment.name?.trim();
+  if (attachmentName) {
+    return attachmentName.replace(/[\\/:*?"<>|]+/g, '-');
+  }
+
+  try {
+    const urlName = decodeURIComponent(new URL(attachment.url).pathname.split('/').pop() ?? '').trim();
+    if (urlName) {
+      return urlName.replace(/[\\/:*?"<>|]+/g, '-');
+    }
+  } catch {
+    // Use the MIME-derived fallback below.
+  }
+
+  const extension = attachment.mimeType.split('/')[1]?.split(';')[0]?.trim() || 'image';
+  return `image.${extension}`;
+}
+
+function openImageAttachmentDialog(attachment: MessageAttachmentMetadata): void {
+  fullscreenImageAttachment.value = attachment;
+  isImageDialogOpen.value = true;
+}
+
+function closeImageAttachmentDialog(): void {
+  isImageDialogOpen.value = false;
+  fullscreenImageAttachment.value = null;
+}
+
+async function downloadFullscreenImage(): Promise<void> {
+  const attachment = fullscreenImageAttachment.value;
+  if (!attachment || isDownloadingImage.value) {
+    return;
+  }
+
+  isDownloadingImage.value = true;
+  let objectUrl = '';
+  try {
+    const response = await fetch(attachment.url);
+    if (!response.ok) {
+      throw new Error(`Image download failed with HTTP ${response.status}.`);
+    }
+
+    const blob = await response.blob();
+    if (blob.size === 0) {
+      throw new Error('Image download returned an empty file.');
+    }
+
+    objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = resolveImageDownloadName(attachment);
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } catch (error) {
+    reportUiError('Failed to download chat image', error);
+  } finally {
+    if (objectUrl) {
+      globalThis.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+    }
+    isDownloadingImage.value = false;
+  }
+}
+
 function isContactGroupMember(value: unknown): value is ContactGroupMember {
   if (!value || typeof value !== 'object') {
     return false;
@@ -572,6 +704,21 @@ const contactAvatarFallback = computed(() => {
 
 const loggedInPublicKey = computed(() => {
   return nostrStore.getLoggedInPublicKeyHex()?.trim().toLowerCase() ?? '';
+});
+const reactionAuthorLabels = computed<Record<string, string>>(() => {
+  const chatPublicKey = props.chat?.publicKey.trim().toLowerCase() ?? '';
+  const chatName = props.chat?.name.trim() ?? '';
+
+  return {
+    ...Object.fromEntries(
+      Object.entries(authorIdentityByPublicKey.value).map(([publicKey, identity]) => [
+        publicKey,
+        identity.label,
+      ])
+    ),
+    ...(chatPublicKey && chatName ? { [chatPublicKey]: chatName } : {}),
+    ...(loggedInPublicKey.value ? { [loggedInPublicKey.value]: t('common.you') } : {}),
+  };
 });
 
 function readGroupMentionMembers(
@@ -734,10 +881,7 @@ const reactionVisibilitySignature = computed(() => {
 });
 
 const authorIdentitySignature = computed(() => {
-  return props.messages
-    .map((message) => message.authorPublicKey.trim().toLowerCase())
-    .filter(Boolean)
-    .join('|');
+  return collectThreadIdentityPublicKeys(props.messages).join('|');
 });
 
 const messageIdSignature = computed(() => props.messages.map((message) => message.id).join('|'));
@@ -1078,13 +1222,8 @@ function resolveMessageAuthorIdentity(message: Message): {
 async function refreshMessageAuthorIdentities(): Promise<void> {
   const refreshToken = ++authorIdentityRefreshToken;
   const loggedInPublicKeyValue = loggedInPublicKey.value;
-  const authorPubkeys = Array.from(
-    new Set(
-      props.messages
-        .map((message) => message.authorPublicKey.trim().toLowerCase())
-        .filter(Boolean)
-        .filter((pubkey) => pubkey !== loggedInPublicKeyValue)
-    )
+  const authorPubkeys = collectThreadIdentityPublicKeys(props.messages).filter(
+    (pubkey) => pubkey !== loggedInPublicKeyValue
   );
 
   if (authorPubkeys.length === 0) {
@@ -1147,6 +1286,26 @@ async function refreshMessageAuthorIdentities(): Promise<void> {
       ])
     );
   }
+}
+
+function collectThreadIdentityPublicKeys(messages: Message[]): string[] {
+  const publicKeys = new Set<string>();
+
+  messages.forEach((message) => {
+    const authorPublicKey = message.authorPublicKey.trim().toLowerCase();
+    if (authorPublicKey) {
+      publicKeys.add(authorPublicKey);
+    }
+
+    normalizeMessageReactions(message.meta.reactions).forEach((reaction) => {
+      const reactorPublicKey = reaction.reactorPublicKey.trim().toLowerCase();
+      if (reactorPublicKey) {
+        publicKeys.add(reactorPublicKey);
+      }
+    });
+  });
+
+  return Array.from(publicKeys).sort();
 }
 
 function cancelPendingScrollToBottom(): void {
@@ -2716,6 +2875,71 @@ onBeforeUnmount(() => {
   overflow: hidden;
   overscroll-behavior: none;
   background: transparent;
+}
+
+.thread-image-dialog :deep(.q-dialog__inner) {
+  padding: 0;
+}
+
+.thread-image-dialog__card {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  max-width: none;
+  max-height: 100vh;
+  max-height: 100dvh;
+  border-radius: 0;
+  background: rgba(3, 7, 18, 0.96);
+  color: white;
+  overflow: hidden;
+}
+
+.thread-image-dialog__toolbar {
+  position: absolute;
+  z-index: 2;
+  top: max(12px, env(safe-area-inset-top));
+  right: max(12px, env(safe-area-inset-right));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.thread-image-dialog__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  color: white;
+  text-decoration: none;
+}
+
+.thread-image-dialog__body {
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  min-width: 0;
+  min-height: 0;
+  padding: calc(max(56px, env(safe-area-inset-top)) + 12px)
+    max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom))
+    max(16px, env(safe-area-inset-left));
+  overflow: hidden;
+}
+
+.thread-image-dialog__media {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  min-width: 0;
+  min-height: 0;
+  object-fit: contain;
+  border-radius: 6px;
 }
 
 .thread-header {

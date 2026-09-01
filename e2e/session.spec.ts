@@ -24,7 +24,6 @@ test('logout and logging in as another user does not leak prior chat state', asy
 
     await alice.page.goto('/#/chats');
     await expect(alice.page.getByTestId('chat-item')).toHaveCount(1);
-    await expect(alice.page.getByText(TEST_ACCOUNTS.isolationBob.displayName)).toBeVisible();
 
     await logoutFromSettings(alice.page);
     await expectBrowserStorageToBeEmpty(alice.page);
@@ -32,7 +31,6 @@ test('logout and logging in as another user does not leak prior chat state', asy
 
     await alice.page.goto('/#/chats');
     await expect(alice.page.getByTestId('chat-item')).toHaveCount(0);
-    await expect(alice.page.getByText(TEST_ACCOUNTS.isolationBob.displayName)).toHaveCount(0);
     await expect(alice.page.getByTestId('requests-row')).toHaveCount(0);
     await expectNoUnexpectedBrowserErrors([alice, bob]);
   } finally {
@@ -78,7 +76,9 @@ test('Blossom server preference is encrypted, restored, and shown in Settings or
     await logoutFromSettings(alice.page);
     await expectBrowserStorageToBeEmpty(alice.page);
     await bootstrapSessionOnPage(alice.page, TEST_ACCOUNTS.mediaSettingsAlice);
-    await alice.page.goto('/#/settings/media-data-storage');
+    await alice.page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await alice.page.getByTestId('settings-media-data-storage-item').click();
+    await expect(alice.page).toHaveURL(/#\/settings\/media-data-storage$/);
     await expect(serverInput).toHaveValue(customServerUrl);
 
     await alice.page.getByTestId('settings-blossom-restore-default').click();

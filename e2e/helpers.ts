@@ -1617,9 +1617,12 @@ export async function waitForDeletedMessageState(
 }
 
 export async function logoutFromSettings(page: Page): Promise<void> {
-  await page.goto('/#/settings/profile');
   const logoutItem = page.getByTestId('settings-logout-item');
   const logoutConfirm = page.getByTestId('settings-logout-confirm');
+
+  if (!(await logoutItem.isVisible().catch(() => false))) {
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  }
 
   await expect(logoutItem).toBeVisible({ timeout: 30_000 });
   await logoutItem.click();
@@ -1631,7 +1634,7 @@ export async function logoutFromSettings(page: Page): Promise<void> {
     await expect(logoutConfirm).toBeVisible({ timeout: 15_000 });
   }
 
-  await logoutConfirm.click();
+  await Promise.all([page.waitForEvent('load', { timeout: 30_000 }), logoutConfirm.click()]);
   await expect.poll(() => page.url(), { timeout: 30_000 }).toMatch(/#\/(auth|login)/);
   await expect(page.getByText('Welcome')).toBeVisible({ timeout: 30_000 });
   await waitForAppBridge(page);

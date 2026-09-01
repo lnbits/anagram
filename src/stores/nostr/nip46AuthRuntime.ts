@@ -9,7 +9,7 @@ import type {
 } from 'src/stores/nostr/types';
 
 export const NIP46_DEFAULT_PERMISSIONS = 'sign_event,nip44_encrypt,nip44_decrypt';
-const NIP46_APP_NAME = 'Nostr Chat';
+const NIP46_APP_NAME = 'Anagram';
 
 interface Nip46AuthRuntimeDeps {
   clearCurrentAuthSession: () => void;

@@ -1,6 +1,6 @@
 # Android relay notifications
 
-Android notifications are delivered without Google Play Services, Firebase Cloud Messaging, or a Nostr Chat notification server.
+Android notifications are delivered without Google Play Services, Firebase Cloud Messaging, or an Anagram notification server.
 
 ## Runtime model
 
@@ -23,7 +23,7 @@ Gift wraps are checked for their event shape, canonical event ID, BIP-340 Schnor
 
 Alerts contain only:
 
-- title: `Nostr Chat`;
+- title: `Anagram`;
 - body: `New message`, or a generic accumulated count.
 
 Tapping an alert opens the chats screen and routes to a matching group when the watched recipient is a current group epoch key. The app performs all message fetching and decryption through its normal Nostr runtime.

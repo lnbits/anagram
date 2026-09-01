@@ -220,7 +220,7 @@ async function openChatFromNotification(chatPubkey: string): Promise<void> {
 
 async function createWindow(): Promise<void> {
   mainWindow = new BrowserWindow({
-    title: 'Nostr Chat',
+    title: 'Anagram',
     icon: notificationIconPath,
     width: 1440,
     height: 960,

@@ -24,28 +24,18 @@
               :placeholder="$t('common.search')"
             />
             <div class="sidebar-top__actions">
-              <q-btn-dropdown
+              <q-btn
                 flat
                 dense
+                round
                 icon="refresh"
-                dropdown-icon="arrow_drop_down"
                 class="sidebar-top__action"
+                data-testid="refresh-chats-button"
                 :aria-label="$t('chat.refreshChats')"
-              >
-                <q-list separator>
-                  <q-item
-                    v-for="option in chatRefreshRangeOptions"
-                    :key="option.id"
-                    clickable
-                    v-close-popup
-                    @click="handleRefreshChatsForRange(option)"
-                  >
-                    <q-item-section>
-                      <q-item-label>{{ $t(option.labelKey) }}</q-item-label>
-                    </q-item-section>
-                  </q-item>
-                </q-list>
-              </q-btn-dropdown>
+                :loading="nostrStore.isReconnectHealing"
+                :disable="nostrStore.isReconnectHealing"
+                @click="handleRunReconnectHealing"
+              />
               <q-btn
                 flat
                 dense
@@ -256,7 +246,7 @@ import ContactLookupDialog from 'src/components/ContactLookupDialog.vue';
 import ReconnectHealingBanner from 'src/components/ReconnectHealingBanner.vue';
 import StartupHistoryBanner from 'src/components/StartupHistoryBanner.vue';
 import { useNostrStore } from 'src/stores/nostrStore';
-import { getDateTimeLocale, t } from 'src/i18n';
+import { t } from 'src/i18n';
 
 const AppNavRail = defineAsyncComponent(() => import('src/components/AppNavRail.vue'));
 const ChatRequestsPage = defineAsyncComponent(() => import('src/components/ChatRequestsPage.vue'));
@@ -311,44 +301,6 @@ const isForwardingMessage = ref(false);
 const forwardingMessage = ref<Message | null>(null);
 const newGroupName = ref('');
 const newGroupAbout = ref('');
-type ChatRefreshRangeId =
-  | 'since-last-message'
-  | 'last-24-hours'
-  | 'last-week'
-  | 'last-month'
-  | 'custom';
-
-interface ChatRefreshRangeOption {
-  id: ChatRefreshRangeId;
-  labelKey: string;
-  lookbackMinutes?: number;
-}
-
-const chatRefreshRangeOptions: ChatRefreshRangeOption[] = [
-  {
-    id: 'since-last-message',
-    labelKey: 'message.sinceLastMessage'
-  },
-  {
-    id: 'last-24-hours',
-    labelKey: 'common.last24Hours',
-    lookbackMinutes: 24 * 60
-  },
-  {
-    id: 'last-week',
-    labelKey: 'common.lastWeek',
-    lookbackMinutes: 7 * 24 * 60
-  },
-  {
-    id: 'last-month',
-    labelKey: 'common.lastMonth',
-    lookbackMinutes: 30 * 24 * 60
-  },
-  {
-    id: 'custom',
-    labelKey: 'common.custom'
-  }
-];
 const isRequestsRoute = computed(() => route.name === 'chat-requests');
 const activeChatId = computed(() => {
   const rawChatId = route.params.pubkey;
@@ -1032,95 +984,14 @@ async function handleRefreshChat(chatId: string): Promise<void> {
   }
 }
 
-async function handleRefreshChatsForRange(option: ChatRefreshRangeOption): Promise<void> {
-  const refreshToastCaption = getRefreshToastCaption(option, activeChat.value);
-
-  if (option.id === 'custom') {
-    $q.notify({
-      type: 'info',
-      message: t('chat.customChatRefreshRange'),
-      caption: refreshToastCaption,
-      position: 'top'
-    });
-    return;
-  }
-
+async function handleRunReconnectHealing(): Promise<void> {
   try {
-    if (option.id === 'since-last-message' || typeof option.lookbackMinutes !== 'number') {
-      await refreshChats('');
-    } else {
-      await refreshChats('', {
-        lookbackMinutes: option.lookbackMinutes
-      });
-    }
-    $q.notify({
-      type: 'positive',
-      message: t('chat.refresh.started', {
-        range: t(option.labelKey).toLowerCase()
-      }),
-      caption: refreshToastCaption,
-      position: 'top'
+    await nostrStore.runReconnectHealing('manual-refresh', {
+      propagateError: true,
     });
   } catch (error) {
-    reportUiError('Failed to refresh chats for selected range', error, t('errors.failedRefreshChats'));
+    reportUiError('Failed to run reconnect healing manually', error, t('errors.failedRefreshChats'));
   }
-}
-
-function getRefreshToastCaption(option: ChatRefreshRangeOption, chat: {
-  lastMessageAt?: string;
-} | null): string {
-  const sinceValue = getChatRefreshSinceValue(option, chat);
-  const sinceCaption = getSinceValueCaption(sinceValue);
-  if (sinceCaption) {
-    return sinceCaption;
-  }
-
-  return t('common.sinceDateUnavailable');
-}
-
-function getSinceValueCaption(sinceValue: number | null): string {
-  if (!Number.isInteger(sinceValue) || sinceValue <= 0) {
-    return '';
-  }
-
-  return t('common.sinceDate', {
-    date: new Intl.DateTimeFormat(getDateTimeLocale(), {
-    dateStyle: 'medium',
-    timeStyle: 'short'
-    }).format(new Date(sinceValue * 1000))
-  });
-}
-
-function getChatRefreshSinceValue(
-  option: ChatRefreshRangeOption,
-  chat: {
-    lastMessageAt?: string;
-  } | null
-): number | null {
-  if (option.id === 'since-last-message') {
-    const lastMessageAt = chat?.lastMessageAt?.trim();
-    if (!lastMessageAt) {
-      return null;
-    }
-
-    const parsed = new Date(lastMessageAt);
-    if (Number.isNaN(parsed.valueOf())) {
-      return null;
-    }
-
-    return Math.floor(parsed.valueOf() / 1000);
-  }
-
-  if (typeof option.lookbackMinutes !== 'number') {
-    return null;
-  }
-
-  const boundedLookbackMinutes = Math.floor(option.lookbackMinutes);
-  if (!Number.isFinite(boundedLookbackMinutes) || boundedLookbackMinutes <= 0) {
-    return null;
-  }
-
-  return Math.floor(Date.now() / 1000 - boundedLookbackMinutes * 60);
 }
 
 async function handleAcceptRequest(chatId: string): Promise<void> {
@@ -1362,10 +1233,6 @@ watch(isForwardMessageDialogOpen, (isOpen) => {
 
 .sidebar-top__action {
   flex-shrink: 0;
-}
-
-.sidebar-top__action:deep(.q-btn-dropdown__arrow) {
-  margin-left: 0;
 }
 
 @media (--nc-desktop-viewport) {

@@ -409,6 +409,28 @@ describe('reconnectHealingRuntime', () => {
     expect(refreshDeveloperPendingQueues).toHaveBeenCalledTimes(2);
   });
 
+  it('runs a manual refresh immediately during the automatic healing cooldown', async () => {
+    const { refreshDeveloperPendingQueues, refreshDirectMessages, runtime } = createRuntime();
+
+    const firstRunPromise = runtime.runReconnectHealing('visibility-regain');
+    await runQueuedTimersForStatusSteps(8);
+    await firstRunPromise;
+
+    const manualRunPromise = runtime.runReconnectHealing('manual-refresh');
+    await runQueuedTimersForStatusSteps(8);
+    await manualRunPromise;
+
+    expect(refreshDirectMessages).toHaveBeenCalledTimes(2);
+    expect(refreshDeveloperPendingQueues).toHaveBeenCalledTimes(2);
+    expect(console.log).toHaveBeenCalledWith(
+      '[nostr-chat][reconnect-healing]',
+      'start',
+      expect.objectContaining({
+        reason: 'manual-refresh',
+      })
+    );
+  });
+
   it('runs healing when a window-focus notifier follows a long enough background period', async () => {
     const { refreshDeveloperPendingQueues, runtime, statusLabelUpdates } = createRuntime();
 

@@ -408,25 +408,60 @@
       </div>
 
       <div v-if="messageReactions.length > 0" class="bubble__reactions">
-        <button
+        <span
           v-for="item in messageReactionItems"
           :key="item.key"
-          type="button"
-          class="bubble__reaction-chip"
-          :class="{
-            'bubble__reaction-chip--fresh': isFreshReaction(item.key),
-            'bubble__reaction-chip--removable': canRemoveReaction(item.reaction)
-          }"
-          :aria-label="
-            canRemoveReaction(item.reaction)
-              ? $t('message.removeReaction', { name: item.reaction.name })
-              : $t('message.reactionByName', { name: item.reaction.name })
-          "
-          @click.stop="handleRemoveReaction(item.reaction)"
+          class="bubble__reaction-shell"
         >
-          <span class="bubble__reaction-emoji">{{ item.reaction.emoji }}</span>
-          <AppTooltip>{{ item.reaction.name }}</AppTooltip>
-        </button>
+          <button
+            type="button"
+            class="bubble__reaction-chip"
+            :class="{
+              'bubble__reaction-chip--fresh': isFreshReaction(item.key),
+              'bubble__reaction-chip--removable': canRemoveReaction(item.reaction)
+            }"
+            :aria-label="resolveReactionAriaLabel(item.reaction)"
+            @click.stop="handleReactionChipClick(item)"
+          >
+            <span class="bubble__reaction-emoji">{{ item.reaction.emoji }}</span>
+            <AppTooltip v-if="!isMobileReactionUi">
+              {{ resolveReactionAuthorLabel(item.reaction) }}
+            </AppTooltip>
+          </button>
+
+          <q-menu
+            v-if="isMobileReactionUi"
+            :model-value="activeMobileReactionKey === item.key"
+            no-parent-event
+            anchor="bottom middle"
+            self="top middle"
+            class="nc-pop-menu bubble__reaction-menu"
+            @update:model-value="handleMobileReactionMenuUpdate(item.key, $event)"
+          >
+            <q-list dense>
+              <q-item>
+                <q-item-section avatar>
+                  <q-icon name="person" />
+                </q-item-section>
+                <q-item-section>{{ resolveReactionAuthorLabel(item.reaction) }}</q-item-section>
+              </q-item>
+              <q-separator v-if="canRemoveReaction(item.reaction)" />
+              <q-item
+                v-if="canRemoveReaction(item.reaction)"
+                clickable
+                v-close-popup
+                @click.stop="handleRemoveReactionFromMenu(item.reaction)"
+              >
+                <q-item-section avatar>
+                  <q-icon name="delete" />
+                </q-item-section>
+                <q-item-section>
+                  {{ $t('message.removeReaction', { name: item.reaction.name }) }}
+                </q-item-section>
+              </q-item>
+            </q-list>
+          </q-menu>
+        </span>
       </div>
     </div>
   </div>
@@ -667,43 +702,6 @@
     <div class="bubble__deleted-message-dialog">{{ message.text }}</div>
   </AppDialog>
 
-  <q-dialog v-model="isImageDialogOpen" maximized class="bubble__image-dialog">
-    <q-card class="bubble__image-dialog-card">
-      <div class="bubble__image-dialog-toolbar">
-        <a
-          v-if="fullscreenImageAttachment"
-          class="bubble__image-dialog-action"
-          :href="fullscreenImageAttachment.url"
-          target="_blank"
-          rel="noopener noreferrer"
-          :aria-label="$t('common.open')"
-          :title="$t('common.open')"
-          @click.stop
-        >
-          <q-icon name="open_in_new" size="20px" />
-        </a>
-        <q-btn
-          flat
-          dense
-          round
-          icon="close"
-          color="white"
-          :aria-label="$t('common.closeDialog')"
-          class="bubble__image-dialog-close"
-          @click="closeImageAttachmentDialog"
-        />
-      </div>
-      <div class="bubble__image-dialog-body">
-        <img
-          v-if="fullscreenImageAttachment"
-          class="bubble__image-dialog-media"
-          data-testid="message-image-fullscreen"
-          :src="fullscreenImageAttachment.url"
-          :alt="resolveImageAttachmentAlt(fullscreenImageAttachment)"
-        />
-      </div>
-    </q-card>
-  </q-dialog>
 </template>
 
 <script setup lang="ts">
@@ -744,6 +742,7 @@ import {
 } from 'src/utils/nostrMentions';
 import { reportUiError } from 'src/utils/uiErrorHandler';
 import { isPackagedAppRuntime } from 'src/utils/runtimePlatform';
+import { formatCompactPublicKey } from 'src/utils/publicKeyText';
 import { getDateTimeLocale, t } from 'src/i18n';
 
 const props = defineProps<{
@@ -756,6 +755,7 @@ const props = defineProps<{
   isMessageExpanded?: boolean;
   mentionProfiles?: NostrMentionProfile[];
   mobileGroupLayout?: boolean;
+  reactionAuthorLabels?: Record<string, string>;
   reserveTelegramAuthorAvatarSpace?: boolean;
   showAuthorName?: boolean;
   showAuthorOnMobile?: boolean;
@@ -773,6 +773,7 @@ const emit = defineEmits<{
   (event: 'react', payload: { message: Message; emoji: string }): void;
   (event: 'delete-message', message: Message): void;
   (event: 'remove-reaction', payload: { message: Message; reaction: MessageReaction }): void;
+  (event: 'open-image', attachment: MessageAttachmentMetadata): void;
   (event: 'update-message-expanded', payload: { message: Message; expanded: boolean }): void;
 }>();
 
@@ -804,8 +805,7 @@ const shouldOpenEmojiPickerAfterActionMenu = ref(false);
 const lastActionMenuClickPosition = ref<{ left: number; top: number } | null>(null);
 const emojiPickerRef = ref<{ reset: () => void } | null>(null);
 const revealedImageAttachmentKeys = ref<string[]>([]);
-const isImageDialogOpen = ref(false);
-const fullscreenImageAttachment = ref<MessageAttachmentMetadata | null>(null);
+const activeMobileReactionKey = ref<string | null>(null);
 
 interface MessageReactionItem {
   key: string;
@@ -1003,6 +1003,23 @@ function isFreshReaction(key: string): boolean {
 function canRemoveReaction(reaction: MessageReaction): boolean {
   return reaction.reactorPublicKey.trim().toLowerCase() === loggedInPublicKey.value;
 }
+const isMobileReactionUi = computed(() => $q.screen.lt.sm);
+
+function resolveReactionAuthorLabel(reaction: MessageReaction): string {
+  const reactorPublicKey = reaction.reactorPublicKey.trim().toLowerCase();
+  if (reactorPublicKey === loggedInPublicKey.value) {
+    return t('common.you');
+  }
+
+  return props.reactionAuthorLabels?.[reactorPublicKey]?.trim() || formatCompactPublicKey(reactorPublicKey);
+}
+
+function resolveReactionAriaLabel(reaction: MessageReaction): string {
+  const reactionLabel = canRemoveReaction(reaction)
+    ? t('message.removeReaction', { name: reaction.name })
+    : t('message.reactionByName', { name: reaction.name });
+  return `${reactionLabel} — ${resolveReactionAuthorLabel(reaction)}`;
+}
 const deletedMessageMeta = computed<DeletedMessageMetadata | null>(() => {
   const candidate = props.message.meta.deleted;
   return isDeletedMessageMetadata(candidate) ? candidate : null;
@@ -1155,12 +1172,7 @@ function resolveImageAttachmentAlt(attachment: MessageAttachmentMetadata): strin
 }
 
 function openImageAttachmentDialog(attachment: MessageAttachmentMetadata): void {
-  fullscreenImageAttachment.value = attachment;
-  isImageDialogOpen.value = true;
-}
-
-function closeImageAttachmentDialog(): void {
-  isImageDialogOpen.value = false;
+  emit('open-image', attachment);
 }
 
 function openStatusDialog(): void {
@@ -1356,6 +1368,27 @@ function handleRemoveReaction(reaction: MessageReaction): void {
   } catch (error) {
     reportUiError('Failed to emit message reaction removal', error, t('errors.failedRemoveReaction'));
   }
+}
+
+function handleReactionChipClick(item: MessageReactionItem): void {
+  if (isMobileReactionUi.value) {
+    activeMobileReactionKey.value =
+      activeMobileReactionKey.value === item.key ? null : item.key;
+    return;
+  }
+
+  handleRemoveReaction(item.reaction);
+}
+
+function handleMobileReactionMenuUpdate(itemKey: string, isOpen: boolean): void {
+  if (!isOpen && activeMobileReactionKey.value === itemKey) {
+    activeMobileReactionKey.value = null;
+  }
+}
+
+function handleRemoveReactionFromMenu(reaction: MessageReaction): void {
+  activeMobileReactionKey.value = null;
+  handleRemoveReaction(reaction);
 }
 
 async function handleCopy(): Promise<void> {
@@ -1575,19 +1608,13 @@ watch(
   () => {
     localMessageExpanded.value = false;
     revealedImageAttachmentKeys.value = [];
-    closeImageAttachmentDialog();
+    activeMobileReactionKey.value = null;
   }
 );
 
 watch(isInfoDialogOpen, (isOpen) => {
   if (!isOpen) {
     isEventJsonViewOpen.value = false;
-  }
-});
-
-watch(isImageDialogOpen, (isOpen) => {
-  if (!isOpen) {
-    fullscreenImageAttachment.value = null;
   }
 });
 
@@ -1907,76 +1934,6 @@ onBeforeUnmount(() => {
   line-height: 1.3;
 }
 
-.bubble__image-dialog :deep(.q-dialog__inner) {
-  padding: 0;
-}
-
-.bubble__image-dialog-card {
-  position: relative;
-  width: 100vw;
-  height: 100vh;
-  height: 100dvh;
-  max-width: none;
-  max-height: 100vh;
-  max-height: 100dvh;
-  border-radius: 0;
-  background: rgba(3, 7, 18, 0.96);
-  color: white;
-  overflow: hidden;
-}
-
-.bubble__image-dialog-toolbar {
-  position: absolute;
-  z-index: 2;
-  top: max(12px, env(safe-area-inset-top));
-  right: max(12px, env(safe-area-inset-right));
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.bubble__image-dialog-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.72);
-  color: white;
-  text-decoration: none;
-}
-
-.bubble__image-dialog-close {
-  background: rgba(15, 23, 42, 0.72);
-  color: white;
-}
-
-.bubble__image-dialog-body {
-  box-sizing: border-box;
-  display: grid;
-  place-items: center;
-  width: 100vw;
-  height: 100vh;
-  height: 100dvh;
-  min-width: 0;
-  min-height: 0;
-  padding: calc(max(56px, env(safe-area-inset-top)) + 12px)
-    max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom))
-    max(16px, env(safe-area-inset-left));
-  overflow: hidden;
-}
-
-.bubble__image-dialog-media {
-  display: block;
-  max-width: 100%;
-  max-height: 100%;
-  min-width: 0;
-  min-height: 0;
-  object-fit: contain;
-  border-radius: 6px;
-}
-
 .bubble__text--deleted {
   white-space: nowrap;
   overflow: hidden;
@@ -2088,6 +2045,10 @@ onBeforeUnmount(() => {
   z-index: 1;
 }
 
+.bubble__reaction-shell {
+  display: inline-flex;
+}
+
 .bubble__reaction-chip {
   display: inline-flex;
   align-items: center;
@@ -2103,6 +2064,7 @@ onBeforeUnmount(() => {
     background-color 0.18s ease,
     border-color 0.18s ease,
     color 0.18s ease;
+  cursor: help;
 }
 
 .bubble__reaction-chip--fresh {
@@ -2115,6 +2077,10 @@ onBeforeUnmount(() => {
 
 .bubble__reaction-chip--removable {
   cursor: pointer;
+}
+
+.bubble__reaction-menu {
+  min-width: 180px;
 }
 
 .bubble__reaction-chip--removable:hover {

@@ -75,6 +75,19 @@ test('reactions surface in the chat list and deleted messages stay deleted after
     await waitForReaction(alice.page, /thumbs up reaction/i, {
       chatId: bob.session.publicKey,
     });
+    const reaction = alice.page.getByLabel(/thumbs up reaction/i).first();
+    const reactionAuthorPublicKeyPrefix = bob.session.publicKey.slice(0, 16);
+    await reaction.hover();
+    await expect(alice.page.locator('.app-tooltip')).toContainText(reactionAuthorPublicKeyPrefix);
+    await expect(alice.page.locator('.app-tooltip')).not.toContainText('thumbs up');
+
+    await alice.page.setViewportSize({ width: 390, height: 844 });
+    await reaction.click();
+    await expect(alice.page.locator('.bubble__reaction-menu')).toContainText(
+      reactionAuthorPublicKeyPrefix
+    );
+    await alice.page.keyboard.press('Escape');
+    await alice.page.setViewportSize({ width: 1440, height: 960 });
 
     await deleteMessage(alice.page, targetMessage);
     await reloadAndWaitForApp(bob.page);

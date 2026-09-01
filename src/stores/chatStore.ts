@@ -803,6 +803,19 @@ export const useChatStore = defineStore('chatStore', () => {
         return category !== 'blocked' && category !== 'hidden' && chat.unreadCount > 0;
       }).length
   );
+  const unreadMessageCount = computed(() =>
+    chats.value.reduce((count, chat) => {
+      const category = resolveChatCategory(chat.meta as Record<string, unknown>);
+      if (category === 'blocked' || category === 'hidden') {
+        return count;
+      }
+
+      const unreadCount = Number.isFinite(chat.unreadCount)
+        ? Math.max(0, Math.floor(chat.unreadCount))
+        : 0;
+      return count + unreadCount;
+    }, 0)
+  );
 
   async function loadChatsIntoState(): Promise<void> {
     await Promise.all([chatDataService.init(), contactsService.init()]);
@@ -1796,6 +1809,7 @@ export const useChatStore = defineStore('chatStore', () => {
     requestChats,
     requestCount,
     unreadChatCount,
+    unreadMessageCount,
     isLoaded,
     searchQuery,
     composerDraftsByChatId,

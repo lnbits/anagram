@@ -273,6 +273,14 @@ export const TEST_ACCOUNTS = {
     privateKey: '6666666666666666666666666666666666666666666666666666666666666666',
     displayName: 'Alice Media Settings',
   },
+  mediaViewerAlice: {
+    privateKey: '7777777777777777777777777777777777777777777777777777777777777777',
+    displayName: 'Alice Media Viewer',
+  },
+  mediaViewerBob: {
+    privateKey: '8888888888888888888888888888888888888888888888888888888888888888',
+    displayName: 'Bob Media Viewer',
+  },
   blockAlice: {
     privateKey: '732cc8f4c9bb1542b025b94aa494a706c9991bbf2dd23ce589cf51f99b0652ff',
     displayName: 'Alice Block',

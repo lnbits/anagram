@@ -2167,6 +2167,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     isRelayConnectionPending,
     isAppForeground,
     isReconnectHealing,
+    runReconnectHealing: runReconnectHealingImpl,
     isRestoringStartupState,
     listDeveloperTraceEntries,
     listPrivateMessageReadRelayUrls: () => resolvePrivateMessageReadRelayUrls(),

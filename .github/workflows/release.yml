@@ -1,4 +1,4 @@
-name: Release binaries
+name: Release desktop binaries and Android test build
 
 on:
   push:
@@ -31,7 +31,7 @@ jobs:
         run: bash .github/scripts/validate-release-tag.sh
 
   build-android:
-    name: Build Android Debug APK
+    name: Build Android Debug APK (TEST ONLY)
     needs: validate-tag
     runs-on: ubuntu-latest
 
@@ -42,17 +42,17 @@ jobs:
         with:
           node-version: 24.x
 
-      - name: Build Android Debug APK
+      - name: Build Android Debug APK (TEST ONLY)
         run: npm run build:android:apk:debug
 
-      - name: Stage Android release asset
+      - name: Stage Android test-only asset
         shell: bash
-        run: bash .github/scripts/stage-release-asset.sh dist/capacitor/android/apk/debug '*.apk' release-assets/nostr-chat-android.apk
+        run: bash .github/scripts/stage-release-asset.sh dist/capacitor/android/apk/debug '*.apk' release-assets/nostr-chat-android-debug-test-only.apk
 
       - uses: actions/upload-artifact@v6
         with:
-          name: release-android
-          path: release-assets/nostr-chat-android.apk
+          name: release-android-debug-test-only
+          path: release-assets/nostr-chat-android-debug-test-only.apk
           if-no-files-found: error
 
   build-linux:

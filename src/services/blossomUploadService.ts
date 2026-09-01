@@ -1,15 +1,18 @@
 import type { MessageAttachmentMetadata } from 'src/types/chat';
+import {
+  buildBlossomUploadUrl,
+  getBlossomServerHost,
+  requireBlossomServerUrl,
+} from 'src/utils/blossomServer';
 
-export const NOSTR_BUILD_BLOSSOM_SERVER = 'blossom.nostr.build';
-export const NOSTR_BUILD_BLOSSOM_UPLOAD_URL = `https://${NOSTR_BUILD_BLOSSOM_SERVER}/upload`;
-export const NOSTR_BUILD_FREE_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
+export const BLOSSOM_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
 
-export interface NostrBuildUploadResult {
+export interface BlossomUploadResult {
   attachment: MessageAttachmentMetadata;
-  descriptor: NostrBuildBlobDescriptor;
+  descriptor: BlossomBlobDescriptor;
 }
 
-interface NostrBuildBlobDescriptor {
+interface BlossomBlobDescriptor {
   url: string;
   sha256: string;
   size: number;
@@ -17,9 +20,10 @@ interface NostrBuildBlobDescriptor {
   uploaded?: number;
 }
 
-interface UploadNostrBuildMediaOptions {
+interface UploadBlossomMediaOptions {
+  serverUrl: string;
   signal?: AbortSignal;
-  signUploadAuthHeader: (input: { sha256: string }) => Promise<string>;
+  signUploadAuthHeader: (input: { serverUrl: string; sha256: string }) => Promise<string>;
 }
 
 function normalizeString(value: unknown): string {
@@ -39,7 +43,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function normalizeBlobDescriptor(value: unknown): NostrBuildBlobDescriptor | null {
+function normalizeBlobDescriptor(value: unknown): BlossomBlobDescriptor | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -62,12 +66,12 @@ function normalizeBlobDescriptor(value: unknown): NostrBuildBlobDescriptor | nul
   };
 }
 
-export function isCommonNostrBuildMediaFile(file: File): boolean {
+export function isCommonBlossomMediaFile(file: File): boolean {
   return /^(image|video|audio)\//u.test(file.type);
 }
 
-export function validateNostrBuildMediaFile(file: File): string | null {
-  if (!isCommonNostrBuildMediaFile(file)) {
+export function validateBlossomMediaFile(file: File): string | null {
+  if (!isCommonBlossomMediaFile(file)) {
     return 'Only image, video, and audio files are supported.';
   }
 
@@ -75,8 +79,8 @@ export function validateNostrBuildMediaFile(file: File): string | null {
     return 'The selected file is empty.';
   }
 
-  if (file.size > NOSTR_BUILD_FREE_MEDIA_MAX_BYTES) {
-    return 'nostr.build free uploads are limited to 20 MiB.';
+  if (file.size > BLOSSOM_MEDIA_MAX_BYTES) {
+    return 'Media uploads are limited to 20 MiB.';
   }
 
   return null;
@@ -88,7 +92,7 @@ export async function sha256HexFromBlob(blob: Blob): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-async function readUploadError(response: Response): Promise<string> {
+async function readUploadError(response: Response, serverHost: string): Promise<string> {
   const reason = response.headers.get('X-Reason')?.trim();
   if (reason) {
     return reason;
@@ -99,21 +103,23 @@ async function readUploadError(response: Response): Promise<string> {
     return body;
   }
 
-  return `nostr.build upload failed with HTTP ${response.status}.`;
+  return `${serverHost} upload failed with HTTP ${response.status}.`;
 }
 
-export async function uploadNostrBuildMedia(
+export async function uploadBlossomMedia(
   file: File,
-  options: UploadNostrBuildMediaOptions
-): Promise<NostrBuildUploadResult> {
-  const validationError = validateNostrBuildMediaFile(file);
+  options: UploadBlossomMediaOptions
+): Promise<BlossomUploadResult> {
+  const validationError = validateBlossomMediaFile(file);
   if (validationError) {
     throw new Error(validationError);
   }
 
+  const serverUrl = requireBlossomServerUrl(options.serverUrl);
+  const serverHost = getBlossomServerHost(serverUrl);
   const sha256 = await sha256HexFromBlob(file);
-  const authorization = await options.signUploadAuthHeader({ sha256 });
-  const response = await fetch(NOSTR_BUILD_BLOSSOM_UPLOAD_URL, {
+  const authorization = await options.signUploadAuthHeader({ serverUrl, sha256 });
+  const response = await fetch(buildBlossomUploadUrl(serverUrl), {
     method: 'PUT',
     headers: {
       Authorization: authorization,
@@ -125,12 +131,12 @@ export async function uploadNostrBuildMedia(
   });
 
   if (response.status !== 200 && response.status !== 201) {
-    throw new Error(await readUploadError(response));
+    throw new Error(await readUploadError(response, serverHost));
   }
 
   const descriptor = normalizeBlobDescriptor(await response.json().catch(() => null));
   if (!descriptor) {
-    throw new Error('nostr.build returned an invalid upload response.');
+    throw new Error(`${serverHost} returned an invalid upload response.`);
   }
 
   const uploadedAt = descriptor.uploaded ? new Date(descriptor.uploaded * 1000).toISOString() : '';
@@ -144,7 +150,7 @@ export async function uploadNostrBuildMedia(
       size: descriptor.size,
       sha256: descriptor.sha256,
       name: file.name,
-      service: 'nostr.build',
+      service: serverHost,
       ...(uploadedAt ? { uploadedAt } : {}),
     },
   };

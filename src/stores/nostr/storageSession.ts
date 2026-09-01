@@ -21,6 +21,7 @@ import type {
   PrivateMessagesBackfillState,
   PrivatePreferences,
 } from 'src/stores/nostr/types';
+import { normalizeBlossomServerUrl } from 'src/utils/blossomServer';
 import type { Ref } from 'vue';
 
 interface PendingEventSinceState {
@@ -357,10 +358,18 @@ export function createStorageSessionRuntime({
       return null;
     }
 
-    return {
+    const normalizedBlossomServerUrl = normalizeBlossomServerUrl(value.blossomServerUrl);
+    const preferences: PrivatePreferences = {
       ...value,
       contactSecret: normalizedContactSecret,
     };
+    if (normalizedBlossomServerUrl) {
+      preferences.blossomServerUrl = normalizedBlossomServerUrl;
+    } else {
+      delete preferences.blossomServerUrl;
+    }
+
+    return preferences;
   }
 
   function readPrivatePreferencesFromStorage(): PrivatePreferences | null {

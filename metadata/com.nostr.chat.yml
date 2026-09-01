@@ -1,0 +1,73 @@
+Categories:
+  - Connectivity
+  - Internet
+License: MIT
+AuthorName: LNbits
+WebSite: https://github.com/lnbits/nostr-chat
+SourceCode: https://github.com/lnbits/nostr-chat
+IssueTracker: https://github.com/lnbits/nostr-chat/issues
+Changelog: https://github.com/lnbits/nostr-chat/releases
+
+RepoType: git
+Repo: https://github.com/lnbits/nostr-chat.git
+
+Builds:
+  - versionName: 0.6.1
+    versionCode: 6
+    commit: 840eb8de90e78b67364d638cb429f4b9f00803d9
+    subdir: src-capacitor/android/app
+    sudo:
+      - apt-get update
+      - apt-get install -y build-essential cmake golang-go rustup
+      - curl -Lo node.tar.gz https://nodejs.org/dist/v24.16.0/node-v24.16.0-linux-x64.tar.gz
+      - echo "2faf6a387e9b62b888e21c54f01249fb27537ffecf1842f29f4c919d0a59a0ff node.tar.gz"
+        | sha256sum -c -
+      - tar xzf node.tar.gz --strip-components=1 -C /usr/local/
+    gradle:
+      - yes
+    srclibs:
+      - esbuild@v0.27.7
+      - rolldown@v1.0.1
+    prebuild:
+      - rustup set profile minimal
+      - rustup default 1.95.0
+      - cd ../../..
+      - npm ci --ignore-scripts --no-audit --no-fund
+      - npm --prefix src-capacitor ci --ignore-scripts --no-audit --no-fund
+      - rm -f node_modules/@rollup/rollup-linux-x64-gnu/rollup.linux-x64-gnu.node
+      - rm -f node_modules/@rolldown/binding-linux-x64-gnu/rolldown-binding.linux-x64-gnu.node
+    scanignore:
+      - src-capacitor/node_modules/@capacitor/cli/assets/capacitor-cordova-android-plugins.tar.gz
+    scandelete:
+      - node_modules
+      - src-capacitor/node_modules
+    build:
+      - pushd $$esbuild$$
+      - go build ./cmd/esbuild
+      - popd
+      - mkdir -p $$rolldown$$/fdroid-napi
+      - pushd $$rolldown$$/fdroid-napi
+      - npm init -y
+      - npm install --no-save --no-audit --no-fund @napi-rs/cli@3.6.1
+      - ./node_modules/.bin/napi build --cwd ../packages/rolldown/src --manifest-path
+        ../../../crates/rolldown_binding/Cargo.toml --package-json-path ../package.json
+        --package rolldown_binding --platform --release --no-js --dts binding.d.cts
+        --output-dir .
+      - popd
+      - cp -f $$rolldown$$/packages/rolldown/src/rolldown-binding.linux-x64-gnu.node
+        ../../../node_modules/@rolldown/binding-linux-x64-gnu/rolldown-binding.linux-x64-gnu.node
+      - cd ../../..
+      - export ESBUILD_BINARY_PATH="$$esbuild$$/esbuild"
+      - node scripts/quasar.cjs build -m capacitor -T android --skip-pkg
+
+MaintainerNotes: |-
+  The first build is a technical baseline against the published post-v0.6.1
+  source commit that adds configurable Blossom storage. Replace it with the
+  immutable v0.6.2 release commit before submitting this recipe to fdroiddata.
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags ^v[0-9.]+$
+UpdateCheckData:
+  src-capacitor/package.json|"androidVersionCode":\s*(\d+)|.|"version":\s*"([\d.]+)"
+CurrentVersion: 0.6.1
+CurrentVersionCode: 6

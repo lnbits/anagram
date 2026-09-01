@@ -20,7 +20,6 @@ interface PackageJson {
 interface AppBuildInfo {
   appVersion: string;
   bundleId: string;
-  builtAt: string;
 }
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -68,20 +67,14 @@ function readGitSha(): string {
   }
 }
 
-function formatBundleTimestamp(value: string): string {
-  return value.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-}
-
 function buildAppInfo(isProd: boolean): AppBuildInfo {
-  const builtAt = process.env.APP_BUILD_TIME?.trim() || new Date().toISOString();
   const gitSha = process.env.APP_GIT_SHA?.trim() || readGitSha();
   const envBundleId = process.env.APP_BUNDLE_ID?.trim();
+  const releaseId = `${appVersion}-${gitSha}`;
 
   return {
     appVersion,
-    bundleId:
-      envBundleId || (isProd ? `${gitSha}-${formatBundleTimestamp(builtAt)}` : `dev-${gitSha}`),
-    builtAt,
+    bundleId: envBundleId || (isProd ? releaseId : `dev-${releaseId}`),
   };
 }
 
@@ -293,7 +286,6 @@ export default configure((ctx) => {
       env: {
         APP_VERSION: buildInfo.appVersion,
         APP_BUNDLE_ID: buildInfo.bundleId,
-        APP_BUILD_TIME: buildInfo.builtAt,
         APP_ENABLE_APP_SHELL: enableAppShell,
         APP_E2E_DISABLE_NDK_OUTBOX: process.env.APP_E2E_DISABLE_NDK_OUTBOX === 'true',
       },

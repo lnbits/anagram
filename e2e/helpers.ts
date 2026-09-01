@@ -269,6 +269,10 @@ export const TEST_ACCOUNTS = {
     privateKey: '600318cd43cd7c80ce7b366dec6b61b1f4c89379adf553d0989d1536797d358d',
     displayName: 'Charlie Isolation',
   },
+  mediaSettingsAlice: {
+    privateKey: '6666666666666666666666666666666666666666666666666666666666666666',
+    displayName: 'Alice Media Settings',
+  },
   blockAlice: {
     privateKey: '732cc8f4c9bb1542b025b94aa494a706c9991bbf2dd23ce589cf51f99b0652ff',
     displayName: 'Alice Block',

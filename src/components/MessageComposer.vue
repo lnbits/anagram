@@ -218,17 +218,17 @@
     <AppDialog
       v-model="isMediaPrivacyDialogOpen"
       :title="$t('message.photoOrVideo')"
-      :persistent="isNostrBuildAuthInProgress"
-      :show-close="!isNostrBuildAuthInProgress"
+      :persistent="isBlossomAuthInProgress"
+      :show-close="!isBlossomAuthInProgress"
       max-width="420px"
     >
       <div class="composer__media-warning">
         <div>{{ $t('message.mediaUrlWarning') }}</div>
-        <div>{{ $t('message.mediaUpload.usingNostrBuild') }}</div>
+        <div>{{ $t('message.mediaUpload.usingBlossomServer', { server: blossomServerUrl }) }}</div>
       </div>
 
       <q-linear-progress
-        v-if="isNostrBuildAuthInProgress"
+        v-if="isBlossomAuthInProgress"
         indeterminate
         rounded
         color="primary"
@@ -239,7 +239,7 @@
         <q-btn
           flat
           no-caps
-          :disable="isNostrBuildAuthInProgress"
+          :disable="isBlossomAuthInProgress"
           :label="$t('common.cancel')"
           @click="handleMediaConsentCancel"
         />
@@ -247,7 +247,7 @@
           unelevated
           no-caps
           color="primary"
-          :loading="isNostrBuildAuthInProgress"
+          :loading="isBlossomAuthInProgress"
           :label="$t('common.ok')"
           @click="handleMediaConsentConfirm"
         />
@@ -295,9 +295,9 @@ import EmojiPickerPanel from 'src/components/EmojiPickerPanel.vue';
 import { TOP_500_EMOJIS, filterEmojiEntries, type EmojiOption } from 'src/data/topEmojis';
 import { t } from 'src/i18n';
 import {
-  uploadNostrBuildMedia,
-  validateNostrBuildMediaFile,
-} from 'src/services/nostrBuildUploadService';
+  uploadBlossomMedia,
+  validateBlossomMediaFile,
+} from 'src/services/blossomUploadService';
 import { useChatStore } from 'src/stores/chatStore';
 import { useNostrStore } from 'src/stores/nostrStore';
 import type { Message, MessageAttachmentMetadata, MessageReplyPreview } from 'src/types/chat';
@@ -329,7 +329,7 @@ const emojiPickerRef = ref<{ reset: () => void } | null>(null);
 const isComposerMenuOpen = ref(false);
 const isEmojiMenuOpen = ref(false);
 const isMediaPrivacyDialogOpen = ref(false);
-const isNostrBuildAuthInProgress = ref(false);
+const isBlossomAuthInProgress = ref(false);
 const isMediaUploadDialogOpen = ref(false);
 const isMediaUploadInProgress = ref(false);
 const pendingInlineMediaFile = ref<File | null>(null);
@@ -364,6 +364,7 @@ function normalizeChatIdentifier(value: string | null | undefined): string | nul
 }
 
 const activeChatId = computed(() => normalizeChatIdentifier(props.chatId));
+const blossomServerUrl = computed(() => nostrStore.getBlossomServerUrl());
 const sendButtonIcon = computed(() =>
   props.editingMessage ? 'check' : $q.screen.lt.sm ? 'north' : 'send'
 );
@@ -375,7 +376,7 @@ const mediaUploadStatusMessage = computed(() => {
 
   return mediaUploadStatus.value === 'sending'
     ? t('message.mediaUpload.sending')
-    : t('message.mediaUpload.uploading');
+    : t('message.mediaUpload.uploadingToServer', { server: blossomServerUrl.value });
 });
 
 function setDraftValue(nextDraft: string, options: { persist?: boolean } = {}): void {
@@ -625,7 +626,7 @@ watch(emojiAutocompleteMatch, () => {
 });
 
 watch(isMediaPrivacyDialogOpen, (isOpen) => {
-  if (!isOpen && !isNostrBuildAuthInProgress.value) {
+  if (!isOpen && !isBlossomAuthInProgress.value) {
     pendingInlineMediaFile.value = null;
   }
 });
@@ -685,12 +686,12 @@ function openMediaFileBrowser(): void {
 }
 
 function openMediaPrivacyDialog(file: File | null = null): void {
-  if (isNostrBuildAuthInProgress.value || isMediaUploadInProgress.value) {
+  if (isBlossomAuthInProgress.value || isMediaUploadInProgress.value) {
     return;
   }
 
   if (file) {
-    const validationError = validateNostrBuildMediaFile(file);
+    const validationError = validateBlossomMediaFile(file);
     if (validationError) {
       $q.notify({
         type: 'warning',
@@ -706,7 +707,7 @@ function openMediaPrivacyDialog(file: File | null = null): void {
 }
 
 function handleMediaConsentCancel(): void {
-  if (isNostrBuildAuthInProgress.value) {
+  if (isBlossomAuthInProgress.value) {
     return;
   }
 
@@ -715,13 +716,13 @@ function handleMediaConsentCancel(): void {
 }
 
 async function handleMediaConsentConfirm(): Promise<void> {
-  if (isNostrBuildAuthInProgress.value) {
+  if (isBlossomAuthInProgress.value) {
     return;
   }
 
-  isNostrBuildAuthInProgress.value = true;
+  isBlossomAuthInProgress.value = true;
   try {
-    await nostrStore.ensureNostrBuildUploadAuthentication();
+    await nostrStore.ensureBlossomUploadAuthentication();
     const inlineFile = pendingInlineMediaFile.value;
     pendingInlineMediaFile.value = null;
     isMediaPrivacyDialogOpen.value = false;
@@ -734,14 +735,14 @@ async function handleMediaConsentConfirm(): Promise<void> {
       openMediaFileBrowser();
     });
   } catch (error) {
-    reportUiError('Failed to authenticate nostr.build upload', error);
+    reportUiError('Failed to authenticate Blossom upload', error);
     $q.notify({
       type: 'negative',
       message: error instanceof Error ? error.message : t('errors.failedUploadMedia'),
       position: 'top',
     });
   } finally {
-    isNostrBuildAuthInProgress.value = false;
+    isBlossomAuthInProgress.value = false;
   }
 }
 
@@ -753,7 +754,7 @@ async function handleMediaFileInputChange(event: Event): Promise<void> {
     return;
   }
 
-  const validationError = validateNostrBuildMediaFile(file);
+  const validationError = validateBlossomMediaFile(file);
   if (validationError) {
     $q.notify({
       type: 'warning',
@@ -834,8 +835,9 @@ async function uploadAndSendMediaFile(file: File): Promise<void> {
   const minProgressDelay = new Promise((resolve) => window.setTimeout(resolve, 2000));
 
   try {
-    const uploadResult = await uploadNostrBuildMedia(file, {
-      signUploadAuthHeader: nostrStore.signNostrBuildUploadAuthHeader,
+    const uploadResult = await uploadBlossomMedia(file, {
+      serverUrl: blossomServerUrl.value,
+      signUploadAuthHeader: nostrStore.signBlossomUploadAuthHeader,
     });
     await minProgressDelay;
     mediaUploadStatus.value = 'sending';
@@ -845,7 +847,7 @@ async function uploadAndSendMediaFile(file: File): Promise<void> {
     isMediaUploadDialogOpen.value = false;
   } catch (error) {
     await minProgressDelay;
-    reportUiError('Failed to upload media to nostr.build', error);
+    reportUiError('Failed to upload media to Blossom', error);
     mediaUploadError.value =
       error instanceof Error && error.message.trim()
         ? error.message.trim()
@@ -1081,7 +1083,7 @@ watch(
     isComposerMenuOpen.value = false;
     isEmojiMenuOpen.value = false;
     isMediaPrivacyDialogOpen.value = false;
-    isNostrBuildAuthInProgress.value = false;
+    isBlossomAuthInProgress.value = false;
     isMediaUploadDialogOpen.value = false;
     isMediaUploadInProgress.value = false;
     pendingInlineMediaFile.value = null;

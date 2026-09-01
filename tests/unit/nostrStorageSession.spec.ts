@@ -259,15 +259,33 @@ describe('storageSession runtime', () => {
     const preferences = {
       contactSecret: groupPrivateKey,
       notifyOnReply: true,
+      blossomServerUrl: 'https://Media.Example.com/',
     } as never;
     runtime.writePrivatePreferencesToStorage(preferences);
-    expect(runtime.readPrivatePreferencesFromStorage()).toEqual(preferences);
+    expect(runtime.readPrivatePreferencesFromStorage()).toEqual({
+      contactSecret: groupPrivateKey,
+      notifyOnReply: true,
+      blossomServerUrl: 'https://media.example.com',
+    });
 
     const encryptedPreferences = await runtime.encryptPrivatePreferencesContent(preferences);
     expect(encryptedPreferences).toBe(`enc:${JSON.stringify(preferences)}`);
-    expect(await runtime.decryptPrivatePreferencesContent(encryptedPreferences)).toEqual(
-      preferences
+    expect(await runtime.decryptPrivatePreferencesContent(encryptedPreferences)).toEqual({
+      contactSecret: groupPrivateKey,
+      notifyOnReply: true,
+      blossomServerUrl: 'https://media.example.com',
+    });
+
+    localStorage.store.set(
+      PRIVATE_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        contactSecret: groupPrivateKey,
+        blossomServerUrl: 'http://insecure.example.com',
+      })
     );
+    expect(runtime.readPrivatePreferencesFromStorage()).toEqual({
+      contactSecret: groupPrivateKey,
+    });
 
     const cursor = {
       at: '2026-01-02T00:00:00.000Z',

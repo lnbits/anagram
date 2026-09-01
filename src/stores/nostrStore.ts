@@ -18,6 +18,7 @@ import { useNip65RelayStore } from 'src/stores/nip65RelayStore';
 import { createAppLifecycleRuntime } from 'src/stores/nostr/appLifecycleRuntime';
 import { createAuthIdentityRuntime } from 'src/stores/nostr/authIdentityRuntime';
 import { createAuthSessionRuntime } from 'src/stores/nostr/authSessionRuntime';
+import { createBlossomSettingsRuntime } from 'src/stores/nostr/blossomSettingsRuntime';
 import {
   DEFAULT_EVENT_SINCE_LOOKBACK_SECONDS,
   DEVELOPER_DIAGNOSTICS_STORAGE_KEY,
@@ -116,6 +117,7 @@ import {
 import { useRelayStore } from 'src/stores/relayStore';
 import type { ChatGroupEpochKey, MessageRelayStatus } from 'src/types/chat';
 import type { ContactRecord } from 'src/types/contact';
+import { buildBlossomUploadAuthorization, requireBlossomServerUrl } from 'src/utils/blossomServer';
 import { ref, watch } from 'vue';
 
 export type {
@@ -1716,6 +1718,13 @@ export const useNostrStore = defineStore('nostrStore', () => {
   publishGroupMembershipFollowSetRuntime = publishGroupMembershipFollowSetImpl;
   publishGroupMembershipRosterFollowSetRuntime = publishGroupMembershipRosterFollowSetImpl;
 
+  const { getBlossomServerUrl, saveBlossomServerUrl } = createBlossomSettingsRuntime({
+    ensurePrivatePreferences,
+    publishPrivatePreferences,
+    readPrivatePreferencesFromStorage,
+    writePrivatePreferencesToStorage,
+  });
+
   const {
     resetGroupRosterSubscriptionRuntimeState: resetGroupRosterSubscriptionRuntimeStateImpl,
     subscribeGroupMembershipRosterUpdates: subscribeGroupMembershipRosterUpdatesImpl,
@@ -1817,7 +1826,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     return globalThis.btoa(binary);
   }
 
-  async function ensureNostrBuildUploadAuthentication(): Promise<void> {
+  async function ensureBlossomUploadAuthentication(): Promise<void> {
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
     if (!loggedInPubkeyHex) {
       throw new Error('A logged-in public key is required to upload media.');
@@ -1829,29 +1838,24 @@ export const useNostrStore = defineStore('nostrStore', () => {
     }
   }
 
-  async function signNostrBuildUploadAuthHeader(input: { sha256: string }): Promise<string> {
+  async function signBlossomUploadAuthHeader(input: {
+    serverUrl: string;
+    sha256: string;
+  }): Promise<string> {
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
     if (!loggedInPubkeyHex) {
       throw new Error('A logged-in public key is required to sign upload auth.');
     }
 
-    const sha256 = input.sha256.trim().toLowerCase();
-    if (!/^[a-f0-9]{64}$/u.test(sha256)) {
-      throw new Error('A valid file hash is required to sign upload auth.');
-    }
-
+    const serverUrl = requireBlossomServerUrl(input.serverUrl);
     const createdAt = Math.floor(Date.now() / 1000);
+    const authorization = buildBlossomUploadAuthorization(serverUrl, input.sha256, createdAt);
     const authEvent = new NDKEvent(ndk, {
       kind: 24242,
       created_at: createdAt,
       pubkey: loggedInPubkeyHex,
-      content: 'Upload media to nostr.build',
-      tags: [
-        ['t', 'upload'],
-        ['expiration', String(createdAt + 15 * 60)],
-        ['server', 'blossom.nostr.build'],
-        ['x', sha256],
-      ],
+      content: authorization.content,
+      tags: authorization.tags,
     });
     await authEvent.sign(await getOrCreateSignerRuntime());
     return `Nostr ${encodeBase64Utf8(JSON.stringify(await authEvent.toNostrEvent()))}`;
@@ -2223,8 +2227,10 @@ export const useNostrStore = defineStore('nostrStore', () => {
     scheduleContactCursorPublish,
     sendGroupEpochTicket,
     sendDirectMessage,
-    ensureNostrBuildUploadAuthentication,
-    signNostrBuildUploadAuthHeader,
+    ensureBlossomUploadAuthentication,
+    getBlossomServerUrl,
+    saveBlossomServerUrl,
+    signBlossomUploadAuthHeader,
     sendDirectMessageDeletion,
     sendDirectMessageReaction,
     unblockPubkey: (

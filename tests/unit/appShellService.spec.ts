@@ -13,12 +13,10 @@ describe('appShellService', () => {
       normalizeAppBuildInfo({
         appVersion: ' 0.2.0 ',
         bundleId: ' abc123 ',
-        builtAt: ' 2026-05-14T10:00:00.000Z ',
       })
     ).toEqual({
       appVersion: '0.2.0',
       bundleId: 'abc123',
-      builtAt: '2026-05-14T10:00:00.000Z',
     });
 
     expect(normalizeAppBuildInfo({ appVersion: '0.2.0', bundleId: '' })).toBeNull();
@@ -28,19 +26,17 @@ describe('appShellService', () => {
   it('detects different loaded and server bundles', () => {
     expect(
       hasDifferentBundle(
-        { appVersion: '0.2.0', bundleId: 'loaded', builtAt: '' },
-        { appVersion: '0.2.0', bundleId: 'server', builtAt: '' }
+        { appVersion: '0.2.0', bundleId: 'loaded' },
+        { appVersion: '0.2.0', bundleId: 'server' }
       )
     ).toBe(true);
     expect(
       hasDifferentBundle(
-        { appVersion: '0.2.0', bundleId: 'loaded', builtAt: '' },
-        { appVersion: '0.2.0', bundleId: 'loaded', builtAt: '' }
+        { appVersion: '0.2.0', bundleId: 'loaded' },
+        { appVersion: '0.2.0', bundleId: 'loaded' }
       )
     ).toBe(false);
-    expect(hasDifferentBundle({ appVersion: '0.2.0', bundleId: 'loaded', builtAt: '' }, null)).toBe(
-      false
-    );
+    expect(hasDifferentBundle({ appVersion: '0.2.0', bundleId: 'loaded' }, null)).toBe(false);
   });
 
   it('resolves app shell URLs from hash-routed app URLs', () => {
@@ -61,7 +57,6 @@ describe('appShellService', () => {
         JSON.stringify({
           appVersion: '0.2.0',
           bundleId: 'server-bundle',
-          builtAt: '2026-05-14T10:00:00.000Z',
         }),
         { status: 200 }
       );

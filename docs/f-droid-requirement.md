@@ -9,7 +9,7 @@ The two earlier dependency and release blockers are resolved and remain resolved
 1. Android notifications now connect directly to Nostr relays without Firebase Cloud Messaging, Google Services or the Capacitor push-notifications package.
 2. NDK's unused Sandpack dependency is replaced during npm resolution by the empty, MIT-licensed `@gitlab/noop` package, so non-FLOSS Nodebox is not fetched.
 
-The current source now implements the configurable Blossom server described by the store listing. Remaining release work includes publishing that change in a new immutable release, a tested `fdroiddata` recipe, a genuine release APK strategy, deterministic build inputs if reproducible builds are pursued, and network/asset review.
+The current source now implements the configurable Blossom server described by the store listing. A draft `fdroiddata` recipe also builds and validates an unsigned APK from source against the post-`v0.6.1` technical-baseline commit. Remaining release work includes publishing the current source in a new immutable release, retargeting the recipe to that release, a genuine release APK strategy, deterministic build inputs if reproducible builds are pursued, and network/asset review.
 
 F-Droid’s governing requirements are in its [Inclusion Policy](https://f-droid.org/en/docs/Inclusion_Policy/).
 
@@ -20,7 +20,7 @@ F-Droid’s governing requirements are in its [Inclusion Policy](https://f-droid
 | Done | Published `v0.5.3` contained Firebase/GMS push support | Published Firebase-free `v0.6.1`; use `v0.6.1` or a later release as the submission baseline, never `v0.5.3`. |
 | Done | NDK declared Sandpack and non-FLOSS Nodebox | Replaced the unused Sandpack dependency with an empty MIT-licensed package through npm overrides. |
 | Done | F-Droid/Fastlane store metadata was missing | Added English descriptions, an icon, phone screenshots, and version-code changelogs upstream. |
-| Required | No tested `fdroiddata` build recipe | Create and test a recipe that builds an unsigned release APK entirely from source. |
+| Done for technical baseline | No tested `fdroiddata` build recipe | Added and tested a source-build recipe against commit `840eb8de90e78b67364d638cb429f4b9f00803d9`; retarget it to the immutable `v0.6.2` release commit before submission. |
 | Required | Current GitHub Android “release” is a debug APK | Publish a genuine release APK or make it unambiguously test-only. |
 | Done | Android identity was inconsistent | Normalized Android, Capacitor, and Electron IDs to `com.nostr.chat`. |
 | Important | Production bundles contain the current build timestamp | Make build-time inputs deterministic if reproducible builds are desired. |
@@ -35,7 +35,7 @@ The root npm override now replaces NDK's Sandpack dependency with dependency-fre
 
 This differs from deleting the package after installation: npm resolves and downloads the FLOSS no-op package in its place. The override can be removed when an upstream NDK release drops the unused dependency.
 
-The final `fdroid build` and scanner review still need to confirm the complete release dependency closure.
+The baseline `fdroid build` and source scanner completed successfully with the override in place. Official `fdroiddata` review will repeat the dependency and binary review when the recipe is submitted.
 
 ### 2. Firebase-free release
 
@@ -80,23 +80,23 @@ The listing discloses:
 
 The published `v0.6.1` source predates this feature, but the current source now matches the listing. Users can select an HTTPS base URL under Media & Data Storage; [blossomUploadService.ts](../src/services/blossomUploadService.ts) applies it to the upload request and signed authorization event. The choice is stored in encrypted NIP-78 private preferences so it is restored with the account. Publish the implementation under a new tag rather than moving `v0.6.1`.
 
-### 4. Create the F-Droid build recipe
+### 4. F-Droid build recipe
 
-A new file such as `metadata/com.nostr.chat.yml` will be submitted to the `fdroiddata` repository. It will need:
+The draft recipe is available at [metadata/com.nostr.chat.yml](../metadata/com.nostr.chat.yml), with the additional Rolldown source-library declaration at [srclibs/rolldown.yml](../srclibs/rolldown.yml). Both files are intended for eventual submission to the separate `fdroiddata` repository.
 
-- Public Git repository URL.
-- MIT license declaration.
-- Exact version name, version code, tag and full commit hash.
-- Node/npm and JDK requirements.
-- Root and Capacitor dependency installation.
-- Quasar/Capacitor production build and Android synchronization.
-- Gradle `assembleRelease`.
-- Removal/scanning of generated dependency directories such as `node_modules`.
-- Tag-based update checking.
+The technical baseline targets version `0.6.1`, version code `6`, and the full post-tag source commit `840eb8de90e78b67364d638cb429f4b9f00803d9`. It:
 
-The exact recipe should be tested using the commands described in F-Droid’s [Build Metadata Reference](https://f-droid.org/en/docs/Build_Metadata_Reference/), including `fdroid lint`, `fdroid rewritemeta` and a local `fdroid build`.
+- Installs checksum-pinned Node 24.16.0 and the required native build toolchains.
+- Installs both npm lockfiles with lifecycle scripts disabled.
+- Lets F-Droid scan the source tree and remove packaged executables before building.
+- Rebuilds esbuild 0.27.7 from Go source and Rolldown 1.0.1 from Rust source instead of using their npm native binaries.
+- Builds the Quasar UI, synchronizes Capacitor Android, and runs Gradle `assembleRelease`.
+- Removes generated `node_modules` trees before F-Droid packages the source state.
+- Detects future versions from `v*` Git tags and reads Android version codes from `src-capacitor/package.json`.
 
-The application currently requires Node 24/npm 11, JDK 21 and Android SDK 36-era tooling. The recipe must demonstrate that these can be provisioned reproducibly on F-Droid’s builder.
+The recipe was tested in F-Droid's official `fdroidserver:buildserver` container. `fdroid lint` passed, `fdroid rewritemeta` parsed and canonicalized the recipe, the source scanner reported no blocking problems, and `fdroid build --on-server --no-tarball -v com.nostr.chat:6` completed successfully. The resulting 5,015,471-byte APK has package `com.nostr.chat`, version name `0.6.1`, version code `6`, and no APK signature. A standalone F-Droid APK scan also returned successfully with no findings. The APK's SHA-256 is `e1a4be25dcfc906d2109ce9c7591ec32aee24f802aad799759ba1213c3b4a3a3`.
+
+This proves the source-build path but is not the final submission record: the configurable Blossom implementation was committed after the immutable `v0.6.1` tag. Once `v0.6.2` is published, replace the baseline commit/version fields with that tag's full commit hash, repeat the isolated build and APK checks, and submit the two recipe files to `fdroiddata`.
 
 ### 5. Decide the signing strategy
 
@@ -131,11 +131,10 @@ The current media-upload implementation defaults to `blossom.nostr.build` but le
 1. Complete the remaining asset and brand licensing review.
 2. Confirm with reviewers whether the configurable Blossom default needs any anti-feature disclosure.
 3. Make build inputs deterministic if reproducible builds are pursued.
-4. Produce and test a genuine unsigned release build from a clean checkout.
-5. Run the complete project validation and Android smoke tests.
-6. Bump the version and create a new immutable release tag (normally `v0.6.2`) containing the configurable Blossom implementation; do not move `v0.6.1`.
-7. Test the F-Droid build recipe in an fdroidserver environment.
-8. Submit a merge request to the official `fdroiddata` repository.
-9. Respond to scanner/reviewer feedback and document any requested anti-features.
+4. Run the complete project validation and Android smoke tests.
+5. Bump the version and create a new immutable release tag (normally `v0.6.2`) containing the configurable Blossom implementation; do not move `v0.6.1`.
+6. Retarget the tested F-Droid recipe to the new tag and repeat the isolated build and APK checks.
+7. Submit a merge request to the official `fdroiddata` repository.
+8. Respond to scanner/reviewer feedback and document any requested anti-features.
 
-With the NDK dependency, Firebase-free release and configurable Blossom issues resolved in current source, the application looks like a reasonable F-Droid candidate once the remaining release, build, signing and disclosure work is complete.
+With the NDK dependency, Firebase-free release, configurable Blossom implementation, and baseline source-build recipe addressed, the application looks like a reasonable F-Droid candidate once the remaining release, signing and disclosure work is complete.

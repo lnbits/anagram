@@ -579,7 +579,7 @@ describe('privateMessagesIngestRuntime', () => {
     expect(deps.showIncomingMessageBrowserNotification).toHaveBeenCalledWith(
       expect.objectContaining({
         chatPubkey: groupPublicKey,
-        title: 'Nostr Group',
+        title: 'Group',
         messageText: '@Bobby Group hello',
       })
     );

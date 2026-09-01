@@ -68,7 +68,7 @@ Notify.setDefaults({
 const savedDarkMode = readDarkModePreference();
 const foregroundMessageBanner = ref<ForegroundMessageActivityDetail | null>(null);
 const foregroundMessageBannerAvatarFallback = computed(() =>
-  buildAvatarText(foregroundMessageBanner.value?.title ?? 'Nostr Chat')
+  buildAvatarText(foregroundMessageBanner.value?.title ?? 'Anagram')
 );
 const foregroundMessageBannerMessage = computed(() => {
   const messageText = foregroundMessageBanner.value?.messageText.replace(/\s+/g, ' ').trim() ?? '';
@@ -104,7 +104,7 @@ function showForegroundMessageBanner(detail: ForegroundMessageActivityDetail): v
     chatPubkey: detail.chatPubkey,
     iconUrl: detail.iconUrl,
     messageText: detail.messageText,
-    title: detail.title || t('chat.nostrChat'),
+    title: detail.title || t('app.name'),
     showBanner: true,
   };
   foregroundMessageBannerTimeoutId = window.setTimeout(() => {

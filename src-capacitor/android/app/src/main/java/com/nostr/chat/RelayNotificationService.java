@@ -786,7 +786,7 @@ public final class RelayNotificationService extends Service {
         );
 
         String message = unreadCount == 1 ? "1 new message" : unreadCount + " new messages";
-        String title = conversation == null ? "Nostr Chat" : conversation.name;
+        String title = conversation == null ? "Anagram" : conversation.name;
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, MESSAGE_CHANNEL_ID)
             .setSmallIcon(R.drawable.nostr_chat_notification)
             .setContentTitle(title)
@@ -823,7 +823,7 @@ public final class RelayNotificationService extends Service {
         String message = unreadCount == 1 ? "1 new message" : unreadCount + " new messages";
         return new NotificationCompat.Builder(this, MESSAGE_CHANNEL_ID)
             .setSmallIcon(R.drawable.nostr_chat_notification)
-            .setContentTitle("Nostr Chat")
+            .setContentTitle("Anagram")
             .setContentText(message)
             .setNumber(unreadCount)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -885,7 +885,7 @@ public final class RelayNotificationService extends Service {
             "Messages",
             NotificationManager.IMPORTANCE_HIGH
         );
-        messageChannel.setDescription("Incoming Nostr Chat message counts");
+        messageChannel.setDescription("Incoming Anagram message counts");
         manager.createNotificationChannel(messageChannel);
     }
 

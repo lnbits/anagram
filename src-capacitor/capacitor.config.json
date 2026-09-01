@@ -1,6 +1,6 @@
 {
   "appId": "com.nostr.chat",
-  "appName": "Nostr Chat",
+  "appName": "Anagram",
   "webDir": "www",
   "android": {
     "loggingBehavior": "none"

@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Nostr Chat</string>
-    <string name="title_activity_main">Nostr Chat</string>
+    <string name="app_name">Anagram</string>
+    <string name="title_activity_main">Anagram</string>
     <string name="package_name">com.nostr.chat</string>
     <string name="custom_url_scheme">com.nostr.chat</string>
 </resources>

@@ -311,7 +311,7 @@ export default configure((ctx) => {
       bundler: 'builder',
       builder: {
         appId: 'com.nostr.chat',
-        productName: 'Nostr Chat',
+        productName: 'Anagram',
         artifactName: `\${productName}-\${version}-\${os}-\${arch}.\${ext}`,
         mac: {
           category: 'public.app-category.social-networking',

@@ -1,4 +1,4 @@
-Nostr Chat is a private messaging client for the Nostr protocol. Connect directly to Nostr relays and choose which relays the app uses.
+Anagram is a private messaging client for the Nostr protocol. Connect directly to Nostr relays and choose which relays the app uses.
 
 Features include:
 <ul>
@@ -13,4 +13,4 @@ Features include:
 
 On Android, optional background notifications maintain direct connections to your configured Nostr relays using a foreground service. The service can restart after device boot when enabled. Notifications are delivered directly from Nostr relays without Firebase Cloud Messaging or Google Play Services.
 
-Nostr Chat contains no advertising, analytics, or tracking SDKs.
+Anagram contains no advertising, analytics, or tracking SDKs.

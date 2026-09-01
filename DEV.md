@@ -1,10 +1,10 @@
-# Nostr Chat Developer Guide
+# Anagram Developer Guide
 
 This file keeps the technical project notes that used to live in the README. For a short user-facing overview, see [README.md](./README.md).
 
 ## Project Snapshot
 
-Nostr Chat is a Quasar/Vue web and Electron client for Nostr private messaging. The current app supports direct chats, group chats, contact and profile management, relay controls, browser notifications, developer diagnostics, and local packaging for desktop builds.
+Anagram is a Quasar/Vue web and Electron client for Nostr private messaging. The current app supports direct chats, group chats, contact and profile management, relay controls, browser notifications, developer diagnostics, and local packaging for desktop builds.
 
 ## Current Features
 

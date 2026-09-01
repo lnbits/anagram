@@ -161,7 +161,7 @@ export function createPrivateMessagesIngestRuntime({
       }
     }
 
-    return chat.type === 'group' ? 'Nostr Group' : 'Nostr Chat';
+    return chat.type === 'group' ? 'Group' : 'Chat';
   }
 
   function queuePrivateMessageIngestion(

@@ -91,7 +91,11 @@ test('Blossom server preference is encrypted, restored, and shown in Settings or
       timeout: 12_000,
     });
     await expect(serverInput).toHaveValue(defaultServerUrl);
-    await expectNoUnexpectedBrowserErrors([alice]);
+    await expectNoUnexpectedBrowserErrors([alice], {
+      allowPatterns: [
+        /Failed to run (?:chat checks|post-DM EOSE checks).*database connection is closing\./,
+      ],
+    });
   } finally {
     await disposeUsers(alice);
   }

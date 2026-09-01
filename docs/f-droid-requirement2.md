@@ -1,6 +1,6 @@
 There are two separate repositories involved:
 
-  - lnbits/nostr-chat: the authoritative source and release tags.
+  - lnbits/anagram: the authoritative source and release tags.
   - fdroid/fdroiddata: the packaging recipe that tells F-Droid how to rebuild and publish Anagram.
 
   Do the upstream release first, then submit the packaging recipe.
@@ -136,7 +136,7 @@ There are two separate repositories involved:
 
   Keep:
 
-  Repo: https://github.com/lnbits/nostr-chat.git
+  Repo: https://github.com/lnbits/anagram.git
   UpdateCheckMode: Tags ^v[0-9.]+$
 
   Remove the obsolete note saying the recipe targets a post-v0.6.1 technical baseline. It can be replaced with something useful to reviewers:

@@ -1,7 +1,6 @@
 export interface AppBuildInfo {
   appVersion: string;
   bundleId: string;
-  builtAt: string;
 }
 
 export type ForceRefreshResult =
@@ -12,7 +11,6 @@ export const APP_SHELL_CACHE_PREFIX = 'nostr-chat-app-shell-';
 export const CURRENT_APP_BUILD_INFO: AppBuildInfo = {
   appVersion: readStringEnv(process.env.APP_VERSION, '0.0.0'),
   bundleId: readStringEnv(process.env.APP_BUNDLE_ID, 'dev'),
-  builtAt: readStringEnv(process.env.APP_BUILD_TIME, ''),
 };
 
 const BUILD_INFO_FILENAME = 'build-info.json';
@@ -86,7 +84,6 @@ export function normalizeAppBuildInfo(value: unknown): AppBuildInfo | null {
   return {
     appVersion: candidate.appVersion.trim(),
     bundleId: candidate.bundleId.trim(),
-    builtAt: typeof candidate.builtAt === 'string' ? candidate.builtAt.trim() : '',
   };
 }
 

@@ -9,7 +9,7 @@ The two earlier dependency and release blockers are resolved and remain resolved
 1. Android notifications now connect directly to Nostr relays without Firebase Cloud Messaging, Google Services or the Capacitor push-notifications package.
 2. NDK's unused Sandpack dependency is replaced during npm resolution by the empty, MIT-licensed `@gitlab/noop` package, so non-FLOSS Nodebox is not fetched.
 
-The current source now implements the configurable Blossom server described by the store listing. A draft `fdroiddata` recipe also builds and validates an unsigned APK from source against the post-`v0.6.1` technical-baseline commit. The GitHub workflow labels its Android debug APK as test-only, while production Android distribution is reserved for F-Droid. Remaining release work includes publishing the current source in a new immutable release, retargeting the recipe to that release, deterministic build inputs if reproducible builds are pursued, and network/asset review.
+The current source now implements the configurable Blossom server described by the store listing. A draft `fdroiddata` recipe also builds and validates an unsigned APK from source against the post-`v0.6.1` technical-baseline commit. The GitHub workflow labels its Android debug APK as test-only, while production Android distribution is reserved for F-Droid. Production bundle metadata is deterministic for a given version and source commit. Remaining release work includes publishing the current source in a new immutable release, retargeting the recipe to that release, and network/asset review.
 
 F-Droid’s governing requirements are in its [Inclusion Policy](https://f-droid.org/en/docs/Inclusion_Policy/).
 
@@ -23,7 +23,7 @@ F-Droid’s governing requirements are in its [Inclusion Policy](https://f-droid
 | Done for technical baseline | No tested `fdroiddata` build recipe | Added and tested a source-build recipe against commit `840eb8de90e78b67364d638cb429f4b9f00803d9`; retarget it to the immutable `v0.6.2` release commit before submission. |
 | Done | Current GitHub Android “release” is a debug APK | Renamed and labeled the GitHub APK as a debug test-only artifact; production Android distribution will be through F-Droid. |
 | Done | Android identity was inconsistent | Normalized Android, Capacitor, and Electron IDs to `com.nostr.chat`. |
-| Important | Production bundles contain the current build timestamp | Make build-time inputs deterministic if reproducible builds are desired. |
+| Done | Production bundles contained the current build timestamp | Removed the wall-clock timestamp; bundle and cache identity now use the app version and Git commit SHA. |
 | Done in current source | The `v0.6.1` listing says Blossom uploads are configurable, but the tagged implementation still uses fixed `blossom.nostr.build` | Added a configurable HTTPS server saved in encrypted NIP-78 preferences; publish it in a new release rather than moving `v0.6.1`. |
 | Legal review | LNbits identifier, name, logo, screenshots and other assets | Confirm that the repository license and distribution permissions cover them all. |
 
@@ -104,9 +104,7 @@ Production Android distribution uses standard F-Droid signing: F-Droid builds th
 
 The GitHub workflow continues to build a debug APK only for direct-install testing. Its public filename is `nostr-chat-android-debug-test-only.apk`; the workflow job, artifact name, release warning, and download labels all identify it as test-only. It is not presented as the production Android package, and users may need to uninstall an older test build if its debug signature differs.
 
-Reproducible/upstream signing remains a possible future strategy but is not required for the current standard F-Droid path; see F-Droid’s [Reproducible Builds documentation](https://f-droid.org/en/docs/Reproducible_Builds/).
-
-The timestamp generated in [quasar.config.ts](../quasar.config.ts) should be derived deterministically from the release commit or supplied by both build systems if reproducibility is pursued.
+Reproducible/upstream signing remains a possible future strategy but is not required for the current standard F-Droid path; see F-Droid’s [Reproducible Builds documentation](https://f-droid.org/en/docs/Reproducible_Builds/). Production builds no longer embed the current time in app metadata. [quasar.config.ts](../quasar.config.ts) derives the bundle and service-worker cache identity from the app version and Git commit SHA, so repeated builds of the same source use the same value.
 
 ### 6. Review network anti-features
 
@@ -127,11 +125,10 @@ The current media-upload implementation defaults to `blossom.nostr.build` but le
 
 1. Complete the remaining asset and brand licensing review.
 2. Confirm with reviewers whether the configurable Blossom default needs any anti-feature disclosure.
-3. Make build inputs deterministic if reproducible builds are pursued.
-4. Run the complete project validation and Android smoke tests.
-5. Bump the version and create a new immutable release tag (normally `v0.6.2`) containing the configurable Blossom implementation; do not move `v0.6.1`.
-6. Retarget the tested F-Droid recipe to the new tag and repeat the isolated build and APK checks.
-7. Submit a merge request to the official `fdroiddata` repository.
-8. Respond to scanner/reviewer feedback and document any requested anti-features.
+3. Run the complete project validation and Android smoke tests.
+4. Bump the version and create a new immutable release tag (normally `v0.6.2`) containing the configurable Blossom implementation; do not move `v0.6.1`.
+5. Retarget the tested F-Droid recipe to the new tag and repeat the isolated build and APK checks.
+6. Submit a merge request to the official `fdroiddata` repository.
+7. Respond to scanner/reviewer feedback and document any requested anti-features.
 
 With the NDK dependency, Firebase-free release, configurable Blossom implementation, baseline source-build recipe, and Android distribution strategy addressed, the application looks like a reasonable F-Droid candidate once the remaining release and disclosure work is complete.

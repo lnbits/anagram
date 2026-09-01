@@ -49,11 +49,6 @@
               {{ appUpdateStore.currentBuildInfo.appVersion }}
             </div>
 
-            <div class="developer-facts__label">{{ $t('developer.buildTime') }}</div>
-            <div class="developer-facts__value developer-facts__value--mono">
-              {{ appUpdateStore.currentBuildInfo.builtAt || $t('common.n') }}
-            </div>
-
             <div class="developer-facts__label">{{ $t('developer.bundleId') }}</div>
             <div class="developer-facts__value developer-facts__value--mono">
               {{ appUpdateStore.currentBuildInfo.bundleId }}

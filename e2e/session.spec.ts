@@ -75,10 +75,15 @@ test('Blossom server preference is encrypted, restored, and shown in Settings or
     await reloadAndWaitForApp(alice.page);
     await expect(serverInput).toHaveValue(customServerUrl);
 
-    await logoutFromSettings(alice.page);
+    await Promise.all([
+      alice.page.waitForEvent('load', { timeout: 30_000 }),
+      logoutFromSettings(alice.page),
+    ]);
     await expectBrowserStorageToBeEmpty(alice.page);
     await bootstrapSessionOnPage(alice.page, TEST_ACCOUNTS.mediaSettingsAlice);
-    await alice.page.goto('/#/settings/media-data-storage');
+    await alice.page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await alice.page.getByTestId('settings-media-data-storage-item').click();
+    await expect(alice.page).toHaveURL(/#\/settings\/media-data-storage$/);
     await expect(serverInput).toHaveValue(customServerUrl);
 
     await alice.page.getByTestId('settings-blossom-restore-default').click();

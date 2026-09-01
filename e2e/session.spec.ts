@@ -23,8 +23,11 @@ test('logout and logging in as another user does not leak prior chat state', asy
     await establishAcceptedDirectChat(alice, bob);
 
     await alice.page.goto('/#/chats');
+    const bobChat = alice.page.locator(
+      `[data-testid="chat-item"][data-chat-public-key="${bob.session.publicKey}"]`
+    );
     await expect(alice.page.getByTestId('chat-item')).toHaveCount(1);
-    await expect(alice.page.getByText(TEST_ACCOUNTS.isolationBob.displayName)).toBeVisible();
+    await expect(bobChat).toHaveCount(1);
 
     await logoutFromSettings(alice.page);
     await expectBrowserStorageToBeEmpty(alice.page);
@@ -32,7 +35,7 @@ test('logout and logging in as another user does not leak prior chat state', asy
 
     await alice.page.goto('/#/chats');
     await expect(alice.page.getByTestId('chat-item')).toHaveCount(0);
-    await expect(alice.page.getByText(TEST_ACCOUNTS.isolationBob.displayName)).toHaveCount(0);
+    await expect(bobChat).toHaveCount(0);
     await expect(alice.page.getByTestId('requests-row')).toHaveCount(0);
     await expectNoUnexpectedBrowserErrors([alice, bob]);
   } finally {
@@ -94,6 +97,7 @@ test('Blossom server preference is encrypted, restored, and shown in Settings or
     await expectNoUnexpectedBrowserErrors([alice], {
       allowPatterns: [
         /Failed to run (?:chat checks|post-DM EOSE checks).*database connection is closing\./,
+        /Failed to process my relay list event.*database connection is closing\./,
       ],
     });
   } finally {

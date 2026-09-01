@@ -4,6 +4,7 @@
     class="chat-item"
     :class="{ 'chat-item--muted': isMuted }"
     data-testid="chat-item"
+    :data-chat-public-key="chat.publicKey"
     :active="active"
     active-class="chat-item--active"
     @click="handleSelectChat"

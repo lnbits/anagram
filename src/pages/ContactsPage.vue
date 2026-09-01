@@ -26,9 +26,11 @@
                 flat
                 round
                 icon="refresh"
+                data-testid="refresh-contacts-button"
                 :aria-label="$t('contacts.refreshContacts')"
-                :loading="isRefreshingContacts"
-                @click="handleRefreshContacts"
+                :loading="isRefreshContactsButtonPending"
+                :disable="isRefreshingContacts"
+                @click="handleRefreshContacts()"
               >
                 <AppTooltip>{{ $t('contacts.refreshContacts') }}</AppTooltip>
               </q-btn>
@@ -49,7 +51,12 @@
           <StartupHistoryBanner class="contacts-sidebar__healing" />
         </div>
 
-        <q-scroll-area class="contacts-list">
+        <PullToRefreshScrollArea
+          class="contacts-list"
+          data-testid="contacts-list-pull-to-refresh"
+          :disable="isRefreshingContacts"
+          @refresh="handlePullToRefreshContacts"
+        >
           <q-list>
             <template v-if="!isLoadingContacts && contacts.length > 0">
               <template v-for="section in contactSections" :key="section.key">
@@ -212,7 +219,7 @@
               {{ $t('contacts.contactsFound') }}
             </div>
           </q-list>
-        </q-scroll-area>
+        </PullToRefreshScrollArea>
         <AppNavRail
           v-if="!isMobile"
           class="contacts-sidebar__nav"
@@ -290,6 +297,7 @@ import AppTooltip from 'src/components/AppTooltip.vue';
 import ContactProfile from 'src/components/ContactProfile.vue';
 import CachedAvatar from 'src/components/CachedAvatar.vue';
 import ContactLookupDialog from 'src/components/ContactLookupDialog.vue';
+import PullToRefreshScrollArea from 'src/components/PullToRefreshScrollArea.vue';
 import ReconnectHealingBanner from 'src/components/ReconnectHealingBanner.vue';
 import StartupHistoryBanner from 'src/components/StartupHistoryBanner.vue';
 import { useSectionShell } from 'src/composables/useSectionShell';
@@ -349,6 +357,7 @@ const contactQueryModel = computed({
 const isAddContactDialogOpen = ref(false);
 const isLoadingContacts = ref(false);
 const isRefreshingContacts = ref(false);
+const isRefreshContactsButtonPending = ref(false);
 const selectedContactId = ref<number | null>(null);
 const selectedContactPubkey = ref('');
 const selectedContactProfile = ref(createEmptyContactProfileForm());
@@ -971,12 +980,21 @@ async function refreshStoredContact(contact: ContactRecord): Promise<ContactReco
   return contactsService.getContactByPublicKey(contact.public_key);
 }
 
-async function handleRefreshContacts(): Promise<void> {
+async function handlePullToRefreshContacts(done: () => void): Promise<void> {
+  try {
+    await handleRefreshContacts('pull');
+  } finally {
+    done();
+  }
+}
+
+async function handleRefreshContacts(source: 'button' | 'pull' = 'button'): Promise<void> {
   if (isRefreshingContacts.value) {
     return;
   }
 
   isRefreshingContacts.value = true;
+  isRefreshContactsButtonPending.value = source === 'button';
 
   try {
     await nostrStore.refreshPrivateContactListWithOutgoingMessages();
@@ -1037,6 +1055,7 @@ async function handleRefreshContacts(): Promise<void> {
     reportUiError('Failed to refresh contacts from header', error, t('errors.failedRefreshContacts'));
   } finally {
     isRefreshingContacts.value = false;
+    isRefreshContactsButtonPending.value = false;
   }
 }
 

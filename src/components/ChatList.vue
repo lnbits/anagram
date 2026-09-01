@@ -1,5 +1,9 @@
 <template>
-  <q-scroll-area class="chat-list-scroll">
+  <PullToRefreshScrollArea
+    class="chat-list-scroll"
+    :disable="refreshDisabled"
+    @refresh="$emit('refresh', $event)"
+  >
     <q-list>
       <q-item
         v-if="showRequestsRow"
@@ -43,11 +47,12 @@
         @delete-chat="$emit('delete-chat', $event)"
       />
     </q-list>
-  </q-scroll-area>
+  </PullToRefreshScrollArea>
 </template>
 
 <script setup lang="ts">
 import ChatItem from 'src/components/ChatItem.vue';
+import PullToRefreshScrollArea from 'src/components/PullToRefreshScrollArea.vue';
 import type { Chat } from 'src/types/chat';
 
 const props = withDefaults(defineProps<{
@@ -56,10 +61,12 @@ const props = withDefaults(defineProps<{
   showRequestsRow?: boolean;
   requestCount?: number;
   requestsActive?: boolean;
+  refreshDisabled?: boolean;
 }>(), {
   showRequestsRow: false,
   requestCount: 0,
-  requestsActive: false
+  requestsActive: false,
+  refreshDisabled: false
 });
 
 defineEmits<{
@@ -73,6 +80,7 @@ defineEmits<{
   (event: 'mark-as-read', chatId: string): void;
   (event: 'delete-chat', chatId: string): void;
   (event: 'open-requests'): void;
+  (event: 'refresh', done: () => void): void;
 }>();
 
 function formatRequestCount(value: number): string {

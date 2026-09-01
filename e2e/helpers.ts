@@ -1068,6 +1068,23 @@ export async function setAppVisibility(
   );
 }
 
+export async function pullToRefresh(page: Page, testId: string): Promise<void> {
+  const pullArea = page.getByTestId(testId);
+  await expect(pullArea).toBeVisible();
+
+  const bounds = await pullArea.boundingBox();
+  if (!bounds) {
+    throw new Error(`Pull-to-refresh area ${testId} has no visible bounds.`);
+  }
+
+  const startX = bounds.x + bounds.width / 2;
+  const startY = bounds.y + Math.min(32, bounds.height / 4);
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(startX, startY + 100, { steps: 10 });
+  await page.mouse.up();
+}
+
 export async function openDirectChatFromIdentifier(
   page: Page,
   identifier: string,

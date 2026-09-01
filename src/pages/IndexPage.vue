@@ -33,7 +33,7 @@
                 data-testid="refresh-chats-button"
                 :aria-label="$t('chat.refreshChats')"
                 :loading="isManualRefreshPending"
-                :disable="isManualRefreshPending || nostrStore.isReconnectHealing"
+                :disable="isUserRefreshPending || nostrStore.isReconnectHealing"
                 @click="handleRunReconnectHealing"
               />
               <q-btn
@@ -76,11 +76,13 @@
 
         <ChatList
           class="sidebar-list"
+          data-testid="chat-list-pull-to-refresh"
           :chats="sidebarChats"
           :selected-chat-id="selectedChatId"
           :show-requests-row="showRequestsRow"
           :request-count="requestCount"
           :requests-active="requestsRowActive"
+          :refresh-disabled="isUserRefreshPending || nostrStore.isReconnectHealing"
           @select="handleSelectChat"
           @open-requests="handleOpenRequests"
           @view-profile="handleViewChatProfile"
@@ -91,6 +93,7 @@
           @block="handleBlockChat"
           @mark-as-read="handleMarkChatAsRead"
           @delete-chat="handleDeleteChat"
+          @refresh="handlePullToRefreshChats"
         />
         <AppNavRail
           v-if="!isMobile"
@@ -297,6 +300,7 @@ const isNewChatDialogOpen = ref(false);
 const isCreateGroupDialogOpen = ref(false);
 const isCreatingGroup = ref(false);
 const isManualRefreshPending = ref(false);
+const isPullRefreshPending = ref(false);
 const isForwardMessageDialogOpen = ref(false);
 const isForwardingMessage = ref(false);
 const forwardingMessage = ref<Message | null>(null);
@@ -322,6 +326,9 @@ const requestCount = computed(() => chatStore.requestCount);
 const requestsRowActive = computed(() => {
   return isRequestsRoute.value || chatStore.isRequestChat(activeChatId.value);
 });
+const isUserRefreshPending = computed(
+  () => isManualRefreshPending.value || isPullRefreshPending.value
+);
 const selectedChatId = computed(() => {
   if (isRequestsRoute.value || chatStore.isRequestChat(activeChatId.value)) {
     return null;
@@ -986,11 +993,28 @@ async function handleRefreshChat(chatId: string): Promise<void> {
 }
 
 async function handleRunReconnectHealing(): Promise<void> {
-  if (isManualRefreshPending.value || nostrStore.isReconnectHealing) {
+  await runUserReconnectHealing('button');
+}
+
+async function handlePullToRefreshChats(done: () => void): Promise<void> {
+  try {
+    await runUserReconnectHealing('pull');
+  } finally {
+    done();
+  }
+}
+
+async function runUserReconnectHealing(source: 'button' | 'pull'): Promise<void> {
+  if (isUserRefreshPending.value || nostrStore.isReconnectHealing) {
     return;
   }
 
-  isManualRefreshPending.value = true;
+  if (source === 'button') {
+    isManualRefreshPending.value = true;
+  } else {
+    isPullRefreshPending.value = true;
+  }
+
   try {
     await nostrStore.runReconnectHealing('manual-refresh', {
       propagateError: true,
@@ -998,7 +1022,11 @@ async function handleRunReconnectHealing(): Promise<void> {
   } catch (error) {
     reportUiError('Failed to run reconnect healing manually', error, t('errors.failedRefreshChats'));
   } finally {
-    isManualRefreshPending.value = false;
+    if (source === 'button') {
+      isManualRefreshPending.value = false;
+    } else {
+      isPullRefreshPending.value = false;
+    }
   }
 }
 

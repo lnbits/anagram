@@ -631,7 +631,10 @@ async function handleSend(payload: { text: string; replyTo: MessageReplyPreview 
         payload.text,
         payload.replyTo,
         {
-          relayUrls: fallbackRelayUrls
+          relayUrls: fallbackRelayUrls,
+          ...(typeof error.localMessageId === 'number' && error.localMessageId > 0
+            ? { continueFromMessageId: error.localMessageId }
+            : {})
         }
       );
     }
@@ -681,7 +684,10 @@ async function handleSendMedia(payload: {
         payload.attachment,
         payload.replyTo,
         {
-          relayUrls: fallbackRelayUrls
+          relayUrls: fallbackRelayUrls,
+          ...(typeof error.localMessageId === 'number' && error.localMessageId > 0
+            ? { continueFromMessageId: error.localMessageId }
+            : {})
         }
       );
     }
@@ -778,6 +784,9 @@ async function handleForwardMessageToChat(chatId: string): Promise<void> {
 
       created = await messageStore.forwardMessage(targetChat.id, message, {
         relayUrls: fallbackRelayUrls,
+        ...(typeof error.localMessageId === 'number' && error.localMessageId > 0
+          ? { continueFromMessageId: error.localMessageId }
+          : {}),
       });
     }
 

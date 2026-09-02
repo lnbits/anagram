@@ -123,8 +123,10 @@ test('an unresponsive extra relay does not block startup, send, or receive', asy
     const sendStartedAt = Date.now();
     await sendMessage(alice.page, liveMessage, {
       chatId: bob.session.publicKey,
+      attempts: 1,
+      timeoutMs: 1_000,
     });
-    expect(Date.now() - sendStartedAt).toBeLessThan(8_000);
+    expect(Date.now() - sendStartedAt).toBeLessThan(2_000);
 
     await navigateToChat(bob.page, alice.session.publicKey);
     await waitForThreadMessage(bob.page, liveMessage, {

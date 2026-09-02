@@ -1211,6 +1211,8 @@ export async function sendMessage(
   text: string,
   options: {
     chatId?: string;
+    attempts?: number;
+    timeoutMs?: number;
   } = {}
 ): Promise<void> {
   await expect(composerInput(page)).toBeVisible();

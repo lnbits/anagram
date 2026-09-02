@@ -15,7 +15,9 @@ const {
   compareMessageCursors,
   countUnreadMessageRowsAfterBoundary,
   countOwnUnseenReactions,
+  isOptimisticMessageId,
   mapMessageRowToMessage,
+  mergeLoadedMessagesWithLocalOutbound,
   mergeMessagesById,
   readUnseenReactionCountFromMeta,
   resolveChatDeliveryTarget,
@@ -116,6 +118,57 @@ describe('messageStore logic', () => {
 
     expect(merged.map((message) => message.id)).toEqual(['1', '2', '3']);
     expect(merged.find((message) => message.id === '2')?.meta).toEqual({ edited: true });
+  });
+
+  it('identifies optimistic local message ids', () => {
+    expect(isOptimisticMessageId('optimistic-1')).toBe(true);
+    expect(isOptimisticMessageId('12')).toBe(false);
+    expect(isOptimisticMessageId(null)).toBe(false);
+  });
+
+  it('keeps unpublished outbound messages when a later load would otherwise replace them', () => {
+    const loaded = [
+      {
+        id: '1',
+        chatId: 'chat',
+        text: 'history',
+        sender: 'them' as const,
+        sentAt: '2026-01-01T00:00:00.000Z',
+        authorPublicKey: 'b',
+        eventId: 'e'.repeat(64),
+        nostrEvent: null,
+        meta: {},
+      },
+    ];
+    const existing = [
+      loaded[0],
+      {
+        id: 'optimistic-99',
+        chatId: 'chat',
+        text: 'just sent',
+        sender: 'me' as const,
+        sentAt: '2026-01-02T00:00:00.000Z',
+        authorPublicKey: 'a',
+        eventId: null,
+        nostrEvent: null,
+        meta: {},
+      },
+      {
+        id: '8',
+        chatId: 'chat',
+        text: 'persisted unpublished',
+        sender: 'me' as const,
+        sentAt: '2026-01-03T00:00:00.000Z',
+        authorPublicKey: 'a',
+        eventId: null,
+        nostrEvent: null,
+        meta: {},
+      },
+    ];
+
+    expect(
+      mergeLoadedMessagesWithLocalOutbound(loaded, existing).map((message) => message.id)
+    ).toEqual(['1', 'optimistic-99', '8']);
   });
 
   it('builds forwarded payloads without original reply or event provenance metadata', () => {

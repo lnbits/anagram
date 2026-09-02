@@ -276,7 +276,7 @@ describe('reconnectHealingRuntime', () => {
     await runQueuedTimersForStatusSteps(3);
     expect(refreshDeveloperPendingQueues).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(8_000);
     await runQueuedTimersForStatusSteps(5);
     await runPromise;
 

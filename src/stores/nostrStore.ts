@@ -27,6 +27,7 @@ import {
   PRIVATE_MESSAGES_EPOCH_SUBSCRIPTION_REFRESH_DEBOUNCE_MS,
   PRIVATE_MESSAGES_LIVE_RECONNECT_LOOKBACK_SECONDS,
   RELAY_CONNECT_FAILURE_COOLDOWN_MS,
+  RELAY_FIRST_HEALTHY_WAIT_MS,
   STARTUP_STEP_MIN_PROGRESS_MS,
 } from 'src/stores/nostr/constants';
 import { createContactProfileRuntime } from 'src/stores/nostr/contactProfileRuntime';
@@ -997,6 +998,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     getStoredAuthMethod,
     hasNip07Extension,
     initialConnectTimeoutMs: INITIAL_CONNECT_TIMEOUT_MS,
+    relayFirstHealthyWaitMs: RELAY_FIRST_HEALTHY_WAIT_MS,
     isPrivateMessagesSubscriptionRelayTracked: (relayUrl) =>
       isPrivateMessagesSubscriptionRelayTrackedRuntime(relayUrl),
     logDeveloperTrace,

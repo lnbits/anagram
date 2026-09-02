@@ -54,7 +54,9 @@ export interface BootstrapExtensionUserOptions extends BootstrapUserOptions {
 
 export const E2E_RELAY_URL = process.env.E2E_RELAY_URL ?? 'ws://127.0.0.1:7000';
 export const E2E_RELAY_URL_TWO = process.env.E2E_RELAY_URL_TWO ?? 'ws://127.0.0.1:7001';
+export const E2E_RELAY_URL_HANG = process.env.E2E_RELAY_URL_HANG ?? 'ws://127.0.0.1:65534';
 export const E2E_DUAL_RELAY_URLS = [E2E_RELAY_URL, E2E_RELAY_URL_TWO];
+export const E2E_HANG_RELAY_PORT = Number.parseInt(new URL(E2E_RELAY_URL_HANG).port, 10) || 7002;
 
 export const TEST_ACCOUNTS = {
   startupRestoreAlice: {
@@ -148,6 +150,14 @@ export const TEST_ACCOUNTS = {
   relaySettingsBob: {
     privateKey: '68da0a59c381ef5c80e64a5cbca770c90c06fdd57b39b75c80fc17a4a217de99',
     displayName: 'Bob Relay Settings',
+  },
+  slowRelayAlice: {
+    privateKey: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    displayName: 'Alice Slow Relay',
+  },
+  slowRelayBob: {
+    privateKey: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    displayName: 'Bob Slow Relay',
   },
   groupAlice: {
     privateKey: 'eeb0542ecef525deee036b1865dc872bcda25df86016403ef25a730f330115b2',
@@ -2101,6 +2111,45 @@ export async function establishAcceptedDirectChat(
   await waitForThreadMessage(sender.page, replyMessage, {
     chatId: recipient.session.publicKey,
   });
+}
+
+export async function startHangingRelayServer(): Promise<() => Promise<void>> {
+  const server = net.createServer((socket) => {
+    socket.on('error', () => {
+      // Intentionally ignore client errors; this socket never completes the handshake.
+    });
+  });
+  let didListen = false;
+
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE') {
+        resolve();
+        return;
+      }
+
+      reject(error);
+    };
+
+    server.once('error', onError);
+    server.listen(E2E_HANG_RELAY_PORT, '127.0.0.1', () => {
+      didListen = true;
+      server.off('error', onError);
+      resolve();
+    });
+  });
+
+  return async () => {
+    if (!didListen) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      server.close(() => {
+        resolve();
+      });
+    });
+  };
 }
 
 export async function pauseRelayService(service: keyof typeof relayPortsByService): Promise<void> {

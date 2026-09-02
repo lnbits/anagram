@@ -11,6 +11,7 @@ import { type ChatRow, chatDataService, type MessageRow } from 'src/services/cha
 import { contactsService } from 'src/services/contactsService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { PRIVATE_CONTACT_LIST_D_TAG, PRIVATE_CONTACT_LIST_TITLE } from 'src/stores/nostr/constants';
+import { createReadyRelaySet, fetchEventWithRelayTimeout } from 'src/stores/nostr/relayQueryUtils';
 import type { Ref } from 'vue';
 
 interface PrivateContactListTarget {
@@ -472,8 +473,9 @@ export function createPrivateContactListRuntime({
       await ensureRelayConnections(relayUrls);
       await getLoggedInSignerUser();
 
-      const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
-      const fetchedEvent = await ndk.fetchEvent(
+      const relaySet = createReadyRelaySet(ndk, relayUrls);
+      const fetchedEvent = await fetchEventWithRelayTimeout(
+        ndk,
         {
           kinds: [NDKKind.FollowSet],
           authors: [loggedInPubkeyHex],
@@ -529,8 +531,9 @@ export function createPrivateContactListRuntime({
         await ensureRelayConnections(relayUrls);
         await getLoggedInSignerUser();
 
-        const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
-        const listEvent = await ndk.fetchEvent(
+        const relaySet = createReadyRelaySet(ndk, relayUrls);
+        const listEvent = await fetchEventWithRelayTimeout(
+          ndk,
           {
             kinds: [NDKKind.FollowSet],
             authors: [loggedInPubkeyHex],

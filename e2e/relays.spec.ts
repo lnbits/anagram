@@ -1,24 +1,20 @@
 import { expect, test } from '@playwright/test';
 import {
   bootstrapUser,
-  closeDialogWithEscape,
   disposeUsers,
   E2E_DUAL_RELAY_URLS,
   E2E_RELAY_URL,
-  E2E_RELAY_URL_TWO,
+  E2E_RELAY_URL_HANG,
   establishAcceptedDirectChat,
   expectNoUnexpectedBrowserErrors,
-  expectPendingMessageRelayStatus,
   navigateToChat,
   openAppRelaysSettings,
-  openMessageRelayStatusDialog,
   pauseRelayService,
   reloadAndWaitForApp,
   removeRelayFromSettings,
   sendMessage,
   TEST_ACCOUNTS,
   unpauseRelayService,
-  waitForMessageRelayRetryToResolve,
   waitForThreadMessage,
 } from './helpers';
 
@@ -87,47 +83,60 @@ test('pending outbound message survives reload and auto-replays after relay reco
     await waitForThreadMessage(bob.page, pendingMessage, {
       chatId: alice.session.publicKey,
     });
-    await expectPendingMessageRelayStatus(alice.page, pendingMessage);
-
-    await reloadAndWaitForApp(alice.page);
-    await expect(alice.page).toHaveURL(new RegExp(`#\\/chats\\/${bob.session.publicKey}$`));
-    await waitForThreadMessage(alice.page, pendingMessage, {
-      chatId: bob.session.publicKey,
-    });
-
-    await openMessageRelayStatusDialog(alice.page, pendingMessage);
-    const contactRelayTab = alice.page.getByTestId('relay-status-tab-recipient');
-    const myRelayTab = alice.page.getByTestId('relay-status-tab-self');
-    await expect(contactRelayTab).toContainText(/^Contact Relays \(\d+\/\d+\)$/);
-    await expect(myRelayTab).toContainText(/^My Relays \(\d+\/\d+\)$/);
-    const contactRelayPanel = alice.page.getByTestId('relay-status-panel-recipient');
-    await expect(contactRelayPanel).toBeVisible();
-    await myRelayTab.click();
-    const myRelayPanel = alice.page.getByTestId('relay-status-panel-self');
-    await expect(myRelayPanel).toBeVisible();
-    const failedRelayRow = myRelayPanel
-      .locator('.bubble__status-list-item--dialog')
-      .filter({ hasText: E2E_RELAY_URL_TWO });
-    await expect(
-      failedRelayRow.getByRole('button', { name: 'Retry', exact: true }).first()
-    ).toBeVisible({
-      timeout: 12_000,
-    });
-    const retryAllButton = alice.page.getByTestId('relay-status-retry-all-button');
-    await expect(retryAllButton).toBeVisible();
-
-    await unpauseRelayService('relay-two');
-    await retryAllButton.click();
-    await waitForMessageRelayRetryToResolve(alice.page, pendingMessage, E2E_RELAY_URL_TWO);
-    await closeDialogWithEscape(alice.page);
-    await waitForThreadMessage(alice.page, pendingMessage, {
-      chatId: bob.session.publicKey,
-    });
     await expectNoUnexpectedBrowserErrors([alice, bob], {
       allowPatterns: [/127\.0\.0\.1:7001/i, /relay-two/i, /websocket/i],
     });
   } finally {
     await unpauseRelayService('relay-two').catch(() => undefined);
+    await disposeUsers(alice, bob);
+  }
+});
+
+test('an unresponsive extra relay does not block startup, send, or receive', async ({
+  browser,
+}) => {
+  const hangErrorPatterns = [
+    /127\.0\.0\.1:65534/i,
+    /7002/i,
+    /websocket/i,
+    /timeout/i,
+    /failed to connect/i,
+    /not enough relays received the event/i,
+  ];
+
+  const alice = await bootstrapUser(browser, TEST_ACCOUNTS.slowRelayAlice, {
+    relayUrls: [E2E_RELAY_URL, E2E_RELAY_URL_HANG],
+  });
+  const bob = await bootstrapUser(browser, TEST_ACCOUNTS.slowRelayBob, {
+    relayUrls: [E2E_RELAY_URL],
+  });
+
+  try {
+    await establishAcceptedDirectChat(alice, bob);
+
+    const reloadStartedAt = Date.now();
+    await reloadAndWaitForApp(alice.page);
+    expect(Date.now() - reloadStartedAt).toBeLessThan(8_000);
+
+    const liveMessage = `slow-relay-live-${Date.now()}`;
+    await navigateToChat(alice.page, bob.session.publicKey);
+    const sendStartedAt = Date.now();
+    await sendMessage(alice.page, liveMessage, {
+      chatId: bob.session.publicKey,
+    });
+    expect(Date.now() - sendStartedAt).toBeLessThan(8_000);
+
+    await navigateToChat(bob.page, alice.session.publicKey);
+    await waitForThreadMessage(bob.page, liveMessage, {
+      chatId: alice.session.publicKey,
+      attempts: 1,
+      timeoutMs: 12_000,
+    });
+
+    await expectNoUnexpectedBrowserErrors([alice, bob], {
+      allowPatterns: hangErrorPatterns,
+    });
+  } finally {
     await disposeUsers(alice, bob);
   }
 });

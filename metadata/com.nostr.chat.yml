@@ -28,9 +28,6 @@ Builds:
       - tar xzf node.tar.gz --strip-components=1 -C /usr/local/
     gradle:
       - yes
-    srclibs:
-      - esbuild@v0.27.7
-      - rolldown@v1.0.1
     prebuild:
       - rustup set profile minimal
       - rustup default 1.95.0

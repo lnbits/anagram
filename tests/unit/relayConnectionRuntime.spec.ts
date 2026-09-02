@@ -61,12 +61,13 @@ function createFakeRelay(url = 'wss://relay.example/') {
 
 function createRuntimeHarness(
   options: {
+    hasActivatedPool?: boolean;
     isPrivateMessagesSubscriptionRelayTracked?: boolean;
     loggedInPublicKeyHex?: string | null;
   } = {}
 ) {
   const { connectivity, rawConnect, relay } = createFakeRelay();
-  let hasActivatedPool = true;
+  let hasActivatedPool = options.hasActivatedPool ?? true;
   let hasRelayStatusListeners = false;
   let connectPromise: Promise<void> | null = null;
   const configuredRelayUrls = new Set<string>();
@@ -115,6 +116,7 @@ function createRuntimeHarness(
     getStoredAuthMethod: () => null,
     hasNip07Extension: () => false,
     initialConnectTimeoutMs: 3000,
+    relayFirstHealthyWaitMs: 80,
     isPrivateMessagesSubscriptionRelayTracked: () =>
       options.isPrivateMessagesSubscriptionRelayTracked ?? false,
     logDeveloperTrace: vi.fn(),
@@ -256,5 +258,56 @@ describe('relayConnectionRuntime', () => {
 
     expect(queueOutboundMessageReplay).toHaveBeenCalledTimes(1);
     expect(queuePrivateMessagesWatchdog).toHaveBeenCalledWith(0);
+  });
+
+  it('becomes usable as soon as the first requested relay connects', async () => {
+    const { rawConnect, relay, runtime } = createRuntimeHarness({
+      hasActivatedPool: false,
+    });
+    rawConnect.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          globalThis.setTimeout(() => {
+            relay.connected = true;
+            resolve();
+          }, 20);
+        })
+    );
+
+    const startedAt = Date.now();
+    await runtime.ensureRelayConnections(['wss://relay.example', 'wss://slow.example']);
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(elapsedMs).toBeLessThan(200);
+    expect(relay.connected).toBe(true);
+  });
+
+  it('does not wait for a hanging relay when another requested relay is already healthy', async () => {
+    const { ndk, rawConnect, relay, runtime } = createRuntimeHarness();
+    relay.connected = true;
+    rawConnect.mockImplementation(() => new Promise(() => {}));
+    ndk.connect = vi.fn(() => new Promise(() => {}));
+
+    const startedAt = Date.now();
+    await runtime.ensureRelayConnections(['wss://relay.example', 'wss://slow.example']);
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(elapsedMs).toBeLessThan(250);
+  });
+
+  it('abandons slow relays within the first-healthy wait instead of blocking on pool connect', async () => {
+    const { ndk, rawConnect, runtime } = createRuntimeHarness({
+      hasActivatedPool: false,
+    });
+    rawConnect.mockImplementation(() => new Promise(() => {}));
+    ndk.connect = vi.fn(() => new Promise(() => {}));
+
+    const startedAt = Date.now();
+    await runtime.ensureRelayConnections(['wss://relay.example', 'wss://slow.example']);
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(elapsedMs).toBeGreaterThanOrEqual(80);
+    expect(elapsedMs).toBeLessThan(500);
+    expect(ndk.connect).toHaveBeenCalled();
   });
 });

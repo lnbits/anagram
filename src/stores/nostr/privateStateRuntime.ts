@@ -21,6 +21,11 @@ import {
   PRIVATE_PREFERENCES_D_TAG,
   PRIVATE_PREFERENCES_KIND,
 } from 'src/stores/nostr/constants';
+import {
+  createReadyRelaySet,
+  fetchEventsWithRelayTimeout,
+  fetchEventWithRelayTimeout,
+} from 'src/stores/nostr/relayQueryUtils';
 import type {
   ContactCursorContent,
   ContactCursorState,
@@ -356,8 +361,9 @@ export function createPrivateStateRuntime({
         await ensureRelayConnections(relayUrls);
         await ensureLoggedInSignerUser();
 
-        const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
-        const preferencesEvent = await ndk.fetchEvent(
+        const relaySet = createReadyRelaySet(ndk, relayUrls);
+        const preferencesEvent = await fetchEventWithRelayTimeout(
+          ndk,
           {
             kinds: [PRIVATE_PREFERENCES_KIND],
             authors: [loggedInPubkeyHex],
@@ -812,8 +818,9 @@ export function createPrivateStateRuntime({
 
     await ensureRelayConnections(relayUrls);
 
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
-    const listEvent = await ndk.fetchEvent(
+    const relaySet = createReadyRelaySet(ndk, relayUrls);
+    const listEvent = await fetchEventWithRelayTimeout(
+      ndk,
       {
         kinds: [NDKKind.FollowSet],
         authors: [normalizedGroupPublicKey],
@@ -857,8 +864,9 @@ export function createPrivateStateRuntime({
     );
     await ensureRelayConnections(context.relayUrls);
 
-    const relaySet = NDKRelaySet.fromRelayUrls(context.relayUrls, ndk, false);
-    const listEvent = await ndk.fetchEvent(
+    const relaySet = createReadyRelaySet(ndk, context.relayUrls);
+    const listEvent = await fetchEventWithRelayTimeout(
+      ndk,
       {
         kinds: [NDKKind.FollowSet],
         authors: [normalizedGroupPublicKey],
@@ -1474,8 +1482,9 @@ export function createPrivateStateRuntime({
 
     await ensureRelayConnections(relayUrls);
 
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
-    const listEvent = await ndk.fetchEvent(
+    const relaySet = createReadyRelaySet(ndk, relayUrls);
+    const listEvent = await fetchEventWithRelayTimeout(
+      ndk,
       {
         kinds: [NDKKind.FollowSet],
         authors: [normalizedGroupPublicKey],
@@ -1552,8 +1561,9 @@ export function createPrivateStateRuntime({
     await ensureRelayConnections(relayUrls);
     await ensureLoggedInSignerUser();
 
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
-    const events = await ndk.fetchEvents(
+    const relaySet = createReadyRelaySet(ndk, relayUrls);
+    const events = await fetchEventsWithRelayTimeout(
+      ndk,
       {
         kinds: [PRIVATE_PREFERENCES_KIND],
         authors: [loggedInPubkeyHex],
@@ -1822,11 +1832,12 @@ export function createPrivateStateRuntime({
     await ensureRelayConnections(relayUrls);
     await ensureLoggedInSignerUser();
 
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
+    const relaySet = createReadyRelaySet(ndk, relayUrls);
     const eventsByDTag = new Map<string, ContactCursorContent>();
 
     for (const dTagBatch of chunkValues(normalizedContactDTags, CONTACT_CURSOR_FETCH_BATCH_SIZE)) {
-      const events = await ndk.fetchEvents(
+      const events = await fetchEventsWithRelayTimeout(
+        ndk,
         {
           kinds: [PRIVATE_PREFERENCES_KIND],
           authors: [loggedInPubkeyHex],

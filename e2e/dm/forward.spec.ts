@@ -91,7 +91,9 @@ test('accepted DM forwards message content to another chat without attribution',
       .poll(() => bob.page.evaluate(() => window.sessionStorage.getItem('e2e:last-copied-text')))
       .toBe(linkedUrl);
 
-    await forwardMessage(alice.page, originalMessage, charlie.account.displayName);
+    await forwardMessage(alice.page, originalMessage, charlie.account.displayName, {
+      publicKey: charlie.session.publicKey,
+    });
 
     const compactChatRowHeight = await alice.page
       .getByTestId('chat-item')

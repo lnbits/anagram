@@ -94,6 +94,8 @@ jobs:
         run: sleep 10
 
       - name: Run ${{ matrix.name }} e2e smoke tests
+        env:
+          APP_E2E_DISABLE_NDK_OUTBOX: 'true'
         run: npm run ${{ matrix.script }}
 
       - name: Stop local relay

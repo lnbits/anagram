@@ -38,5 +38,9 @@ export default defineConfig({
     url: appBaseUrl,
     reuseExistingServer: !isCi && !disablesNdkOutboxForE2E,
     timeout: 120_000,
+    env: {
+      ...process.env,
+      ...(isCi && !disablesNdkOutboxForE2E ? { APP_E2E_DISABLE_NDK_OUTBOX: 'true' } : {}),
+    },
   },
 });

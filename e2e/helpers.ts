@@ -1492,7 +1492,10 @@ export async function replyToMessage(
 export async function forwardMessage(
   page: Page,
   text: string,
-  destinationName: string
+  destinationName: string,
+  options: {
+    publicKey?: string;
+  } = {}
 ): Promise<void> {
   await threadMessage(page, text)
     .locator('.bubble')
@@ -1501,10 +1504,42 @@ export async function forwardMessage(
       position: { x: 4, y: 4 },
     });
   await page.getByText('Forward', { exact: true }).click();
-  await expect(page.getByTestId('forward-message-chat-list')).toBeVisible({
+  const list = page.getByTestId('forward-message-chat-list');
+  await expect(list).toBeVisible({
     timeout: 12_000,
   });
-  await page.getByLabel(`Forward to ${destinationName}`, { exact: true }).click();
+  await expect(page.getByTestId('forward-message-chat').first()).toBeVisible({
+    timeout: 15_000,
+  });
+
+  const search = page.getByTestId('forward-message-search');
+  const normalizedPublicKey = options.publicKey?.trim().toLowerCase() ?? '';
+  const destinationByName = list.getByTestId('forward-message-chat').filter({
+    hasText: destinationName,
+  });
+  const destinationByKey = normalizedPublicKey
+    ? page.locator(
+        `[data-testid="forward-message-chat"][data-chat-public-key="${normalizedPublicKey}"]`
+      )
+    : destinationByName;
+  const destination = destinationByName.or(destinationByKey);
+
+  if (await search.isVisible()) {
+    await search.fill(destinationName);
+  }
+
+  try {
+    await expect(destination.first()).toBeVisible({ timeout: 8_000 });
+  } catch (error) {
+    if (!normalizedPublicKey || !(await search.isVisible())) {
+      throw error;
+    }
+
+    await search.fill(normalizedPublicKey);
+    await expect(destinationByKey).toBeVisible({ timeout: 12_000 });
+  }
+
+  await destination.first().click();
   await acceptAppRelayFallbackIfVisible(page);
   await expect(page.getByTestId('forward-message-chat-list')).toHaveCount(0, {
     timeout: 12_000,

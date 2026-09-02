@@ -243,4 +243,32 @@ describe('messageStore send', () => {
     await expect(store.sendMessage(CHAT_ID, 'keep me')).rejects.toThrow('relay timeout');
     expect(store.getMessages(CHAT_ID).map((message) => message.text)).toEqual(['keep me']);
   });
+
+  it('keeps the optimistic bubble but does not publish when persistence fails', async () => {
+    serviceMocks.chatDataService.createMessage.mockResolvedValue(null);
+    const store = useMessageStore();
+
+    await expect(store.sendMessage(CHAT_ID, 'not persisted')).rejects.toThrow(
+      'Failed to persist outbound message.'
+    );
+
+    expect(store.getMessages(CHAT_ID).map((message) => message.text)).toEqual(['not persisted']);
+    expect(serviceMocks.nostrStore.sendDirectMessage).not.toHaveBeenCalled();
+  });
+
+  it('rejects a continuation row that belongs to another chat', async () => {
+    serviceMocks.chatDataService.getMessageById.mockResolvedValue(
+      makeMessageRow({ chat_public_key: 'd'.repeat(64) })
+    );
+    const store = useMessageStore();
+
+    await expect(
+      store.sendMessage(CHAT_ID, 'wrong chat', null, {
+        continueFromMessageId: 11,
+        relayUrls: ['wss://fallback.example'],
+      })
+    ).rejects.toThrow('Cannot continue an outbound message from a different chat.');
+
+    expect(serviceMocks.nostrStore.sendDirectMessage).not.toHaveBeenCalled();
+  });
 });

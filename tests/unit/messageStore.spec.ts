@@ -171,6 +171,39 @@ describe('messageStore logic', () => {
     ).toEqual(['1', 'optimistic-99', '8']);
   });
 
+  it('keeps a newly published outbound message missing from an earlier load snapshot', () => {
+    const loaded = [
+      {
+        id: '1',
+        chatId: 'chat',
+        text: 'history',
+        sender: 'them' as const,
+        sentAt: '2026-01-01T00:00:00.000Z',
+        authorPublicKey: 'b',
+        eventId: 'e'.repeat(64),
+        nostrEvent: null,
+        meta: {},
+      },
+    ];
+    const newlyPublished = {
+      id: '9',
+      chatId: 'chat',
+      text: 'just published',
+      sender: 'me' as const,
+      sentAt: '2026-01-02T00:00:00.000Z',
+      authorPublicKey: 'a',
+      eventId: 'f'.repeat(64),
+      nostrEvent: null,
+      meta: {},
+    };
+
+    expect(
+      mergeLoadedMessagesWithLocalOutbound(loaded, [loaded[0], newlyPublished]).map(
+        (message) => message.id
+      )
+    ).toEqual(['1', '9']);
+  });
+
   it('builds forwarded payloads without original reply or event provenance metadata', () => {
     expect(
       buildForwardedMessagePayload({

@@ -449,6 +449,7 @@ function mergeLoadedMessagesWithLocalOutbound(
   existingMessages: Message[]
 ): Message[] {
   const loadedIds = new Set(loadedMessages.map((message) => message.id));
+  const newestLoadedMessage = loadedMessages[loadedMessages.length - 1] ?? null;
   const preserved = existingMessages.filter((message) => {
     if (loadedIds.has(message.id)) {
       return false;
@@ -456,7 +457,10 @@ function mergeLoadedMessagesWithLocalOutbound(
 
     return (
       isOptimisticMessageId(message.id) ||
-      (message.sender === 'me' && !normalizeEventId(message.eventId))
+      (message.sender === 'me' &&
+        (!normalizeEventId(message.eventId) ||
+          !newestLoadedMessage ||
+          compareMessagesBySentAt(message, newestLoadedMessage) > 0))
     );
   });
 
@@ -1102,6 +1106,9 @@ export const useMessageStore = defineStore('messageStore', () => {
       if (!existingRow) {
         return null;
       }
+      if (normalizeChatIdentifier(existingRow.chat_public_key) !== normalizedChatId) {
+        throw new Error('Cannot continue an outbound message from a different chat.');
+      }
 
       persistedId = existingRow.id;
       liveMessage = mapMessageRowToMessage(existingRow, normalizedChatId);
@@ -1142,18 +1149,20 @@ export const useMessageStore = defineStore('messageStore', () => {
         created_at: createdAt,
         ...(Object.keys(persistMeta).length > 0 ? { meta: persistMeta } : {}),
       });
-      if (created) {
-        persistedId = created.id;
-        const persistedMessage = mapMessageRowToMessage(created, normalizedChatId);
-        if (input.shouldSyncLiveMessage && optimisticId) {
-          replaceMessageIdInState(normalizedChatId, optimisticId, persistedMessage);
-        } else if (input.shouldSyncLiveMessage) {
-          upsertMessageInState(normalizedChatId, persistedMessage, {
-            allowOutsideLoadedWindow: true,
-          });
-        }
-        liveMessage = persistedMessage;
+      if (!created) {
+        throw new Error('Failed to persist outbound message.');
       }
+
+      persistedId = created.id;
+      const persistedMessage = mapMessageRowToMessage(created, normalizedChatId);
+      if (input.shouldSyncLiveMessage && optimisticId) {
+        replaceMessageIdInState(normalizedChatId, optimisticId, persistedMessage);
+      } else if (input.shouldSyncLiveMessage) {
+        upsertMessageInState(normalizedChatId, persistedMessage, {
+          allowOutsideLoadedWindow: true,
+        });
+      }
+      liveMessage = persistedMessage;
     }
 
     if (!liveMessage) {
@@ -1162,7 +1171,7 @@ export const useMessageStore = defineStore('messageStore', () => {
 
     const chat = await chatDataService.getChatByPublicKey(normalizedChatId);
     if (!chat) {
-      return liveMessage;
+      throw new Error('Chat not found for outbound message.');
     }
 
     const recipientPublicKey = resolveChatRecipientPublicKeyFromRow(chat);

@@ -8,7 +8,6 @@ import {
   clearElectronPrivateKeySessionMetadata,
   hasUsableElectronPrivateKeySession,
 } from 'src/services/electronSecurePrivateKeyStorage';
-import { PUBLIC_KEY_STORAGE_KEY } from 'src/stores/nostr/constants';
 import {
   ALREADY_LOGGED_IN_BUNKER_MESSAGE,
   readBunkerLoginQueryParam,
@@ -16,7 +15,7 @@ import {
   removeTopLevelBunkerLoginQueryParam,
   withoutBunkerLoginQueryParam,
 } from 'src/utils/bunkerLoginQuery';
-import { finalizePendingLogoutCleanup } from 'src/utils/logoutCleanup';
+import { finalizePendingLogoutCleanup, hasPendingLogoutCleanup } from 'src/utils/logoutCleanup';
 import {
   createMemoryHistory,
   createRouter,
@@ -24,29 +23,18 @@ import {
   createWebHistory,
 } from 'vue-router';
 import routes from './routes';
+import { createStoredSessionChecker } from './storedSession';
 
-async function hasStoredPublicKey(): Promise<boolean> {
-  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
-    return false;
-  }
-
-  const hasPublicKey = Boolean(window.localStorage.getItem(PUBLIC_KEY_STORAGE_KEY)?.trim());
-  if (!hasPublicKey) {
-    return false;
-  }
-
-  if (!(await hasUsableAndroidPrivateKeySession())) {
-    clearAndroidPrivateKeySessionMetadata();
-    return false;
-  }
-
-  if (!(await hasUsableElectronPrivateKeySession())) {
-    clearElectronPrivateKeySessionMetadata();
-    return false;
-  }
-
-  return true;
-}
+const hasStoredPublicKey = createStoredSessionChecker({
+  clearAndroidSessionMetadata: clearAndroidPrivateKeySessionMetadata,
+  clearElectronSessionMetadata: clearElectronPrivateKeySessionMetadata,
+  getLocalStorage: () =>
+    typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
+      ? window.localStorage
+      : null,
+  hasUsableAndroidSession: hasUsableAndroidPrivateKeySession,
+  hasUsableElectronSession: hasUsableElectronPrivateKeySession,
+});
 
 function showAlreadyLoggedInBunkerMessage(): void {
   Notify.create({
@@ -70,59 +58,67 @@ export default route(() => {
     history: createHistory(process.env.VUE_ROUTER_BASE),
   });
 
-  Router.beforeEach(async (to) => {
-    if (!process.env.SERVER) {
-      await finalizePendingLogoutCleanup();
-    }
-
+  Router.beforeEach((to) => {
     if (process.env.SERVER) {
       return true;
     }
 
-    const isAuthRoute = to.name === 'auth' || to.name === 'register';
-    const hasLoggedInUser = await hasStoredPublicKey();
-    const routeBunkerToken = readBunkerLoginQueryParam(to.query);
-    const topLevelBunkerToken = readTopLevelBunkerLoginQueryParam();
-    const hasBunkerLoginToken = Boolean(routeBunkerToken || topLevelBunkerToken);
+    const resolveNavigation = (hasLoggedInUser: boolean) => {
+      const isAuthRoute = to.name === 'auth' || to.name === 'register';
+      const routeBunkerToken = readBunkerLoginQueryParam(to.query);
+      const topLevelBunkerToken = readTopLevelBunkerLoginQueryParam();
+      const hasBunkerLoginToken = Boolean(routeBunkerToken || topLevelBunkerToken);
 
-    if (hasLoggedInUser && hasBunkerLoginToken) {
-      removeTopLevelBunkerLoginQueryParam();
-      showAlreadyLoggedInBunkerMessage();
+      if (hasLoggedInUser && hasBunkerLoginToken) {
+        removeTopLevelBunkerLoginQueryParam();
+        showAlreadyLoggedInBunkerMessage();
+
+        if (isAuthRoute) {
+          return { name: 'chats' };
+        }
+
+        if (routeBunkerToken) {
+          return {
+            path: to.path,
+            query: withoutBunkerLoginQueryParam(to.query),
+            hash: to.hash,
+            replace: true,
+          };
+        }
+
+        return true;
+      }
 
       if (isAuthRoute) {
-        return { name: 'chats' };
+        return hasLoggedInUser ? { name: 'chats' } : true;
+      }
+
+      if (hasLoggedInUser) {
+        return true;
       }
 
       if (routeBunkerToken) {
         return {
-          path: to.path,
-          query: withoutBunkerLoginQueryParam(to.query),
-          hash: to.hash,
-          replace: true,
+          name: 'auth',
+          query: {
+            bunker: routeBunkerToken,
+          },
         };
       }
 
-      return true;
-    }
+      return '/login';
+    };
 
-    if (isAuthRoute) {
-      return hasLoggedInUser ? { name: 'chats' } : true;
-    }
+    const checkStoredSession = () => {
+      const result = hasStoredPublicKey();
+      return typeof result === 'boolean'
+        ? resolveNavigation(result)
+        : result.then(resolveNavigation);
+    };
 
-    if (hasLoggedInUser) {
-      return true;
-    }
-
-    if (routeBunkerToken) {
-      return {
-        name: 'auth',
-        query: {
-          bunker: routeBunkerToken,
-        },
-      };
-    }
-
-    return '/login';
+    return hasPendingLogoutCleanup()
+      ? finalizePendingLogoutCleanup().then(checkStoredSession)
+      : checkStoredSession();
   });
 
   return Router;

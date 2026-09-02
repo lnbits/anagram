@@ -13,8 +13,11 @@ import {
   reloadAndWaitForApp,
   removeRelayFromSettings,
   sendMessage,
+  sendMessageAndMeasureOptimisticRender,
+  startDelayedRelayProxy,
   TEST_ACCOUNTS,
   unpauseRelayService,
+  updateStoredContactRelays,
   waitForThreadMessage,
 } from './helpers';
 
@@ -120,13 +123,11 @@ test('an unresponsive extra relay does not block startup, send, or receive', asy
 
     const liveMessage = `slow-relay-live-${Date.now()}`;
     await navigateToChat(alice.page, bob.session.publicKey);
-    const sendStartedAt = Date.now();
-    await sendMessage(alice.page, liveMessage, {
-      chatId: bob.session.publicKey,
-      attempts: 1,
-      timeoutMs: 1_000,
-    });
-    expect(Date.now() - sendStartedAt).toBeLessThan(2_000);
+    const optimisticRenderLatencyMs = await sendMessageAndMeasureOptimisticRender(
+      alice.page,
+      liveMessage
+    );
+    expect(optimisticRenderLatencyMs).toBeLessThan(100);
 
     await navigateToChat(bob.page, alice.session.publicKey);
     await waitForThreadMessage(bob.page, liveMessage, {
@@ -140,5 +141,57 @@ test('an unresponsive extra relay does not block startup, send, or receive', asy
     });
   } finally {
     await disposeUsers(alice, bob);
+  }
+});
+
+test('a slowly responding relay does not delay navigation during send', async ({ browser }) => {
+  const delayedRelay = await startDelayedRelayProxy({ delayMs: 700 });
+  const alice = await bootstrapUser(browser, TEST_ACCOUNTS.delayedRelayAlice);
+  const bob = await bootstrapUser(browser, TEST_ACCOUNTS.delayedRelayBob);
+
+  try {
+    await establishAcceptedDirectChat(alice, bob);
+    await updateStoredContactRelays(alice.page, bob.session.publicKey, [delayedRelay.relayUrl], {
+      reload: false,
+    });
+    await navigateToChat(alice.page, bob.session.publicKey);
+
+    const messageText = `delayed-relay-navigation-${Date.now()}`;
+    const optimisticRenderLatencyMs = await sendMessageAndMeasureOptimisticRender(
+      alice.page,
+      messageText
+    );
+    expect(optimisticRenderLatencyMs).toBeLessThan(100);
+
+    const navigationLatencyMs = await alice.page
+      .getByRole('button', { name: 'Contacts', exact: true })
+      .evaluate(async (button) => {
+        const startedAt = performance.now();
+        (button as HTMLButtonElement).click();
+        while (performance.now() - startedAt < 1_000) {
+          if (
+            window.location.hash === '#/contacts' &&
+            document.querySelector('[data-testid="contact-list-search"]')
+          ) {
+            return performance.now() - startedAt;
+          }
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        }
+        throw new Error('Contacts did not render within 1 second.');
+      });
+    expect(navigationLatencyMs).toBeLessThan(250);
+    await expect(alice.page.getByTestId('contact-list-search')).toBeEditable();
+
+    await navigateToChat(bob.page, alice.session.publicKey);
+    await waitForThreadMessage(bob.page, messageText, {
+      chatId: alice.session.publicKey,
+      attempts: 1,
+      timeoutMs: 12_000,
+    });
+    expect(delayedRelay.connectionCount()).toBeGreaterThan(0);
+    await expectNoUnexpectedBrowserErrors([alice, bob]);
+  } finally {
+    await disposeUsers(alice, bob);
+    await delayedRelay.close();
   }
 });

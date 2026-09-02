@@ -20,6 +20,7 @@ import type {
   MessageReplyPreview,
   NostrEventEntry,
 } from 'src/types/chat';
+import { yieldToNextPaint } from 'src/utils/backgroundTasks';
 import { resolvePreferredContactRelayUrls } from 'src/utils/contactRelayUrls';
 import { isIncomingUnreadMessageActivity } from 'src/utils/messageActivity';
 import {
@@ -1045,9 +1046,6 @@ export const useMessageStore = defineStore('messageStore', () => {
     upsertMessageInState(chatId, message, {
       allowOutsideLoadedWindow: true,
     });
-    void chatStore.updateChatPreview(chatId, message.text, message.sentAt, {
-      messageMeta: message.meta,
-    });
   }
 
   function buildOptimisticOutboundMessage(
@@ -1128,6 +1126,10 @@ export const useMessageStore = defineStore('messageStore', () => {
       optimisticId = liveMessage.id;
       if (input.shouldSyncLiveMessage) {
         insertOptimisticOutboundMessage(normalizedChatId, liveMessage);
+        await yieldToNextPaint();
+        void chatStore.updateChatPreview(normalizedChatId, liveMessage.text, liveMessage.sentAt, {
+          messageMeta: liveMessage.meta,
+        });
       }
 
       await chatDataService.init();

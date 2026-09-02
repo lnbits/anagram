@@ -43,7 +43,6 @@ import {
   type ForegroundMessageActivityDetail,
 } from 'src/services/foregroundMessageActivityService';
 import { useAppUpdateStore } from 'src/stores/appUpdateStore';
-import { installAppE2EBridge } from 'src/testing/e2eBridge';
 import { buildAvatarText } from 'src/utils/avatarText';
 import { readDarkModePreference } from 'src/utils/themeStorage';
 import { useRouter } from 'vue-router';
@@ -137,7 +136,11 @@ onMounted(() => {
   void appUpdateStore.startRuntime();
 
   if (process.env.DEV) {
-    installAppE2EBridge();
+    void import('src/testing/e2eBridge')
+      .then(({ installAppE2EBridge }) => installAppE2EBridge())
+      .catch((error: unknown) => {
+        console.warn('Failed to install the development E2E bridge.', error);
+      });
   }
 });
 

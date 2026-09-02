@@ -55,6 +55,7 @@ export interface BootstrapExtensionUserOptions extends BootstrapUserOptions {
 export const E2E_RELAY_URL = process.env.E2E_RELAY_URL ?? 'ws://127.0.0.1:7000';
 export const E2E_RELAY_URL_TWO = process.env.E2E_RELAY_URL_TWO ?? 'ws://127.0.0.1:7001';
 export const E2E_RELAY_URL_HANG = process.env.E2E_RELAY_URL_HANG ?? 'ws://127.0.0.1:65534';
+export const E2E_RELAY_URL_DELAYED = process.env.E2E_RELAY_URL_DELAYED ?? 'ws://127.0.0.1:7002';
 export const E2E_DUAL_RELAY_URLS = [E2E_RELAY_URL, E2E_RELAY_URL_TWO];
 export const E2E_HANG_RELAY_PORT = Number.parseInt(new URL(E2E_RELAY_URL_HANG).port, 10) || 7002;
 
@@ -158,6 +159,14 @@ export const TEST_ACCOUNTS = {
   slowRelayBob: {
     privateKey: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     displayName: 'Bob Slow Relay',
+  },
+  delayedRelayAlice: {
+    privateKey: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+    displayName: 'Alice Delayed Relay',
+  },
+  delayedRelayBob: {
+    privateKey: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+    displayName: 'Bob Delayed Relay',
   },
   groupAlice: {
     privateKey: 'eeb0542ecef525deee036b1865dc872bcda25df86016403ef25a730f330115b2',
@@ -1222,6 +1231,29 @@ export async function sendMessage(
   await waitForThreadMessage(page, text, options);
 }
 
+export async function sendMessageAndMeasureOptimisticRender(
+  page: Page,
+  text: string
+): Promise<number> {
+  await expect(composerInput(page)).toBeVisible();
+  await composerInput(page).fill(text);
+
+  return page.getByTestId('message-composer-send').evaluate(async (button, expectedText) => {
+    const startedAt = performance.now();
+    (button as HTMLButtonElement).click();
+    while (performance.now() - startedAt < 500) {
+      const hasMessage = Array.from(
+        document.querySelectorAll<HTMLElement>('.thread-message-entry')
+      ).some((entry) => entry.textContent?.includes(expectedText));
+      if (hasMessage) {
+        return performance.now() - startedAt;
+      }
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+    throw new Error('The optimistic message did not render within 500ms.');
+  }, text);
+}
+
 export async function sendMessagesViaBridge(
   page: Page,
   chatId: string,
@@ -2048,7 +2080,8 @@ export async function rotateGroupEpoch(
 export async function updateStoredContactRelays(
   page: Page,
   publicKey: string,
-  relayUrls: string[]
+  relayUrls: string[],
+  options: { reload?: boolean } = {}
 ): Promise<void> {
   await page.evaluate(
     async ({ nextPublicKey, nextRelayUrls }) => {
@@ -2067,6 +2100,10 @@ export async function updateStoredContactRelays(
       nextRelayUrls: relayUrls,
     }
   );
+  if (options.reload === false) {
+    return;
+  }
+
   await page.reload();
   await waitForAppBridge(page);
 }
@@ -2186,6 +2223,101 @@ export async function startHangingRelayServer(): Promise<() => Promise<void>> {
         resolve();
       });
     });
+  };
+}
+
+export async function startDelayedRelayProxy(options: {
+  delayMs: number;
+  listenUrl?: string;
+  targetUrl?: string;
+}): Promise<{
+  close: () => Promise<void>;
+  connectionCount: () => number;
+  relayUrl: string;
+}> {
+  const relayUrl = options.listenUrl ?? E2E_RELAY_URL_DELAYED;
+  const targetUrl = new URL(options.targetUrl ?? E2E_RELAY_URL);
+  const listenUrl = new URL(relayUrl);
+  const delayMs = Math.max(0, Math.floor(options.delayMs));
+  const listenPort = Number.parseInt(listenUrl.port, 10);
+  const targetPort = Number.parseInt(targetUrl.port, 10);
+  if (!Number.isInteger(listenPort) || !Number.isInteger(targetPort)) {
+    throw new Error('Delayed relay proxy URLs must include explicit ports.');
+  }
+
+  const server = net.createServer();
+  const socketPairs = new Set<{ client: net.Socket; upstream: net.Socket }>();
+  const pendingTimeoutIds = new Set<ReturnType<typeof globalThis.setTimeout>>();
+  let acceptedConnectionCount = 0;
+  let didListen = false;
+
+  const forwardChunk = (destination: net.Socket, chunk: Buffer): void => {
+    const timeoutId = globalThis.setTimeout(() => {
+      pendingTimeoutIds.delete(timeoutId);
+      if (!destination.destroyed && destination.writable) {
+        destination.write(chunk);
+      }
+    }, delayMs);
+    pendingTimeoutIds.add(timeoutId);
+  };
+
+  server.on('connection', (client) => {
+    acceptedConnectionCount += 1;
+    const upstream = net.createConnection({
+      host: targetUrl.hostname,
+      port: targetPort,
+    });
+    const pair = { client, upstream };
+    socketPairs.add(pair);
+
+    client.on('data', (chunk) => forwardChunk(upstream, chunk));
+    upstream.on('data', (chunk) => forwardChunk(client, chunk));
+    client.on('error', () => upstream.destroy());
+    upstream.on('error', () => client.destroy());
+    client.on('close', () => {
+      upstream.destroy();
+      socketPairs.delete(pair);
+    });
+    upstream.on('close', () => {
+      client.destroy();
+      socketPairs.delete(pair);
+    });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      reject(error);
+    };
+    server.once('error', onError);
+    server.listen(listenPort, listenUrl.hostname, () => {
+      didListen = true;
+      server.off('error', onError);
+      resolve();
+    });
+  });
+
+  return {
+    relayUrl,
+    connectionCount: () => acceptedConnectionCount,
+    close: async () => {
+      pendingTimeoutIds.forEach((timeoutId) => {
+        globalThis.clearTimeout(timeoutId);
+      });
+      pendingTimeoutIds.clear();
+      socketPairs.forEach(({ client, upstream }) => {
+        client.destroy();
+        upstream.destroy();
+      });
+      socketPairs.clear();
+
+      if (!didListen) {
+        return;
+      }
+      didListen = false;
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    },
   };
 }
 

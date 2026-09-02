@@ -82,6 +82,40 @@ describe('relayPublishRuntime', () => {
     );
   });
 
+  it('accepts a delayed relay acknowledgement before the publish deadline', async () => {
+    const { runtime } = createRuntime();
+    const delayedRelay = {
+      url: 'wss://delayed.example/',
+      publish: vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            globalThis.setTimeout(() => resolve(true), 40);
+          })
+      ),
+    };
+    vi.spyOn(NDKRelaySet, 'fromRelayUrls').mockReturnValue({
+      relays: new Set([delayedRelay]),
+    } as never);
+
+    const result = await runtime.publishEventWithRelayStatuses(
+      {
+        ndk: {},
+        sig: 'signature',
+        sign: vi.fn(),
+      } as never,
+      ['wss://delayed.example/'],
+      'recipient'
+    );
+
+    expect(result.error).toBeNull();
+    expect(result.relayStatuses).toEqual([
+      expect.objectContaining({
+        relay_url: 'wss://delayed.example/',
+        status: 'published',
+      }),
+    ]);
+  });
+
   it('times out hung relays instead of blocking the publish path', async () => {
     const { runtime } = createRuntime();
     const slowRelay = {

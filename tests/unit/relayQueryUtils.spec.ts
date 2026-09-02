@@ -98,6 +98,28 @@ describe('relayQueryUtils', () => {
     expect(stop).not.toHaveBeenCalled();
   });
 
+  it('accepts delayed events and EOSE before the query deadline', async () => {
+    const stop = vi.fn();
+    const delayedEvent = {
+      created_at: 30,
+      deduplicationKey: () => 'kind:author',
+    };
+    const ndk = {
+      subscribe: vi.fn((_filters, options) => {
+        const subscription = { stop };
+        globalThis.setTimeout(() => {
+          options.onEvent?.(delayedEvent);
+          options.onEose?.(subscription);
+        }, 40);
+        return subscription;
+      }),
+    };
+
+    await expect(
+      fetchEventWithRelayTimeout(ndk as never, { kinds: [0] }, undefined, { size: 1 } as never, 200)
+    ).resolves.toBe(delayedEvent);
+  });
+
   it('returns an authoritative empty fetchEvents result after EOSE', async () => {
     const ndk = {
       subscribe: vi.fn((_filters, options) => {

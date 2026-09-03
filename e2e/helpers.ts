@@ -10,6 +10,7 @@ import {
   type Page,
 } from '@playwright/test';
 import type { DeveloperDiagnosticsSnapshot } from 'src/stores/nostr/types';
+import { startMockRelayProxy } from '../scripts/mock-relay-proxy.cjs';
 
 export interface TestAccount {
   privateKey: string;
@@ -2240,84 +2241,26 @@ export async function startDelayedRelayProxy(options: {
   const listenUrl = new URL(relayUrl);
   const delayMs = Math.max(0, Math.floor(options.delayMs));
   const listenPort = Number.parseInt(listenUrl.port, 10);
-  const targetPort = Number.parseInt(targetUrl.port, 10);
-  if (!Number.isInteger(listenPort) || !Number.isInteger(targetPort)) {
+  if (!Number.isInteger(listenPort) || !targetUrl.port) {
     throw new Error('Delayed relay proxy URLs must include explicit ports.');
   }
-
-  const server = net.createServer();
-  const socketPairs = new Set<{ client: net.Socket; upstream: net.Socket }>();
-  const pendingTimeoutIds = new Set<ReturnType<typeof globalThis.setTimeout>>();
-  let acceptedConnectionCount = 0;
-  let didListen = false;
-
-  const forwardChunk = (destination: net.Socket, chunk: Buffer): void => {
-    const timeoutId = globalThis.setTimeout(() => {
-      pendingTimeoutIds.delete(timeoutId);
-      if (!destination.destroyed && destination.writable) {
-        destination.write(chunk);
-      }
-    }, delayMs);
-    pendingTimeoutIds.add(timeoutId);
-  };
-
-  server.on('connection', (client) => {
-    acceptedConnectionCount += 1;
-    const upstream = net.createConnection({
-      host: targetUrl.hostname,
-      port: targetPort,
-    });
-    const pair = { client, upstream };
-    socketPairs.add(pair);
-
-    client.on('data', (chunk) => forwardChunk(upstream, chunk));
-    upstream.on('data', (chunk) => forwardChunk(client, chunk));
-    client.on('error', () => upstream.destroy());
-    upstream.on('error', () => client.destroy());
-    client.on('close', () => {
-      upstream.destroy();
-      socketPairs.delete(pair);
-    });
-    upstream.on('close', () => {
-      client.destroy();
-      socketPairs.delete(pair);
-    });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    const onError = (error: Error) => {
-      reject(error);
-    };
-    server.once('error', onError);
-    server.listen(listenPort, listenUrl.hostname, () => {
-      didListen = true;
-      server.off('error', onError);
-      resolve();
-    });
+  const proxy = await startMockRelayProxy({
+    delayMs,
+    environment: {},
+    listenHost: listenUrl.hostname,
+    listenPort,
+    logger: {
+      error: () => undefined,
+      info: () => undefined,
+      warn: () => undefined,
+    },
+    targetUrl: targetUrl.toString(),
   });
 
   return {
     relayUrl,
-    connectionCount: () => acceptedConnectionCount,
-    close: async () => {
-      pendingTimeoutIds.forEach((timeoutId) => {
-        globalThis.clearTimeout(timeoutId);
-      });
-      pendingTimeoutIds.clear();
-      socketPairs.forEach(({ client, upstream }) => {
-        client.destroy();
-        upstream.destroy();
-      });
-      socketPairs.clear();
-
-      if (!didListen) {
-        return;
-      }
-      didListen = false;
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    },
+    connectionCount: proxy.connectionCount,
+    close: proxy.close,
   };
 }
 

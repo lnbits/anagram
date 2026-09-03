@@ -1,0 +1,39 @@
+name: anagram-mock-relay
+
+services:
+  relay:
+    image: scsibug/nostr-rs-relay:latest
+    ports:
+      - '7000:8080'
+    volumes:
+      - mock-relay-data:/usr/src/app/db
+
+  mock-relay:
+    image: node:24-alpine
+    depends_on:
+      - relay
+    command: ['node', '/app/mock-relay-proxy.cjs']
+    environment:
+      MOCK_RELAY_LISTEN_HOST: 0.0.0.0
+      MOCK_RELAY_PORT: 7002
+      MOCK_RELAY_TARGET_URL: ws://relay:8080
+      MOCK_RELAY_DELAY_MS: '${MOCK_RELAY_DELAY_MS:-1000}'
+      MOCK_RELAY_HANDSHAKE_DELAY_MS: '${MOCK_RELAY_HANDSHAKE_DELAY_MS:-}'
+      MOCK_RELAY_REQUEST_DELAY_MS: '${MOCK_RELAY_REQUEST_DELAY_MS:-}'
+      MOCK_RELAY_ACK_DELAY_MS: '${MOCK_RELAY_ACK_DELAY_MS:-}'
+      MOCK_RELAY_EVENT_DELAY_MS: '${MOCK_RELAY_EVENT_DELAY_MS:-}'
+      MOCK_RELAY_EOSE_DELAY_MS: '${MOCK_RELAY_EOSE_DELAY_MS:-}'
+      MOCK_RELAY_OTHER_DELAY_MS: '${MOCK_RELAY_OTHER_DELAY_MS:-}'
+      MOCK_RELAY_JITTER_MS: '${MOCK_RELAY_JITTER_MS:-0}'
+      MOCK_RELAY_DROP_ACKS: '${MOCK_RELAY_DROP_ACKS:-false}'
+      MOCK_RELAY_DROP_EVENTS: '${MOCK_RELAY_DROP_EVENTS:-false}'
+      MOCK_RELAY_DROP_EOSE: '${MOCK_RELAY_DROP_EOSE:-false}'
+      MOCK_RELAY_HANG_MODE: '${MOCK_RELAY_HANG_MODE:-none}'
+      MOCK_RELAY_VERBOSE: '${MOCK_RELAY_VERBOSE:-false}'
+    ports:
+      - '7002:7002'
+    volumes:
+      - ./scripts/mock-relay-proxy.cjs:/app/mock-relay-proxy.cjs:ro
+
+volumes:
+  mock-relay-data:

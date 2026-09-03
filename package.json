@@ -9,6 +9,9 @@
   "scripts": {
     "dev": "node ./scripts/quasar.cjs dev",
     "dev:e2e": "node ./scripts/quasar.cjs dev --port 4100 --hostname 127.0.0.1",
+    "dev:mock-relay": "docker compose -f docker-compose.mock-relay.yml up --remove-orphans",
+    "dev:mock-relay:proxy": "node ./scripts/mock-relay-proxy.cjs",
+    "dev:mock-relay:stop": "docker compose -f docker-compose.mock-relay.yml down --remove-orphans",
     "dev:electron": "node ./scripts/quasar.cjs dev -m electron",
     "dev:android": "node ./scripts/quasar.cjs dev -m capacitor -T android",
     "build": "node ./scripts/quasar.cjs build",

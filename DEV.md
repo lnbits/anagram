@@ -145,6 +145,12 @@ The local e2e runner uses Playwright plus the Docker stack in `docker-compose.e2
 
 Playwright traces, screenshots, and videos are retained by default. After a run, inspect `test-results/` and `playwright-report/` for artifacts.
 
+### Human testing with a slow relay
+
+Run `npm run dev:mock-relay` to start a normal relay on port `7000` and a configurable, Nostr-aware relay proxy on port `7002`. The proxy delays every WebSocket phase by one second by default. Add `ws://127.0.0.1:7002` to Anagram's relay settings while testing.
+
+Delay individual publish acknowledgements, events, EOSE responses, requests, or handshakes with environment variables. The proxy can also add jitter, drop selected message types, or keep a connection permanently hanging. See [docs/mock-relay.md](./docs/mock-relay.md) for commands and configuration.
+
 ## Build
 
 Build the web app:

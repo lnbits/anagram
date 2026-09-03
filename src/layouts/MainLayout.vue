@@ -88,6 +88,7 @@ import { useVisibleViewportHeight } from 'src/composables/useVisibleViewportHeig
 import {
   clearAndroidRelayNotificationForChat,
   createAndroidNotificationConversationSignature,
+  ingestPendingAndroidRelayNotificationEvents,
   refreshAndroidRelayNotificationListener,
   resolveAndroidRelayNotificationRoute,
   startAndroidRelayNotificationListeners
@@ -256,8 +257,12 @@ let removeDesktopNotificationOpenListener: (() => void) | null = null;
 onMounted(() => {
   nostrStore.startAppLifecycleRuntime();
   startAndroidRelayNotificationListeners((recipientPubkey) => {
+    drainPendingAndroidRelayNotificationEvents();
     void openAndroidRelayNotification(recipientPubkey);
+  }, () => {
+    drainPendingAndroidRelayNotificationEvents();
   });
+  drainPendingAndroidRelayNotificationEvents();
   syncNativeViewportCssVariables();
   document.addEventListener('focusin', handleNativeDialogFocusIn);
   document.addEventListener('focusout', handleNativeFocusOut);
@@ -555,7 +560,15 @@ async function initializeSessionState(): Promise<void> {
     await nostrStore.initializeSessionState(relayStore.relays);
   } catch (error) {
     console.error('Failed to initialize app session state', error);
+  } finally {
+    drainPendingAndroidRelayNotificationEvents();
   }
+}
+
+function drainPendingAndroidRelayNotificationEvents(): void {
+  void ingestPendingAndroidRelayNotificationEvents().catch((error) => {
+    console.warn('Failed to transfer pending Android relay events into the app.', error);
+  });
 }
 
 async function preloadInactiveSections(): Promise<void> {
@@ -612,6 +625,7 @@ function clearVisibleAndroidChatNotification(chatId: string | null): void {
 
 function handleAndroidNotificationVisibilityChange(): void {
   if (document.visibilityState === 'visible') {
+    drainPendingAndroidRelayNotificationEvents();
     clearVisibleAndroidChatNotification(routeChatId.value);
   }
 }

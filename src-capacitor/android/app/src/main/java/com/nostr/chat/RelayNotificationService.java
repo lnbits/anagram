@@ -55,6 +55,8 @@ public final class RelayNotificationService extends Service {
 
     private static final String LOG_TAG = "NostrChatRelay";
     static final String ACTION_START_OR_REFRESH = "com.nostr.chat.notifications.START_OR_REFRESH";
+    static final String ACTION_PENDING_EVENTS_AVAILABLE =
+        "com.nostr.chat.notifications.PENDING_EVENTS_AVAILABLE";
     private static final String EXTRA_RECONNECT_RELAYS = "nostr_chat_reconnect_notification_relays";
     static final String EXTRA_CHAT_PUBKEY = "nostr_chat_chat_pubkey";
     static final String EXTRA_OPEN_CHATS_LIST = "nostr_chat_open_chats_list";
@@ -201,6 +203,7 @@ public final class RelayNotificationService extends Service {
         if (disablePreference) {
             NotificationSecureStore.clear(context);
             NotificationAvatarCache.clear(context);
+            RelayNotificationEventInbox.clear(context);
             RelayNotificationPreferences.clearNotificationContext(context);
         }
         context.stopService(new Intent(context, RelayNotificationService.class));
@@ -539,26 +542,41 @@ public final class RelayNotificationService extends Service {
                 return;
             }
 
-            if (RelayNotificationPreferences.isAppForeground(this)) {
-                if (!RelayNotificationPreferences.markEventSeen(this, eventId)) {
-                    seenEventIds.add(eventId);
-                    logDebug("gift-wrap-ignored event=" + eventLabel + " reason=duplicate");
-                    return;
-                }
-                seenEventIds.add(eventId);
-                logDebug("gift-wrap-accepted event=" + eventLabel + " action=foreground-suppressed");
-                return;
+            boolean addedToPendingInbox = false;
+            try {
+                addedToPendingInbox = RelayNotificationEventInbox.enqueue(
+                    this,
+                    ownerPubkey,
+                    recipientPubkey,
+                    source.relayUrl,
+                    event,
+                    System.currentTimeMillis()
+                );
+            } catch (RuntimeException exception) {
+                logWarning(
+                    "gift-wrap-inbox-failed event=" + eventLabel + " " +
+                    exceptionSummary(exception)
+                );
+            }
+            if (addedToPendingInbox) {
+                notifyPendingEventsAvailable();
             }
 
-            NotificationTarget target = resolveNotificationTarget(event, recipientPubkey);
-            long messageCreatedAt = target == null ? 0L : target.messageCreatedAt;
-            boolean shouldNotifyEvent = source.shouldNotifyEvent(messageCreatedAt, now);
             if (!RelayNotificationPreferences.markEventSeen(this, eventId)) {
                 seenEventIds.add(eventId);
                 logDebug("gift-wrap-ignored event=" + eventLabel + " reason=duplicate");
                 return;
             }
             seenEventIds.add(eventId);
+
+            if (RelayNotificationPreferences.isAppForeground(this)) {
+                logDebug("gift-wrap-accepted event=" + eventLabel + " action=foreground-handoff");
+                return;
+            }
+
+            NotificationTarget target = resolveNotificationTarget(event, recipientPubkey);
+            long messageCreatedAt = target == null ? 0L : target.messageCreatedAt;
+            boolean shouldNotifyEvent = source.shouldNotifyEvent(messageCreatedAt, now);
             if (!shouldNotifyEvent) {
                 logDebug("gift-wrap-accepted event=" + eventLabel + " action=catch-up-only");
                 return;
@@ -578,6 +596,12 @@ public final class RelayNotificationService extends Service {
                 " reason=json-error " + exceptionSummary(exception)
             );
         }
+    }
+
+    private void notifyPendingEventsAvailable() {
+        Intent intent = new Intent(ACTION_PENDING_EVENTS_AVAILABLE);
+        intent.setPackage(getPackageName());
+        sendBroadcast(intent);
     }
 
     @Nullable

@@ -15,18 +15,20 @@ The watch plan is refreshed when the logged-in identity, readable relay candidat
 
 NIP-59 gift wraps intentionally use randomized timestamps up to two days in the past. Each relay subscription therefore includes that full lookback window. Stored events received before a relay's initial `EOSE` are validated and deduplicated without notifying; events received after catch-up, and unseen events recovered on later reconnects, can produce alerts.
 
-The service persists only relay URLs, public recipient keys, subscription cursors, seen event IDs, and an unread count. It does not receive or store account private keys, group epoch private keys, plaintext messages, sender names, or chat names.
+For conversation-aware alerts, the app supplies the local identity key and current group epoch keys to Android's encrypted notification key store. The service uses those keys only to validate notification eligibility and resolve the conversation. It never persists decrypted seals, rumors, or plaintext message content.
+
+Every validated gift wrap is also written, still encrypted, to an app-private native inbox. The inbox is capped at 500 events and 16 MiB, and individual events larger than 256 KiB are not retained. Events remain until the web app acknowledges successful ingestion or duplicate detection. Unacknowledged events expire after seven days, and disabling notifications, logging out, or replacing the configured account clears the inbox.
 
 ## Notifications
 
-Gift wraps are checked for their event shape, canonical event ID, BIP-340 Schnorr signature, kind, timestamp, and a matching `p` tag. Duplicate event IDs seen on several relays produce one alert. The service intentionally does not decrypt gift wraps.
+Gift wraps are checked for their event shape, canonical event ID, BIP-340 Schnorr signature, kind, timestamp, and a matching `p` tag. Duplicate event IDs seen on several relays produce one alert. When conversation details are enabled and the required local key is available, the service decrypts an event in memory to apply the same accepted-chat policy and choose its notification target.
 
 Alerts contain only:
 
 - title: `Anagram`;
 - body: `New message`, or a generic accumulated count.
 
-Tapping an alert opens the chats screen and routes to a matching group when the watched recipient is a current group epoch key. The app performs all message fetching and decryption through its normal Nostr runtime.
+Tapping an alert opens the matching chat. On app startup, resume, notification action, or a native inbox update, the Capacitor bridge transfers pending encrypted gift wraps to the normal private-message ingestion runtime. The newest native events are transferred first and are queued ahead of relay backfill and other pending background ingest. Each successfully persisted or duplicate event is acknowledged and removed independently, so an event that cannot yet be decrypted remains available for retry without holding successfully processed events in the inbox. Normal relay synchronization continues concurrently and deduplicates any event received through both paths.
 
 ## User controls
 

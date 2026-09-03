@@ -1,5 +1,5 @@
 import { Capacitor, type PluginListenerHandle, registerPlugin } from '@capacitor/core';
-import { NDKPrivateKeySigner, normalizeRelayUrl } from '@nostr-dev-kit/ndk';
+import { NDKPrivateKeySigner, type NostrEvent, normalizeRelayUrl } from '@nostr-dev-kit/ndk';
 import {
   AndroidNotificationRelaySelectionError,
   resolveSelectedAndroidNotificationRelayUrls,
@@ -71,10 +71,16 @@ interface AndroidRelayNotificationsPlugin {
   stop(): Promise<AndroidRelayNotificationState>;
   setStartOnBoot(options: { enabled: boolean }): Promise<AndroidRelayNotificationState>;
   getState(): Promise<AndroidRelayNotificationState>;
+  getPendingEvents(options: { limit: number; ownerPubkey: string }): Promise<{ events: unknown[] }>;
+  acknowledgePendingEvents(options: { eventIds: string[]; ownerPubkey: string }): Promise<void>;
   clearDeliveredNotifications(options?: { chatPubkey?: string }): Promise<void>;
   addListener(
     eventName: 'notificationActionPerformed',
     listener: (event: { chatPubkey?: string; openChats?: boolean }) => void
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: 'pendingEventsAvailable',
+    listener: () => void
   ): Promise<PluginListenerHandle>;
 }
 
@@ -92,6 +98,18 @@ let rejectRefreshCoordinator: ((error: unknown) => void) | null = null;
 let refreshDebounceTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let isRefreshInProgress = false;
 let isRefreshRequested = false;
+const ANDROID_PENDING_EVENT_BATCH_SIZE = 50;
+const ANDROID_PENDING_EVENT_MAX_BATCHES_PER_DRAIN = 10;
+const HEX_128_PATTERN = /^[0-9a-f]{128}$/;
+let pendingEventDrainPromise: Promise<void> | null = null;
+let isPendingEventDrainRequested = false;
+
+export interface AndroidRelayPendingEvent {
+  event: NostrEvent;
+  eventId: string;
+  recipientPubkey: string;
+  relayUrl: string;
+}
 
 function canUseStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
@@ -102,6 +120,78 @@ function normalizePermission(value: string): AndroidRelayNotificationPermissionS
     return value;
   }
   return 'prompt';
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizePendingRelayUrl(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  try {
+    const relayUrl = normalizeRelayUrl(value);
+    return relayUrl.startsWith('ws://') || relayUrl.startsWith('wss://') ? relayUrl : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseAndroidRelayPendingEvent(value: unknown): AndroidRelayPendingEvent | null {
+  if (!isPlainRecord(value) || !isPlainRecord(value.event)) {
+    return null;
+  }
+
+  const eventId = inputSanitizerService.normalizeHexKey(String(value.id ?? ''));
+  const recipientPubkey = inputSanitizerService.normalizeHexKey(
+    String(value.recipientPubkey ?? '')
+  );
+  const relayUrl = normalizePendingRelayUrl(value.relayUrl);
+  const rawEvent = value.event;
+  const rawEventId = inputSanitizerService.normalizeHexKey(String(rawEvent.id ?? ''));
+  const pubkey = inputSanitizerService.normalizeHexKey(String(rawEvent.pubkey ?? ''));
+  const signature = typeof rawEvent.sig === 'string' ? rawEvent.sig.trim().toLowerCase() : '';
+  const tags = Array.isArray(rawEvent.tags)
+    ? rawEvent.tags.filter(
+        (tag): tag is string[] =>
+          Array.isArray(tag) && tag.length > 0 && tag.every((entry) => typeof entry === 'string')
+      )
+    : [];
+  const createdAt = Number(rawEvent.created_at);
+
+  if (
+    !eventId ||
+    rawEventId !== eventId ||
+    !recipientPubkey ||
+    !relayUrl ||
+    !pubkey ||
+    !HEX_128_PATTERN.test(signature) ||
+    rawEvent.kind !== 1059 ||
+    !Number.isInteger(createdAt) ||
+    createdAt < 0 ||
+    typeof rawEvent.content !== 'string' ||
+    !Array.isArray(rawEvent.tags) ||
+    tags.length !== rawEvent.tags.length ||
+    !tags.some((tag) => tag[0] === 'p' && tag[1]?.toLowerCase() === recipientPubkey)
+  ) {
+    return null;
+  }
+
+  return {
+    eventId,
+    recipientPubkey,
+    relayUrl,
+    event: {
+      id: eventId,
+      pubkey,
+      sig: signature,
+      kind: 1059,
+      created_at: createdAt,
+      content: rawEvent.content,
+      tags: tags.map((tag) => [...tag]),
+    },
+  };
 }
 
 export function isAndroidRelayNotificationSupported(): boolean {
@@ -697,16 +787,130 @@ export async function disableAndroidRelayNotifications(): Promise<void> {
   }
 }
 
+async function performAndroidRelayPendingEventDrain(): Promise<void> {
+  const nostrStore = useNostrStore();
+  const ownerPubkey = inputSanitizerService.normalizeHexKey(
+    nostrStore.getLoggedInPublicKeyHex() ?? ''
+  );
+  if (!ownerPubkey) {
+    return;
+  }
+
+  for (
+    let batchIndex = 0;
+    batchIndex < ANDROID_PENDING_EVENT_MAX_BATCHES_PER_DRAIN;
+    batchIndex += 1
+  ) {
+    const response = await AndroidRelayNotifications.getPendingEvents({
+      ownerPubkey,
+      limit: ANDROID_PENDING_EVENT_BATCH_SIZE,
+    });
+    const rawEvents = Array.isArray(response.events) ? response.events : [];
+    if (rawEvents.length === 0) {
+      return;
+    }
+
+    const permanentlyInvalidEventIds = new Set<string>();
+    const pendingEvents: AndroidRelayPendingEvent[] = [];
+    for (const rawEvent of rawEvents) {
+      const parsedEvent = parseAndroidRelayPendingEvent(rawEvent);
+      if (parsedEvent) {
+        pendingEvents.push(parsedEvent);
+        continue;
+      }
+
+      if (isPlainRecord(rawEvent)) {
+        const invalidEventId = inputSanitizerService.normalizeHexKey(String(rawEvent.id ?? ''));
+        if (invalidEventId) {
+          permanentlyInvalidEventIds.add(invalidEventId);
+        }
+      }
+    }
+
+    const ingestionJobs = pendingEvents.map((pendingEvent) => ({
+      pendingEvent,
+      result: nostrStore.ingestAndroidRelayNotificationEvent({
+        event: pendingEvent.event,
+        ownerPubkey,
+        relayUrl: pendingEvent.relayUrl,
+      }),
+    }));
+
+    if (permanentlyInvalidEventIds.size > 0) {
+      await AndroidRelayNotifications.acknowledgePendingEvents({
+        ownerPubkey,
+        eventIds: Array.from(permanentlyInvalidEventIds),
+      });
+    }
+
+    const ingestionResults = await Promise.all(
+      ingestionJobs.map(async ({ pendingEvent, result }) => {
+        let shouldAcknowledge = false;
+        try {
+          shouldAcknowledge = await result;
+        } catch (error) {
+          console.warn('Failed to ingest an Android relay notification event.', error);
+          return false;
+        }
+        if (!shouldAcknowledge) {
+          return false;
+        }
+
+        try {
+          await AndroidRelayNotifications.acknowledgePendingEvents({
+            ownerPubkey,
+            eventIds: [pendingEvent.eventId],
+          });
+          return true;
+        } catch (error) {
+          console.warn('Failed to acknowledge an Android relay notification event.', error);
+          return false;
+        }
+      })
+    );
+    const acknowledgedEventCount =
+      permanentlyInvalidEventIds.size + ingestionResults.filter(Boolean).length;
+
+    if (acknowledgedEventCount < rawEvents.length) {
+      return;
+    }
+  }
+}
+
+async function runAndroidRelayPendingEventDrain(): Promise<void> {
+  try {
+    do {
+      isPendingEventDrainRequested = false;
+      await performAndroidRelayPendingEventDrain();
+    } while (isPendingEventDrainRequested);
+  } finally {
+    pendingEventDrainPromise = null;
+  }
+}
+
+export function ingestPendingAndroidRelayNotificationEvents(): Promise<void> {
+  if (!isAndroidRelayNotificationSupported()) {
+    return Promise.resolve();
+  }
+
+  isPendingEventDrainRequested = true;
+  pendingEventDrainPromise ??= runAndroidRelayPendingEventDrain();
+  return pendingEventDrainPromise;
+}
+
 export const __androidRelayNotificationServiceTestUtils = {
   resetRefreshState(): void {
     resetRefreshCoordinator();
     lastAppliedConfigurationSignature = null;
     decryptedGroupEpochPrivateKeyCache.clear();
+    pendingEventDrainPromise = null;
+    isPendingEventDrainRequested = false;
   },
 };
 
 export function startAndroidRelayNotificationListeners(
-  onNotificationAction: (chatPubkey: string | null) => void
+  onNotificationAction: (chatPubkey: string | null) => void,
+  onPendingEventsAvailable: () => void
 ): void {
   if (!isAndroidRelayNotificationSupported() || didInstallNotificationListeners) {
     return;
@@ -719,6 +923,9 @@ export function startAndroidRelayNotificationListeners(
 
   void AndroidRelayNotifications.addListener('notificationActionPerformed', (event) => {
     onNotificationAction(inputSanitizerService.normalizeHexKey(String(event.chatPubkey ?? '')));
+  });
+  void AndroidRelayNotifications.addListener('pendingEventsAvailable', () => {
+    onPendingEventsAvailable();
   });
 }
 

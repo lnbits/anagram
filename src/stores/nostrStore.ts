@@ -1,8 +1,10 @@
 import { Capacitor } from '@capacitor/core';
 import NDK, {
   NDKEvent,
+  NDKKind,
   NDKPrivateKeySigner,
   type NDKSigner,
+  type NostrEvent,
   normalizeRelayUrl,
 } from '@nostr-dev-kit/ndk';
 import { defineStore } from 'pinia';
@@ -1330,6 +1332,44 @@ export const useNostrStore = defineStore('nostrStore', () => {
   });
   getPrivateMessagesIngestQueueRuntime = getPrivateMessagesIngestQueue;
 
+  async function ingestAndroidRelayNotificationEvent(input: {
+    event: NostrEvent;
+    ownerPubkey: string;
+    relayUrl: string;
+  }): Promise<boolean> {
+    const loggedInPubkeyHex = getLoggedInPublicKeyHex();
+    const ownerPubkey = inputSanitizerService.normalizeHexKey(input.ownerPubkey);
+    const eventId = normalizeEventId(input.event.id);
+    if (!loggedInPubkeyHex || ownerPubkey !== loggedInPubkeyHex) {
+      return false;
+    }
+    if (!eventId || input.event.kind !== NDKKind.GiftWrap) {
+      return true;
+    }
+
+    const wrappedEvent = new NDKEvent(ndk, {
+      ...input.event,
+      id: eventId,
+    });
+    try {
+      if (!wrappedEvent.verifySignature(false)) {
+        return true;
+      }
+    } catch {
+      return true;
+    }
+
+    try {
+      const relayUrl = normalizeRelayUrl(input.relayUrl);
+      wrappedEvent.relay = ndk.pool.getRelay(relayUrl, false);
+    } catch {}
+
+    return queuePrivateMessageIngestion(wrappedEvent, loggedInPubkeyHex, {
+      priority: 'foreground',
+      uiThrottleMs: 0,
+    });
+  }
+
   const {
     ensurePrivateMessagesWatchdog: ensurePrivateMessagesWatchdogImpl,
     getPrivateMessagesSubscription,
@@ -2160,6 +2200,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     getNip05Data,
     hasNip07Extension,
     initializeSessionState,
+    ingestAndroidRelayNotificationEvent,
     getLoggedInPublicKeyHex,
     getPrivateKeyHex: getPrivateKeyHexRuntime,
     refreshDeveloperPendingQueues,

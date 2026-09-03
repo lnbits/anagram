@@ -210,6 +210,85 @@ describe('privateMessagesIngestRuntime', () => {
     ndkMocks.giftUnwrap.mockReset();
   });
 
+  it('requests a retry when the gift-wrap recipient context is not ready', async () => {
+    const deps = createDeps();
+    deps.resolveIncomingPrivateMessageRecipientContext.mockResolvedValue(null);
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+
+    await expect(
+      runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64))
+    ).resolves.toBe(false);
+  });
+
+  it('requests a retry when gift-wrap decryption fails', async () => {
+    const deps = createDeps();
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+    ndkMocks.giftUnwrap.mockRejectedValue(new Error('Signer is not ready'));
+
+    await expect(
+      runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64))
+    ).resolves.toBe(false);
+  });
+
+  it('processes foreground handoff events before queued background events', async () => {
+    const deps = createDeps();
+    const processingOrder: string[] = [];
+    let releaseActiveBackgroundTask: ((value: null) => void) | null = null;
+    deps.resolveIncomingPrivateMessageRecipientContext.mockImplementation(
+      () =>
+        new Promise<null>((resolve) => {
+          releaseActiveBackgroundTask = resolve;
+        })
+    );
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+    const makeTrackedWrappedEvent = (id: string, kind: number): NDKEvent => {
+      const event = makeWrappedEvent({ id });
+      Object.defineProperty(event, 'kind', {
+        configurable: true,
+        get: () => {
+          processingOrder.push(id);
+          return kind;
+        },
+      });
+      return event;
+    };
+
+    const activeBackgroundResult = runtime.queuePrivateMessageIngestion(
+      makeTrackedWrappedEvent('active-background', NDKKind.GiftWrap),
+      'b'.repeat(64)
+    );
+    await vi.waitFor(() => expect(processingOrder).toEqual(['active-background']));
+
+    const queuedBackgroundResult = runtime.queuePrivateMessageIngestion(
+      makeTrackedWrappedEvent('queued-background', NDKKind.Text),
+      'b'.repeat(64)
+    );
+    const foregroundResult = runtime.queuePrivateMessageIngestion(
+      makeTrackedWrappedEvent('foreground-handoff', NDKKind.Text),
+      'b'.repeat(64),
+      { priority: 'foreground' }
+    );
+    const lastBackgroundResult = runtime.queuePrivateMessageIngestion(
+      makeTrackedWrappedEvent('last-background', NDKKind.Text),
+      'b'.repeat(64)
+    );
+
+    releaseActiveBackgroundTask?.(null);
+    await Promise.all([
+      activeBackgroundResult,
+      queuedBackgroundResult,
+      foregroundResult,
+      lastBackgroundResult,
+    ]);
+
+    expect(processingOrder).toEqual([
+      'active-background',
+      'foreground-handoff',
+      'queued-background',
+      'last-background',
+    ]);
+  });
+
   it('creates request chats for first-contact direct messages and queues UI refreshes', async () => {
     const deps = createDeps();
     const runtime = createPrivateMessagesIngestRuntime(deps);

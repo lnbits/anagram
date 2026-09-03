@@ -28,7 +28,7 @@ Alerts contain only:
 - title: `Anagram`;
 - body: `New message`, or a generic accumulated count.
 
-Tapping an alert opens the matching chat. On app startup, resume, notification action, or a native inbox update, the Capacitor bridge transfers pending encrypted gift wraps to the normal private-message ingestion runtime. Successfully persisted and duplicate events are acknowledged and removed from the native inbox; events that cannot yet be decrypted remain available for retry. Normal relay synchronization continues concurrently and deduplicates any event received through both paths.
+Tapping an alert opens the matching chat. On app startup, resume, notification action, or a native inbox update, the Capacitor bridge transfers pending encrypted gift wraps to the normal private-message ingestion runtime. The newest native events are transferred first and are queued ahead of relay backfill and other pending background ingest. Each successfully persisted or duplicate event is acknowledged and removed independently, so an event that cannot yet be decrypted remains available for retry without holding successfully processed events in the inbox. Normal relay synchronization continues concurrently and deduplicates any event received through both paths.
 
 ## User controls
 

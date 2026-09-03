@@ -131,7 +131,7 @@ final class RelayNotificationEventInbox extends SQLiteOpenHelper {
                     new String[] { ownerPubkey },
                     null,
                     null,
-                    COLUMN_RECEIVED_AT_MS + " ASC, " + COLUMN_EVENT_ID + " ASC",
+                    pendingEventSortOrder(),
                     String.valueOf(normalizeBatchLimit(requestedLimit))
                 )
             ) {
@@ -218,6 +218,10 @@ final class RelayNotificationEventInbox extends SQLiteOpenHelper {
 
     static long expiryCutoffMillis(long nowMillis) {
         return Math.max(0L, nowMillis - RETENTION_MILLIS);
+    }
+
+    static String pendingEventSortOrder() {
+        return COLUMN_RECEIVED_AT_MS + " DESC, " + COLUMN_EVENT_ID + " DESC";
     }
 
     private static void purgeExpired(SQLiteDatabase database, long nowMillis) {

@@ -55,7 +55,7 @@ const moduleMocks = vi.hoisted(() => ({
       showConversationDetails: true,
       permission: 'granted',
     })),
-    getPendingEvents: vi.fn(async () => ({ events: moduleMocks.pendingEvents })),
+    getPendingEvents: vi.fn(async () => ({ events: [...moduleMocks.pendingEvents] })),
     acknowledgePendingEvents: vi.fn(async (options: { eventIds: string[] }) => {
       for (let index = moduleMocks.pendingEvents.length - 1; index >= 0; index -= 1) {
         const value = moduleMocks.pendingEvents[index];
@@ -326,6 +326,56 @@ describe('androidRelayNotificationService', () => {
 
     expect(moduleMocks.ingestAndroidRelayNotificationEvent).toHaveBeenCalledOnce();
     expect(moduleMocks.plugin.acknowledgePendingEvents).not.toHaveBeenCalled();
+  });
+
+  it('queues the full native batch and acknowledges later successes independently', async () => {
+    const ownerPubkey = new NDKPrivateKeySigner(moduleMocks.privateKey).pubkey;
+    const retryEventId = '12'.repeat(32);
+    const successfulEventId = '34'.repeat(32);
+    let resolveRetryEvent: ((value: boolean) => void) | null = null;
+    const retryEventResult = new Promise<boolean>((resolve) => {
+      resolveRetryEvent = resolve;
+    });
+    moduleMocks.ingestAndroidRelayNotificationEvent
+      .mockReturnValueOnce(retryEventResult)
+      .mockResolvedValueOnce(true);
+    for (const eventId of [retryEventId, successfulEventId]) {
+      moduleMocks.pendingEvents.push({
+        id: eventId,
+        recipientPubkey: ownerPubkey,
+        relayUrl: 'wss://relay.example/',
+        event: {
+          id: eventId,
+          pubkey: '56'.repeat(32),
+          created_at: 2_000_002,
+          kind: 1059,
+          tags: [['p', ownerPubkey]],
+          content: 'encrypted gift wrap',
+          sig: '78'.repeat(64),
+        },
+      });
+    }
+
+    const drainPromise = ingestPendingAndroidRelayNotificationEvents();
+    await vi.waitFor(() => {
+      expect(moduleMocks.ingestAndroidRelayNotificationEvent).toHaveBeenCalledTimes(2);
+      expect(moduleMocks.plugin.acknowledgePendingEvents).toHaveBeenCalledWith({
+        ownerPubkey,
+        eventIds: [successfulEventId],
+      });
+    });
+    if (!resolveRetryEvent) {
+      throw new Error('The retry event ingestion did not start.');
+    }
+    resolveRetryEvent(false);
+    await drainPromise;
+
+    expect(moduleMocks.pendingEvents).toHaveLength(1);
+    expect(moduleMocks.pendingEvents[0]).toEqual(
+      expect.objectContaining({
+        id: retryEventId,
+      })
+    );
   });
 
   it('refreshes native conversation details when a group avatar changes', () => {

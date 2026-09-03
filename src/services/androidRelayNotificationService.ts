@@ -827,34 +827,51 @@ async function performAndroidRelayPendingEventDrain(): Promise<void> {
       }
     }
 
-    const ingestionResults: Array<string | null> = [];
-    for (const pendingEvent of pendingEvents) {
-      try {
-        const shouldAcknowledge = await nostrStore.ingestAndroidRelayNotificationEvent({
-          event: pendingEvent.event,
-          ownerPubkey,
-          relayUrl: pendingEvent.relayUrl,
-        });
-        ingestionResults.push(shouldAcknowledge ? pendingEvent.eventId : null);
-      } catch (error) {
-        console.warn('Failed to ingest an Android relay notification event.', error);
-        ingestionResults.push(null);
-      }
-    }
-    const acknowledgedEventIds = Array.from(
-      new Set([
-        ...permanentlyInvalidEventIds,
-        ...ingestionResults.filter((eventId): eventId is string => Boolean(eventId)),
-      ])
-    );
-    if (acknowledgedEventIds.length > 0) {
+    const ingestionJobs = pendingEvents.map((pendingEvent) => ({
+      pendingEvent,
+      result: nostrStore.ingestAndroidRelayNotificationEvent({
+        event: pendingEvent.event,
+        ownerPubkey,
+        relayUrl: pendingEvent.relayUrl,
+      }),
+    }));
+
+    if (permanentlyInvalidEventIds.size > 0) {
       await AndroidRelayNotifications.acknowledgePendingEvents({
         ownerPubkey,
-        eventIds: acknowledgedEventIds,
+        eventIds: Array.from(permanentlyInvalidEventIds),
       });
     }
 
-    if (acknowledgedEventIds.length < rawEvents.length) {
+    const ingestionResults = await Promise.all(
+      ingestionJobs.map(async ({ pendingEvent, result }) => {
+        let shouldAcknowledge = false;
+        try {
+          shouldAcknowledge = await result;
+        } catch (error) {
+          console.warn('Failed to ingest an Android relay notification event.', error);
+          return false;
+        }
+        if (!shouldAcknowledge) {
+          return false;
+        }
+
+        try {
+          await AndroidRelayNotifications.acknowledgePendingEvents({
+            ownerPubkey,
+            eventIds: [pendingEvent.eventId],
+          });
+          return true;
+        } catch (error) {
+          console.warn('Failed to acknowledge an Android relay notification event.', error);
+          return false;
+        }
+      })
+    );
+    const acknowledgedEventCount =
+      permanentlyInvalidEventIds.size + ingestionResults.filter(Boolean).length;
+
+    if (acknowledgedEventCount < rawEvents.length) {
       return;
     }
   }

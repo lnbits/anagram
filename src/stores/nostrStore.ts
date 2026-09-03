@@ -1365,6 +1365,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     } catch {}
 
     return queuePrivateMessageIngestion(wrappedEvent, loggedInPubkeyHex, {
+      priority: 'foreground',
       uiThrottleMs: 0,
     });
   }

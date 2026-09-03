@@ -33,6 +33,10 @@ public final class RelayNotificationServiceTest {
             RelayNotificationEventInbox.normalizeBatchLimit(500)
         );
         assertEquals(10, RelayNotificationEventInbox.normalizeBatchLimit(10));
+        assertEquals(
+            "received_at_ms DESC, event_id DESC",
+            RelayNotificationEventInbox.pendingEventSortOrder()
+        );
     }
 
     @Test

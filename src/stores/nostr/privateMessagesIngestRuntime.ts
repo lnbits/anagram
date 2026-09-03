@@ -72,14 +72,67 @@ export function createPrivateMessagesIngestRuntime({
   upsertIncomingGroupInviteRequestChat,
   verifyIncomingGroupEpochTicket,
 }: PrivateMessagesIngestRuntimeDeps) {
+  type IngestPriority = 'background' | 'foreground';
+  interface QueuedIngestTask {
+    generation: number;
+    run: () => Promise<boolean>;
+    resolve: (shouldAcknowledge: boolean) => void;
+  }
+
+  const foregroundIngestTasks: QueuedIngestTask[] = [];
+  const backgroundIngestTasks: QueuedIngestTask[] = [];
   let privateMessagesIngestQueue = Promise.resolve();
+  let ingestQueueGeneration = 0;
+  let activeIngestWorkerGeneration: number | null = null;
 
   function getPrivateMessagesIngestQueue(): Promise<void> {
     return privateMessagesIngestQueue;
   }
 
   function resetPrivateMessagesIngestRuntimeState(): void {
+    ingestQueueGeneration += 1;
+    const abandonedTasks = [...foregroundIngestTasks, ...backgroundIngestTasks];
+    foregroundIngestTasks.length = 0;
+    backgroundIngestTasks.length = 0;
+    activeIngestWorkerGeneration = null;
     privateMessagesIngestQueue = Promise.resolve();
+    for (const task of abandonedTasks) {
+      task.resolve(false);
+    }
+  }
+
+  function startPrivateMessagesIngestWorker(generation: number): void {
+    if (activeIngestWorkerGeneration === generation) {
+      return;
+    }
+
+    activeIngestWorkerGeneration = generation;
+    void (async () => {
+      try {
+        while (ingestQueueGeneration === generation) {
+          const task = foregroundIngestTasks.shift() ?? backgroundIngestTasks.shift();
+          if (!task) {
+            return;
+          }
+          if (task.generation !== generation) {
+            task.resolve(false);
+            continue;
+          }
+
+          task.resolve(await task.run());
+        }
+      } finally {
+        if (activeIngestWorkerGeneration === generation) {
+          activeIngestWorkerGeneration = null;
+        }
+        if (
+          ingestQueueGeneration === generation &&
+          (foregroundIngestTasks.length > 0 || backgroundIngestTasks.length > 0)
+        ) {
+          startPrivateMessagesIngestWorker(generation);
+        }
+      }
+    })();
   }
 
   function isSameNostrSecond(firstTimestamp: string, secondTimestamp: string): boolean {
@@ -168,6 +221,7 @@ export function createPrivateMessagesIngestRuntime({
     wrappedEvent: NDKEvent,
     loggedInPubkeyHex: string,
     options: {
+      priority?: IngestPriority;
       uiThrottleMs?: number;
     } = {}
   ): Promise<boolean> {
@@ -176,24 +230,36 @@ export function createPrivateMessagesIngestRuntime({
         ? normalizeThrottleMs(options.uiThrottleMs)
         : getPrivateMessagesRestoreThrottleMs();
 
-    const ingestionResult = privateMessagesIngestQueue.then(async () => {
-      try {
-        const shouldAcknowledge = await processIncomingPrivateMessage(
-          wrappedEvent,
-          loggedInPubkeyHex,
-          {
-            uiThrottleMs,
+    const generation = ingestQueueGeneration;
+    const ingestionResult = new Promise<boolean>((resolve) => {
+      const task: QueuedIngestTask = {
+        generation,
+        resolve,
+        run: async () => {
+          try {
+            const shouldAcknowledge = await processIncomingPrivateMessage(
+              wrappedEvent,
+              loggedInPubkeyHex,
+              {
+                uiThrottleMs,
+              }
+            );
+            return shouldAcknowledge !== false;
+          } catch (error) {
+            console.error('Failed to process incoming private message', error);
+            return false;
           }
-        );
-        return shouldAcknowledge !== false;
-      } catch (error) {
-        console.error('Failed to process incoming private message', error);
-        return false;
-      }
+        },
+      };
+      const queue =
+        options.priority === 'foreground' ? foregroundIngestTasks : backgroundIngestTasks;
+      queue.push(task);
+      startPrivateMessagesIngestWorker(generation);
     });
-    privateMessagesIngestQueue = ingestionResult.then(() => {
-      return;
-    });
+    const previousQueue = privateMessagesIngestQueue;
+    privateMessagesIngestQueue = Promise.all([previousQueue, ingestionResult]).then(
+      () => undefined
+    );
     return ingestionResult;
   }
 

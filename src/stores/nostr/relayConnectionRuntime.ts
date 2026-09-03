@@ -14,6 +14,7 @@ import type {
   AuthMethod,
   DeveloperRelaySnapshot,
   RelayConnectionState,
+  RelayConnectRetryState,
 } from 'src/stores/nostr/types';
 
 interface RelayConnectionRuntimeDeps {
@@ -45,8 +46,10 @@ interface RelayConnectionRuntimeDeps {
   ndk: NDK;
   queuePrivateMessagesWatchdog: (delayMs?: number) => void;
   relayAuthFailureListenerUrls: Set<string>;
-  relayConnectFailureCooldownMs: number;
-  relayConnectFailureCooldownUntilByUrl: Map<string, number>;
+  relayConnectRetryBaseDelayMs: number;
+  relayConnectRetryJitterRatio: number;
+  relayConnectRetryMaxDelayMs: number;
+  relayConnectRetryStateByUrl: Map<string, RelayConnectRetryState>;
   relayConnectPromises: Map<string, Promise<void>>;
   queueOutboundMessageReplay: () => void;
   setCachedSigner: (signer: NDKSigner | null) => void;
@@ -67,13 +70,77 @@ type RelaySocketLike = {
 type RelayConnectivityState = {
   _status?: NDKRelayStatus;
   connectTimeout?: ReturnType<typeof globalThis.setTimeout> | null;
+  resetReconnectionState?: () => void;
   ws?: RelaySocketLike;
 };
 
 type GuardedRelay = NDKRelay & {
+  __nostrChatCanConnect?: () => boolean;
   __nostrChatConnectPromise?: Promise<void> | null;
+  __nostrChatOnConnectSuppressed?: () => void;
+  __nostrChatPublishGuardInstalled?: boolean;
   __nostrChatSingleSocketGuardInstalled?: boolean;
 };
+
+export interface SingleSocketRelayConnectGuardOptions {
+  canConnect?: () => boolean;
+  onConnectSuppressed?: () => void;
+}
+
+function normalizeRelayClientUrl(value: string): string | null {
+  try {
+    return normalizeRelayUrl(value);
+  } catch {
+    return null;
+  }
+}
+
+export function isUsableRelayClientUrl(value: string): boolean {
+  const normalizedRelayUrl = normalizeRelayClientUrl(value);
+  if (!normalizedRelayUrl) {
+    return false;
+  }
+
+  try {
+    const relayUrl = new URL(normalizedRelayUrl);
+    return (
+      (relayUrl.protocol === 'ws:' || relayUrl.protocol === 'wss:') &&
+      relayUrl.hostname !== '0.0.0.0' &&
+      relayUrl.hostname !== '[::]' &&
+      relayUrl.hostname !== '::'
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function calculateRelayConnectRetryDelayMs(options: {
+  baseDelayMs: number;
+  failureCount: number;
+  jitterRatio: number;
+  maxDelayMs: number;
+  randomValue?: number;
+}): number {
+  const baseDelayMs = Math.max(0, Math.floor(options.baseDelayMs));
+  const maxDelayMs = Math.max(baseDelayMs, Math.floor(options.maxDelayMs));
+  const failureCount = Math.max(1, Math.floor(options.failureCount));
+  const jitterRatio = Math.min(1, Math.max(0, options.jitterRatio));
+  const randomValue = Math.min(1, Math.max(0, options.randomValue ?? Math.random()));
+  const exponentialDelayMs = Math.min(
+    maxDelayMs,
+    baseDelayMs * 2 ** Math.min(30, failureCount - 1)
+  );
+  const jitterRangeMs = exponentialDelayMs * jitterRatio;
+  const minimumDelayMs = Math.max(0, exponentialDelayMs - jitterRangeMs);
+  const maximumDelayMs = Math.min(maxDelayMs, exponentialDelayMs + jitterRangeMs);
+
+  return Math.round(minimumDelayMs + (maximumDelayMs - minimumDelayMs) * randomValue);
+}
+
+function cancelRelayAutoReconnect(relay: NDKRelay): void {
+  const connectivity = relay.connectivity as unknown as RelayConnectivityState;
+  connectivity.resetReconnectionState?.();
+}
 
 function closeGuardedRelaySocket(relay: NDKRelay, connectivity: RelayConnectivityState): void {
   if (connectivity.connectTimeout) {
@@ -96,32 +163,56 @@ function closeGuardedRelaySocket(relay: NDKRelay, connectivity: RelayConnectivit
   }
 }
 
-export function ensureSingleSocketRelayConnectGuard(relay: NDKRelay | null | undefined): void {
+export function ensureSingleSocketRelayConnectGuard(
+  relay: NDKRelay | null | undefined,
+  options: SingleSocketRelayConnectGuardOptions = {}
+): void {
   const guardedRelay = relay as GuardedRelay | null | undefined;
-  if (!guardedRelay || guardedRelay.__nostrChatSingleSocketGuardInstalled) {
+  if (!guardedRelay) {
+    return;
+  }
+
+  guardedRelay.__nostrChatCanConnect = options.canConnect;
+  guardedRelay.__nostrChatOnConnectSuppressed = options.onConnectSuppressed;
+  cancelRelayAutoReconnect(relay);
+  if (!guardedRelay.__nostrChatPublishGuardInstalled) {
+    const originalPublish = relay.publish.bind(relay);
+    guardedRelay.__nostrChatPublishGuardInstalled = true;
+    guardedRelay.publish = ((event, timeoutMs) => {
+      if (relay.status < NDKRelayStatus.CONNECTED) {
+        return Promise.reject(new Error(`Relay ${relay.url} is not connected.`));
+      }
+
+      return originalPublish(event, timeoutMs);
+    }) as typeof relay.publish;
+  }
+  if (guardedRelay.__nostrChatSingleSocketGuardInstalled) {
     return;
   }
 
   const originalConnect = relay.connect.bind(relay);
   guardedRelay.__nostrChatSingleSocketGuardInstalled = true;
   guardedRelay.__nostrChatConnectPromise = null;
-  guardedRelay.connect = ((timeoutMs?: number, reconnect = true) => {
+  guardedRelay.connect = ((timeoutMs?: number) => {
     const connectivity = relay.connectivity as unknown as RelayConnectivityState;
     const existingPromise = guardedRelay.__nostrChatConnectPromise ?? null;
     const readyState = connectivity.ws?.readyState;
 
-    if (
-      existingPromise &&
-      (readyState === RELAY_SOCKET_CONNECTING || readyState === RELAY_SOCKET_OPEN)
-    ) {
-      return existingPromise;
+    if (readyState === RELAY_SOCKET_CONNECTING || readyState === RELAY_SOCKET_OPEN) {
+      return existingPromise ?? Promise.resolve();
+    }
+
+    if (guardedRelay.__nostrChatCanConnect?.() === false) {
+      guardedRelay.__nostrChatOnConnectSuppressed?.();
+      return Promise.resolve();
     }
 
     if (readyState !== undefined && readyState !== RELAY_SOCKET_OPEN) {
       closeGuardedRelaySocket(relay, connectivity);
     }
 
-    const connectPromise = Promise.resolve(originalConnect(timeoutMs, reconnect)).finally(() => {
+    cancelRelayAutoReconnect(relay);
+    const connectPromise = Promise.resolve(originalConnect(timeoutMs, false)).finally(() => {
       if (guardedRelay.__nostrChatConnectPromise === connectPromise) {
         guardedRelay.__nostrChatConnectPromise = null;
       }
@@ -156,8 +247,10 @@ export function createRelayConnectionRuntime({
   ndk,
   queuePrivateMessagesWatchdog,
   relayAuthFailureListenerUrls,
-  relayConnectFailureCooldownMs,
-  relayConnectFailureCooldownUntilByUrl,
+  relayConnectRetryBaseDelayMs,
+  relayConnectRetryJitterRatio,
+  relayConnectRetryMaxDelayMs,
+  relayConnectRetryStateByUrl,
   relayConnectPromises,
   queueOutboundMessageReplay,
   setCachedSigner,
@@ -166,6 +259,93 @@ export function createRelayConnectionRuntime({
   setHasActivatedPool,
   setHasRelayStatusListeners,
 }: RelayConnectionRuntimeDeps) {
+  const previousRelayConnectionFilter = ndk.relayConnectionFilter;
+  ndk.relayConnectionFilter = (relayUrl) => {
+    return (
+      isUsableRelayClientUrl(relayUrl) &&
+      (previousRelayConnectionFilter ? previousRelayConnectionFilter(relayUrl) : true)
+    );
+  };
+
+  function getRelayConnectionAttemptBlockReason(relayUrl: string): string | null {
+    const normalizedRelayUrl = normalizeRelayClientUrl(relayUrl);
+    if (!normalizedRelayUrl || !isUsableRelayClientUrl(normalizedRelayUrl)) {
+      return 'Relay URL is not usable as a client destination.';
+    }
+
+    const relay = ndk.pool.relays.get(normalizedRelayUrl);
+    if (relay?.connected) {
+      return null;
+    }
+
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return 'Relay connection is unavailable while the device is offline.';
+    }
+
+    const retryState = relayConnectRetryStateByUrl.get(normalizedRelayUrl);
+    if (!retryState || retryState.nextAttemptAt <= Date.now()) {
+      return null;
+    }
+
+    return `Relay connection retry is cooling down for ${Math.max(
+      1,
+      retryState.nextAttemptAt - Date.now()
+    )}ms.`;
+  }
+
+  function clearRelayConnectRetryState(relayUrl: string): void {
+    const normalizedRelayUrl = normalizeRelayClientUrl(relayUrl);
+    if (normalizedRelayUrl) {
+      relayConnectRetryStateByUrl.delete(normalizedRelayUrl);
+    }
+  }
+
+  function recordRelayConnectFailure(relay: NDKRelay, error?: unknown): void {
+    const normalizedRelayUrl = normalizeRelayClientUrl(relay.url);
+    if (!normalizedRelayUrl) {
+      return;
+    }
+
+    cancelRelayAutoReconnect(relay);
+    const previousFailureCount =
+      relayConnectRetryStateByUrl.get(normalizedRelayUrl)?.failureCount ?? 0;
+    const failureCount = Math.min(31, previousFailureCount + 1);
+    const retryDelayMs = calculateRelayConnectRetryDelayMs({
+      baseDelayMs: relayConnectRetryBaseDelayMs,
+      failureCount,
+      jitterRatio: relayConnectRetryJitterRatio,
+      maxDelayMs: relayConnectRetryMaxDelayMs,
+    });
+    const nextAttemptAt = Date.now() + retryDelayMs;
+    relayConnectRetryStateByUrl.set(normalizedRelayUrl, {
+      failureCount,
+      nextAttemptAt,
+    });
+    logDeveloperTrace('warn', 'relay-connect', 'retry-backoff', {
+      ...buildRelaySnapshot(relay),
+      error,
+      failureCount,
+      nextAttemptAt: new Date(nextAttemptAt).toISOString(),
+      retryDelayMs,
+    });
+  }
+
+  function guardRelayConnection(relay: NDKRelay | null | undefined): void {
+    if (!relay) {
+      return;
+    }
+
+    ensureSingleSocketRelayConnectGuard(relay, {
+      canConnect: () => getRelayConnectionAttemptBlockReason(relay.url) === null,
+      onConnectSuppressed: () => {
+        logDeveloperTrace('info', 'relay-connect', 'connect-suppressed', {
+          ...buildRelaySnapshot(relay),
+          reason: getRelayConnectionAttemptBlockReason(relay.url),
+        });
+      },
+    });
+  }
+
   function setRelayConnectivityStatus(relay: NDKRelay, status: NDKRelayStatus): void {
     const connectivity = relay.connectivity as unknown as {
       _status?: NDKRelayStatus;
@@ -260,12 +440,25 @@ export function createRelayConnectionRuntime({
       return;
     }
 
+    for (const relay of ndk.pool.relays.values()) {
+      guardRelayConnection(relay);
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('offline', () => {
+        for (const relay of ndk.pool.relays.values()) {
+          cancelRelayAutoReconnect(relay);
+        }
+      });
+    }
+
     ndk.pool.on('relay:connecting', (relay) => {
+      guardRelayConnection(relay);
       authenticatedRelayUrls.delete(relay.url);
       bumpRelayStatusVersion();
       logRelayLifecycle('connecting', relay);
     });
     ndk.pool.on('relay:connect', (relay) => {
+      clearRelayConnectRetryState(relay.url);
       authenticatedRelayUrls.delete(relay.url);
       bumpRelayStatusVersion();
       logRelayLifecycle('connect', relay);
@@ -281,6 +474,7 @@ export function createRelayConnectionRuntime({
       logRelayLifecycle('ready', relay);
     });
     ndk.pool.on('relay:disconnect', (relay) => {
+      recordRelayConnectFailure(relay);
       authenticatedRelayUrls.delete(relay.url);
       bumpRelayStatusVersion();
       logRelayLifecycle('disconnect', relay);
@@ -344,7 +538,7 @@ export function createRelayConnectionRuntime({
     normalizedRelayUrl: string,
     mode: 'connect' | 'reconnect'
   ): Promise<void> | null {
-    ensureSingleSocketRelayConnectGuard(relay);
+    guardRelayConnection(relay);
     ensureRelayAuthFailureListener(relay);
     if (!relay || relay.connected || relay.status !== NDKRelayStatus.DISCONNECTED) {
       return null;
@@ -355,8 +549,12 @@ export function createRelayConnectionRuntime({
       return pendingConnectPromise;
     }
 
-    const cooldownUntil = relayConnectFailureCooldownUntilByUrl.get(normalizedRelayUrl) ?? 0;
-    if (cooldownUntil > Date.now()) {
+    const blockReason = getRelayConnectionAttemptBlockReason(normalizedRelayUrl);
+    if (blockReason) {
+      logDeveloperTrace('info', 'relay-connect', 'connect-skipped', {
+        reason: blockReason,
+        ...buildRelaySnapshot(relay),
+      });
       return null;
     }
 
@@ -373,15 +571,11 @@ export function createRelayConnectionRuntime({
     const connectPromise = relay
       .connect(initialConnectTimeoutMs, false)
       .catch((error) => {
-        relayConnectFailureCooldownUntilByUrl.set(
-          normalizedRelayUrl,
-          Date.now() + relayConnectFailureCooldownMs
-        );
+        recordRelayConnectFailure(relay, error);
         console.warn(
           mode === 'reconnect' ? 'Failed to reconnect relay' : 'Failed to connect relay',
           normalizedRelayUrl,
           {
-            cooldownMs: relayConnectFailureCooldownMs,
             error,
             relay: buildRelaySnapshot(relay),
           }
@@ -417,8 +611,11 @@ export function createRelayConnectionRuntime({
     const requestedRelayUrls: string[] = [];
 
     for (const relayUrl of relayUrls) {
-      const normalizedRelayUrl = normalizeRelayUrl(relayUrl);
-      if (!normalizedRelayUrl) {
+      const normalizedRelayUrl = normalizeRelayClientUrl(relayUrl);
+      if (!normalizedRelayUrl || !isUsableRelayClientUrl(normalizedRelayUrl)) {
+        logDeveloperTrace('warn', 'relay-connect', 'invalid-client-relay-url', {
+          relayUrl,
+        });
         continue;
       }
 
@@ -456,7 +653,10 @@ export function createRelayConnectionRuntime({
   }
 
   function getRelayConnectionState(relayUrl: string): RelayConnectionState {
-    const normalizedRelayUrl = normalizeRelayUrl(relayUrl);
+    const normalizedRelayUrl = normalizeRelayClientUrl(relayUrl);
+    if (!normalizedRelayUrl) {
+      return 'issue';
+    }
     const relay = ndk.pool.relays.get(normalizedRelayUrl);
     if (!relay) {
       return 'issue';
@@ -466,7 +666,10 @@ export function createRelayConnectionRuntime({
   }
 
   function isRelayConnectionPending(relayUrl: string): boolean {
-    const normalizedRelayUrl = normalizeRelayUrl(relayUrl);
+    const normalizedRelayUrl = normalizeRelayClientUrl(relayUrl);
+    if (!normalizedRelayUrl) {
+      return false;
+    }
     if (relayConnectPromises.has(normalizedRelayUrl)) {
       return true;
     }
@@ -492,6 +695,7 @@ export function createRelayConnectionRuntime({
   return {
     ensureRelayConnections,
     fetchRelayNip11Info,
+    getRelayConnectionAttemptBlockReason,
     getOrCreateSigner,
     getRelayConnectionState,
     isRelayConnectionPending,

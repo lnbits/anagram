@@ -31,6 +31,11 @@ export interface NostrNip05DataResult {
 
 export type RelayConnectionState = 'connected' | 'issue';
 
+export interface RelayConnectRetryState {
+  failureCount: number;
+  nextAttemptAt: number;
+}
+
 export interface PublishUserMetadataInput {
   [key: string]: unknown;
   name?: string;

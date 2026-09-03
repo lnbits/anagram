@@ -28,7 +28,9 @@ import {
   LAST_SEEN_RECEIVED_ACTIVITY_AT_META_KEY,
   PRIVATE_MESSAGES_EPOCH_SUBSCRIPTION_REFRESH_DEBOUNCE_MS,
   PRIVATE_MESSAGES_LIVE_RECONNECT_LOOKBACK_SECONDS,
-  RELAY_CONNECT_FAILURE_COOLDOWN_MS,
+  RELAY_CONNECT_RETRY_BASE_DELAY_MS,
+  RELAY_CONNECT_RETRY_JITTER_RATIO,
+  RELAY_CONNECT_RETRY_MAX_DELAY_MS,
   RELAY_FIRST_HEALTHY_WAIT_MS,
   STARTUP_STEP_MIN_PROGRESS_MS,
 } from 'src/stores/nostr/constants';
@@ -88,6 +90,7 @@ import type {
   PrivatePreferences,
   RefreshPrivateMessagesLiveSubscriptionOptions,
   RefreshPrivateMessagesLiveSubscriptionResult,
+  RelayConnectRetryState,
   RelaySaveStatus,
   RepairMissingMessageDependencyOptions,
   SubscribePrivateMessagesOptions,
@@ -195,7 +198,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
   let cachedSignerSessionKey: string | null = null;
   const configuredRelayUrls = new Set<string>();
   const relayConnectPromises = new Map<string, Promise<void>>();
-  const relayConnectFailureCooldownUntilByUrl = new Map<string, number>();
+  const relayConnectRetryStateByUrl = new Map<string, RelayConnectRetryState>();
   const pendingDirectMessageRelayRetryPromises = new Map<string, Promise<void>>();
   let connectPromise: Promise<void> | null = null;
   let hasActivatedPool = false;
@@ -982,6 +985,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     ensureRelayConnections,
     fetchRelayNip11Info,
     getOrCreateSigner: getOrCreateSignerImpl,
+    getRelayConnectionAttemptBlockReason,
     getRelayConnectionState,
     isRelayConnectionPending,
   } = createRelayConnectionRuntime({
@@ -1016,8 +1020,10 @@ export const useNostrStore = defineStore('nostrStore', () => {
       notifyOutboundMessageReplayRelayConnectedRuntime();
     },
     relayAuthFailureListenerUrls,
-    relayConnectFailureCooldownMs: RELAY_CONNECT_FAILURE_COOLDOWN_MS,
-    relayConnectFailureCooldownUntilByUrl,
+    relayConnectRetryBaseDelayMs: RELAY_CONNECT_RETRY_BASE_DELAY_MS,
+    relayConnectRetryJitterRatio: RELAY_CONNECT_RETRY_JITTER_RATIO,
+    relayConnectRetryMaxDelayMs: RELAY_CONNECT_RETRY_MAX_DELAY_MS,
+    relayConnectRetryStateByUrl,
     relayConnectPromises,
     setCachedSigner: (signer) => {
       cachedSigner = signer;
@@ -1099,6 +1105,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     buildRelaySaveStatus,
     decryptGroupIdentitySecretContent,
     ensureRelayConnections,
+    getRelayConnectionAttemptBlockReason,
     getLoggedInPublicKeyHex,
     getOrCreateSigner,
     ndk,
@@ -1940,7 +1947,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     pendingEventSinceState,
     pendingIncomingDeletions,
     pendingIncomingReactions,
-    relayConnectFailureCooldownUntilByUrl,
+    relayConnectRetryStateByUrl,
     relayConnectPromises,
     relayStatusVersion,
     resetContactSubscriptionsRuntimeState,

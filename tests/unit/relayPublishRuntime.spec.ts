@@ -1,9 +1,9 @@
-import { NDKRelaySet } from '@nostr-dev-kit/ndk';
+import { NDKRelaySet, NDKRelayStatus } from '@nostr-dev-kit/ndk';
 import { RELAY_PUBLISH_TIMEOUT_MS } from 'src/stores/nostr/constants';
 import { createRelayPublishRuntime } from 'src/stores/nostr/relayPublishRuntime';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-function createRuntime() {
+function createRuntime(options: { blockReasonByRelayUrl?: Map<string, string> } = {}) {
   const ndk = {};
   const runtime = createRelayPublishRuntime({
     appendRelayStatusesToMessageEvent: vi.fn(async () => {}),
@@ -15,6 +15,8 @@ function createRuntime() {
     })),
     decryptGroupIdentitySecretContent: vi.fn(async () => null),
     ensureRelayConnections: vi.fn(async () => {}),
+    getRelayConnectionAttemptBlockReason: (relayUrl) =>
+      options.blockReasonByRelayUrl?.get(relayUrl) ?? null,
     getLoggedInPublicKeyHex: () => 'a'.repeat(64),
     getOrCreateSigner: vi.fn(async () => ({}) as never),
     ndk: ndk as never,
@@ -43,10 +45,12 @@ describe('relayPublishRuntime', () => {
   it('returns as soon as the first healthy relay acknowledges publish', async () => {
     const { runtime } = createRuntime();
     const fastRelay = {
+      status: NDKRelayStatus.CONNECTED,
       url: 'wss://fast.example/',
       publish: vi.fn(async () => true),
     };
     const slowRelay = {
+      status: NDKRelayStatus.CONNECTED,
       url: 'wss://slow.example/',
       publish: vi.fn(() => new Promise<boolean>(() => {})),
     };
@@ -85,6 +89,7 @@ describe('relayPublishRuntime', () => {
   it('accepts a delayed relay acknowledgement before the publish deadline', async () => {
     const { runtime } = createRuntime();
     const delayedRelay = {
+      status: NDKRelayStatus.CONNECTED,
       url: 'wss://delayed.example/',
       publish: vi.fn(
         () =>
@@ -119,6 +124,7 @@ describe('relayPublishRuntime', () => {
   it('times out hung relays instead of blocking the publish path', async () => {
     const { runtime } = createRuntime();
     const slowRelay = {
+      status: NDKRelayStatus.CONNECTED,
       url: 'wss://slow.example/',
       publish: vi.fn(() => new Promise<boolean>(() => {})),
     };
@@ -146,6 +152,77 @@ describe('relayPublishRuntime', () => {
         relay_url: 'wss://slow.example/',
         status: 'failed',
         detail: `Publish timeout after ${RELAY_PUBLISH_TIMEOUT_MS}ms`,
+      }),
+    ]);
+  });
+
+  it('does not let publishing initiate a connection to a disconnected relay', async () => {
+    const { runtime } = createRuntime();
+    const disconnectedRelay = {
+      status: NDKRelayStatus.DISCONNECTED,
+      url: 'wss://disconnected.example/',
+      publish: vi.fn(async () => true),
+    };
+    vi.spyOn(NDKRelaySet, 'fromRelayUrls').mockReturnValue({
+      relays: new Set([disconnectedRelay]),
+    } as never);
+
+    const result = await runtime.publishEventWithRelayStatuses(
+      {
+        ndk: {},
+        sig: 'signature',
+        sign: vi.fn(),
+      } as never,
+      [disconnectedRelay.url],
+      'recipient'
+    );
+
+    expect(disconnectedRelay.publish).not.toHaveBeenCalled();
+    expect(result.error).toBeInstanceOf(Error);
+    expect(result.relayStatuses).toEqual([
+      expect.objectContaining({
+        detail: 'Relay is not connected.',
+        relay_url: disconnectedRelay.url,
+        status: 'failed',
+      }),
+    ]);
+  });
+
+  it('skips publishing to relays whose connection retry is cooling down', async () => {
+    const relayUrl = 'wss://cooling-down.example/';
+    const blockReason = 'Relay connection retry is cooling down for 9000ms.';
+    const { runtime } = createRuntime({
+      blockReasonByRelayUrl: new Map([[relayUrl, blockReason]]),
+    });
+    const cooledRelay = {
+      status: NDKRelayStatus.DISCONNECTED,
+      url: relayUrl,
+      publish: vi.fn(async () => true),
+    };
+    const relaySetSpy = vi.spyOn(NDKRelaySet, 'fromRelayUrls').mockReturnValue({
+      relays: new Set(),
+    } as never);
+
+    const startedAt = Date.now();
+    const result = await runtime.publishEventWithRelayStatuses(
+      {
+        ndk: {},
+        sig: 'signature',
+        sign: vi.fn(),
+      } as never,
+      [relayUrl],
+      'recipient'
+    );
+
+    expect(Date.now() - startedAt).toBeLessThan(100);
+    expect(relaySetSpy).toHaveBeenCalledWith([], expect.anything(), false);
+    expect(cooledRelay.publish).not.toHaveBeenCalled();
+    expect(result.error).toBeInstanceOf(Error);
+    expect(result.relayStatuses).toEqual([
+      expect.objectContaining({
+        detail: blockReason,
+        relay_url: relayUrl,
+        status: 'failed',
       }),
     ]);
   });

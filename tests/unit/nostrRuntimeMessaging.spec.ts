@@ -211,7 +211,7 @@ function createAuthSessionHarness() {
     },
     pendingIncomingDeletions: { clear: vi.fn() },
     pendingIncomingReactions: { clear: vi.fn() },
-    relayConnectFailureCooldownUntilByUrl: { clear: vi.fn() },
+    relayConnectRetryStateByUrl: { clear: vi.fn() },
     relayConnectPromises: { clear: vi.fn() },
     relayStatusVersion: refs.relayStatusVersion,
     resetContactSubscriptionsRuntimeState: vi.fn(),

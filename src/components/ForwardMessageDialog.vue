@@ -31,6 +31,8 @@
           :key="chat.id"
           clickable
           class="forward-dialog__chat"
+          data-testid="forward-message-chat"
+          :data-chat-public-key="chat.publicKey.trim().toLowerCase()"
           :disable="isSubmitting"
           :aria-label="$t('message.forward.toChat', { name: chatDisplayName(chat) })"
           @click="selectChat(chat)"

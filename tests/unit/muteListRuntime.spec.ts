@@ -61,6 +61,10 @@ function createChat(publicKey: string, meta: Record<string, unknown> = {}) {
 
 function createRuntime(overrides: Partial<Parameters<typeof createMuteListRuntime>[0]> = {}) {
   const ndk = new NDK();
+  Object.defineProperty(ndk, 'subscribe', {
+    configurable: true,
+    value: undefined,
+  });
   const deps = {
     beginStartupStep: vi.fn(),
     buildMuteListTags: vi.fn((mutedPubkeys: string[], blockedPubkeys: string[]) => [

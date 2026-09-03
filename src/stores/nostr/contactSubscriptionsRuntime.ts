@@ -11,6 +11,7 @@ import NDK, {
 } from '@nostr-dev-kit/ndk';
 import { contactsService } from 'src/services/contactsService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
+import { createReadyRelaySet, fetchEventWithRelayTimeout } from 'src/stores/nostr/relayQueryUtils';
 import {
   mergeRelayEntriesWithDirectMessageReceiveRelayEntriesValue,
   relayEntriesFromDirectMessageReceiveRelayEventValue,
@@ -177,8 +178,9 @@ export function createContactSubscriptionsRuntime({
 
     await ensureRelayConnections(relayUrls);
 
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
-    const directMessageReceiveRelayEvent = await ndk.fetchEvent(
+    const relaySet = createReadyRelaySet(ndk, relayUrls);
+    const directMessageReceiveRelayEvent = await fetchEventWithRelayTimeout(
+      ndk,
       {
         kinds: [NDKKind.DirectMessageReceiveRelayList],
         authors: [normalizedPubkey],

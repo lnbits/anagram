@@ -64,6 +64,10 @@ describe('private contact list runtime', () => {
 
   it('tracks restored private contact-list entry counts on the startup step', async () => {
     const ndk = new NDK();
+    Object.defineProperty(ndk, 'subscribe', {
+      configurable: true,
+      value: undefined,
+    });
     const listEvent = new NDKEvent(ndk, {
       kind: NDKKind.FollowSet,
       pubkey: LOGGED_IN_PUBKEY,
@@ -181,6 +185,10 @@ describe('private contact list runtime', () => {
 
   it('adds outgoing message targets during Contacts refresh and publishes them', async () => {
     const ndk = new NDK();
+    Object.defineProperty(ndk, 'subscribe', {
+      configurable: true,
+      value: undefined,
+    });
     const listEvent = new NDKEvent(ndk, {
       kind: NDKKind.FollowSet,
       pubkey: LOGGED_IN_PUBKEY,

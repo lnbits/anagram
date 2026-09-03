@@ -261,6 +261,10 @@ describe('relay and subscription runtimes', () => {
 
   it('publishes, restores, and subscribes to the logged-in relay list', async () => {
     const ndk = new NDK();
+    Object.defineProperty(ndk, 'subscribe', {
+      configurable: true,
+      value: undefined,
+    });
     Object.defineProperty(ndk, 'fetchEvent', {
       configurable: true,
       value: vi.fn(async () => {

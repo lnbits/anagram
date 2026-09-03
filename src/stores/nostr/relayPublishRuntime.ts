@@ -4,7 +4,6 @@ import NDK, {
   NDKEvent,
   NDKKind,
   NDKPrivateKeySigner,
-  NDKPublishError,
   NDKRelayList,
   NDKRelaySet,
   type NDKSigner,
@@ -14,6 +13,7 @@ import NDK, {
 } from '@nostr-dev-kit/ndk';
 import { contactsService } from 'src/services/contactsService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
+import { RELAY_PUBLISH_TIMEOUT_MS } from 'src/stores/nostr/constants';
 import type {
   GiftWrappedRumorPublishResult,
   GroupIdentitySecretContent,
@@ -142,6 +142,123 @@ export function createRelayPublishRuntime({
     ]);
   }
 
+  async function publishSignedEventToRelaysFirstSuccess(
+    event: NDKEvent,
+    relayUrls: string[]
+  ): Promise<{
+    publishedRelayUrls: Set<string>;
+    errorsByRelayUrl: Map<string, string>;
+  }> {
+    const publishedRelayUrls = new Set<string>();
+    const errorsByRelayUrl = new Map<string, string>();
+    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
+    const relays = Array.from(relaySet.relays);
+    if (relays.length === 0) {
+      return {
+        publishedRelayUrls,
+        errorsByRelayUrl,
+      };
+    }
+
+    event.ndk = ndk;
+    if (!event.sig) {
+      await event.sign();
+    }
+
+    const snapshotPublishedRelayUrls = new Set<string>();
+    const snapshotErrorsByRelayUrl = new Map<string, string>();
+
+    await new Promise<void>((resolve) => {
+      let finished = false;
+      let remaining = relays.length;
+      const finish = () => {
+        if (finished) {
+          return;
+        }
+
+        finished = true;
+        if (timeoutId !== null) {
+          globalThis.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        for (const relayUrl of publishedRelayUrls) {
+          snapshotPublishedRelayUrls.add(relayUrl);
+        }
+        for (const [relayUrl, detail] of errorsByRelayUrl) {
+          if (!snapshotPublishedRelayUrls.has(relayUrl)) {
+            snapshotErrorsByRelayUrl.set(relayUrl, detail);
+          }
+        }
+        resolve();
+      };
+
+      let timeoutId: ReturnType<typeof globalThis.setTimeout> | null = globalThis.setTimeout(
+        finish,
+        RELAY_PUBLISH_TIMEOUT_MS
+      );
+
+      for (const relay of relays) {
+        const normalizedRelayUrl = normalizeRelayStatusUrl(relay.url);
+        void relay
+          .publish(event, RELAY_PUBLISH_TIMEOUT_MS)
+          .then((success) => {
+            if (finished) {
+              return;
+            }
+
+            if (success && normalizedRelayUrl) {
+              publishedRelayUrls.add(normalizedRelayUrl);
+              errorsByRelayUrl.delete(normalizedRelayUrl);
+              finish();
+              return;
+            }
+
+            if (normalizedRelayUrl && !publishedRelayUrls.has(normalizedRelayUrl)) {
+              errorsByRelayUrl.set(normalizedRelayUrl, 'Relay did not acknowledge publish.');
+            }
+          })
+          .catch((error) => {
+            if (finished) {
+              return;
+            }
+
+            if (normalizedRelayUrl && !publishedRelayUrls.has(normalizedRelayUrl)) {
+              errorsByRelayUrl.set(
+                normalizedRelayUrl,
+                error instanceof Error ? error.message : String(error)
+              );
+            }
+          })
+          .finally(() => {
+            remaining -= 1;
+            if (remaining === 0) {
+              finish();
+            }
+          });
+      }
+    });
+
+    publishedRelayUrls.clear();
+    errorsByRelayUrl.clear();
+    for (const relayUrl of snapshotPublishedRelayUrls) {
+      publishedRelayUrls.add(relayUrl);
+    }
+    for (const [relayUrl, detail] of snapshotErrorsByRelayUrl) {
+      errorsByRelayUrl.set(relayUrl, detail);
+    }
+
+    for (const relayUrl of relayUrls) {
+      if (!publishedRelayUrls.has(relayUrl) && !errorsByRelayUrl.has(relayUrl)) {
+        errorsByRelayUrl.set(relayUrl, `Publish timeout after ${RELAY_PUBLISH_TIMEOUT_MS}ms`);
+      }
+    }
+
+    return {
+      publishedRelayUrls,
+      errorsByRelayUrl,
+    };
+  }
+
   async function publishEventWithRelayStatuses(
     event: NDKEvent,
     relayUrls: string[],
@@ -155,64 +272,23 @@ export function createRelayPublishRuntime({
       };
     }
 
-    const relaySet = NDKRelaySet.fromRelayUrls(normalizedRelayUrls, ndk, false);
+    const { publishedRelayUrls, errorsByRelayUrl } = await publishSignedEventToRelaysFirstSuccess(
+      event,
+      normalizedRelayUrls
+    );
 
-    try {
-      const publishedToRelays = await event.publish(relaySet);
-      const publishedRelayUrls = new Set(
-        Array.from(publishedToRelays, (relay) => normalizeRelayStatusUrl(relay.url)).filter(
-          (relayUrl): relayUrl is string => Boolean(relayUrl)
-        )
-      );
-
-      return {
-        relayStatuses: buildOutboundRelayStatuses(
-          normalizedRelayUrls,
-          publishedRelayUrls,
-          new Map<string, string>(),
-          scope
-        ),
-        error: null,
-      };
-    } catch (error) {
-      const publishedRelayUrls = new Set<string>();
-      const errorsByRelayUrl = new Map<string, string>();
-
-      if (error instanceof NDKPublishError) {
-        for (const relay of error.publishedToRelays) {
-          const normalizedRelayUrl = normalizeRelayStatusUrl(relay.url);
-          if (normalizedRelayUrl) {
-            publishedRelayUrls.add(normalizedRelayUrl);
-          }
-        }
-
-        error.errors.forEach((relayError, relay) => {
-          const normalizedRelayUrl = normalizeRelayStatusUrl(relay.url);
-          if (!normalizedRelayUrl) {
-            return;
-          }
-
-          errorsByRelayUrl.set(
-            normalizedRelayUrl,
-            relayError instanceof Error ? relayError.message : String(relayError)
-          );
-        });
-      } else if (error instanceof Error) {
-        for (const relayUrl of normalizedRelayUrls) {
-          errorsByRelayUrl.set(relayUrl, error.message);
-        }
-      }
-
-      return {
-        relayStatuses: buildOutboundRelayStatuses(
-          normalizedRelayUrls,
-          publishedRelayUrls,
-          errorsByRelayUrl,
-          scope
-        ),
-        error: error instanceof Error ? error : new Error('Failed to publish event.'),
-      };
-    }
+    return {
+      relayStatuses: buildOutboundRelayStatuses(
+        normalizedRelayUrls,
+        publishedRelayUrls,
+        errorsByRelayUrl,
+        scope
+      ),
+      error:
+        publishedRelayUrls.size > 0
+          ? null
+          : new Error('Not enough relays received the event (0 published, 1 required)'),
+    };
   }
 
   async function publishReplaceableEventWithRelayStatuses(
@@ -228,64 +304,27 @@ export function createRelayPublishRuntime({
       };
     }
 
-    const relaySet = NDKRelaySet.fromRelayUrls(normalizedRelayUrls, ndk, false);
+    event.id = '';
+    event.created_at = Math.floor(Date.now() / 1000);
+    event.sig = '';
 
-    try {
-      const publishedToRelays = await event.publishReplaceable(relaySet);
-      const publishedRelayUrls = new Set(
-        Array.from(publishedToRelays, (relay) => normalizeRelayStatusUrl(relay.url)).filter(
-          (relayUrl): relayUrl is string => Boolean(relayUrl)
-        )
-      );
+    const { publishedRelayUrls, errorsByRelayUrl } = await publishSignedEventToRelaysFirstSuccess(
+      event,
+      normalizedRelayUrls
+    );
 
-      return {
-        relayStatuses: buildOutboundRelayStatuses(
-          normalizedRelayUrls,
-          publishedRelayUrls,
-          new Map<string, string>(),
-          scope
-        ),
-        error: null,
-      };
-    } catch (error) {
-      const publishedRelayUrls = new Set<string>();
-      const errorsByRelayUrl = new Map<string, string>();
-
-      if (error instanceof NDKPublishError) {
-        for (const relay of error.publishedToRelays) {
-          const normalizedRelayUrl = normalizeRelayStatusUrl(relay.url);
-          if (normalizedRelayUrl) {
-            publishedRelayUrls.add(normalizedRelayUrl);
-          }
-        }
-
-        error.errors.forEach((relayError, relay) => {
-          const normalizedRelayUrl = normalizeRelayStatusUrl(relay.url);
-          if (!normalizedRelayUrl) {
-            return;
-          }
-
-          errorsByRelayUrl.set(
-            normalizedRelayUrl,
-            relayError instanceof Error ? relayError.message : String(relayError)
-          );
-        });
-      } else if (error instanceof Error) {
-        for (const relayUrl of normalizedRelayUrls) {
-          errorsByRelayUrl.set(relayUrl, error.message);
-        }
-      }
-
-      return {
-        relayStatuses: buildOutboundRelayStatuses(
-          normalizedRelayUrls,
-          publishedRelayUrls,
-          errorsByRelayUrl,
-          scope
-        ),
-        error: error instanceof Error ? error : new Error('Failed to publish replaceable event.'),
-      };
-    }
+    return {
+      relayStatuses: buildOutboundRelayStatuses(
+        normalizedRelayUrls,
+        publishedRelayUrls,
+        errorsByRelayUrl,
+        scope
+      ),
+      error:
+        publishedRelayUrls.size > 0
+          ? null
+          : new Error('Not enough relays received the event (0 published, 1 required)'),
+    };
   }
 
   async function sendGiftWrappedRumor(

@@ -21,6 +21,7 @@ vi.mock('src/services/contactsService', () => ({
 }));
 
 import { PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS } from 'src/stores/nostr/constants';
+import { RelayQueryTimeoutError } from 'src/stores/nostr/relayQueryUtils';
 import { writeStartupCheckpoint } from 'src/stores/nostr/startupCheckpoint';
 import { createStartupContactSyncRuntime } from 'src/stores/nostr/startupContactSyncRuntime';
 
@@ -37,7 +38,9 @@ function installLocalStorage(): void {
   });
 }
 
-function createSessionInitializationRuntime(options: { resumeError?: Error } = {}) {
+function createSessionInitializationRuntime(
+  options: { restoreMyRelayListError?: Error; resumeError?: Error } = {}
+) {
   let restoreStartupStatePromise: Promise<void> | null = null;
   let syncLoggedInContactProfilePromise: Promise<void> | null = null;
   let syncRecentChatContactsPromise: Promise<void> | null = null;
@@ -48,6 +51,11 @@ function createSessionInitializationRuntime(options: { resumeError?: Error } = {
       })
     : vi.fn(async () => {});
   const task = () => vi.fn(async () => {});
+  const restoreMyRelayList = options.restoreMyRelayListError
+    ? vi.fn(async () => {
+        throw options.restoreMyRelayListError;
+      })
+    : task();
 
   const runtime = createStartupContactSyncRuntime({
     applyContactCursorStateToContact: vi.fn(async () => false),
@@ -79,7 +87,7 @@ function createSessionInitializationRuntime(options: { resumeError?: Error } = {
     resetStartupStepTracking: vi.fn(),
     restoreContactCursorState: task(),
     restoreGroupIdentitySecrets: task(),
-    restoreMyRelayList: task(),
+    restoreMyRelayList,
     restoreMuteList: task(),
     restorePrivateContactList: task(),
     restorePrivatePreferences: task(),
@@ -319,5 +327,19 @@ describe('startup contact sync runtime', () => {
     expect(runLightweightSessionResume).toHaveBeenCalledTimes(1);
     expect(beginStartupStep).toHaveBeenCalledWith('my-relays-restore');
     expect(beginStartupStep).toHaveBeenCalledWith('private-messages-subscribe');
+  });
+
+  it('reports a bounded relay-query deferral as a warning during startup', async () => {
+    const queryError = new RelayQueryTimeoutError(2_500);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { runtime } = createSessionInitializationRuntime({
+      restoreMyRelayListError: queryError,
+    });
+
+    await runtime.restoreStartupState();
+
+    expect(warnSpy).toHaveBeenCalledWith('Failed to restore My Relays on startup', queryError);
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 });

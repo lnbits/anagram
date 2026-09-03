@@ -3,18 +3,21 @@ Categories:
   - Internet
 License: MIT
 AuthorName: LNbits
+AuthorWebSite: https://lnbits.com
 WebSite: https://github.com/lnbits/anagram
 SourceCode: https://github.com/lnbits/anagram
 IssueTracker: https://github.com/lnbits/anagram/issues
 Changelog: https://github.com/lnbits/anagram/releases
 
+AutoName: Anagram
+
 RepoType: git
 Repo: https://github.com/lnbits/anagram.git
 
 Builds:
-  - versionName: 0.6.1
-    versionCode: 6
-    commit: 840eb8de90e78b67364d638cb429f4b9f00803d9
+  - versionName: 0.7.0
+    versionCode: 7
+    commit: 825b69632e841871b5c410de756209fe72088071
     subdir: src-capacitor/android/app
     sudo:
       - apt-get update
@@ -61,13 +64,14 @@ Builds:
       - node scripts/quasar.cjs build -m capacitor -T android --skip-pkg
 
 MaintainerNotes: |-
-  The first build is a technical baseline against the published post-v0.6.1
-  source commit that adds configurable Blossom storage. Replace it with the
-  immutable v0.6.2 release commit before submitting this recipe to fdroiddata.
+  npm lifecycle scripts are disabled during dependency installation.
+  esbuild and Rolldown native executables are rebuilt from the declared
+  source libraries. The application contains no Firebase, GMS, advertising,
+  analytics, or tracking SDKs.
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags ^v[0-9.]+$
 UpdateCheckData:
   src-capacitor/package.json|"androidVersionCode":\s*(\d+)|.|"version":\s*"([\d.]+)"
-CurrentVersion: 0.6.1
-CurrentVersionCode: 6
+CurrentVersion: 0.7.0
+CurrentVersionCode: 7

@@ -11,6 +11,7 @@ import NDK, {
 import { contactsService } from 'src/services/contactsService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { useNip65RelayStore } from 'src/stores/nip65RelayStore';
+import { createReadyRelaySet, fetchEventWithRelayTimeout } from 'src/stores/nostr/relayQueryUtils';
 import type { AuthMethod, RelayListMetadataEntry } from 'src/stores/nostr/types';
 import type { ContactRelay } from 'src/types/contact';
 
@@ -200,8 +201,9 @@ export function createMyRelayListRuntime({
     await ensureRelayConnections(relayUrls);
 
     const user = await getLoggedInSignerUser();
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
-    const relayListEvent = await ndk.fetchEvent(
+    const relaySet = createReadyRelaySet(ndk, relayUrls);
+    const relayListEvent = await fetchEventWithRelayTimeout(
+      ndk,
       {
         kinds: [NDKKind.RelayList],
         authors: [user.pubkey],

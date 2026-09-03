@@ -605,14 +605,16 @@ async function resolveFallbackRelayUrls(
 
 async function handleSend(payload: { text: string; replyTo: MessageReplyPreview | null }): Promise<void> {
   try {
-    if (!activeChatId.value) {
+    const targetChatId = activeChatId.value;
+    const targetChatName = activeChat.value?.name ?? '';
+    if (!targetChatId) {
       return;
     }
 
     let created;
     try {
       created = await messageStore.sendMessage(
-        activeChatId.value,
+        targetChatId,
         payload.text,
         payload.replyTo
       );
@@ -621,29 +623,35 @@ async function handleSend(payload: { text: string; replyTo: MessageReplyPreview 
         throw error;
       }
 
-      const fallbackRelayUrls = await resolveFallbackRelayUrls(error.chatPublicKey);
+      const fallbackRelayUrls = await resolveFallbackRelayUrls(
+        error.chatPublicKey,
+        targetChatName
+      );
       if (!fallbackRelayUrls) {
         return;
       }
 
       created = await messageStore.sendMessage(
-        activeChatId.value,
+        targetChatId,
         payload.text,
         payload.replyTo,
         {
-          relayUrls: fallbackRelayUrls
+          relayUrls: fallbackRelayUrls,
+          ...(typeof error.localMessageId === 'number' && error.localMessageId > 0
+            ? { continueFromMessageId: error.localMessageId }
+            : {})
         }
       );
     }
 
     if (created) {
-      await chatStore.updateChatPreview(activeChatId.value, created.text, created.sentAt, {
+      await chatStore.updateChatPreview(targetChatId, created.text, created.sentAt, {
         messageMeta: created.meta
       });
-      await chatStore.acceptChat(activeChatId.value, {
+      await chatStore.acceptChat(targetChatId, {
         lastOutgoingMessageAt: created.sentAt
       });
-      clearAndroidChatNotification(activeChatId.value);
+      clearAndroidChatNotification(targetChatId);
     }
   } catch (error) {
     reportUiError('Failed to send chat message', error, t('errors.failedSendMessage'));
@@ -655,14 +663,16 @@ async function handleSendMedia(payload: {
   replyTo: MessageReplyPreview | null;
 }): Promise<void> {
   try {
-    if (!activeChatId.value) {
+    const targetChatId = activeChatId.value;
+    const targetChatName = activeChat.value?.name ?? '';
+    if (!targetChatId) {
       return;
     }
 
     let created;
     try {
       created = await messageStore.sendMediaAttachment(
-        activeChatId.value,
+        targetChatId,
         payload.attachment,
         payload.replyTo
       );
@@ -671,29 +681,35 @@ async function handleSendMedia(payload: {
         throw error;
       }
 
-      const fallbackRelayUrls = await resolveFallbackRelayUrls(error.chatPublicKey);
+      const fallbackRelayUrls = await resolveFallbackRelayUrls(
+        error.chatPublicKey,
+        targetChatName
+      );
       if (!fallbackRelayUrls) {
         return;
       }
 
       created = await messageStore.sendMediaAttachment(
-        activeChatId.value,
+        targetChatId,
         payload.attachment,
         payload.replyTo,
         {
-          relayUrls: fallbackRelayUrls
+          relayUrls: fallbackRelayUrls,
+          ...(typeof error.localMessageId === 'number' && error.localMessageId > 0
+            ? { continueFromMessageId: error.localMessageId }
+            : {})
         }
       );
     }
 
     if (created) {
-      await chatStore.updateChatPreview(activeChatId.value, created.text, created.sentAt, {
+      await chatStore.updateChatPreview(targetChatId, created.text, created.sentAt, {
         messageMeta: created.meta
       });
-      await chatStore.acceptChat(activeChatId.value, {
+      await chatStore.acceptChat(targetChatId, {
         lastOutgoingMessageAt: created.sentAt
       });
-      clearAndroidChatNotification(activeChatId.value);
+      clearAndroidChatNotification(targetChatId);
     }
   } catch (error) {
     reportUiError('Failed to send media attachment', error, t('errors.failedSendMessage'));
@@ -778,6 +794,9 @@ async function handleForwardMessageToChat(chatId: string): Promise<void> {
 
       created = await messageStore.forwardMessage(targetChat.id, message, {
         relayUrls: fallbackRelayUrls,
+        ...(typeof error.localMessageId === 'number' && error.localMessageId > 0
+          ? { continueFromMessageId: error.localMessageId }
+          : {}),
       });
     }
 

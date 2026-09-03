@@ -20,6 +20,7 @@ import type {
   MessageReplyPreview,
   NostrEventEntry,
 } from 'src/types/chat';
+import { yieldToNextPaint } from 'src/utils/backgroundTasks';
 import { resolvePreferredContactRelayUrls } from 'src/utils/contactRelayUrls';
 import { isIncomingUnreadMessageActivity } from 'src/utils/messageActivity';
 import {
@@ -56,7 +57,11 @@ interface ChatMessagePaginationState {
 interface RelaySendOptions {
   relayUrls?: string[];
   createdAt?: string;
+  continueFromMessageId?: number;
 }
+
+const OPTIMISTIC_MESSAGE_ID_PREFIX = 'optimistic-';
+let optimisticMessageSeq = 0;
 
 interface ChatThreadSearchMatch {
   messageId: string;
@@ -79,11 +84,13 @@ type RelayStore = ReturnType<RelayStoreModule['useRelayStore']>;
 export class MissingContactRelaysError extends Error {
   readonly code = 'missing-contact-relays';
   readonly chatPublicKey: string;
+  readonly localMessageId: number | null;
 
-  constructor(chatPublicKey: string) {
+  constructor(chatPublicKey: string, localMessageId: number | null = null) {
     super('Inbound relays not found for this contact.');
     this.name = 'MissingContactRelaysError';
     this.chatPublicKey = chatPublicKey;
+    this.localMessageId = localMessageId;
   }
 }
 
@@ -112,6 +119,15 @@ function getLoggedInPublicKey(): string | null {
   }
 
   return normalizeChatIdentifier(window.localStorage.getItem('npub'));
+}
+
+function isOptimisticMessageId(messageId: string | null | undefined): boolean {
+  return typeof messageId === 'string' && messageId.startsWith(OPTIMISTIC_MESSAGE_ID_PREFIX);
+}
+
+function createOptimisticMessageId(): string {
+  optimisticMessageSeq += 1;
+  return `${OPTIMISTIC_MESSAGE_ID_PREFIX}${Date.now()}-${optimisticMessageSeq}`;
 }
 
 function normalizeEventId(value: unknown): string | null {
@@ -429,6 +445,33 @@ function mergeMessagesById(currentMessages: Message[], incomingMessages: Message
   return Array.from(mergedMessagesById.values()).sort(compareMessagesBySentAt);
 }
 
+function mergeLoadedMessagesWithLocalOutbound(
+  loadedMessages: Message[],
+  existingMessages: Message[]
+): Message[] {
+  const loadedIds = new Set(loadedMessages.map((message) => message.id));
+  const newestLoadedMessage = loadedMessages[loadedMessages.length - 1] ?? null;
+  const preserved = existingMessages.filter((message) => {
+    if (loadedIds.has(message.id)) {
+      return false;
+    }
+
+    return (
+      isOptimisticMessageId(message.id) ||
+      (message.sender === 'me' &&
+        (!normalizeEventId(message.eventId) ||
+          !newestLoadedMessage ||
+          compareMessagesBySentAt(message, newestLoadedMessage) > 0))
+    );
+  });
+
+  if (preserved.length === 0) {
+    return loadedMessages;
+  }
+
+  return mergeMessagesById(loadedMessages, preserved);
+}
+
 function readUnseenReactionCountFromMetaValue(meta: Record<string, unknown>): number {
   const rawValue = meta.unseen_reaction_count;
   const numericValue = typeof rawValue === 'number' ? rawValue : Number(rawValue);
@@ -668,7 +711,9 @@ export const __messageStoreTestUtils = {
   compareMessageCursors,
   countUnreadMessageRowsAfterBoundary,
   countOwnUnseenReactions,
+  isOptimisticMessageId,
   mapMessageRowToMessage,
+  mergeLoadedMessagesWithLocalOutbound,
   mergeMessagesById,
   readUnseenReactionCountFromMeta: readUnseenReactionCountFromMetaValue,
   resolveLatestOwnMessageAt,
@@ -972,6 +1017,228 @@ export const useMessageStore = defineStore('messageStore', () => {
     paginationStateByChat.value[normalizedChatId] = computedUpsert.paginationState;
   }
 
+  function replaceMessageIdInState(
+    chatId: string,
+    previousMessageId: string,
+    nextMessage: Message
+  ): void {
+    const normalizedChatId = normalizeChatIdentifier(chatId);
+    if (!normalizedChatId) {
+      return;
+    }
+
+    const existingMessages = messagesByChat.value[normalizedChatId] ?? [];
+    const existingIndex = existingMessages.findIndex((entry) => entry.id === previousMessageId);
+    if (existingIndex === -1) {
+      upsertMessageInState(normalizedChatId, nextMessage, {
+        allowOutsideLoadedWindow: true,
+      });
+      return;
+    }
+
+    const nextMessages = [...existingMessages];
+    nextMessages[existingIndex] = nextMessage;
+    messagesByChat.value[normalizedChatId] = nextMessages;
+  }
+
+  function insertOptimisticOutboundMessage(chatId: string, message: Message): void {
+    loadedChatIds.add(chatId);
+    upsertMessageInState(chatId, message, {
+      allowOutsideLoadedWindow: true,
+    });
+  }
+
+  function buildOptimisticOutboundMessage(
+    chatId: string,
+    text: string,
+    createdAt: string,
+    meta: MessageMetadata
+  ): Message {
+    return {
+      id: createOptimisticMessageId(),
+      chatId,
+      text,
+      sender: 'me',
+      sentAt: createdAt,
+      authorPublicKey: getLoggedInPublicKey() ?? '',
+      eventId: null,
+      nostrEvent: null,
+      meta,
+    };
+  }
+
+  async function sendOutboundChatMessage(input: {
+    chatId: string;
+    text: string;
+    meta: MessageMetadata;
+    replyTo: MessageReplyPreview | null;
+    additionalTags?: string[][];
+    options: RelaySendOptions;
+    shouldSyncLiveMessage: boolean;
+  }): Promise<Message | null> {
+    const normalizedChatId = normalizeChatIdentifier(input.chatId);
+    const cleanText = input.text.trim();
+    if (!normalizedChatId || !cleanText) {
+      return null;
+    }
+
+    const createdAt =
+      typeof input.options.createdAt === 'string' && input.options.createdAt.trim()
+        ? input.options.createdAt.trim()
+        : new Date().toISOString();
+    const continueFromMessageId = input.options.continueFromMessageId;
+    const persistedContinueId =
+      typeof continueFromMessageId === 'number' &&
+      Number.isInteger(continueFromMessageId) &&
+      continueFromMessageId > 0
+        ? continueFromMessageId
+        : null;
+
+    let persistedId: number | null = null;
+    let liveMessage: Message | null = null;
+    let optimisticId: string | null = null;
+
+    if (persistedContinueId) {
+      await chatDataService.init();
+      const existingRow = await chatDataService.getMessageById(persistedContinueId);
+      if (!existingRow) {
+        return null;
+      }
+      if (normalizeChatIdentifier(existingRow.chat_public_key) !== normalizedChatId) {
+        throw new Error('Cannot continue an outbound message from a different chat.');
+      }
+
+      persistedId = existingRow.id;
+      liveMessage = mapMessageRowToMessage(existingRow, normalizedChatId);
+      if (input.shouldSyncLiveMessage) {
+        loadedChatIds.add(normalizedChatId);
+        upsertMessageInState(normalizedChatId, liveMessage, {
+          allowOutsideLoadedWindow: true,
+        });
+      }
+    } else {
+      liveMessage = buildOptimisticOutboundMessage(
+        normalizedChatId,
+        cleanText,
+        createdAt,
+        input.meta
+      );
+      optimisticId = liveMessage.id;
+      if (input.shouldSyncLiveMessage) {
+        insertOptimisticOutboundMessage(normalizedChatId, liveMessage);
+        await yieldToNextPaint();
+        void chatStore.updateChatPreview(normalizedChatId, liveMessage.text, liveMessage.sentAt, {
+          messageMeta: liveMessage.meta,
+        });
+      }
+
+      await chatDataService.init();
+      const replyTargetEventId = await resolveReplyTargetEventId(input.replyTo);
+      const replyPreview = input.replyTo
+        ? {
+            ...input.replyTo,
+            eventId: replyTargetEventId ?? input.replyTo.eventId,
+          }
+        : null;
+      const persistMeta = {
+        ...input.meta,
+        ...(replyPreview ? { reply: replyPreview } : {}),
+      };
+      const created = await chatDataService.createMessage({
+        chat_public_key: normalizedChatId,
+        author_public_key: window.localStorage.getItem('npub'),
+        message: cleanText,
+        created_at: createdAt,
+        ...(Object.keys(persistMeta).length > 0 ? { meta: persistMeta } : {}),
+      });
+      if (!created) {
+        throw new Error('Failed to persist outbound message.');
+      }
+
+      persistedId = created.id;
+      const persistedMessage = mapMessageRowToMessage(created, normalizedChatId);
+      if (input.shouldSyncLiveMessage && optimisticId) {
+        replaceMessageIdInState(normalizedChatId, optimisticId, persistedMessage);
+      } else if (input.shouldSyncLiveMessage) {
+        upsertMessageInState(normalizedChatId, persistedMessage, {
+          allowOutsideLoadedWindow: true,
+        });
+      }
+      liveMessage = persistedMessage;
+    }
+
+    if (!liveMessage) {
+      return null;
+    }
+
+    const chat = await chatDataService.getChatByPublicKey(normalizedChatId);
+    if (!chat) {
+      throw new Error('Chat not found for outbound message.');
+    }
+
+    const recipientPublicKey = resolveChatRecipientPublicKeyFromRow(chat);
+    if (!recipientPublicKey) {
+      throw new Error('Group chat is missing the current epoch public key.');
+    }
+
+    let recipientRelayUrls: string[];
+    try {
+      recipientRelayUrls = await resolveSendRelayUrls(chat.public_key, input.options.relayUrls);
+    } catch (error) {
+      if (isMissingContactRelaysError(error)) {
+        throw new MissingContactRelaysError(error.chatPublicKey, persistedId);
+      }
+
+      throw error;
+    }
+
+    const replyTargetEventId = await resolveReplyTargetEventId(input.replyTo);
+    let sendError: unknown = null;
+
+    try {
+      const nostrStore = await getNostrStore();
+      await nostrStore.sendDirectMessage(recipientPublicKey, liveMessage.text, recipientRelayUrls, {
+        ...(persistedId ? { localMessageId: persistedId } : {}),
+        createdAt: liveMessage.sentAt,
+        replyToEventId: replyTargetEventId,
+        publishSelfCopy: shouldPublishSelfCopyForChatRow(chat),
+        ...(input.additionalTags && input.additionalTags.length > 0
+          ? { additionalTags: input.additionalTags }
+          : {}),
+      });
+    } catch (error) {
+      sendError = error;
+    }
+
+    if (persistedId) {
+      const updatedMessageRow = await chatDataService.getMessageById(persistedId);
+      const finalMessage = updatedMessageRow
+        ? await hydrateMessageRow(updatedMessageRow, normalizedChatId)
+        : liveMessage;
+      if (input.shouldSyncLiveMessage) {
+        if (optimisticId && liveMessage.id === optimisticId) {
+          replaceMessageIdInState(normalizedChatId, optimisticId, finalMessage);
+        } else {
+          replaceMessageInState(normalizedChatId, finalMessage);
+        }
+      }
+      liveMessage = finalMessage;
+    }
+
+    if (sendError) {
+      throw sendError;
+    }
+
+    try {
+      const nostrStore = await getNostrStore();
+      await nostrStore.ensureRespondedPubkeyIsContact(chat.public_key, chat.name);
+    } catch (error) {
+      console.warn('Failed to add responded pubkey to contacts', chat.public_key, error);
+    }
+
+    return liveMessage;
+  }
+
   function upsertPersistedMessage(row: MessageRow): Promise<void> {
     const chatId = normalizeChatIdentifier(row.chat_public_key);
     if (!chatId || (!loadedChatIds.has(chatId) && !messagesByChat.value[chatId])) {
@@ -1206,9 +1473,11 @@ export const useMessageStore = defineStore('messageStore', () => {
     const loadPromise = (async () => {
       try {
         const initialWindow = await loadInitialMessageWindow(normalizedChatId);
-        messagesByChat.value[normalizedChatId] = await hydrateMessageRows(
-          initialWindow.rows,
-          normalizedChatId
+        const loadedMessages = await hydrateMessageRows(initialWindow.rows, normalizedChatId);
+        const existingMessages = messagesByChat.value[normalizedChatId] ?? [];
+        messagesByChat.value[normalizedChatId] = mergeLoadedMessagesWithLocalOutbound(
+          loadedMessages,
+          existingMessages
         );
         setPaginationState(normalizedChatId, {
           oldestCursor: buildMessageCursorFromRow(initialWindow.rows[0] ?? null),
@@ -1530,7 +1799,6 @@ export const useMessageStore = defineStore('messageStore', () => {
     options: RelaySendOptions = {}
   ): Promise<Message | null> {
     const cleanText = text.trim();
-
     if (!cleanText) {
       return null;
     }
@@ -1540,82 +1808,20 @@ export const useMessageStore = defineStore('messageStore', () => {
       return null;
     }
 
-    await chatDataService.init();
-    const chat = await chatDataService.getChatByPublicKey(normalizedChatId);
-    if (!chat) {
-      return null;
-    }
-
-    const recipientPublicKey = resolveChatRecipientPublicKeyFromRow(chat);
-    if (!recipientPublicKey) {
-      throw new Error('Group chat is missing the current epoch public key.');
-    }
-
-    const recipientRelayUrls = await resolveSendRelayUrls(chat.public_key, options.relayUrls);
-
-    const replyTargetEventId = await resolveReplyTargetEventId(replyTo);
-    const replyPreview = replyTo
-      ? {
-          ...replyTo,
-          eventId: replyTargetEventId ?? replyTo.eventId,
-        }
-      : null;
-    const createdAt = typeof options.createdAt === 'string' ? options.createdAt.trim() : '';
     const mentionMeta = buildMentionMetadata(cleanText, getLoggedInPublicKey());
     const meta = {
       ...mentionMeta,
-      ...(replyPreview ? { reply: replyPreview } : {}),
+      ...(replyTo ? { reply: replyTo } : {}),
     };
 
-    const created = await chatDataService.createMessage({
-      chat_public_key: chat.public_key,
-      author_public_key: window.localStorage.getItem('npub'),
-      message: cleanText,
-      created_at: createdAt || new Date().toISOString(),
-      ...(Object.keys(meta).length > 0 ? { meta } : {}),
+    return sendOutboundChatMessage({
+      chatId: normalizedChatId,
+      text: cleanText,
+      meta,
+      replyTo,
+      options,
+      shouldSyncLiveMessage: true,
     });
-    if (!created) {
-      return null;
-    }
-
-    const newMessage = mapMessageRowToMessage(created, normalizedChatId);
-
-    loadedChatIds.add(normalizedChatId);
-    upsertMessageInState(normalizedChatId, newMessage, {
-      allowOutsideLoadedWindow: true,
-    });
-    let sendError: unknown = null;
-
-    try {
-      const nostrStore = await getNostrStore();
-      await nostrStore.sendDirectMessage(recipientPublicKey, newMessage.text, recipientRelayUrls, {
-        localMessageId: created.id,
-        createdAt: created.created_at,
-        replyToEventId: replyTargetEventId,
-        publishSelfCopy: shouldPublishSelfCopyForChatRow(chat),
-      });
-    } catch (error) {
-      sendError = error;
-    }
-
-    const updatedMessageRow = await chatDataService.getMessageById(created.id);
-    const finalMessage = updatedMessageRow
-      ? await hydrateMessageRow(updatedMessageRow, normalizedChatId)
-      : newMessage;
-    replaceMessageInState(normalizedChatId, finalMessage);
-
-    if (sendError) {
-      throw sendError;
-    }
-
-    try {
-      const nostrStore = await getNostrStore();
-      await nostrStore.ensureRespondedPubkeyIsContact(chat.public_key, chat.name);
-    } catch (error) {
-      console.warn('Failed to add responded pubkey to contacts', chat.public_key, error);
-    }
-
-    return finalMessage;
   }
 
   async function editMessage(
@@ -1781,82 +1987,20 @@ export const useMessageStore = defineStore('messageStore', () => {
       return null;
     }
 
-    await chatDataService.init();
-    const chat = await chatDataService.getChatByPublicKey(normalizedChatId);
-    if (!chat) {
-      return null;
-    }
-
-    const recipientPublicKey = resolveChatRecipientPublicKeyFromRow(chat);
-    if (!recipientPublicKey) {
-      throw new Error('Group chat is missing the current epoch public key.');
-    }
-
-    const recipientRelayUrls = await resolveSendRelayUrls(chat.public_key, options.relayUrls);
-
-    const replyTargetEventId = await resolveReplyTargetEventId(replyTo);
-    const replyPreview = replyTo
-      ? {
-          ...replyTo,
-          eventId: replyTargetEventId ?? replyTo.eventId,
-        }
-      : null;
-    const createdAt = typeof options.createdAt === 'string' ? options.createdAt.trim() : '';
     const meta = {
       ...attachmentMeta,
-      ...(replyPreview ? { reply: replyPreview } : {}),
+      ...(replyTo ? { reply: replyTo } : {}),
     };
 
-    const created = await chatDataService.createMessage({
-      chat_public_key: chat.public_key,
-      author_public_key: window.localStorage.getItem('npub'),
-      message: messageText,
-      created_at: createdAt || new Date().toISOString(),
+    return sendOutboundChatMessage({
+      chatId: normalizedChatId,
+      text: messageText,
       meta,
+      replyTo,
+      additionalTags: [imetaTag],
+      options,
+      shouldSyncLiveMessage: true,
     });
-    if (!created) {
-      return null;
-    }
-
-    const newMessage = mapMessageRowToMessage(created, normalizedChatId);
-
-    loadedChatIds.add(normalizedChatId);
-    upsertMessageInState(normalizedChatId, newMessage, {
-      allowOutsideLoadedWindow: true,
-    });
-    let sendError: unknown = null;
-
-    try {
-      const nostrStore = await getNostrStore();
-      await nostrStore.sendDirectMessage(recipientPublicKey, newMessage.text, recipientRelayUrls, {
-        localMessageId: created.id,
-        createdAt: created.created_at,
-        replyToEventId: replyTargetEventId,
-        publishSelfCopy: shouldPublishSelfCopyForChatRow(chat),
-        additionalTags: [imetaTag],
-      });
-    } catch (error) {
-      sendError = error;
-    }
-
-    const updatedMessageRow = await chatDataService.getMessageById(created.id);
-    const finalMessage = updatedMessageRow
-      ? await hydrateMessageRow(updatedMessageRow, normalizedChatId)
-      : newMessage;
-    replaceMessageInState(normalizedChatId, finalMessage);
-
-    if (sendError) {
-      throw sendError;
-    }
-
-    try {
-      const nostrStore = await getNostrStore();
-      await nostrStore.ensureRespondedPubkeyIsContact(chat.public_key, chat.name);
-    } catch (error) {
-      console.warn('Failed to add responded pubkey to contacts', chat.public_key, error);
-    }
-
-    return finalMessage;
   }
 
   async function forwardMessage(
@@ -1874,79 +2018,20 @@ export const useMessageStore = defineStore('messageStore', () => {
       return null;
     }
 
-    await chatDataService.init();
-    const chat = await chatDataService.getChatByPublicKey(normalizedChatId);
-    if (!chat) {
-      return null;
-    }
-
-    const recipientPublicKey = resolveChatRecipientPublicKeyFromRow(chat);
-    if (!recipientPublicKey) {
-      throw new Error('Group chat is missing the current epoch public key.');
-    }
-
-    const recipientRelayUrls = await resolveSendRelayUrls(chat.public_key, options.relayUrls);
-    const createdAt = typeof options.createdAt === 'string' ? options.createdAt.trim() : '';
-
-    const created = await chatDataService.createMessage({
-      chat_public_key: chat.public_key,
-      author_public_key: window.localStorage.getItem('npub'),
-      message: forwardedPayload.text,
-      created_at: createdAt || new Date().toISOString(),
-      ...(Object.keys(forwardedPayload.meta).length > 0 ? { meta: forwardedPayload.meta } : {}),
-    });
-    if (!created) {
-      return null;
-    }
-
-    const newMessage = mapMessageRowToMessage(created, normalizedChatId);
     const shouldSyncLiveMessage =
       loadedChatIds.has(normalizedChatId) ||
       chatStore.selectedChatId === normalizedChatId ||
       chatStore.visibleChatId === normalizedChatId;
 
-    if (shouldSyncLiveMessage) {
-      loadedChatIds.add(normalizedChatId);
-      upsertMessageInState(normalizedChatId, newMessage, {
-        allowOutsideLoadedWindow: true,
-      });
-    }
-    let sendError: unknown = null;
-
-    try {
-      const nostrStore = await getNostrStore();
-      await nostrStore.sendDirectMessage(recipientPublicKey, newMessage.text, recipientRelayUrls, {
-        localMessageId: created.id,
-        createdAt: created.created_at,
-        publishSelfCopy: shouldPublishSelfCopyForChatRow(chat),
-        ...(forwardedPayload.additionalTags.length > 0
-          ? { additionalTags: forwardedPayload.additionalTags }
-          : {}),
-      });
-    } catch (error) {
-      sendError = error;
-    }
-
-    const updatedMessageRow = await chatDataService.getMessageById(created.id);
-    const finalMessage = updatedMessageRow
-      ? await hydrateMessageRow(updatedMessageRow, normalizedChatId)
-      : newMessage;
-    if (shouldSyncLiveMessage) {
-      replaceMessageInState(normalizedChatId, finalMessage);
-    }
-
-    if (sendError) {
-      throw sendError;
-    }
-
-    try {
-      const nostrStore = await getNostrStore();
-      await nostrStore.ensureRespondedPubkeyIsContact(chat.public_key, chat.name);
-    } catch (error) {
-      console.warn('Failed to add responded pubkey to contacts', chat.public_key, error);
-    }
-
-    return finalMessage;
+    return sendOutboundChatMessage({
+      chatId: normalizedChatId,
+      text: forwardedPayload.text,
+      meta: forwardedPayload.meta,
+      replyTo: null,
+      additionalTags: forwardedPayload.additionalTags,
+      options,
+      shouldSyncLiveMessage,
+    });
   }
 
   async function updateMessageReactions(

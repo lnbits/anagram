@@ -9,6 +9,7 @@ import NDK, {
   normalizeRelayUrl,
 } from '@nostr-dev-kit/ndk';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
+import { waitForFirstReadyOrTimeout } from 'src/stores/nostr/relayTimeoutUtils';
 import type {
   AuthMethod,
   DeveloperRelaySnapshot,
@@ -32,6 +33,7 @@ interface RelayConnectionRuntimeDeps {
   hasNip07Extension: () => boolean;
   initialConnectTimeoutMs: number;
   isPrivateMessagesSubscriptionRelayTracked: (relayUrl: string) => boolean;
+  relayFirstHealthyWaitMs: number;
   logDeveloperTrace: (
     level: 'info' | 'warn' | 'error',
     area: string,
@@ -147,6 +149,7 @@ export function createRelayConnectionRuntime({
   hasNip07Extension,
   initialConnectTimeoutMs,
   isPrivateMessagesSubscriptionRelayTracked,
+  relayFirstHealthyWaitMs,
   logDeveloperTrace,
   logRelayLifecycle,
   markPrivateMessagesWatchdogRelayDisconnected,
@@ -392,10 +395,26 @@ export function createRelayConnectionRuntime({
     return connectPromise;
   }
 
+  function isRelayConnected(relayUrl: string): boolean {
+    const relay = ndk.pool.relays.get(relayUrl) ?? ndk.pool.getRelay(relayUrl, false);
+    return Boolean(relay?.connected);
+  }
+
+  async function waitForFirstHealthyRelay(relayUrls: string[]): Promise<void> {
+    if (relayUrls.length === 0) {
+      return;
+    }
+
+    await waitForFirstReadyOrTimeout({
+      isReady: () => relayUrls.some((relayUrl) => isRelayConnected(relayUrl)),
+      timeoutMs: relayFirstHealthyWaitMs,
+    });
+  }
+
   async function ensureRelayConnections(relayUrls: string[]): Promise<void> {
     ensureRelayStatusListeners();
 
-    const relaysToReconnect = new Map<string, Promise<void>>();
+    const requestedRelayUrls: string[] = [];
 
     for (const relayUrl of relayUrls) {
       const normalizedRelayUrl = normalizeRelayUrl(relayUrl);
@@ -403,45 +422,25 @@ export function createRelayConnectionRuntime({
         continue;
       }
 
+      requestedRelayUrls.push(normalizedRelayUrl);
+
       if (configuredRelayUrls.has(normalizedRelayUrl)) {
         const existingRelay = ndk.pool.getRelay(normalizedRelayUrl, false);
-        const reconnectPromise = connectRelayForEnsureRelayConnections(
-          existingRelay,
-          normalizedRelayUrl,
-          'reconnect'
-        );
-        if (reconnectPromise) {
-          relaysToReconnect.set(normalizedRelayUrl, reconnectPromise);
-        }
+        connectRelayForEnsureRelayConnections(existingRelay, normalizedRelayUrl, 'reconnect');
         continue;
       }
 
       ndk.addExplicitRelay(normalizedRelayUrl, undefined, false);
       configuredRelayUrls.add(normalizedRelayUrl);
       const addedRelay = ndk.pool.getRelay(normalizedRelayUrl, false);
-      const connectPromise = connectRelayForEnsureRelayConnections(
-        addedRelay,
-        normalizedRelayUrl,
-        'connect'
-      );
-      if (connectPromise) {
-        relaysToReconnect.set(normalizedRelayUrl, connectPromise);
-      }
+      connectRelayForEnsureRelayConnections(addedRelay, normalizedRelayUrl, 'connect');
       bumpRelayStatusVersion();
     }
 
-    if (getHasActivatedPool()) {
-      if (relaysToReconnect.size > 0) {
-        await Promise.all(relaysToReconnect.values());
-        bumpRelayStatusVersion();
-      }
-      return;
-    }
-
-    if (!getConnectPromise()) {
+    if (!getHasActivatedPool() && !getConnectPromise()) {
       setConnectPromise(
         ndk
-          .connect(initialConnectTimeoutMs)
+          .connect(relayFirstHealthyWaitMs)
           .then(() => {
             setHasActivatedPool(true);
           })
@@ -451,7 +450,8 @@ export function createRelayConnectionRuntime({
       );
     }
 
-    await getConnectPromise();
+    await waitForFirstHealthyRelay(requestedRelayUrls);
+    setHasActivatedPool(true);
     bumpRelayStatusVersion();
   }
 

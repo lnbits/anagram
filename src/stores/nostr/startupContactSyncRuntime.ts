@@ -3,6 +3,10 @@ import { contactsService } from 'src/services/contactsService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS } from 'src/stores/nostr/constants';
 import {
+  RelayQueryTimeoutError,
+  RelayQueryUnavailableError,
+} from 'src/stores/nostr/relayQueryUtils';
+import {
   isStartupCheckpointCurrent,
   readStartupCheckpoint,
   writeStartupCheckpoint,
@@ -15,6 +19,7 @@ import type {
   SubscribePrivateMessagesOptions,
 } from 'src/stores/nostr/types';
 import type { ContactRecord } from 'src/types/contact';
+import { yieldToMainThread } from 'src/utils/backgroundTasks';
 import type { Ref } from 'vue';
 
 interface StartupBatchTracker {
@@ -68,6 +73,10 @@ const STARTUP_TASK_ERROR_MESSAGES: Record<StartupStepId, string> = {
   'contact-profile-subscribe': 'Failed to subscribe to contact profile updates on startup',
   'contact-relay-list-subscribe': 'Failed to subscribe to contact relay list updates on startup',
 };
+
+function isExpectedRelayQueryDeferral(error: unknown): boolean {
+  return error instanceof RelayQueryTimeoutError || error instanceof RelayQueryUnavailableError;
+}
 
 interface StartupTaskRunOptions {
   forceSubscriptions?: boolean;
@@ -493,6 +502,7 @@ export function createStartupContactSyncRuntime({
       task: stepId,
     });
     try {
+      await yieldToMainThread();
       await runStartupTaskBody(stepId, seedRelayUrls, options);
       if (stepId !== 'private-messages-subscribe') {
         completeStartupStep(stepId);
@@ -504,7 +514,8 @@ export function createStartupContactSyncRuntime({
       return true;
     } catch (error) {
       failStartupStep(stepId, error);
-      console.error(STARTUP_TASK_ERROR_MESSAGES[stepId], error);
+      const reportError = isExpectedRelayQueryDeferral(error) ? console.warn : console.error;
+      reportError(STARTUP_TASK_ERROR_MESSAGES[stepId], error);
       logStartupRestore('task-error', {
         task: stepId,
         durationMs: Date.now() - taskStartedAt,

@@ -10,6 +10,7 @@ import {
   type Page,
 } from '@playwright/test';
 import type { DeveloperDiagnosticsSnapshot } from 'src/stores/nostr/types';
+import { startMockRelayProxy } from '../scripts/mock-relay-proxy.cjs';
 
 export interface TestAccount {
   privateKey: string;
@@ -54,7 +55,10 @@ export interface BootstrapExtensionUserOptions extends BootstrapUserOptions {
 
 export const E2E_RELAY_URL = process.env.E2E_RELAY_URL ?? 'ws://127.0.0.1:7000';
 export const E2E_RELAY_URL_TWO = process.env.E2E_RELAY_URL_TWO ?? 'ws://127.0.0.1:7001';
+export const E2E_RELAY_URL_HANG = process.env.E2E_RELAY_URL_HANG ?? 'ws://127.0.0.1:65534';
+export const E2E_RELAY_URL_DELAYED = process.env.E2E_RELAY_URL_DELAYED ?? 'ws://127.0.0.1:7002';
 export const E2E_DUAL_RELAY_URLS = [E2E_RELAY_URL, E2E_RELAY_URL_TWO];
+export const E2E_HANG_RELAY_PORT = Number.parseInt(new URL(E2E_RELAY_URL_HANG).port, 10) || 7002;
 
 export const TEST_ACCOUNTS = {
   startupRestoreAlice: {
@@ -148,6 +152,22 @@ export const TEST_ACCOUNTS = {
   relaySettingsBob: {
     privateKey: '68da0a59c381ef5c80e64a5cbca770c90c06fdd57b39b75c80fc17a4a217de99',
     displayName: 'Bob Relay Settings',
+  },
+  slowRelayAlice: {
+    privateKey: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    displayName: 'Alice Slow Relay',
+  },
+  slowRelayBob: {
+    privateKey: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    displayName: 'Bob Slow Relay',
+  },
+  delayedRelayAlice: {
+    privateKey: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+    displayName: 'Alice Delayed Relay',
+  },
+  delayedRelayBob: {
+    privateKey: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+    displayName: 'Bob Delayed Relay',
   },
   groupAlice: {
     privateKey: 'eeb0542ecef525deee036b1865dc872bcda25df86016403ef25a730f330115b2',
@@ -1201,6 +1221,8 @@ export async function sendMessage(
   text: string,
   options: {
     chatId?: string;
+    attempts?: number;
+    timeoutMs?: number;
   } = {}
 ): Promise<void> {
   await expect(composerInput(page)).toBeVisible();
@@ -1208,6 +1230,29 @@ export async function sendMessage(
   await page.getByTestId('message-composer-send').click();
   await acceptAppRelayFallbackIfVisible(page);
   await waitForThreadMessage(page, text, options);
+}
+
+export async function sendMessageAndMeasureOptimisticRender(
+  page: Page,
+  text: string
+): Promise<number> {
+  await expect(composerInput(page)).toBeVisible();
+  await composerInput(page).fill(text);
+
+  return page.getByTestId('message-composer-send').evaluate(async (button, expectedText) => {
+    const startedAt = performance.now();
+    (button as HTMLButtonElement).click();
+    while (performance.now() - startedAt < 500) {
+      const hasMessage = Array.from(
+        document.querySelectorAll<HTMLElement>('.thread-message-entry')
+      ).some((entry) => entry.textContent?.includes(expectedText));
+      if (hasMessage) {
+        return performance.now() - startedAt;
+      }
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+    throw new Error('The optimistic message did not render within 500ms.');
+  }, text);
 }
 
 export async function sendMessagesViaBridge(
@@ -1482,7 +1527,10 @@ export async function replyToMessage(
 export async function forwardMessage(
   page: Page,
   text: string,
-  destinationName: string
+  destinationName: string,
+  options: {
+    publicKey?: string;
+  } = {}
 ): Promise<void> {
   await threadMessage(page, text)
     .locator('.bubble')
@@ -1491,10 +1539,42 @@ export async function forwardMessage(
       position: { x: 4, y: 4 },
     });
   await page.getByText('Forward', { exact: true }).click();
-  await expect(page.getByTestId('forward-message-chat-list')).toBeVisible({
+  const list = page.getByTestId('forward-message-chat-list');
+  await expect(list).toBeVisible({
     timeout: 12_000,
   });
-  await page.getByLabel(`Forward to ${destinationName}`, { exact: true }).click();
+  await expect(page.getByTestId('forward-message-chat').first()).toBeVisible({
+    timeout: 15_000,
+  });
+
+  const search = page.getByTestId('forward-message-search');
+  const normalizedPublicKey = options.publicKey?.trim().toLowerCase() ?? '';
+  const destinationByName = list.getByTestId('forward-message-chat').filter({
+    hasText: destinationName,
+  });
+  const destinationByKey = normalizedPublicKey
+    ? page.locator(
+        `[data-testid="forward-message-chat"][data-chat-public-key="${normalizedPublicKey}"]`
+      )
+    : destinationByName;
+  const destination = destinationByName.or(destinationByKey);
+
+  if (await search.isVisible()) {
+    await search.fill(destinationName);
+  }
+
+  try {
+    await expect(destination.first()).toBeVisible({ timeout: 8_000 });
+  } catch (error) {
+    if (!normalizedPublicKey || !(await search.isVisible())) {
+      throw error;
+    }
+
+    await search.fill(normalizedPublicKey);
+    await expect(destinationByKey).toBeVisible({ timeout: 12_000 });
+  }
+
+  await destination.first().click();
   await acceptAppRelayFallbackIfVisible(page);
   await expect(page.getByTestId('forward-message-chat-list')).toHaveCount(0, {
     timeout: 12_000,
@@ -2001,7 +2081,8 @@ export async function rotateGroupEpoch(
 export async function updateStoredContactRelays(
   page: Page,
   publicKey: string,
-  relayUrls: string[]
+  relayUrls: string[],
+  options: { reload?: boolean } = {}
 ): Promise<void> {
   await page.evaluate(
     async ({ nextPublicKey, nextRelayUrls }) => {
@@ -2020,6 +2101,10 @@ export async function updateStoredContactRelays(
       nextRelayUrls: relayUrls,
     }
   );
+  if (options.reload === false) {
+    return;
+  }
+
   await page.reload();
   await waitForAppBridge(page);
 }
@@ -2101,6 +2186,82 @@ export async function establishAcceptedDirectChat(
   await waitForThreadMessage(sender.page, replyMessage, {
     chatId: recipient.session.publicKey,
   });
+}
+
+export async function startHangingRelayServer(): Promise<() => Promise<void>> {
+  const server = net.createServer((socket) => {
+    socket.on('error', () => {
+      // Intentionally ignore client errors; this socket never completes the handshake.
+    });
+  });
+  let didListen = false;
+
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE') {
+        resolve();
+        return;
+      }
+
+      reject(error);
+    };
+
+    server.once('error', onError);
+    server.listen(E2E_HANG_RELAY_PORT, '127.0.0.1', () => {
+      didListen = true;
+      server.off('error', onError);
+      resolve();
+    });
+  });
+
+  return async () => {
+    if (!didListen) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      server.close(() => {
+        resolve();
+      });
+    });
+  };
+}
+
+export async function startDelayedRelayProxy(options: {
+  delayMs: number;
+  listenUrl?: string;
+  targetUrl?: string;
+}): Promise<{
+  close: () => Promise<void>;
+  connectionCount: () => number;
+  relayUrl: string;
+}> {
+  const relayUrl = options.listenUrl ?? E2E_RELAY_URL_DELAYED;
+  const targetUrl = new URL(options.targetUrl ?? E2E_RELAY_URL);
+  const listenUrl = new URL(relayUrl);
+  const delayMs = Math.max(0, Math.floor(options.delayMs));
+  const listenPort = Number.parseInt(listenUrl.port, 10);
+  if (!Number.isInteger(listenPort) || !targetUrl.port) {
+    throw new Error('Delayed relay proxy URLs must include explicit ports.');
+  }
+  const proxy = await startMockRelayProxy({
+    delayMs,
+    environment: {},
+    listenHost: listenUrl.hostname,
+    listenPort,
+    logger: {
+      error: () => undefined,
+      info: () => undefined,
+      warn: () => undefined,
+    },
+    targetUrl: targetUrl.toString(),
+  });
+
+  return {
+    relayUrl,
+    connectionCount: proxy.connectionCount,
+    close: proxy.close,
+  };
 }
 
 export async function pauseRelayService(service: keyof typeof relayPortsByService): Promise<void> {

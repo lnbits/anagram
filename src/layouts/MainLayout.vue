@@ -102,6 +102,7 @@ import {
   formatUnreadDocumentTitle,
 } from 'src/utils/unreadChatBadge';
 import { reportUiError } from 'src/utils/uiErrorHandler';
+import { scheduleBackgroundTask } from 'src/utils/backgroundTasks';
 import { t } from 'src/i18n';
 
 const $q = useQuasar();
@@ -247,8 +248,8 @@ watch(
 const removeAfterEachHook = router.afterEach(() => {
   pendingMobileSection.value = null;
 });
-let mobilePreloadTimeoutId: number | null = null;
-let startupRestoreFrameId: number | null = null;
+let cancelSectionPreloadTask: (() => void) | null = null;
+let cancelStartupRestoreTask: (() => void) | null = null;
 let nativeFocusOutTimeoutId: number | null = null;
 let removeDesktopNotificationOpenListener: (() => void) | null = null;
 
@@ -273,19 +274,15 @@ onMounted(() => {
     );
   }
 
-  startupRestoreFrameId = window.requestAnimationFrame(() => {
-    startupRestoreFrameId = null;
-    void initializeSessionState();
+  cancelStartupRestoreTask = scheduleBackgroundTask('main-layout:session-restore', () => {
+    return initializeSessionState();
   });
 
-  if (!isMobile.value) {
-    return;
-  }
-
-  mobilePreloadTimeoutId = window.setTimeout(() => {
-    mobilePreloadTimeoutId = null;
-    void preloadMobileSections();
-  }, 900);
+  cancelSectionPreloadTask = scheduleBackgroundTask(
+    'main-layout:section-preload',
+    () => preloadInactiveSections(),
+    { delayMs: 900 }
+  );
 });
 
 onBeforeUnmount(() => {
@@ -304,13 +301,10 @@ onBeforeUnmount(() => {
   clearPendingNativeKeyboardScrollResets();
   resetNativeViewportCssVariables();
 
-  if (mobilePreloadTimeoutId !== null) {
-    window.clearTimeout(mobilePreloadTimeoutId);
-  }
-
-  if (startupRestoreFrameId !== null) {
-    window.cancelAnimationFrame(startupRestoreFrameId);
-  }
+  cancelSectionPreloadTask?.();
+  cancelSectionPreloadTask = null;
+  cancelStartupRestoreTask?.();
+  cancelStartupRestoreTask = null;
 
   if (nativeFocusOutTimeoutId !== null) {
     window.clearTimeout(nativeFocusOutTimeoutId);
@@ -564,7 +558,7 @@ async function initializeSessionState(): Promise<void> {
   }
 }
 
-async function preloadMobileSections(): Promise<void> {
+async function preloadInactiveSections(): Promise<void> {
   const sections = Object.entries(routeLoaders)
     .filter(([section]) => section !== activeSection.value)
     .map(([, loader]) => loader());
@@ -572,7 +566,7 @@ async function preloadMobileSections(): Promise<void> {
   const results = await Promise.allSettled(sections);
   const failedCount = results.filter((result) => result.status === 'rejected').length;
   if (failedCount > 0) {
-    console.warn(`Failed to preload ${failedCount} mobile navigation page(s).`);
+    console.warn(`Failed to preload ${failedCount} navigation page(s).`);
   }
 }
 

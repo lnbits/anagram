@@ -2,7 +2,6 @@ import NDK, {
   NDKEvent,
   NDKKind,
   NDKRelayList,
-  NDKRelaySet,
   NDKSubscriptionCacheUsage,
   type NDKUser,
   type NDKUserProfile,
@@ -11,6 +10,7 @@ import { chatDataService } from 'src/services/chatDataService';
 import { contactsService } from 'src/services/contactsService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import type { MuteListContent } from 'src/stores/nostr/muteListRuntime';
+import { createReadyRelaySet, fetchEventWithRelayTimeout } from 'src/stores/nostr/relayQueryUtils';
 import { isPlainRecord } from 'src/stores/nostr/shared';
 import type {
   ContactProfileEventState,
@@ -132,8 +132,9 @@ export function createContactRelayRuntime({
     const since = options.ignoreStoredSince
       ? null
       : readContactProfileEventSince(existingContact?.meta);
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
-    const profileEvent = await ndk.fetchEvent(
+    const relaySet = createReadyRelaySet(ndk, relayUrls);
+    const profileEvent = await fetchEventWithRelayTimeout(
+      ndk,
       {
         kinds: [NDKKind.Metadata],
         authors: [normalizedPubkey],
@@ -185,9 +186,10 @@ export function createContactRelayRuntime({
     await ensureRelayConnections(relayUrls);
 
     const since = readContactRelayListEventSince(existingContact?.meta);
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
+    const relaySet = createReadyRelaySet(ndk, relayUrls);
     const [relayListEvent, directMessageReceiveRelayEvent] = await Promise.all([
-      ndk.fetchEvent(
+      fetchEventWithRelayTimeout(
+        ndk,
         {
           kinds: [NDKKind.RelayList],
           authors: [normalizedPubkey],
@@ -198,7 +200,8 @@ export function createContactRelayRuntime({
         },
         relaySet
       ),
-      ndk.fetchEvent(
+      fetchEventWithRelayTimeout(
+        ndk,
         {
           kinds: [NDKKind.DirectMessageReceiveRelayList],
           authors: [normalizedPubkey],

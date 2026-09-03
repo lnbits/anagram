@@ -9,6 +9,7 @@ import { type ChatRow, chatDataService } from 'src/services/chatDataService';
 import { contactsService } from 'src/services/contactsService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { MUTE_LIST_KIND } from 'src/stores/nostr/constants';
+import { createReadyRelaySet, fetchEventWithRelayTimeout } from 'src/stores/nostr/relayQueryUtils';
 import type { ContactMetadata, ContactRecord } from 'src/types/contact';
 
 interface MuteListRuntimeDeps {
@@ -366,8 +367,9 @@ export function createMuteListRuntime({
     await ensureRelayConnections(relayUrls);
     await getLoggedInSignerUser();
 
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
-    const fetchedEvent = await ndk.fetchEvent(
+    const relaySet = createReadyRelaySet(ndk, relayUrls);
+    const fetchedEvent = await fetchEventWithRelayTimeout(
+      ndk,
       {
         kinds: [MUTE_LIST_KIND],
         authors: [loggedInPubkeyHex],

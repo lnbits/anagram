@@ -1,10 +1,14 @@
 package com.nostr.chat;
 
 import android.Manifest;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.os.Build;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationManagerCompat;
+import androidx.core.content.ContextCompat;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
@@ -38,9 +42,12 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
 
     static final String NOTIFICATION_PERMISSION = "receive";
     private static final String ACTION_EVENT = "notificationActionPerformed";
+    private static final String PENDING_EVENTS_AVAILABLE_EVENT = "pendingEventsAvailable";
     private static final Pattern HEX_64 = Pattern.compile("^[0-9a-fA-F]{64}$");
     private final Map<String, String> validatedRecipientKeys = new LinkedHashMap<>();
     private boolean hasSavedRecipientKeySnapshot;
+    @Nullable
+    private BroadcastReceiver pendingEventsReceiver;
 
     @PluginMethod
     public void checkPermissions(PluginCall call) {
@@ -110,6 +117,9 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
                 return;
             }
         }
+        if (!previousOwnerPubkey.isEmpty() && !previousOwnerPubkey.equals(ownerPubkey)) {
+            RelayNotificationEventInbox.clear(getContext());
+        }
         validatedRecipientKeys.clear();
         validatedRecipientKeys.putAll(recipientKeys);
         hasSavedRecipientKeySnapshot = true;
@@ -165,6 +175,64 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void getPendingEvents(PluginCall call) {
+        String ownerPubkey = normalizePubkey(call.getString("ownerPubkey"));
+        JSObject result = new JSObject();
+        JSArray events = new JSArray();
+        result.put("events", events);
+        if (
+            ownerPubkey == null ||
+            !ownerPubkey.equals(RelayNotificationPreferences.getOwnerPubkey(getContext()))
+        ) {
+            call.resolve(result);
+            return;
+        }
+
+        Integer requestedLimit = call.getInt(
+            "limit",
+            RelayNotificationEventInbox.MAX_BATCH_SIZE
+        );
+        List<RelayNotificationEventInbox.PendingEvent> pendingEvents =
+            RelayNotificationEventInbox.list(
+                getContext(),
+                ownerPubkey,
+                requestedLimit == null
+                    ? RelayNotificationEventInbox.MAX_BATCH_SIZE
+                    : requestedLimit,
+                System.currentTimeMillis()
+            );
+        for (RelayNotificationEventInbox.PendingEvent pendingEvent : pendingEvents) {
+            JSObject value = new JSObject();
+            value.put("id", pendingEvent.eventId);
+            value.put("recipientPubkey", pendingEvent.recipientPubkey);
+            value.put("relayUrl", pendingEvent.relayUrl);
+            value.put("receivedAtMillis", pendingEvent.receivedAtMillis);
+            value.put("event", pendingEvent.event);
+            events.put(value);
+        }
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void acknowledgePendingEvents(PluginCall call) {
+        String ownerPubkey = normalizePubkey(call.getString("ownerPubkey"));
+        if (
+            ownerPubkey == null ||
+            !ownerPubkey.equals(RelayNotificationPreferences.getOwnerPubkey(getContext()))
+        ) {
+            call.resolve();
+            return;
+        }
+
+        RelayNotificationEventInbox.acknowledge(
+            getContext(),
+            ownerPubkey,
+            normalizePubkeys(call.getArray("eventIds"))
+        );
+        call.resolve();
+    }
+
+    @PluginMethod
     public void clearDeliveredNotifications(PluginCall call) {
         String chatPubkey = normalizePubkey(call.getString("chatPubkey"));
         if (chatPubkey == null) {
@@ -178,6 +246,7 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
     @Override
     public void load() {
         super.load();
+        registerPendingEventsReceiver();
         dispatchNotificationIntent(getActivity().getIntent());
     }
 
@@ -185,6 +254,34 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
     protected void handleOnNewIntent(Intent intent) {
         super.handleOnNewIntent(intent);
         dispatchNotificationIntent(intent);
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        if (pendingEventsReceiver != null) {
+            getContext().unregisterReceiver(pendingEventsReceiver);
+            pendingEventsReceiver = null;
+        }
+        super.handleOnDestroy();
+    }
+
+    private void registerPendingEventsReceiver() {
+        if (pendingEventsReceiver != null) {
+            return;
+        }
+
+        pendingEventsReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                notifyListeners(PENDING_EVENTS_AVAILABLE_EVENT, new JSObject(), false);
+            }
+        };
+        ContextCompat.registerReceiver(
+            getContext(),
+            pendingEventsReceiver,
+            new IntentFilter(RelayNotificationService.ACTION_PENDING_EVENTS_AVAILABLE),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        );
     }
 
     private void dispatchNotificationIntent(@Nullable Intent intent) {

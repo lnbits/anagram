@@ -210,6 +210,26 @@ describe('privateMessagesIngestRuntime', () => {
     ndkMocks.giftUnwrap.mockReset();
   });
 
+  it('requests a retry when the gift-wrap recipient context is not ready', async () => {
+    const deps = createDeps();
+    deps.resolveIncomingPrivateMessageRecipientContext.mockResolvedValue(null);
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+
+    await expect(
+      runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64))
+    ).resolves.toBe(false);
+  });
+
+  it('requests a retry when gift-wrap decryption fails', async () => {
+    const deps = createDeps();
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+    ndkMocks.giftUnwrap.mockRejectedValue(new Error('Signer is not ready'));
+
+    await expect(
+      runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64))
+    ).resolves.toBe(false);
+  });
+
   it('creates request chats for first-contact direct messages and queues UI refreshes', async () => {
     const deps = createDeps();
     const runtime = createPrivateMessagesIngestRuntime(deps);

@@ -19,6 +19,23 @@ public final class RelayNotificationServiceTest {
     private static final long TOLERANCE = 300L;
 
     @Test
+    public void boundsPendingEventRetentionAndBridgeBatches() {
+        long sevenDaysMillis = 7L * 24L * 60L * 60L * 1_000L;
+
+        assertEquals(sevenDaysMillis, RelayNotificationEventInbox.RETENTION_MILLIS);
+        assertEquals(NOW * 1_000L - sevenDaysMillis, RelayNotificationEventInbox.expiryCutoffMillis(NOW * 1_000L));
+        assertEquals(
+            RelayNotificationEventInbox.MAX_BATCH_SIZE,
+            RelayNotificationEventInbox.normalizeBatchLimit(0)
+        );
+        assertEquals(
+            RelayNotificationEventInbox.MAX_BATCH_SIZE,
+            RelayNotificationEventInbox.normalizeBatchLimit(500)
+        );
+        assertEquals(10, RelayNotificationEventInbox.normalizeBatchLimit(10));
+    }
+
+    @Test
     public void subscriptionIncludesNip59TimestampRandomizationWindow() {
         long since = RelayNotificationService.subscriptionSince(NOW);
 

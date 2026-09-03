@@ -170,21 +170,31 @@ export function createPrivateMessagesIngestRuntime({
     options: {
       uiThrottleMs?: number;
     } = {}
-  ): void {
+  ): Promise<boolean> {
     const uiThrottleMs =
       typeof options.uiThrottleMs === 'number'
         ? normalizeThrottleMs(options.uiThrottleMs)
         : getPrivateMessagesRestoreThrottleMs();
 
-    privateMessagesIngestQueue = privateMessagesIngestQueue
-      .then(() =>
-        processIncomingPrivateMessage(wrappedEvent, loggedInPubkeyHex, {
-          uiThrottleMs,
-        })
-      )
-      .catch((error) => {
+    const ingestionResult = privateMessagesIngestQueue.then(async () => {
+      try {
+        const shouldAcknowledge = await processIncomingPrivateMessage(
+          wrappedEvent,
+          loggedInPubkeyHex,
+          {
+            uiThrottleMs,
+          }
+        );
+        return shouldAcknowledge !== false;
+      } catch (error) {
         console.error('Failed to process incoming private message', error);
-      });
+        return false;
+      }
+    });
+    privateMessagesIngestQueue = ingestionResult.then(() => {
+      return;
+    });
+    return ingestionResult;
   }
 
   async function processIncomingPrivateMessage(
@@ -193,7 +203,7 @@ export function createPrivateMessagesIngestRuntime({
     options: {
       uiThrottleMs?: number;
     } = {}
-  ): Promise<void> {
+  ): Promise<boolean | undefined> {
     const wrappedRelayUrls = extractRelayUrlsFromEvent(wrappedEvent);
     if (wrappedEvent.kind !== NDKKind.GiftWrap) {
       logInboundEvent('drop', {
@@ -220,7 +230,7 @@ export function createPrivateMessagesIngestRuntime({
           relayUrls: wrappedRelayUrls,
         }),
       });
-      return;
+      return false;
     }
 
     let rumorEvent: NDKEvent;
@@ -236,7 +246,7 @@ export function createPrivateMessagesIngestRuntime({
           relayUrls: wrappedRelayUrls,
         }),
       });
-      return;
+      return false;
     }
 
     const senderPubkeyHex = inputSanitizerService.normalizeHexKey(rumorEvent.pubkey ?? '');

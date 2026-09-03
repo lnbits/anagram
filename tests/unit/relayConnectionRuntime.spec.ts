@@ -1,7 +1,9 @@
 import { NDKRelayStatus } from '@nostr-dev-kit/ndk';
 import {
+  calculateRelayConnectRetryDelayMs,
   createRelayConnectionRuntime,
   ensureSingleSocketRelayConnectGuard,
+  isUsableRelayClientUrl,
 } from 'src/stores/nostr/relayConnectionRuntime';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -17,23 +19,27 @@ type FakeRelay = {
   connectivity: {
     _status: NDKRelayStatus;
     connectTimeout: ReturnType<typeof globalThis.setTimeout> | null;
+    resetReconnectionState: ReturnType<typeof vi.fn>;
     ws: FakeSocket | undefined;
   };
   connect: (timeoutMs?: number, reconnect?: boolean) => Promise<void>;
   disconnect: ReturnType<typeof vi.fn>;
   emit: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
+  publish: (event: unknown, timeoutMs?: number) => Promise<boolean>;
 };
 
 function createFakeRelay(url = 'wss://relay.example/') {
   const connectivity = {
     _status: NDKRelayStatus.DISCONNECTED,
     connectTimeout: null as ReturnType<typeof globalThis.setTimeout> | null,
+    resetReconnectionState: vi.fn(),
     ws: undefined as FakeSocket | undefined,
   };
   const rawConnect = vi.fn<(timeoutMs?: number, reconnect?: boolean) => Promise<void>>(
     async () => {}
   );
+  const rawPublish = vi.fn(async () => true);
   const relay = {
     url,
     connected: false,
@@ -45,7 +51,8 @@ function createFakeRelay(url = 'wss://relay.example/') {
     disconnect: vi.fn(),
     emit: vi.fn(),
     on: vi.fn(),
-  } as FakeRelay;
+    publish: rawPublish,
+  } as unknown as FakeRelay;
 
   Object.defineProperty(relay, 'status', {
     configurable: true,
@@ -55,6 +62,7 @@ function createFakeRelay(url = 'wss://relay.example/') {
   return {
     connectivity,
     rawConnect,
+    rawPublish,
     relay,
   };
 }
@@ -72,7 +80,10 @@ function createRuntimeHarness(
   let connectPromise: Promise<void> | null = null;
   const configuredRelayUrls = new Set<string>();
   const relayConnectPromises = new Map<string, Promise<void>>();
-  const relayConnectFailureCooldownUntilByUrl = new Map<string, number>();
+  const relayConnectRetryStateByUrl = new Map<
+    string,
+    { failureCount: number; nextAttemptAt: number }
+  >();
   const relayAuthFailureListenerUrls = new Set<string>();
   const queueOutboundMessageReplay = vi.fn();
   const queuePrivateMessagesWatchdog = vi.fn();
@@ -86,6 +97,7 @@ function createRuntimeHarness(
     connect: vi.fn(async () => {}),
     pool,
     relayAuthDefaultPolicy: undefined,
+    relayConnectionFilter: undefined,
   };
 
   const runtime = createRelayConnectionRuntime({
@@ -126,8 +138,10 @@ function createRuntimeHarness(
     queueOutboundMessageReplay,
     queuePrivateMessagesWatchdog,
     relayAuthFailureListenerUrls,
-    relayConnectFailureCooldownMs: 10000,
-    relayConnectFailureCooldownUntilByUrl,
+    relayConnectRetryBaseDelayMs: 10000,
+    relayConnectRetryJitterRatio: 0,
+    relayConnectRetryMaxDelayMs: 300000,
+    relayConnectRetryStateByUrl,
     relayConnectPromises,
     setCachedSigner: vi.fn(),
     setCachedSignerSessionKey: vi.fn(),
@@ -152,6 +166,7 @@ function createRuntimeHarness(
     rawConnect,
     relay,
     relayConnectPromises,
+    relayConnectRetryStateByUrl,
     runtime,
   };
 }
@@ -190,11 +205,11 @@ describe('relayConnectionRuntime', () => {
     await firstConnectPromise;
   });
 
-  it('closes stale pending sockets before opening a fresh connection attempt', async () => {
+  it('closes stale closed sockets before opening a fresh connection attempt', async () => {
     const { connectivity, rawConnect, relay } = createFakeRelay();
     const staleSocket = {
       close: vi.fn(),
-      readyState: 0,
+      readyState: 3,
     };
     connectivity.ws = staleSocket;
     connectivity.connectTimeout = globalThis.setTimeout(() => {}, 1000);
@@ -217,6 +232,84 @@ describe('relayConnectionRuntime', () => {
 
     expect(ndk.addExplicitRelay).toHaveBeenCalledWith('wss://relay.example/', undefined, false);
     expect(rawConnect).toHaveBeenCalledWith(3000, false);
+  });
+
+  it('forces NDK-initiated connect calls to use the app-owned no-auto-retry policy', async () => {
+    const { rawConnect, relay } = createFakeRelay();
+
+    ensureSingleSocketRelayConnectGuard(relay as never);
+    await relay.connect(2500, true);
+
+    expect(rawConnect).toHaveBeenCalledWith(2500, false);
+  });
+
+  it('prevents NDK publish calls from initiating disconnected relay connections', async () => {
+    const { connectivity, rawPublish, relay } = createFakeRelay();
+    ensureSingleSocketRelayConnectGuard(relay as never);
+
+    await expect(relay.publish({}, 2500)).rejects.toThrow('is not connected');
+    expect(rawPublish).not.toHaveBeenCalled();
+
+    connectivity._status = NDKRelayStatus.CONNECTED;
+    await expect(relay.publish({}, 2500)).resolves.toBe(true);
+    expect(rawPublish).toHaveBeenCalledWith({}, 2500);
+  });
+
+  it('records WebSocket disconnects and suppresses attempts until backoff expires', async () => {
+    const { connectivity, pool, rawConnect, relay, relayConnectRetryStateByUrl, runtime } =
+      createRuntimeHarness();
+
+    await runtime.ensureRelayConnections(['wss://relay.example']);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000);
+    const relayDisconnectHandler = pool.on.mock.calls.find(
+      ([eventName]) => eventName === 'relay:disconnect'
+    )?.[1] as ((nextRelay: FakeRelay) => void) | undefined;
+
+    expect(relayDisconnectHandler).toBeTypeOf('function');
+    connectivity._status = NDKRelayStatus.DISCONNECTED;
+    relayDisconnectHandler?.(relay);
+
+    expect(connectivity.resetReconnectionState).toHaveBeenCalled();
+    expect(relayConnectRetryStateByUrl.get('wss://relay.example/')).toEqual({
+      failureCount: 1,
+      nextAttemptAt: 11000,
+    });
+
+    await relay.connect(3000, true);
+    expect(rawConnect).toHaveBeenCalledTimes(1);
+
+    nowSpy.mockReturnValue(11000);
+    await relay.connect(3000, true);
+    expect(rawConnect).toHaveBeenCalledTimes(2);
+    expect(rawConnect).toHaveBeenLastCalledWith(3000, false);
+  });
+
+  it('clears relay retry backoff after a successful connection', async () => {
+    const { pool, relay, relayConnectRetryStateByUrl, runtime } = createRuntimeHarness();
+    relayConnectRetryStateByUrl.set(relay.url, {
+      failureCount: 3,
+      nextAttemptAt: Date.now() + 40000,
+    });
+    await runtime.ensureRelayConnections([]);
+    const relayConnectHandler = pool.on.mock.calls.find(
+      ([eventName]) => eventName === 'relay:connect'
+    )?.[1] as ((nextRelay: FakeRelay) => void) | undefined;
+
+    relay.connected = true;
+    relayConnectHandler?.(relay);
+
+    expect(relayConnectRetryStateByUrl.has(relay.url)).toBe(false);
+  });
+
+  it('rejects unspecified-address relay URLs as client destinations', async () => {
+    const { ndk, rawConnect, runtime } = createRuntimeHarness();
+
+    await runtime.ensureRelayConnections(['ws://0.0.0.0:7002']);
+
+    expect(ndk.addExplicitRelay).not.toHaveBeenCalled();
+    expect(rawConnect).not.toHaveBeenCalled();
+    expect(ndk.relayConnectionFilter?.('ws://0.0.0.0:7002')).toBe(false);
+    expect(ndk.relayConnectionFilter?.('ws://127.0.0.1:7002')).toBe(true);
   });
 
   it('reports pending relay connection checks while a relay is connecting or authenticating', () => {
@@ -309,5 +402,44 @@ describe('relayConnectionRuntime', () => {
     expect(elapsedMs).toBeGreaterThanOrEqual(80);
     expect(elapsedMs).toBeLessThan(500);
     expect(ndk.connect).toHaveBeenCalled();
+  });
+});
+
+describe('relay retry helpers', () => {
+  it('uses capped exponential backoff with bounded jitter', () => {
+    expect(
+      calculateRelayConnectRetryDelayMs({
+        baseDelayMs: 10000,
+        failureCount: 1,
+        jitterRatio: 0.2,
+        maxDelayMs: 300000,
+        randomValue: 0,
+      })
+    ).toBe(8000);
+    expect(
+      calculateRelayConnectRetryDelayMs({
+        baseDelayMs: 10000,
+        failureCount: 3,
+        jitterRatio: 0.2,
+        maxDelayMs: 300000,
+        randomValue: 1,
+      })
+    ).toBe(48000);
+    expect(
+      calculateRelayConnectRetryDelayMs({
+        baseDelayMs: 10000,
+        failureCount: 10,
+        jitterRatio: 0.2,
+        maxDelayMs: 300000,
+        randomValue: 1,
+      })
+    ).toBe(300000);
+  });
+
+  it('accepts loopback relays but rejects unspecified client addresses', () => {
+    expect(isUsableRelayClientUrl('ws://127.0.0.1:7002')).toBe(true);
+    expect(isUsableRelayClientUrl('ws://localhost:7002')).toBe(true);
+    expect(isUsableRelayClientUrl('ws://0.0.0.0:7002')).toBe(false);
+    expect(isUsableRelayClientUrl('ws://[::]:7002')).toBe(false);
   });
 });

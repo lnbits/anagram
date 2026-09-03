@@ -6,10 +6,12 @@ import NDK, {
   NDKPrivateKeySigner,
   NDKRelayList,
   NDKRelaySet,
+  NDKRelayStatus,
   type NDKSigner,
   NDKUser,
   type NDKUserProfile,
   type NostrEvent,
+  serializeProfile,
 } from '@nostr-dev-kit/ndk';
 import { contactsService } from 'src/services/contactsService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
@@ -41,6 +43,7 @@ interface RelayPublishRuntimeDeps {
     content: string
   ) => Promise<GroupIdentitySecretContent | null>;
   ensureRelayConnections: (relayUrls: string[]) => Promise<void>;
+  getRelayConnectionAttemptBlockReason: (relayUrl: string) => string | null;
   getLoggedInPublicKeyHex: () => string | null;
   getOrCreateSigner: () => Promise<NDKSigner>;
   ndk: NDK;
@@ -62,6 +65,7 @@ export function createRelayPublishRuntime({
   buildRelaySaveStatus,
   decryptGroupIdentitySecretContent,
   ensureRelayConnections,
+  getRelayConnectionAttemptBlockReason,
   getLoggedInPublicKeyHex,
   getOrCreateSigner,
   ndk,
@@ -142,7 +146,7 @@ export function createRelayPublishRuntime({
     ]);
   }
 
-  async function publishSignedEventToRelaysFirstSuccess(
+  async function publishSignedEventToRelays(
     event: NDKEvent,
     relayUrls: string[]
   ): Promise<{
@@ -151,8 +155,28 @@ export function createRelayPublishRuntime({
   }> {
     const publishedRelayUrls = new Set<string>();
     const errorsByRelayUrl = new Map<string, string>();
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
-    const relays = Array.from(relaySet.relays);
+    const eligibleRelayUrls: string[] = [];
+    for (const relayUrl of relayUrls) {
+      const blockReason = getRelayConnectionAttemptBlockReason(relayUrl);
+      if (blockReason) {
+        errorsByRelayUrl.set(relayUrl, blockReason);
+      } else {
+        eligibleRelayUrls.push(relayUrl);
+      }
+    }
+
+    const relaySet = NDKRelaySet.fromRelayUrls(eligibleRelayUrls, ndk, false);
+    const relays = Array.from(relaySet.relays).filter((relay) => {
+      if (relay.status >= NDKRelayStatus.CONNECTED) {
+        return true;
+      }
+
+      const normalizedRelayUrl = normalizeRelayStatusUrl(relay.url);
+      if (normalizedRelayUrl) {
+        errorsByRelayUrl.set(normalizedRelayUrl, 'Relay is not connected.');
+      }
+      return false;
+    });
     if (relays.length === 0) {
       return {
         publishedRelayUrls,
@@ -209,7 +233,6 @@ export function createRelayPublishRuntime({
             if (success && normalizedRelayUrl) {
               publishedRelayUrls.add(normalizedRelayUrl);
               errorsByRelayUrl.delete(normalizedRelayUrl);
-              finish();
               return;
             }
 
@@ -272,7 +295,7 @@ export function createRelayPublishRuntime({
       };
     }
 
-    const { publishedRelayUrls, errorsByRelayUrl } = await publishSignedEventToRelaysFirstSuccess(
+    const { publishedRelayUrls, errorsByRelayUrl } = await publishSignedEventToRelays(
       event,
       normalizedRelayUrls
     );
@@ -308,7 +331,7 @@ export function createRelayPublishRuntime({
     event.created_at = Math.floor(Date.now() / 1000);
     event.sig = '';
 
-    const { publishedRelayUrls, errorsByRelayUrl } = await publishSignedEventToRelaysFirstSuccess(
+    const { publishedRelayUrls, errorsByRelayUrl } = await publishSignedEventToRelays(
       event,
       normalizedRelayUrls
     );
@@ -508,10 +531,18 @@ export function createRelayPublishRuntime({
     await ensureRelayConnections(relayList);
 
     const signer = await getOrCreateSigner();
-    const user = await signer.user();
-    user.ndk = ndk;
-    user.profile = metadata as NDKUserProfile;
-    await user.publish();
+    const profileEvent = new NDKEvent(ndk, {
+      content: serializeProfile(metadata as NDKUserProfile),
+      created_at: Math.floor(Date.now() / 1000),
+      kind: NDKKind.Metadata,
+      pubkey: signer.pubkey,
+      tags: [],
+    });
+    await profileEvent.sign(signer);
+    const publishResult = await publishEventWithRelayStatuses(profileEvent, relayList, 'self');
+    if (publishResult.error) {
+      throw publishResult.error;
+    }
   }
 
   async function publishGroupMetadata(

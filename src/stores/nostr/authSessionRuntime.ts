@@ -72,7 +72,7 @@ interface AuthSessionRuntimeDeps {
   };
   pendingIncomingDeletions: { clear: () => void };
   pendingIncomingReactions: { clear: () => void };
-  relayConnectFailureCooldownUntilByUrl: { clear: () => void };
+  relayConnectRetryStateByUrl: { clear: () => void };
   relayConnectPromises: { clear: () => void };
   relayStatusVersion: Ref<number>;
   resetContactSubscriptionsRuntimeState: (reason?: string) => void;
@@ -133,7 +133,7 @@ export function createAuthSessionRuntime({
   pendingEventSinceState,
   pendingIncomingDeletions,
   pendingIncomingReactions,
-  relayConnectFailureCooldownUntilByUrl,
+  relayConnectRetryStateByUrl,
   relayConnectPromises,
   relayStatusVersion,
   resetContactSubscriptionsRuntimeState,
@@ -561,7 +561,7 @@ export function createAuthSessionRuntime({
     resetPrivateMessagesUiRuntimeState({ includeRefreshQueue: true });
     configuredRelayUrls.clear();
     relayConnectPromises.clear();
-    relayConnectFailureCooldownUntilByUrl.clear();
+    relayConnectRetryStateByUrl.clear();
     groupContactRefreshPromises.clear();
     backgroundGroupContactRefreshStartedAt.clear();
     setPendingPrivateMessagesEpochSubscriptionRefreshOptions(null);

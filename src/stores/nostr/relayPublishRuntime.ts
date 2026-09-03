@@ -146,7 +146,7 @@ export function createRelayPublishRuntime({
     ]);
   }
 
-  async function publishSignedEventToRelaysFirstSuccess(
+  async function publishSignedEventToRelays(
     event: NDKEvent,
     relayUrls: string[]
   ): Promise<{
@@ -233,7 +233,6 @@ export function createRelayPublishRuntime({
             if (success && normalizedRelayUrl) {
               publishedRelayUrls.add(normalizedRelayUrl);
               errorsByRelayUrl.delete(normalizedRelayUrl);
-              finish();
               return;
             }
 
@@ -296,7 +295,7 @@ export function createRelayPublishRuntime({
       };
     }
 
-    const { publishedRelayUrls, errorsByRelayUrl } = await publishSignedEventToRelaysFirstSuccess(
+    const { publishedRelayUrls, errorsByRelayUrl } = await publishSignedEventToRelays(
       event,
       normalizedRelayUrls
     );
@@ -332,7 +331,7 @@ export function createRelayPublishRuntime({
     event.created_at = Math.floor(Date.now() / 1000);
     event.sig = '';
 
-    const { publishedRelayUrls, errorsByRelayUrl } = await publishSignedEventToRelaysFirstSuccess(
+    const { publishedRelayUrls, errorsByRelayUrl } = await publishSignedEventToRelays(
       event,
       normalizedRelayUrls
     );

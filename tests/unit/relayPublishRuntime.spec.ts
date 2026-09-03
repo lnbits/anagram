@@ -42,8 +42,11 @@ describe('relayPublishRuntime', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns as soon as the first healthy relay acknowledges publish', async () => {
+  it('waits for every connected relay to settle before finalizing publish statuses', async () => {
     const { runtime } = createRuntime();
+    let acknowledgeSlowRelay: (success: boolean) => void = () => {
+      throw new Error('Slow relay publish was not initialized.');
+    };
     const fastRelay = {
       status: NDKRelayStatus.CONNECTED,
       url: 'wss://fast.example/',
@@ -52,25 +55,41 @@ describe('relayPublishRuntime', () => {
     const slowRelay = {
       status: NDKRelayStatus.CONNECTED,
       url: 'wss://slow.example/',
-      publish: vi.fn(() => new Promise<boolean>(() => {})),
+      publish: vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            acknowledgeSlowRelay = resolve;
+          })
+      ),
     };
     vi.spyOn(NDKRelaySet, 'fromRelayUrls').mockReturnValue({
       relays: new Set([fastRelay, slowRelay]),
     } as never);
 
-    const startedAt = Date.now();
-    const result = await runtime.publishEventWithRelayStatuses(
-      {
-        ndk: {},
-        sig: 'signature',
-        sign: vi.fn(),
-      } as never,
-      ['wss://fast.example/', 'wss://slow.example/'],
-      'recipient'
-    );
-    const elapsedMs = Date.now() - startedAt;
+    let publishSettled = false;
+    const resultPromise = runtime
+      .publishEventWithRelayStatuses(
+        {
+          ndk: {},
+          sig: 'signature',
+          sign: vi.fn(),
+        } as never,
+        ['wss://fast.example/', 'wss://slow.example/'],
+        'recipient'
+      )
+      .finally(() => {
+        publishSettled = true;
+      });
 
-    expect(elapsedMs).toBeLessThan(250);
+    await vi.waitFor(() => {
+      expect(fastRelay.publish).toHaveBeenCalledOnce();
+      expect(slowRelay.publish).toHaveBeenCalledOnce();
+    });
+    expect(publishSettled).toBe(false);
+
+    acknowledgeSlowRelay(true);
+    const result = await resultPromise;
+
     expect(result.error).toBeNull();
     expect(result.relayStatuses).toEqual(
       expect.arrayContaining([
@@ -80,6 +99,51 @@ describe('relayPublishRuntime', () => {
         }),
         expect.objectContaining({
           relay_url: 'wss://slow.example/',
+          status: 'published',
+        }),
+      ])
+    );
+  });
+
+  it('records another relay failure after the first relay acknowledges publish', async () => {
+    const { runtime } = createRuntime();
+    const fastRelay = {
+      status: NDKRelayStatus.CONNECTED,
+      url: 'wss://fast.example/',
+      publish: vi.fn(async () => true),
+    };
+    const rejectingRelay = {
+      status: NDKRelayStatus.CONNECTED,
+      url: 'wss://rejecting.example/',
+      publish: vi.fn(async () => {
+        await Promise.resolve();
+        throw new Error('Relay rejected the event.');
+      }),
+    };
+    vi.spyOn(NDKRelaySet, 'fromRelayUrls').mockReturnValue({
+      relays: new Set([fastRelay, rejectingRelay]),
+    } as never);
+
+    const result = await runtime.publishEventWithRelayStatuses(
+      {
+        ndk: {},
+        sig: 'signature',
+        sign: vi.fn(),
+      } as never,
+      ['wss://fast.example/', 'wss://rejecting.example/'],
+      'recipient'
+    );
+
+    expect(result.error).toBeNull();
+    expect(result.relayStatuses).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          relay_url: 'wss://fast.example/',
+          status: 'published',
+        }),
+        expect.objectContaining({
+          detail: 'Relay rejected the event.',
+          relay_url: 'wss://rejecting.example/',
           status: 'failed',
         }),
       ])

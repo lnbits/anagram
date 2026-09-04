@@ -1,7 +1,7 @@
 {
   "name": "anagram",
-  "version": "0.7.2",
-  "androidVersionCode": 9,
+  "version": "0.7.3",
+  "androidVersionCode": 10,
   "description": "Anagram is a desktop and web private messaging client for Nostr.",
   "private": true,
   "scripts": {

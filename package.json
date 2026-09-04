@@ -1,7 +1,7 @@
 {
   "name": "nostr-chat",
   "productName": "Anagram",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Anagram is a desktop and web private messaging client for Nostr.",
   "author": "LNbits",
   "homepage": "https://github.com/lnbits/anagram/",

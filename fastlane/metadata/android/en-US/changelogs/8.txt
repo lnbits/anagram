@@ -1,0 +1,5 @@
+Version 0.7.1
+
+- Improved startup, chat loading, and message delivery performance.
+- Made Android relay notifications load messages faster after opening the app.
+- Improved relay retry, reconnection, and publishing reliability.

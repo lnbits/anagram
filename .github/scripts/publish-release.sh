@@ -3,7 +3,7 @@ set -euo pipefail
 
 required_env_vars=(GH_TOKEN TAG COMMIT REPOSITORY)
 required_assets=(
-  anagram-android-debug-test-only.apk
+  anagram-android-release.apk
   anagram-linux.AppImage
   anagram-linux.deb
   anagram-linux.rpm
@@ -45,13 +45,13 @@ Automated binary release for ${TAG}.
 
 Commit: ${COMMIT}
 
-Android test-only artifact:
+Android production artifact:
 
-**anagram-android-debug-test-only.apk is a DEBUG build provided only for direct-install testing. It is not a production Android release, is not the F-Droid package, and is not intended for normal user installation or updates. Production Android distribution will be through F-Droid. If Android rejects an update because the debug signing key changed, uninstall the previous test build first.**
+**anagram-android-release.apk is the production signed Android release APK.**
 
 Versioned asset URLs:
 
-- Android debug APK (TEST ONLY): https://github.com/${REPOSITORY}/releases/download/${TAG}/anagram-android-debug-test-only.apk
+- Android release APK: https://github.com/${REPOSITORY}/releases/download/${TAG}/anagram-android-release.apk
 - Linux AppImage: https://github.com/${REPOSITORY}/releases/download/${TAG}/anagram-linux.AppImage
 - Linux DEB: https://github.com/${REPOSITORY}/releases/download/${TAG}/anagram-linux.deb
 - Linux RPM: https://github.com/${REPOSITORY}/releases/download/${TAG}/anagram-linux.rpm
@@ -60,7 +60,7 @@ Versioned asset URLs:
 
 Latest asset URLs:
 
-- Android debug APK (TEST ONLY): https://github.com/${REPOSITORY}/releases/latest/download/anagram-android-debug-test-only.apk
+- Android release APK: https://github.com/${REPOSITORY}/releases/latest/download/anagram-android-release.apk
 - Linux AppImage: https://github.com/${REPOSITORY}/releases/latest/download/anagram-linux.AppImage
 - Linux DEB: https://github.com/${REPOSITORY}/releases/latest/download/anagram-linux.deb
 - Linux RPM: https://github.com/${REPOSITORY}/releases/latest/download/anagram-linux.rpm

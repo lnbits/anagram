@@ -1,7 +1,7 @@
 {
   "name": "nostr-chat",
-  "version": "0.7.0",
-  "androidVersionCode": 7,
+  "version": "0.7.1",
+  "androidVersionCode": 8,
   "description": "Anagram is a desktop and web private messaging client for Nostr.",
   "private": true,
   "scripts": {

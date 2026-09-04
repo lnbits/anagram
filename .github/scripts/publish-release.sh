@@ -3,12 +3,12 @@ set -euo pipefail
 
 required_env_vars=(GH_TOKEN TAG COMMIT REPOSITORY)
 required_assets=(
-  nostr-chat-android-debug-test-only.apk
-  nostr-chat-linux.AppImage
-  nostr-chat-linux.deb
-  nostr-chat-linux.rpm
-  nostr-chat-macos.zip
-  nostr-chat-windows.exe
+  anagram-android-debug-test-only.apk
+  anagram-linux.AppImage
+  anagram-linux.deb
+  anagram-linux.rpm
+  anagram-macos.zip
+  anagram-windows.exe
 )
 
 validate_env() {
@@ -47,25 +47,25 @@ Commit: ${COMMIT}
 
 Android test-only artifact:
 
-**nostr-chat-android-debug-test-only.apk is a DEBUG build provided only for direct-install testing. It is not a production Android release, is not the F-Droid package, and is not intended for normal user installation or updates. Production Android distribution will be through F-Droid. If Android rejects an update because the debug signing key changed, uninstall the previous test build first.**
+**anagram-android-debug-test-only.apk is a DEBUG build provided only for direct-install testing. It is not a production Android release, is not the F-Droid package, and is not intended for normal user installation or updates. Production Android distribution will be through F-Droid. If Android rejects an update because the debug signing key changed, uninstall the previous test build first.**
 
 Versioned asset URLs:
 
-- Android debug APK (TEST ONLY): https://github.com/${REPOSITORY}/releases/download/${TAG}/nostr-chat-android-debug-test-only.apk
-- Linux AppImage: https://github.com/${REPOSITORY}/releases/download/${TAG}/nostr-chat-linux.AppImage
-- Linux DEB: https://github.com/${REPOSITORY}/releases/download/${TAG}/nostr-chat-linux.deb
-- Linux RPM: https://github.com/${REPOSITORY}/releases/download/${TAG}/nostr-chat-linux.rpm
-- macOS ZIP: https://github.com/${REPOSITORY}/releases/download/${TAG}/nostr-chat-macos.zip
-- Windows EXE: https://github.com/${REPOSITORY}/releases/download/${TAG}/nostr-chat-windows.exe
+- Android debug APK (TEST ONLY): https://github.com/${REPOSITORY}/releases/download/${TAG}/anagram-android-debug-test-only.apk
+- Linux AppImage: https://github.com/${REPOSITORY}/releases/download/${TAG}/anagram-linux.AppImage
+- Linux DEB: https://github.com/${REPOSITORY}/releases/download/${TAG}/anagram-linux.deb
+- Linux RPM: https://github.com/${REPOSITORY}/releases/download/${TAG}/anagram-linux.rpm
+- macOS ZIP: https://github.com/${REPOSITORY}/releases/download/${TAG}/anagram-macos.zip
+- Windows EXE: https://github.com/${REPOSITORY}/releases/download/${TAG}/anagram-windows.exe
 
 Latest asset URLs:
 
-- Android debug APK (TEST ONLY): https://github.com/${REPOSITORY}/releases/latest/download/nostr-chat-android-debug-test-only.apk
-- Linux AppImage: https://github.com/${REPOSITORY}/releases/latest/download/nostr-chat-linux.AppImage
-- Linux DEB: https://github.com/${REPOSITORY}/releases/latest/download/nostr-chat-linux.deb
-- Linux RPM: https://github.com/${REPOSITORY}/releases/latest/download/nostr-chat-linux.rpm
-- macOS ZIP: https://github.com/${REPOSITORY}/releases/latest/download/nostr-chat-macos.zip
-- Windows EXE: https://github.com/${REPOSITORY}/releases/latest/download/nostr-chat-windows.exe
+- Android debug APK (TEST ONLY): https://github.com/${REPOSITORY}/releases/latest/download/anagram-android-debug-test-only.apk
+- Linux AppImage: https://github.com/${REPOSITORY}/releases/latest/download/anagram-linux.AppImage
+- Linux DEB: https://github.com/${REPOSITORY}/releases/latest/download/anagram-linux.deb
+- Linux RPM: https://github.com/${REPOSITORY}/releases/latest/download/anagram-linux.rpm
+- macOS ZIP: https://github.com/${REPOSITORY}/releases/latest/download/anagram-macos.zip
+- Windows EXE: https://github.com/${REPOSITORY}/releases/latest/download/anagram-windows.exe
 EOF
 }
 

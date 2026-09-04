@@ -47,12 +47,12 @@ jobs:
 
       - name: Stage Android test-only asset
         shell: bash
-        run: bash .github/scripts/stage-release-asset.sh dist/capacitor/android/apk/debug '*.apk' release-assets/nostr-chat-android-debug-test-only.apk
+        run: bash .github/scripts/stage-release-asset.sh dist/capacitor/android/apk/debug '*.apk' release-assets/anagram-android-debug-test-only.apk
 
       - uses: actions/upload-artifact@v6
         with:
           name: release-android-debug-test-only
-          path: release-assets/nostr-chat-android-debug-test-only.apk
+          path: release-assets/anagram-android-debug-test-only.apk
           if-no-files-found: error
 
   build-linux:
@@ -87,14 +87,14 @@ jobs:
       - name: Stage Linux release assets
         shell: bash
         run: |
-          bash .github/scripts/stage-release-asset.sh dist/electron/Packaged '*.AppImage' release-assets/nostr-chat-linux.AppImage
-          bash .github/scripts/stage-release-asset.sh dist/electron/Packaged '*.deb' release-assets/nostr-chat-linux.deb
-          bash .github/scripts/stage-release-asset.sh dist/electron/Packaged '*.rpm' release-assets/nostr-chat-linux.rpm
+          bash .github/scripts/stage-release-asset.sh dist/electron/Packaged '*.AppImage' release-assets/anagram-linux.AppImage
+          bash .github/scripts/stage-release-asset.sh dist/electron/Packaged '*.deb' release-assets/anagram-linux.deb
+          bash .github/scripts/stage-release-asset.sh dist/electron/Packaged '*.rpm' release-assets/anagram-linux.rpm
 
       - uses: actions/upload-artifact@v6
         with:
           name: release-linux
-          path: release-assets/nostr-chat-linux.*
+          path: release-assets/anagram-linux.*
           if-no-files-found: error
 
   build-macos:
@@ -123,12 +123,12 @@ jobs:
 
       - name: Stage macOS release asset
         shell: bash
-        run: bash .github/scripts/stage-release-asset.sh dist/electron/Packaged '*.zip' release-assets/nostr-chat-macos.zip
+        run: bash .github/scripts/stage-release-asset.sh dist/electron/Packaged '*.zip' release-assets/anagram-macos.zip
 
       - uses: actions/upload-artifact@v6
         with:
           name: release-macos
-          path: release-assets/nostr-chat-macos.zip
+          path: release-assets/anagram-macos.zip
           if-no-files-found: error
 
   build-windows:
@@ -157,12 +157,12 @@ jobs:
 
       - name: Stage Windows release asset
         shell: pwsh
-        run: .github/scripts/stage-release-asset.ps1 -SearchRoot dist/electron/Packaged -Pattern '*.exe' -OutputPath release-assets/nostr-chat-windows.exe
+        run: .github/scripts/stage-release-asset.ps1 -SearchRoot dist/electron/Packaged -Pattern '*.exe' -OutputPath release-assets/anagram-windows.exe
 
       - uses: actions/upload-artifact@v6
         with:
           name: release-windows
-          path: release-assets/nostr-chat-windows.exe
+          path: release-assets/anagram-windows.exe
           if-no-files-found: error
 
   publish-release:

@@ -102,7 +102,7 @@ This proves the source-build path but is not the final submission record: the co
 
 Production Android distribution uses standard F-Droid signing: F-Droid builds the app from source and signs the APK. The F-Droid APK therefore cannot update a GitHub debug installation.
 
-The GitHub workflow continues to build a debug APK only for direct-install testing. Its public filename is `nostr-chat-android-debug-test-only.apk`; the workflow job, artifact name, release warning, and download labels all identify it as test-only. It is not presented as the production Android package, and users may need to uninstall an older test build if its debug signature differs.
+The GitHub workflow continues to build a debug APK only for direct-install testing. Its public filename is `anagram-android-debug-test-only.apk`; the workflow job, artifact name, release warning, and download labels all identify it as test-only. It is not presented as the production Android package, and users may need to uninstall an older test build if its debug signature differs.
 
 Reproducible/upstream signing remains a possible future strategy but is not required for the current standard F-Droid path; see F-Droid’s [Reproducible Builds documentation](https://f-droid.org/en/docs/Reproducible_Builds/). Production builds no longer embed the current time in app metadata. [quasar.config.ts](../quasar.config.ts) derives the bundle and service-worker cache identity from the app version and Git commit SHA, so repeated builds of the same source use the same value.
 

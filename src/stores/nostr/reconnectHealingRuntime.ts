@@ -92,7 +92,7 @@ function isBrowserOffline(): boolean {
 }
 
 function logReconnectHealing(phase: string, details: Record<string, unknown> = {}): void {
-  console.log('[nostr-chat][reconnect-healing]', phase, details);
+  console.log('[anagram][reconnect-healing]', phase, details);
 }
 
 function normalizeChatTarget(
@@ -575,7 +575,7 @@ export function createReconnectHealingRuntime({
       });
     })()
       .catch((error) => {
-        console.warn('[nostr-chat][reconnect-healing] failed', {
+        console.warn('[anagram][reconnect-healing] failed', {
           reason,
           error: error instanceof Error ? error.message : String(error ?? ''),
         });

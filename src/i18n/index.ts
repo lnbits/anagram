@@ -247,7 +247,7 @@ const state = reactive<I18nState>({
 
 const currentLocale = computed(() => state.locale);
 const currentLanguage = computed(() => languageByCode.get(state.locale) ?? fallbackLanguage);
-const i18nInjectionKey: InjectionKey<I18nApi> = Symbol('nostr-chat-i18n');
+const i18nInjectionKey: InjectionKey<I18nApi> = Symbol('anagram-i18n');
 
 export const i18nApi: I18nApi = {
   locale: currentLocale,

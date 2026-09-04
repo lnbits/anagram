@@ -177,7 +177,7 @@ describe('reconnectHealingRuntime', () => {
     });
     expect(refreshDeveloperPendingQueues).toHaveBeenCalledTimes(1);
     expect(console.log).toHaveBeenCalledWith(
-      '[nostr-chat][reconnect-healing]',
+      '[anagram][reconnect-healing]',
       'start',
       expect.objectContaining({
         reason: 'relay-connected',
@@ -186,7 +186,7 @@ describe('reconnectHealingRuntime', () => {
       })
     );
     expect(console.log).toHaveBeenCalledWith(
-      '[nostr-chat][reconnect-healing]',
+      '[anagram][reconnect-healing]',
       'complete',
       expect.objectContaining({
         reason: 'relay-connected',
@@ -307,7 +307,7 @@ describe('reconnectHealingRuntime', () => {
       'Checking session and network'
     );
     expect(console.log).toHaveBeenCalledWith(
-      '[nostr-chat][reconnect-healing]',
+      '[anagram][reconnect-healing]',
       'deferred',
       expect.objectContaining({
         reason: 'relay-list-changed',
@@ -423,7 +423,7 @@ describe('reconnectHealingRuntime', () => {
     expect(refreshDirectMessages).toHaveBeenCalledTimes(2);
     expect(refreshDeveloperPendingQueues).toHaveBeenCalledTimes(2);
     expect(console.log).toHaveBeenCalledWith(
-      '[nostr-chat][reconnect-healing]',
+      '[anagram][reconnect-healing]',
       'start',
       expect.objectContaining({
         reason: 'manual-refresh',

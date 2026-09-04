@@ -125,7 +125,7 @@ test('group owner can create a group, invite a member, and exchange messages bot
     await alice.page.evaluate(() => {
       window.localStorage.setItem('ui-desktop-message-layout', 'bubbles');
       window.dispatchEvent(
-        new CustomEvent('nostr-chat:desktop-message-layout-changed', {
+        new CustomEvent('anagram:desktop-message-layout-changed', {
           detail: { layout: 'bubbles' },
         })
       );
@@ -188,7 +188,7 @@ test('group owner can create a group, invite a member, and exchange messages bot
     await alice.page.evaluate(() => {
       window.localStorage.setItem('ui-desktop-message-layout', 'text');
       window.dispatchEvent(
-        new CustomEvent('nostr-chat:desktop-message-layout-changed', {
+        new CustomEvent('anagram:desktop-message-layout-changed', {
           detail: { layout: 'text' },
         })
       );

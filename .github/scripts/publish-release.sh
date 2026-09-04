@@ -3,7 +3,7 @@ set -euo pipefail
 
 required_env_vars=(GH_TOKEN TAG COMMIT REPOSITORY)
 required_assets=(
-  anagram-android-debug-test-only.apk
+  anagram-android-release.apk
   anagram-linux.AppImage
   anagram-linux.deb
   anagram-linux.rpm

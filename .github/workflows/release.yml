@@ -31,30 +31,47 @@ jobs:
         run: bash .github/scripts/validate-release-tag.sh
 
   build-android:
-    name: Build Android Debug APK (TEST ONLY)
-    needs: validate-tag
-    runs-on: ubuntu-latest
+      name: Build signed Android release APK
+      needs: validate-tag
+      runs-on: ubuntu-latest
 
-    steps:
-      - uses: actions/checkout@v6
+      steps:
+        - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24.x
+        - uses: actions/setup-node@v6
+          with:
+            node-version: 24.x
 
-      - name: Build Android Debug APK (TEST ONLY)
-        run: npm run build:android:apk:debug
+        - name: Restore Android release keystore
+          shell: bash
+          env:
+            ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          run: |
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" |
+              base64 --decode > "$RUNNER_TEMP/anagram-release.jks"
+            chmod 600 "$RUNNER_TEMP/anagram-release.jks"
 
-      - name: Stage Android test-only asset
-        shell: bash
-        run: bash .github/scripts/stage-release-asset.sh dist/capacitor/android/apk/debug '*.apk' release-assets/anagram-android-debug-test-only.apk
+        - name: Build signed Android release APK
+          env:
+            ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/anagram-release.jks
+            ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+            ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+            ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          run: npm run build:android:apk:release
 
-      - uses: actions/upload-artifact@v6
-        with:
-          name: release-android-debug-test-only
-          path: release-assets/anagram-android-debug-test-only.apk
-          if-no-files-found: error
+        - name: Stage Android release asset
+          shell: bash
+          run: |
+            bash .github/scripts/stage-release-asset.sh \
+              dist/capacitor/android/apk/release \
+              '*.apk' \
+              release-assets/anagram-android-release.apk
 
+        - uses: actions/upload-artifact@v6
+          with:
+            name: release-android
+            path: release-assets/anagram-android-release.apk
+            if-no-files-found: error
   build-linux:
     name: Build Linux Packages
     needs: validate-tag

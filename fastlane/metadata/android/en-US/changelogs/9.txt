@@ -1,0 +1,4 @@
+Version 0.7.2
+
+- Completed the Anagram rebrand across package and release metadata.
+- No application behavior changes.

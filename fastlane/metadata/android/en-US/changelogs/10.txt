@@ -1,0 +1,4 @@
+Version 0.7.3
+
+- Added signed Android release builds.
+- No application behavior changes.

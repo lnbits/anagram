@@ -55,7 +55,7 @@ test('a second upward scroll at the top loads older messages', async ({ browser 
     await bob.page.evaluate(() => {
       window.localStorage.setItem('ui-desktop-message-layout', 'bubbles');
       window.dispatchEvent(
-        new CustomEvent('nostr-chat:desktop-message-layout-changed', {
+        new CustomEvent('anagram:desktop-message-layout-changed', {
           detail: { layout: 'bubbles' },
         })
       );

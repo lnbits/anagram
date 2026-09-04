@@ -36,7 +36,7 @@ function createResponsiveMediaQueryPlugin(): Plugin {
   ] as const;
 
   return {
-    name: 'nostr-chat-responsive-media-queries',
+    name: 'anagram-responsive-media-queries',
     enforce: 'pre',
     transform(source, id) {
       const sourcePath = id.split('?', 1)[0] ?? '';
@@ -80,7 +80,7 @@ function buildAppInfo(isProd: boolean): AppBuildInfo {
 
 function createAppShellBuildPlugin(buildInfo: AppBuildInfo): Plugin {
   return {
-    name: 'nostr-chat-app-shell-build',
+    name: 'anagram-app-shell-build',
     apply: 'build',
     writeBundle(outputOptions) {
       if (!outputOptions.dir) {

@@ -145,7 +145,7 @@ interface StartupContactSyncRuntimeDeps {
 }
 
 function logStartupRestore(phase: string, details: Record<string, unknown> = {}): void {
-  console.log('[nostr-chat][startup-restore]', phase, details);
+  console.log('[anagram][startup-restore]', phase, details);
 }
 
 function formatStartupRestoreError(error: unknown): string {

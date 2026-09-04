@@ -1,6 +1,6 @@
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 
-export const FOREGROUND_MESSAGE_ACTIVITY_EVENT = 'nostr-chat:foreground-message-activity';
+export const FOREGROUND_MESSAGE_ACTIVITY_EVENT = 'anagram:foreground-message-activity';
 
 export interface ForegroundMessageActivityDetail {
   chatPubkey: string;

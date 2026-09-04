@@ -82,7 +82,7 @@ Add “honest sync” UI. A tiny offline/reconnecting/catching-up indicator woul
 Expand chaos testing. The next missing tests are long offline periods, relay flapping during send, two devices sending in the same chat simultaneously, wake-from-sleep recovery, and notification/background resume. The existing e2e base is strong enough that this should be very achievable.
 
 If We Prioritize Ruthlessly
-Start with durable outbox + auto replay, then targeted gap repair on resume/reconnect, then logical-message dedupe + multi-device convergence. Those three would move nostr-chat the most toward an “it just catches up and does the right thing” feel.
+Start with durable outbox + auto replay, then targeted gap repair on resume/reconnect, then logical-message dedupe + multi-device convergence. Those three would move Anagram the most toward an “it just catches up and does the right thing” feel.
 
 Do you want to rerun the local groups Playwright check with Docker and Node explicitly on PATH?
 export PATH=/Applications/Docker.app/Contents/Resources/bin:/Users/moto/.nvm/versions/node/v24.15.0/bin:$PATH; /Users/moto/.nvm/versions/node/v24.15.0/bin/node ./scripts/run-e2e-local.cjs e2e/groups.spec.ts

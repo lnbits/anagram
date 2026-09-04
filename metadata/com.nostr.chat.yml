@@ -1,10 +1,8 @@
 Categories:
-  - Connectivity
-  - Internet
+  - Messaging
 License: MIT
 AuthorName: LNbits
 AuthorWebSite: https://lnbits.com
-WebSite: https://github.com/lnbits/anagram
 SourceCode: https://github.com/lnbits/anagram
 IssueTracker: https://github.com/lnbits/anagram/issues
 Changelog: https://github.com/lnbits/anagram/releases
@@ -20,12 +18,10 @@ Builds:
     commit: 825b69632e841871b5c410de756209fe72088071
     subdir: src-capacitor/android/app
     sudo:
+      - echo "deb https://deb.debian.org/debian forky main" > /etc/apt/sources.list.d/forky.list
       - apt-get update
       - apt-get install -y build-essential cmake golang-go rustup
-      - curl -Lo node.tar.gz https://nodejs.org/dist/v24.16.0/node-v24.16.0-linux-x64.tar.gz
-      - echo "2faf6a387e9b62b888e21c54f01249fb27537ffecf1842f29f4c919d0a59a0ff node.tar.gz"
-        | sha256sum -c -
-      - tar xzf node.tar.gz --strip-components=1 -C /usr/local/
+      - apt-get install -y -t forky nodejs npm
     gradle:
       - yes
     srclibs:
@@ -71,7 +67,7 @@ MaintainerNotes: |-
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags ^v[0-9.]+$
-UpdateCheckData:
+UpdateCheckData: 
   src-capacitor/package.json|"androidVersionCode":\s*(\d+)|.|"version":\s*"([\d.]+)"
 CurrentVersion: 0.7.0
 CurrentVersionCode: 7

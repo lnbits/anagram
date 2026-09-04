@@ -35,12 +35,12 @@ jobs:
     needs: validate-tag
     runs-on: ubuntu-latest
 
-    steps:
-      - uses: actions/checkout@v6
+      steps:
+        - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24.x
+        - uses: actions/setup-node@v6
+          with:
+            node-version: 24.x
 
       - name: Restore Android release keystore
         shell: bash
@@ -73,6 +73,11 @@ jobs:
           path: release-assets/anagram-android-release.apk
           if-no-files-found: error
 
+        - uses: actions/upload-artifact@v6
+          with:
+            name: release-android
+            path: release-assets/anagram-android-release.apk
+            if-no-files-found: error
   build-linux:
     name: Build Linux Packages
     needs: validate-tag

@@ -1,0 +1,4 @@
+Version 0.7.5
+
+- Removed Google Play dependency metadata from APK releases for F-Droid compatibility.
+- No application behavior changes.

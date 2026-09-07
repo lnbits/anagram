@@ -48,6 +48,8 @@ function createRuntime(
     getPrivateMessagesStartupFloorSince?: ReturnType<typeof vi.fn>;
     getPrivateMessagesBackfillResumeState?: () => PrivateMessagesBackfillState | null;
     getPrivateMessagesIngestQueue?: () => Promise<void>;
+    ndk?: NDK;
+    readRelays?: string[];
     subscribeWithReqLogging?: ReturnType<typeof vi.fn>;
     resolveGroupChatEpochEntries?: (chat: {
       meta: Record<string, unknown>;
@@ -95,7 +97,7 @@ function createRuntime(
     getPrivateMessagesStartupFloorSince:
       overrides.getPrivateMessagesStartupFloorSince ?? vi.fn(() => 1700000000),
     logSubscription: vi.fn(),
-    ndk: new NDK(),
+    ndk: overrides.ndk ?? new NDK(),
     normalizeThrottleMs: (value) => value ?? 0,
     queuePrivateMessageIngestion: vi.fn(),
     relaySignature: (relayUrls) => relayUrls.join(','),
@@ -106,7 +108,9 @@ function createRuntime(
           epoch_public_key: GROUP_EPOCH_A,
         },
       ]),
-    resolvePrivateMessageReadRelayUrls: vi.fn(async () => ['wss://relay.example']),
+    resolvePrivateMessageReadRelayUrls: vi.fn(
+      async () => overrides.readRelays ?? ['wss://relay.example']
+    ),
     schedulePostPrivateMessagesEoseChecks: vi.fn(),
     subscribeWithReqLogging,
     toOptionalIsoTimestampFromUnix: (value) =>
@@ -207,6 +211,74 @@ describe('privateMessagesBackfillRuntime', () => {
       expect(completeStartupStep).toHaveBeenCalledExactlyOnceWith('message-history-restore')
     );
     runtime.resetPrivateMessagesBackfillRuntimeState();
+  });
+
+  it('continues older windows on the connected relay while another target is unavailable', async () => {
+    const ndk = new NDK();
+    const available = ndk.pool.getRelay('wss://available.example/', false, false);
+    ndk.pool.getRelay('wss://unavailable.example/', false, false);
+    vi.spyOn(available, 'connected', 'get').mockReturnValue(true);
+    const readRelays = ['wss://available.example/', 'wss://unavailable.example/'];
+    const { runtime, subscribeWithReqLogging, completeStartupStep, failStartupStep } =
+      createRuntime({
+        ndk,
+        readRelays,
+        getPrivateMessagesBackfillResumeState: () => ({
+          pubkey: LOGGED_IN_PUBLIC_KEY,
+          nextSince: 90,
+          nextUntil: 100,
+          floorSince: 80,
+          delayMs: 0,
+          completed: false,
+        }),
+      });
+    runtime.startPrivateMessagesStartupBackfill(
+      LOGGED_IN_PUBLIC_KEY,
+      [LOGGED_IN_PUBLIC_KEY],
+      readRelays,
+      100
+    );
+    await vi.waitFor(() =>
+      expect(completeStartupStep).toHaveBeenCalledExactlyOnceWith('message-history-restore')
+    );
+    expect(subscribeWithReqLogging).toHaveBeenCalledTimes(2);
+    for (const call of subscribeWithReqLogging.mock.calls) {
+      expect([...call[3].relaySet.relayUrls]).toEqual(['wss://available.example/']);
+    }
+    expect(failStartupStep).not.toHaveBeenCalled();
+  });
+
+  it('reports unavailable history relays instead of waiting forever without a request', async () => {
+    const ndk = new NDK();
+    ndk.pool.getRelay('wss://unavailable.example/', false, false);
+    const readRelays = ['wss://unavailable.example/'];
+    const { runtime, subscribeWithReqLogging, completeStartupStep, failStartupStep } =
+      createRuntime({
+        ndk,
+        readRelays,
+        getPrivateMessagesBackfillResumeState: () => ({
+          pubkey: LOGGED_IN_PUBLIC_KEY,
+          nextSince: 90,
+          nextUntil: 100,
+          floorSince: 90,
+          delayMs: 0,
+          completed: false,
+        }),
+      });
+    runtime.startPrivateMessagesStartupBackfill(
+      LOGGED_IN_PUBLIC_KEY,
+      [LOGGED_IN_PUBLIC_KEY],
+      readRelays,
+      100
+    );
+    await vi.waitFor(() =>
+      expect(failStartupStep).toHaveBeenCalledWith(
+        'message-history-restore',
+        expect.objectContaining({ name: 'RelayQueryUnavailableError' })
+      )
+    );
+    expect(subscribeWithReqLogging).not.toHaveBeenCalled();
+    expect(completeStartupStep).not.toHaveBeenCalled();
   });
 
   it('completes only history when there are no older windows to restore', () => {

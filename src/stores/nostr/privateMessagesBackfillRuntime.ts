@@ -21,6 +21,7 @@ import {
 } from 'src/stores/nostr/constants';
 import { historyCoverageScope, uncoveredHistoryWindows } from 'src/stores/nostr/historyCoverage';
 import { resolvePrivateMessageRelayScopes } from 'src/stores/nostr/privateMessageRouting';
+import { createReadyRelaySet, RelayQueryUnavailableError } from 'src/stores/nostr/relayQueryUtils';
 import type { StartupStepId } from 'src/stores/nostr/startupState';
 import type {
   MissingMessageDependencyRepairReason,
@@ -368,13 +369,17 @@ export function createPrivateMessagesBackfillRuntime({
     until: number;
     signature: string;
     startupTaskId: string;
-  }): Promise<number> {
+  }): Promise<{ eventCount: number; relayUrls: string[] }> {
     const privateMessageTargetDetails = await buildPrivateMessageSubscriptionTargetDetails(
       options.recipientPubkeys,
       options.loggedInPubkeyHex
     );
 
-    return new Promise<number>((resolve, reject) => {
+    const relaySet = createReadyRelaySet(ndk, options.relayUrls);
+    if (!relaySet) throw new RelayQueryUnavailableError();
+    const queryRelayUrls = [...relaySet.relayUrls];
+
+    return new Promise<{ eventCount: number; relayUrls: string[] }>((resolve, reject) => {
       let didFinish = false;
       let eventCount = 0;
       let subscription: ReturnType<NDK['subscribe']> | null = null;
@@ -394,16 +399,15 @@ export function createPrivateMessagesBackfillRuntime({
           return;
         }
 
-        resolve(eventCount);
+        resolve({ eventCount, relayUrls: queryRelayUrls });
       };
 
       try {
-        const relaySet = NDKRelaySet.fromRelayUrls(options.relayUrls, ndk, false);
         logSubscription('private-messages', 'backfill-window-subscribe', {
           signature: options.signature,
           ...buildFilterSinceDetails(options.since),
           ...buildFilterUntilDetails(options.until),
-          ...buildSubscriptionRelayDetails(options.relayUrls),
+          ...buildSubscriptionRelayDetails(queryRelayUrls),
           recipientCount: options.recipientPubkeys.length,
           recipients: options.recipientPubkeys.map((value) => formatSubscriptionLogValue(value)),
           ...privateMessageTargetDetails,
@@ -453,7 +457,7 @@ export function createPrivateMessagesBackfillRuntime({
             signature: options.signature,
             ...buildFilterSinceDetails(options.since),
             ...buildFilterUntilDetails(options.until),
-            ...buildSubscriptionRelayDetails(options.relayUrls),
+            ...buildSubscriptionRelayDetails(queryRelayUrls),
           }
         );
 
@@ -1374,7 +1378,7 @@ export function createPrivateMessagesBackfillRuntime({
               },
               coverage.read(historyCoverageScope(route.publicKey, route.relayUrls))
             )) {
-              eventCount += await runPrivateMessagesBackfillWindow({
+              const result = await runPrivateMessagesBackfillWindow({
                 loggedInPubkeyHex: normalizedPubkey,
                 recipientPubkeys: [route.publicKey],
                 relayUrls: route.relayUrls,
@@ -1382,9 +1386,10 @@ export function createPrivateMessagesBackfillRuntime({
                 signature,
                 startupTaskId,
               });
+              eventCount += result.eventCount;
               await getPrivateMessagesIngestQueue();
               if (runToken !== privateMessagesBackfillRunToken) return;
-              coverage.add(historyCoverageScope(route.publicKey, route.relayUrls), gap);
+              coverage.add(historyCoverageScope(route.publicKey, result.relayUrls), gap);
             }
           }
           await getPrivateMessagesIngestQueue();

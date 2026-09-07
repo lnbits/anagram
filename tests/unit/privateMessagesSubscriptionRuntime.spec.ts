@@ -1,10 +1,13 @@
-import NDK, { type NDKEvent, type NDKFilter } from '@nostr-dev-kit/ndk';
+import { EventEmitter } from 'node:events';
+import NDK, { type NDKEvent, type NDKFilter, type NDKSubscription } from '@nostr-dev-kit/ndk';
+import { RELAY_QUERY_TIMEOUT_MS } from 'src/stores/nostr/constants';
 import { createPrivateMessagesSubscriptionRuntime } from 'src/stores/nostr/privateMessagesSubscriptionRuntime';
 import { createStartupRuntime } from 'src/stores/nostr/startupRuntime';
 import {
   createInitialStartupStepSnapshots,
   type StartupDisplaySnapshot,
 } from 'src/stores/nostr/startupState';
+import { observeConnectedRelayEose } from 'src/stores/nostr/subscriptionEose';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
 
@@ -230,6 +233,44 @@ describe('privateMessagesSubscriptionRuntime', () => {
     expect(startupRuntime.getStartupStepSnapshot('private-messages-subscribe').status).toBe(
       'success'
     );
+  });
+
+  it('starts step 16 after a slow live snapshot when another relay is unavailable', async () => {
+    vi.useFakeTimers();
+    const healthy = { connected: true };
+    const unavailable = { connected: false };
+    const subscription = Object.assign(new EventEmitter(), {
+      relaySet: { relays: new Set([healthy, unavailable]) },
+      eosesSeen: new Set(),
+      stop: vi.fn(),
+    });
+    const subscribeWithReqLogging = vi.fn((_label, _requestLabel, _filters, options) => {
+      observeConnectedRelayEose(subscription as unknown as NDKSubscription, options.onEose);
+      return subscription as never;
+    });
+    const { runtime, startPrivateMessagesStartupBackfill, startupRuntime } = createRuntime({
+      subscribeWithReqLogging,
+    });
+    await runtime.subscribePrivateMessagesForLoggedInUser(false, { startupTrackStep: true });
+    runtime.startPrivateMessagesHistoryRestore();
+    await vi.advanceTimersByTimeAsync(RELAY_QUERY_TIMEOUT_MS + 1000);
+    expect(startPrivateMessagesStartupBackfill).not.toHaveBeenCalled();
+
+    subscription.eosesSeen.add(healthy);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(startPrivateMessagesStartupBackfill).toHaveBeenCalledExactlyOnceWith(
+      LOGGED_IN_PUBLIC_KEY,
+      [LOGGED_IN_PUBLIC_KEY],
+      RELAY_URLS,
+      90
+    );
+    expect(startupRuntime.getStartupStepSnapshot('private-messages-subscribe').status).toBe(
+      'success'
+    );
+    expect(subscribeWithReqLogging).toHaveBeenCalledTimes(1);
+    expect(subscription.stop).not.toHaveBeenCalled();
+    expect(subscription.listenerCount('eose')).toBe(0);
+    expect(subscription.listenerCount('close')).toBe(0);
   });
 
   it('does not leave history waiting on a listener that failed to start', async () => {

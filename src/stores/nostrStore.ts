@@ -1583,7 +1583,6 @@ export const useNostrStore = defineStore('nostrStore', () => {
     extractRelayUrlsFromEvent,
     failStartupStep,
     formatSubscriptionLogValue,
-    getFilterSince,
     getLoggedInPublicKeyHex,
     getLoggedInSignerUser,
     getStartupStepSnapshot,

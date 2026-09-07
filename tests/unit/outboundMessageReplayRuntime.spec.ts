@@ -142,7 +142,7 @@ describe('outboundMessageReplayRuntime', () => {
     );
   });
 
-  it('uses cooldown for periodic sweeps but retries immediately on browser-online events', async () => {
+  it('respects cooldown for periodic, startup and browser-online triggers', async () => {
     const retryDirectMessageRelay = vi.fn().mockResolvedValue(undefined);
     const logMessageRelayDiagnostics = vi.fn();
     const relayStatus = makeRelayStatus({
@@ -183,9 +183,7 @@ describe('outboundMessageReplayRuntime', () => {
     await vi.runAllTicks();
     runtime.resetOutboundMessageReplayRuntimeState();
 
-    expect(retryDirectMessageRelay).toHaveBeenCalledWith(7, 'wss://relay-failed', 'recipient', {
-      trigger: 'outbox:browser-online',
-    });
+    expect(retryDirectMessageRelay).not.toHaveBeenCalled();
     expect(window.removeEventListener).toHaveBeenCalledWith('online', onlineHandler);
   });
 });

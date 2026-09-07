@@ -16,6 +16,7 @@ import NDK, {
 import { contactsService } from 'src/services/contactsService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { RELAY_PUBLISH_TIMEOUT_MS } from 'src/stores/nostr/constants';
+import { getOrCreateOutboundGiftWrap } from 'src/stores/nostr/outboundGiftWrap';
 import type {
   GiftWrappedRumorPublishResult,
   GroupIdentitySecretContent,
@@ -435,9 +436,15 @@ export function createRelayPublishRuntime({
     const combinedRelayStatuses: MessageRelayStatus[] = [];
 
     try {
-      const recipientGiftWrapEvent = await giftWrap(recipientRumorEvent, recipient, signer, {
-        rumorKind,
-      });
+      const recipientGiftWrapEvent =
+        options.localMessageId && recipientRumorNostrEvent
+          ? new NDKEvent(
+              ndk,
+              await getOrCreateOutboundGiftWrap(recipientRumorNostrEvent, 'recipient', () =>
+                giftWrap(recipientRumorEvent, recipient, signer, { rumorKind })
+              )
+            )
+          : await giftWrap(recipientRumorEvent, recipient, signer, { rumorKind });
       const recipientPublishResult = await publishEventWithRelayStatuses(
         recipientGiftWrapEvent,
         relayUrls,
@@ -467,9 +474,15 @@ export function createRelayPublishRuntime({
             normalizedRecipientPubkey,
             createdAt
           );
-          const selfGiftWrapEvent = await giftWrap(selfRumorEvent, senderRecipient, signer, {
-            rumorKind,
-          });
+          const selfGiftWrapEvent =
+            options.localMessageId && recipientRumorNostrEvent
+              ? new NDKEvent(
+                  ndk,
+                  await getOrCreateOutboundGiftWrap(recipientRumorNostrEvent, 'self', () =>
+                    giftWrap(selfRumorEvent, senderRecipient, signer, { rumorKind })
+                  )
+                )
+              : await giftWrap(selfRumorEvent, senderRecipient, signer, { rumorKind });
           const selfPublishResult = await publishEventWithRelayStatuses(
             selfGiftWrapEvent,
             selfRelayUrls,

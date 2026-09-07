@@ -2,6 +2,7 @@ import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import type { SubscribePrivateMessagesOptions } from 'src/stores/nostr/types';
 
 interface SubscriptionRefreshRuntimeDeps {
+  isStartupRestoring?: () => boolean;
   getPendingPrivateMessagesEpochSubscriptionRefreshOptions: () => SubscribePrivateMessagesOptions | null;
   getPrivateMessagesEpochSubscriptionRefreshQueue: () => Promise<void>;
   getPrivateMessagesEpochSubscriptionRefreshTimerId: () => ReturnType<
@@ -30,6 +31,7 @@ interface SubscriptionRefreshRuntimeDeps {
 }
 
 export function createSubscriptionRefreshRuntime({
+  isStartupRestoring = () => false,
   getPendingPrivateMessagesEpochSubscriptionRefreshOptions,
   getPrivateMessagesEpochSubscriptionRefreshQueue,
   getPrivateMessagesEpochSubscriptionRefreshTimerId,
@@ -120,6 +122,7 @@ export function createSubscriptionRefreshRuntime({
   function queueEpochDrivenPrivateMessagesSubscriptionRefresh(
     options: SubscribePrivateMessagesOptions = {}
   ): void {
+    if (isStartupRestoring()) return;
     const pendingOptions = getPendingPrivateMessagesEpochSubscriptionRefreshOptions();
     setPendingPrivateMessagesEpochSubscriptionRefreshOptions(
       pendingOptions === null
@@ -139,9 +142,9 @@ export function createSubscriptionRefreshRuntime({
         setPendingPrivateMessagesEpochSubscriptionRefreshOptions(null);
         setPrivateMessagesEpochSubscriptionRefreshQueue(
           getPrivateMessagesEpochSubscriptionRefreshQueue()
-            .then(() => subscribePrivateMessagesForLoggedInUser(true, refreshOptions))
+            .then(() => subscribePrivateMessagesForLoggedInUser(false, refreshOptions))
             .then(() =>
-              subscribeGroupMembershipRosterUpdates(refreshOptions.seedRelayUrls ?? [], true)
+              subscribeGroupMembershipRosterUpdates(refreshOptions.seedRelayUrls ?? [], false)
             )
             .catch((error) => {
               console.warn('Failed to refresh subscriptions after epoch ticket update', error);
@@ -155,8 +158,8 @@ export function createSubscriptionRefreshRuntime({
     seedRelayUrls: string[] = [],
     force = false
   ): void {
+    if (isStartupRestoring()) return;
     queueContactProfileSubscriptionRefresh(seedRelayUrls, force);
-    queueContactRelayListSubscriptionRefresh(seedRelayUrls, force);
     queueGroupMembershipRosterSubscriptionRefresh(seedRelayUrls, force);
     queuePrivateMessagesSubscriptionRefresh(force, { seedRelayUrls });
   }

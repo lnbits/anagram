@@ -1,3 +1,4 @@
+import { resolveGroupChatEpochEntriesValue } from 'src/stores/nostr/valueUtils';
 import NDK, {
   NDKEvent,
   type NDKFilter,
@@ -18,6 +19,8 @@ import {
   PRIVATE_MESSAGES_RECONNECT_LOOKBACK_SECONDS,
   PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS,
 } from 'src/stores/nostr/constants';
+import { createHistoryCoverage, uncoveredHistoryWindows } from 'src/stores/nostr/historyCoverage';
+import { resolvePrivateMessageRelayScopes } from 'src/stores/nostr/privateMessageRouting';
 import type { StartupStepId } from 'src/stores/nostr/startupState';
 import type {
   MissingMessageDependencyRepairReason,
@@ -102,6 +105,7 @@ interface PrivateMessagesBackfillRuntimeDeps {
   flushPrivateMessagesUiRefreshNow: () => void;
   formatSubscriptionLogValue: (value: string | null | undefined) => string | null;
   getLoggedInPublicKeyHex: () => string | null;
+  isStartupRestoring?: () => boolean;
   getPrivateMessagesBackfillResumeState: (
     pubkeyHex: string,
     liveSince: number,
@@ -165,6 +169,7 @@ export function createPrivateMessagesBackfillRuntime({
   flushPrivateMessagesUiRefreshNow,
   formatSubscriptionLogValue,
   getLoggedInPublicKeyHex,
+  isStartupRestoring = () => false,
   getPrivateMessagesBackfillResumeState,
   getPrivateMessagesIngestQueue,
   getPrivateMessagesStartupFloorSince,
@@ -189,6 +194,9 @@ export function createPrivateMessagesBackfillRuntime({
   let privateMessagesBackfillSignature = '';
   let privateMessagesBackfillDelayTimerId: ReturnType<typeof globalThis.setTimeout> | null = null;
   let privateMessagesBackfillDelayResolver: (() => void) | null = null;
+  const coverage = createHistoryCoverage(getLoggedInPublicKeyHex);
+  let globalWindow: { since: number; until: number; floor: number; recipients: string[] } | null =
+    null;
   const groupEpochHistoryRestorePromises = new Map<string, Promise<void>>();
   const restoredGroupEpochHistoryKeys = new Set<string>();
   const privateMessagesForRecipientRestorePromises = new Map<string, Promise<void>>();
@@ -305,6 +313,7 @@ export function createPrivateMessagesBackfillRuntime({
   }
 
   function stopPrivateMessagesBackfill(reason = 'replace'): void {
+    globalWindow = null;
     privateMessagesBackfillRunToken += 1;
     clearPrivateMessagesBackfillDelay();
 
@@ -1044,6 +1053,7 @@ export function createPrivateMessagesBackfillRuntime({
     epochPublicKey: string,
     options: GroupEpochHistoryRestoreOptions = {}
   ): Promise<void> {
+    if (isStartupRestoring() && !options.force) return;
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
     const normalizedEpochPublicKey = inputSanitizerService.normalizeHexKey(epochPublicKey);
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
@@ -1107,14 +1117,45 @@ export function createPrivateMessagesBackfillRuntime({
             return existingRestore;
           }
 
-          const restorePromise = runGroupEpochHistoryRestoreWindow({
-            loggedInPubkeyHex,
-            groupPublicKey: normalizedGroupPublicKey,
-            recipientPubkey: epochPublicKeyToRestore,
-            relayUrls,
-            since,
-            until: now,
-          })
+          const restorePromise = (async () => {
+            const entry = resolveGroupChatEpochEntriesValue(groupChat).find(
+              (entry) => entry.epoch_public_key === epochPublicKeyToRestore
+            );
+            const invitationSince = toUnixTimestampFromIso(entry?.invitation_created_at);
+            const floor =
+              invitationSince === null
+                ? since
+                : Math.max(since, invitationSince - 2 * 24 * 60 * 60);
+            const pendingCoverage = globalWindow
+              ? [
+                  {
+                    since: globalWindow.floor,
+                    until: globalWindow.recipients.includes(epochPublicKeyToRestore)
+                      ? globalWindow.until
+                      : globalWindow.since - 1,
+                  },
+                ]
+              : [];
+            const gaps = uncoveredHistoryWindows(
+              { since: floor, until: now },
+              options.force ? [] : [...coverage.read(epochPublicKeyToRestore), ...pendingCoverage]
+            );
+            const route = (
+              await resolvePrivateMessageRelayScopes([epochPublicKeyToRestore], relayUrls)
+            )[0];
+            if (!route?.relayUrls.length) return;
+            for (const gap of gaps) {
+              await runGroupEpochHistoryRestoreWindow({
+                loggedInPubkeyHex,
+                groupPublicKey: normalizedGroupPublicKey,
+                recipientPubkey: epochPublicKeyToRestore,
+                relayUrls: route.relayUrls,
+                ...gap,
+              });
+              await getPrivateMessagesIngestQueue();
+              coverage.add(epochPublicKeyToRestore, gap);
+            }
+          })()
             .then(() => {
               restoredGroupEpochHistoryKeys.add(restoreKey);
             })
@@ -1222,7 +1263,7 @@ export function createPrivateMessagesBackfillRuntime({
     }
 
     const signature = `${normalizedPubkey}:${normalizedRecipientPubkeys.join(',')}:${relaySignature(relayUrls)}:${liveSince}`;
-    if (privateMessagesBackfillPromise && privateMessagesBackfillSignature === signature) {
+    if (privateMessagesBackfillPromise) {
       return;
     }
 
@@ -1285,15 +1326,46 @@ export function createPrivateMessagesBackfillRuntime({
         });
 
         try {
-          const eventCount = await runPrivateMessagesBackfillWindow({
-            loggedInPubkeyHex: normalizedPubkey,
-            recipientPubkeys: normalizedRecipientPubkeys,
-            relayUrls,
+          const chats = await chatDataService.listChats();
+          const currentRecipients = [
+            ...new Set([
+              ...normalizedRecipientPubkeys,
+              ...chats
+                .filter((chat) => chat.type === 'group')
+                .flatMap((chat) =>
+                  resolveGroupChatEpochEntries(chat).map((entry) => entry.epoch_public_key)
+                ),
+            ]),
+          ];
+          globalWindow = {
             since: state.nextSince,
             until: state.nextUntil,
-            signature,
-            startupTaskId,
-          });
+            floor: state.floorSince,
+            recipients: currentRecipients,
+          };
+          const routes = await resolvePrivateMessageRelayScopes(
+            currentRecipients,
+            await resolvePrivateMessageReadRelayUrls()
+          );
+          let eventCount = 0;
+          for (const route of routes) {
+            for (const gap of uncoveredHistoryWindows(
+              { since: state.nextSince, until: state.nextUntil },
+              coverage.read(route.publicKey)
+            )) {
+              eventCount += await runPrivateMessagesBackfillWindow({
+                loggedInPubkeyHex: normalizedPubkey,
+                recipientPubkeys: [route.publicKey],
+                relayUrls: route.relayUrls,
+                ...gap,
+                signature,
+                startupTaskId,
+              });
+              await getPrivateMessagesIngestQueue();
+              if (runToken !== privateMessagesBackfillRunToken) return;
+              coverage.add(route.publicKey, gap);
+            }
+          }
           await getPrivateMessagesIngestQueue();
           if (runToken !== privateMessagesBackfillRunToken) {
             return;
@@ -1348,6 +1420,12 @@ export function createPrivateMessagesBackfillRuntime({
           completed: false,
         };
         writePrivateMessagesBackfillState(state);
+        globalWindow = {
+          since: state.nextSince,
+          until: state.nextUntil,
+          floor: state.floorSince,
+          recipients: [],
+        };
 
         logSubscription('private-messages', 'backfill-wait', {
           signature,
@@ -1384,6 +1462,7 @@ export function createPrivateMessagesBackfillRuntime({
         privateMessagesBackfillSubscription = null;
         privateMessagesBackfillPromise = null;
         privateMessagesBackfillSignature = '';
+        globalWindow = null;
       });
   }
 

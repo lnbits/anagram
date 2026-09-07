@@ -370,6 +370,14 @@ async function startMockRelayProxy(options = {}) {
   const sessions = new Set();
   const pendingTimeouts = new Set();
   let acceptedConnectionCount = 0;
+  let maxConcurrentConnections = 0;
+  let rateLimitRejections = 0;
+  const frames = [];
+  const activeSignatures = new Map();
+  let duplicateActiveSignatures = 0;
+  const rateLimit = options.rateLimit ?? null;
+  const frameTimes = [];
+  const trafficSnapshot = () => ({ frames: frames.slice(), connectionCount: acceptedConnectionCount, maxConcurrentConnections, rateLimitRejections, duplicateActiveSignatures });
   let isClosing = false;
 
   const schedule = (callback, baseDelayMs) => {
@@ -393,7 +401,7 @@ async function startMockRelayProxy(options = {}) {
         'content-type': 'application/json; charset=utf-8',
         'cache-control': 'no-store',
       });
-      response.end(`${JSON.stringify({ ...config, connectionCount: acceptedConnectionCount }, null, 2)}\n`);
+      response.end(`${JSON.stringify({ ...config, ...trafficSnapshot() }, null, 2)}\n`);
       return;
     }
 
@@ -434,6 +442,8 @@ async function startMockRelayProxy(options = {}) {
       upstream: null,
     };
     sessions.add(session);
+    const connectionId = acceptedConnectionCount;
+    maxConcurrentConnections = Math.max(maxConcurrentConnections, sessions.size);
 
     const closeSession = ({ destroyClient = true } = {}) => {
       if (session.isClientClosed) {
@@ -441,6 +451,7 @@ async function startMockRelayProxy(options = {}) {
       }
       session.isClientClosed = true;
       sessions.delete(session);
+      for (const key of activeSignatures.keys()) if (key.startsWith(`${connectionId}:`)) activeSignatures.delete(key);
       if (destroyClient) {
         clientSocket.destroy();
       }
@@ -502,6 +513,31 @@ async function startMockRelayProxy(options = {}) {
       };
 
       const forwardClientData = (data) => {
+        try {
+          const frame = JSON.parse(String(data));
+          const command = frame[0];
+          const subscriptionId = command === 'REQ' || command === 'CLOSE' ? String(frame[1]) : null;
+          const filters = command === 'REQ' ? frame.slice(2) : undefined;
+          const eventId = command === 'EVENT' ? frame[1]?.id ?? null : null;
+          // Only protocol routing fields are retained. Never log content, signatures or secret tags.
+          frames.push({ at: Date.now(), relayUrl: `ws://${config.listenHost}:${config.listenPort}`, connectionId, command, subscriptionId, subscriptionName: subscriptionId?.replace(/-[a-z0-9]+$/, '') ?? null, ...(filters ? { filters } : {}), ...(eventId ? { eventId, kind: frame[1]?.kind } : {}) });
+          if (command === 'REQ') {
+            const signature = JSON.stringify(filters);
+            if ([...activeSignatures.values()].includes(signature)) duplicateActiveSignatures += 1;
+            activeSignatures.set(`${connectionId}:${subscriptionId}`, signature);
+          } else if (command === 'CLOSE') activeSignatures.delete(`${connectionId}:${subscriptionId}`);
+          if (rateLimit && (command === 'REQ' || command === 'EVENT')) {
+            const now = Date.now();
+            while (frameTimes.length && frameTimes[0] <= now - rateLimit.windowMs) frameTimes.shift();
+            frameTimes.push(now);
+            if (frameTimes.length > rateLimit.maxFrames) {
+              rateLimitRejections += 1;
+              const reply = command === 'EVENT' ? ['OK', eventId, false, 'rate-limited: cool off'] : ['CLOSED', subscriptionId, 'rate-limited: cool off'];
+              clientSocket.write(encodeWebSocketFrame(0x1, Buffer.from(JSON.stringify(reply))));
+              return;
+            }
+          }
+        } catch { /* Non-JSON frames are forwarded unchanged. */ }
         schedule(() => sendUpstream(data), config.requestDelayMs);
       };
 
@@ -636,6 +672,8 @@ async function startMockRelayProxy(options = {}) {
       await new Promise((resolve) => server.close(() => resolve()));
     },
     config,
+    trafficSnapshot,
+    resetTraffic: () => { frames.length = 0; frameTimes.length = 0; rateLimitRejections = 0; duplicateActiveSignatures = 0; },
     connectionCount: () => acceptedConnectionCount,
     relayUrl: `ws://${config.listenHost}:${config.listenPort}`,
   };

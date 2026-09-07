@@ -293,7 +293,7 @@ describe('nostr runtime core logic', () => {
     runtime.queueTrackedContactSubscriptionsRefresh(['wss://seed.example'], true);
     await flushPromises();
     expect(subscribeContactProfileUpdates).toHaveBeenCalledWith(['wss://seed.example'], true);
-    expect(subscribeContactRelayListUpdates).toHaveBeenCalledWith(['wss://seed.example'], true);
+    expect(subscribeContactRelayListUpdates).not.toHaveBeenCalled();
     expect(subscribePrivateMessagesForLoggedInUser).toHaveBeenCalledWith(true, {
       seedRelayUrls: ['wss://seed.example'],
     });
@@ -315,7 +315,7 @@ describe('nostr runtime core logic', () => {
     await flushPromises();
 
     expect(subscribePrivateMessagesForLoggedInUser).toHaveBeenCalledTimes(1);
-    expect(subscribePrivateMessagesForLoggedInUser).toHaveBeenCalledWith(true, {
+    expect(subscribePrivateMessagesForLoggedInUser).toHaveBeenCalledWith(false, {
       restoreThrottleMs: 5,
       seedRelayUrls: ['wss://one.example/', 'wss://two.example/'],
       sinceOverride: 10,

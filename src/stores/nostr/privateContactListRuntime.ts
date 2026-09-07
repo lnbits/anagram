@@ -11,6 +11,10 @@ import { type ChatRow, chatDataService, type MessageRow } from 'src/services/cha
 import { contactsService } from 'src/services/contactsService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { PRIVATE_CONTACT_LIST_D_TAG, PRIVATE_CONTACT_LIST_TITLE } from 'src/stores/nostr/constants';
+import {
+  createDesiredSubscriptions,
+  subscriptionSignature,
+} from 'src/stores/nostr/desiredSubscriptions';
 import { createReadyRelaySet, fetchEventWithRelayTimeout } from 'src/stores/nostr/relayQueryUtils';
 import type { Ref } from 'vue';
 
@@ -124,6 +128,7 @@ export function createPrivateContactListRuntime({
   let restorePrivateContactListPromise: Promise<void> | null = null;
   let privateContactListSubscription: ReturnType<NDK['subscribe']> | null = null;
   let privateContactListSubscriptionSignature = '';
+  const desiredSubscriptions = createDesiredSubscriptions();
   let privateContactListApplyQueue = Promise.resolve();
 
   function normalizePrivateContactListTargets(
@@ -275,6 +280,7 @@ export function createPrivateContactListRuntime({
 
     const nextPubkeys = new Set(normalizedTargets.map((target) => target.publicKey));
     const existingContacts = await contactsService.listContacts();
+    let didChange = false;
 
     if (options.deleteMissingContacts !== false) {
       for (const contact of existingContacts) {
@@ -288,6 +294,7 @@ export function createPrivateContactListRuntime({
         }
 
         await contactsService.deleteContact(contact.id);
+        didChange = true;
       }
     }
 
@@ -300,31 +307,7 @@ export function createPrivateContactListRuntime({
           target.publicKey.slice(0, 16),
         ...(target.type ? { type: target.type } : {}),
       });
-      const fallbackName =
-        ensuredContactResult.contact?.name?.trim() ||
-        target.fallbackName?.trim() ||
-        existingContact?.name?.trim() ||
-        target.publicKey.slice(0, 16);
-      try {
-        await refreshContactByPublicKey(target.publicKey, fallbackName, {
-          onProfileFetchStart: () => {
-            profileTracker?.beginItem();
-          },
-          onProfileFetchEnd: (error?: unknown) => {
-            profileTracker?.finishItem(error ?? undefined);
-          },
-          onRelayFetchStart: () => {
-            relayTracker?.beginItem();
-          },
-          onRelayFetchEnd: (error?: unknown) => {
-            relayTracker?.finishItem(error ?? undefined);
-          },
-        });
-      } catch (error) {
-        profileTracker?.finishItem(error);
-        relayTracker?.finishItem(error);
-        console.warn('Failed to refresh private contact list profile', target.publicKey, error);
-      }
+      didChange ||= ensuredContactResult.didChange;
 
       await reconcileAcceptedChatFromPrivateContactList(target.publicKey);
     }
@@ -332,8 +315,8 @@ export function createPrivateContactListRuntime({
     profileTracker?.seal();
     relayTracker?.seal();
 
-    bumpContactListVersion();
-    if (!isRestoringStartupState.value) {
+    if (didChange) bumpContactListVersion();
+    if (didChange && !isRestoringStartupState.value) {
       queueTrackedContactSubscriptionsRefresh();
     }
   }
@@ -514,44 +497,8 @@ export function createPrivateContactListRuntime({
     updatePrivateContactListStartupEntryCount(0);
     restorePrivateContactListPromise = (async () => {
       try {
-        const loggedInPubkeyHex = getLoggedInPublicKeyHex();
-        if (!loggedInPubkeyHex) {
-          completeStartupStep('private-contact-list');
-          return;
-        }
-
-        const relayUrls = await resolvePrivateContactListReadRelayUrls(seedRelayUrls);
-        if (relayUrls.length === 0) {
-          completeStartupStep('private-contact-list');
-          return;
-        }
-
-        await ensureRelayConnections(relayUrls);
-        await getLoggedInSignerUser();
-
-        const relaySet = createReadyRelaySet(ndk, relayUrls);
-        const listEvent = await fetchEventWithRelayTimeout(
-          ndk,
-          // The latest contact snapshot remains valid regardless of the shared event cursor.
-          {
-            kinds: [NDKKind.FollowSet],
-            authors: [loggedInPubkeyHex],
-            '#d': [PRIVATE_CONTACT_LIST_D_TAG],
-          },
-          {
-            cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
-          },
-          relaySet
-        );
-        if (!listEvent) {
-          completeStartupStep('private-contact-list');
-          return;
-        }
-
-        updateStoredEventSinceFromCreatedAt(listEvent.created_at);
-        await applyPrivateContactListEvent(
-          listEvent instanceof NDKEvent ? listEvent : new NDKEvent(ndk, listEvent)
-        );
+        await subscribePrivateContactListUpdates(seedRelayUrls);
+        await desiredSubscriptions.waitForEose();
         completeStartupStep('private-contact-list');
       } catch (error) {
         failStartupStep('private-contact-list', error);
@@ -565,12 +512,12 @@ export function createPrivateContactListRuntime({
   }
 
   function stopPrivateContactListSubscription(reason = 'replace'): void {
+    desiredSubscriptions.stop();
     if (privateContactListSubscription) {
       logSubscription('private-contact-list', 'stop', {
         reason,
         signature: privateContactListSubscriptionSignature || null,
       });
-      privateContactListSubscription.stop();
       privateContactListSubscription = null;
     }
 
@@ -579,98 +526,56 @@ export function createPrivateContactListRuntime({
 
   async function subscribePrivateContactListUpdates(
     seedRelayUrls: string[] = [],
-    force = false
+    _force = false
   ): Promise<void> {
-    const loggedInPubkeyHex = getLoggedInPublicKeyHex();
-    if (!loggedInPubkeyHex) {
-      stopPrivateContactListSubscription('missing-login');
+    const pubkey = getLoggedInPublicKeyHex();
+    if (!pubkey) {
+      desiredSubscriptions.stop();
       return;
     }
-
     const relayUrls = await resolvePrivateContactListReadRelayUrls(seedRelayUrls);
-    if (relayUrls.length === 0) {
-      stopPrivateContactListSubscription('no-relays');
+    if (!relayUrls.length) {
+      desiredSubscriptions.stop();
       return;
     }
-
-    const signature = `${loggedInPubkeyHex}:${relaySignature(relayUrls)}`;
-    if (
-      !force &&
-      privateContactListSubscription &&
-      privateContactListSubscriptionSignature === signature
-    ) {
-      logSubscription('private-contact-list', 'skip', {
-        reason: 'already-active',
-        signature,
-        pubkey: formatSubscriptionLogValue(loggedInPubkeyHex),
-        ...buildSubscriptionRelayDetails(relayUrls),
-      });
-      return;
-    }
-
-    logSubscription('private-contact-list', 'prepare', {
-      force,
-      signature,
-      pubkey: formatSubscriptionLogValue(loggedInPubkeyHex),
-      ...buildSubscriptionRelayDetails(relayUrls),
-    });
-
-    await ensureRelayConnections(relayUrls);
-    await getLoggedInSignerUser();
-    stopPrivateContactListSubscription();
-
-    logSubscription('private-contact-list', 'start', {
-      force,
-      signature,
-      pubkey: formatSubscriptionLogValue(loggedInPubkeyHex),
-      subscriptionTargetType: 'user',
-      userTargetCount: 1,
-      userTargetPubkeys: [formatSubscriptionLogValue(loggedInPubkeyHex)],
-      ...buildSubscriptionRelayDetails(relayUrls),
-    });
-
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
-    // Reconnecting must also recover snapshots older than the shared event cursor.
-    const privateContactListFilters: NDKFilter = {
+    const filters: NDKFilter = {
       kinds: [NDKKind.FollowSet],
-      authors: [loggedInPubkeyHex],
+      authors: [pubkey],
       '#d': [PRIVATE_CONTACT_LIST_D_TAG],
     };
-    privateContactListSubscription = subscribeWithReqLogging(
-      'private-contact-list',
-      'private-contact-list',
-      privateContactListFilters,
+    const signature = subscriptionSignature(filters, relayUrls);
+    await desiredSubscriptions.reconcile([
       {
-        relaySet,
-        cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
-        onEvent: (event) => {
-          const wrappedEvent = event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
-          logSubscription('private-contact-list', 'event', {
-            signature,
-            ...buildSubscriptionEventDetails(wrappedEvent),
-            ...buildSubscriptionRelayDetails(extractRelayUrlsFromEvent(wrappedEvent)),
-          });
-          updateStoredEventSinceFromCreatedAt(wrappedEvent.created_at);
-          queuePrivateContactListEventApplication(wrappedEvent);
+        key: 'private-contact-list',
+        signature,
+        prepare: async () => {
+          await ensureRelayConnections(relayUrls);
+          await getLoggedInSignerUser();
         },
-        onEose: () => {
-          logSubscription('private-contact-list', 'eose', {
-            signature,
-          });
+        applied: () => privateContactListApplyQueue,
+        start: (onEose, onClose) => {
+          privateContactListSubscriptionSignature = signature;
+          privateContactListSubscription = subscribeWithReqLogging(
+            'private-contact-list',
+            'private-contact-list',
+            filters,
+            {
+              relaySet: NDKRelaySet.fromRelayUrls(relayUrls, ndk, false),
+              cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+              onEvent: (event) => {
+                const wrappedEvent = event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
+                updateStoredEventSinceFromCreatedAt(wrappedEvent.created_at);
+                queuePrivateContactListEventApplication(wrappedEvent);
+              },
+              onEose,
+              onClose,
+            },
+            { signature, ...buildSubscriptionRelayDetails(relayUrls) }
+          );
+          return privateContactListSubscription;
         },
       },
-      {
-        signature,
-        ...buildSubscriptionRelayDetails(relayUrls),
-      }
-    );
-    privateContactListSubscriptionSignature = signature;
-
-    logSubscription('private-contact-list', 'active', {
-      signature,
-      pubkey: formatSubscriptionLogValue(loggedInPubkeyHex),
-      ...buildSubscriptionRelayDetails(relayUrls),
-    });
+    ]);
   }
 
   function resetPrivateContactListRuntimeState(reason = 'replace'): void {

@@ -7,12 +7,14 @@ import {
 } from 'src/utils/messageRelayStatus';
 
 interface NostrEventStoreRecord {
+  gift_wraps?: Partial<Record<'recipient' | 'self', NostrEvent>>;
   event: NostrEvent;
   relay_statuses: MessageRelayStatus[];
   direction: NostrEventDirection;
 }
 
 export interface UpsertNostrEventInput {
+  gift_wraps?: Partial<Record<'recipient' | 'self', NostrEvent>>;
   event: NostrEvent;
   relay_statuses?: MessageRelayStatus[];
   direction: NostrEventDirection;
@@ -116,6 +118,7 @@ function toNostrEventEntry(record: NostrEventStoreRecord): NostrEventEntry | nul
   return {
     event,
     direction,
+    ...(record.gift_wraps ? { gift_wraps: record.gift_wraps } : {}),
     relay_statuses: normalizeMessageRelayStatuses(record.relay_statuses),
   };
 }
@@ -244,6 +247,9 @@ class NostrEventDataService {
     );
 
     const nextRecord: NostrEventStoreRecord = {
+      ...(existingRecord?.gift_wraps || input.gift_wraps
+        ? { gift_wraps: { ...input.gift_wraps, ...existingRecord?.gift_wraps } }
+        : {}),
       event,
       direction: existingRecord?.direction ?? direction,
       relay_statuses: mergeMessageRelayStatuses(
@@ -336,6 +342,7 @@ class NostrEventDataService {
       }
 
       const nextRecord: NostrEventStoreRecord = {
+        ...record,
         event,
         direction,
         relay_statuses: nextRelayStatuses,

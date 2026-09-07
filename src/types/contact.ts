@@ -39,6 +39,8 @@ export interface ContactMetadata {
   last_seen_incoming_activity_event_id?: string;
   profile_event_created_at?: number;
   relay_list_event_created_at?: number;
+  general_relay_entries?: ContactRelay[];
+  dm_receive_relay_entries?: ContactRelay[];
   private_contact_list_member?: boolean;
   muted?: boolean;
   blocked?: boolean;

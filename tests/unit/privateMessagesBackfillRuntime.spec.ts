@@ -14,6 +14,7 @@ const serviceMocks = vi.hoisted(() => ({
     getMessageByEventIdOrEditReference: vi.fn(),
     init: vi.fn(),
     listLatestMessages: vi.fn(),
+    listChats: vi.fn(async () => []),
   },
   nostrEventDataService: {
     getEventById: vi.fn(),
@@ -24,6 +25,8 @@ const serviceMocks = vi.hoisted(() => ({
 vi.mock('src/services/chatDataService', () => ({
   chatDataService: serviceMocks.chatDataService,
 }));
+
+vi.mock('src/services/contactsService', () => ({ contactsService: { init: vi.fn(async () => {}), listContacts: vi.fn(async () => []) } }));
 
 vi.mock('src/services/nostrEventDataService', () => ({
   nostrEventDataService: serviceMocks.nostrEventDataService,

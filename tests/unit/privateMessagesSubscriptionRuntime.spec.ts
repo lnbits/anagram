@@ -11,8 +11,10 @@ import { ref } from 'vue';
 const serviceMocks = vi.hoisted(() => ({
   chatDataService: {
     init: vi.fn(),
+    listChats: vi.fn(async () => []),
   },
   contactsService: {
+    listContacts: vi.fn(async () => []),
     init: vi.fn(),
   },
 }));
@@ -26,7 +28,7 @@ vi.mock('src/services/contactsService', () => ({
 }));
 
 const LOGGED_IN_PUBLIC_KEY = 'a'.repeat(64);
-const RELAY_URLS = ['wss://relay.example'];
+const RELAY_URLS = ['wss://relay.example/'];
 
 type SubscriptionOptions = {
   onEvent?: (event: NDKEvent) => void;
@@ -38,6 +40,7 @@ function createRuntime(
   overrides: {
     subscribeWithReqLogging?: ReturnType<typeof vi.fn>;
     refreshAllStoredContacts?: ReturnType<typeof vi.fn>;
+    getPrivateMessagesIngestQueue?: () => Promise<void>;
   } = {}
 ) {
   const privateMessagesSubscriptionLiveCoverageAt = ref<number | null>(null);
@@ -92,7 +95,7 @@ function createRuntime(
     getFilterSince: () => 100,
     getLoggedInPublicKeyHex: () => LOGGED_IN_PUBLIC_KEY,
     getOrCreateSigner: vi.fn(async () => ({})),
-    getPrivateMessagesIngestQueue: vi.fn(async () => {}),
+    getPrivateMessagesIngestQueue: overrides.getPrivateMessagesIngestQueue ?? vi.fn(async () => {}),
     getPrivateMessagesRestoreThrottleMs: () => 0,
     getPrivateMessagesStartupLiveSince: () => 90,
     getRelaySnapshots: vi.fn(() => []),
@@ -248,7 +251,7 @@ describe('privateMessagesSubscriptionRuntime', () => {
         })
     );
     const { runtime, startPrivateMessagesStartupBackfill } = createRuntime({
-      refreshAllStoredContacts,
+      getPrivateMessagesIngestQueue: refreshAllStoredContacts,
     });
     await runtime.subscribePrivateMessagesForLoggedInUser(true, { startupTrackStep: true });
     runtime.startPrivateMessagesHistoryRestore();
@@ -285,7 +288,7 @@ describe('privateMessagesSubscriptionRuntime', () => {
     );
   });
 
-  it('keeps the live subscription when the probe reaches EOSE', async () => {
+  it('creates a missing live subscription without an extra probe', async () => {
     const { privateMessagesSubscriptionLiveCoverageAt, runtime, subscribeWithReqLogging } =
       createRuntime();
 
@@ -294,18 +297,16 @@ describe('privateMessagesSubscriptionRuntime', () => {
       probeTimeoutMs: 10,
     });
 
-    expect(result).toEqual({ recreatedLiveSubscription: false });
+    expect(result).toEqual({ recreatedLiveSubscription: true });
     expect(subscribeWithReqLogging).toHaveBeenCalledTimes(1);
     expect(subscribeWithReqLogging).toHaveBeenCalledWith(
       'private-messages',
-      'private-messages-live-probe',
+      'private-messages-live',
       expect.objectContaining({
         '#p': [LOGGED_IN_PUBLIC_KEY],
         since: 123,
       }),
-      expect.objectContaining({
-        closeOnEose: true,
-      }),
+      expect.not.objectContaining({ closeOnEose: true }),
       expect.any(Object)
     );
     expect(privateMessagesSubscriptionLiveCoverageAt.value).toBeGreaterThan(0);
@@ -323,6 +324,8 @@ describe('privateMessagesSubscriptionRuntime', () => {
       subscribeWithReqLogging,
     });
 
+    await runtime.subscribePrivateMessagesForLoggedInUser();
+    subscribeWithReqLogging.mockClear();
     const refreshPromise = runtime.refreshPrivateMessagesLiveSubscription({
       sinceOverride: 123,
       probeTimeoutMs: 10,

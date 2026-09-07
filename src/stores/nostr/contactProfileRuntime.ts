@@ -394,7 +394,7 @@ export function createContactProfileRuntime({
     const refreshPromise = (async (): Promise<ContactRecord | null> => {
       try {
         await refreshContactByPublicKey(normalizedGroupPublicKey, fallbackName, {
-          refreshRelayList: true,
+          refreshRelayList: false,
           relayListSeedRelayUrls: seedRelayUrls,
         });
       } catch (error) {

@@ -137,6 +137,7 @@ export interface MessageRelayStatus {
 }
 
 export interface NostrEventEntry {
+  gift_wraps?: Partial<Record<'recipient' | 'self', NostrEvent>>;
   event: NostrEvent;
   relay_statuses: MessageRelayStatus[];
   direction: NostrEventDirection;

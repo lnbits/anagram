@@ -255,7 +255,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
   let markPrivateMessagesWatchdogRelayDisconnectedRuntime: (relayUrl: string) => void = () => {};
   let queuePrivateMessagesWatchdogRuntime: (delayMs?: number) => void = () => {};
   let queueOutboundMessageReplayRuntime: (reason: string, delayMs?: number) => void = () => {};
-  let notifyOutboundMessageReplayRelayConnectedRuntime: () => void = () => {};
+  let notifyOutboundMessageReplayRelayConnectedRuntime: (relayUrl: string) => void = () => {};
   let notifyReconnectHealingBrowserOnlineRuntime: () => void = () => {};
   let notifyReconnectHealingVisibilityHiddenRuntime: () => void = () => {};
   let notifyReconnectHealingVisibilityRegainRuntime: () => void = () => {};
@@ -506,15 +506,22 @@ export const useNostrStore = defineStore('nostrStore', () => {
     pendingEventSinceState,
   });
 
+  relayStore.init();
   watch(
     () =>
       relayStore.relayEntries.map(
         (entry) => `${entry.url}:${entry.read !== false}:${entry.write !== false}`
       ),
     () => {
-      queueTrackedContactSubscriptionsRefresh();
+      if (
+        !relayStore.isInitialized ||
+        isRestoringStartupState.value ||
+        !getPrivateMessagesSubscription()
+      )
+        return;
       notifyReconnectHealingRelayListChangedRuntime();
-    }
+    },
+    { flush: 'sync' }
   );
 
   function normalizeThrottleMs(value: number | undefined): number {
@@ -1016,8 +1023,8 @@ export const useNostrStore = defineStore('nostrStore', () => {
     queuePrivateMessagesWatchdog: (delayMs) => {
       queuePrivateMessagesWatchdogRuntime(delayMs);
     },
-    queueOutboundMessageReplay: () => {
-      notifyOutboundMessageReplayRelayConnectedRuntime();
+    queueOutboundMessageReplay: (relayUrl) => {
+      notifyOutboundMessageReplayRelayConnectedRuntime(relayUrl);
     },
     relayAuthFailureListenerUrls,
     relayConnectRetryBaseDelayMs: RELAY_CONNECT_RETRY_BASE_DELAY_MS,
@@ -1130,6 +1137,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     getPrivateMessagesEpochSubscriptionRefreshTimerId: () =>
       privateMessagesEpochSubscriptionRefreshTimerId,
     normalizeRelayStatusUrls,
+    isStartupRestoring: () => isRestoringStartupState.value,
     normalizeThrottleMs,
     privateMessagesEpochSubscriptionRefreshDebounceMs:
       PRIVATE_MESSAGES_EPOCH_SUBSCRIPTION_REFRESH_DEBOUNCE_MS,
@@ -1430,7 +1438,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     queuePrivateMessageIngestion,
     refreshAllStoredContacts: () => refreshAllStoredContactsRuntime(),
     relaySignature,
-    resolvePrivateMessageReadRelayUrls,
+    resolvePrivateMessageReadRelayUrls: resolveLoggedInReadRelayUrls,
     schedulePostPrivateMessagesEoseChecks,
     setPrivateMessagesRestoreThrottleMs: (value) => {
       privateMessagesRestoreThrottleMs = value;
@@ -1483,6 +1491,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     flushPrivateMessagesUiRefreshNow,
     formatSubscriptionLogValue,
     getLoggedInPublicKeyHex,
+    isStartupRestoring: () => isRestoringStartupState.value,
     getPrivateMessagesBackfillResumeState,
     getPrivateMessagesIngestQueue: () => getPrivateMessagesIngestQueueRuntime(),
     getPrivateMessagesStartupFloorSince,
@@ -1492,7 +1501,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     queuePrivateMessageIngestion,
     relaySignature,
     resolveGroupChatEpochEntries,
-    resolvePrivateMessageReadRelayUrls,
+    resolvePrivateMessageReadRelayUrls: resolveLoggedInReadRelayUrls,
     schedulePostPrivateMessagesEoseChecks,
     subscribeWithReqLogging,
     toOptionalIsoTimestampFromUnix,
@@ -2111,11 +2120,10 @@ export const useNostrStore = defineStore('nostrStore', () => {
     restartSessionSubscriptions: async (relayUrls) => {
       ensureStoredEventSince();
       await Promise.all([
-        subscribeMyRelayListUpdates(relayUrls, true),
-        subscribePrivateContactListUpdates(relayUrls, true),
-        subscribeGroupMembershipRosterUpdatesRuntime(relayUrls, true),
-        subscribeContactProfileUpdates(relayUrls, true),
-        subscribeContactRelayListUpdates(relayUrls, true),
+        subscribeMyRelayListUpdates(relayUrls),
+        subscribePrivateContactListUpdates(relayUrls),
+        subscribeGroupMembershipRosterUpdatesRuntime(relayUrls),
+        subscribeContactProfileUpdates(relayUrls),
       ]);
     },
     setIsReconnectHealing: (value) => {

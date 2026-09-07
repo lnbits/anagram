@@ -1,4 +1,3 @@
-import { chatDataService } from 'src/services/chatDataService';
 import { contactsService } from 'src/services/contactsService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS } from 'src/stores/nostr/constants';
@@ -44,15 +43,12 @@ const STARTUP_RESTORE_STEP_ORDER = [
   'private-preferences',
   'private-contact-list-restore',
   'group-identity-secrets',
-  'group-relay-lists-refresh',
   'contact-cursor-state',
-  'logged-in-contact-profile',
-  'recent-chat-contacts-sync',
   'private-contact-list-subscribe',
-  'private-messages-subscribe',
-  'group-rosters-subscribe',
   'contact-profile-subscribe',
   'contact-relay-list-subscribe',
+  'private-messages-subscribe',
+  'group-rosters-subscribe',
   'message-history-restore',
 ] as const satisfies readonly StartupStepId[];
 
@@ -343,92 +339,8 @@ export function createStartupContactSyncRuntime({
     return nextPromise;
   }
 
-  async function syncRecentChatContacts(relayUrls: string[]): Promise<void> {
-    const existingPromise = getSyncRecentChatContactsPromise();
-    if (existingPromise) {
-      return existingPromise;
-    }
-
-    const nextPromise = (async () => {
-      const profileTracker = createStartupBatchTracker('recent-chat-profiles');
-      const relayTracker = createStartupBatchTracker('recent-chat-relays');
-      try {
-        const activeRelays = inputSanitizerService.normalizeStringArray(relayUrls);
-        if (activeRelays.length > 0) {
-          try {
-            await ensureRelayConnections(activeRelays);
-          } catch (error) {
-            console.warn('Failed to connect relays before syncing recent chat contacts', error);
-          }
-        }
-
-        await Promise.all([chatDataService.init(), contactsService.init()]);
-        const recentChats = await chatDataService.listChats();
-        if (recentChats.length === 0) {
-          return;
-        }
-
-        const loggedInPubkeyHex = getLoggedInPublicKeyHex();
-        const recentPublicKeys = new Set<string>();
-
-        for (const chat of recentChats) {
-          const normalizedPubkey = inputSanitizerService.normalizeHexKey(chat.public_key);
-          if (!normalizedPubkey) {
-            continue;
-          }
-
-          if (loggedInPubkeyHex && normalizedPubkey === loggedInPubkeyHex) {
-            continue;
-          }
-
-          recentPublicKeys.add(normalizedPubkey);
-        }
-
-        if (recentPublicKeys.size === 0) {
-          return;
-        }
-
-        for (const pubkeyHex of recentPublicKeys) {
-          const existingContact = await contactsService.getContactByPublicKey(pubkeyHex);
-          if (!existingContact) {
-            continue;
-          }
-
-          const matchingChat = recentChats.find(
-            (chat) => inputSanitizerService.normalizeHexKey(chat.public_key) === pubkeyHex
-          );
-          const fallbackName = existingContact.name.trim() || matchingChat?.name?.trim() || '';
-          try {
-            await refreshContactByPublicKey(pubkeyHex, fallbackName, {
-              onProfileFetchStart: () => {
-                profileTracker.beginItem();
-              },
-              onProfileFetchEnd: (error) => {
-                profileTracker.finishItem(error ?? undefined);
-              },
-              onRelayFetchStart: () => {
-                relayTracker.beginItem();
-              },
-              onRelayFetchEnd: (error) => {
-                relayTracker.finishItem(error ?? undefined);
-              },
-            });
-          } catch (error) {
-            profileTracker.finishItem(error);
-            relayTracker.finishItem(error);
-            console.warn('Failed to refresh recent chat contact profile', pubkeyHex, error);
-          }
-        }
-      } finally {
-        profileTracker.seal();
-        relayTracker.seal();
-      }
-    })().finally(() => {
-      setSyncRecentChatContactsPromise(null);
-    });
-
-    setSyncRecentChatContactsPromise(nextPromise);
-    return nextPromise;
+  async function syncRecentChatContacts(_relayUrls: string[]): Promise<void> {
+    // Contacts already exist locally; live hydration owns profile and routing updates.
   }
 
   async function runStartupTaskBody(
@@ -474,7 +386,7 @@ export function createStartupContactSyncRuntime({
         await subscribePrivateContactListUpdates(seedRelayUrls, forceSubscriptions);
         return;
       case 'private-messages-subscribe':
-        await subscribePrivateMessagesForLoggedInUser(true, {
+        await subscribePrivateMessagesForLoggedInUser(forceSubscriptions, {
           restoreThrottleMs: PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS,
           startupTrackStep: true,
         });

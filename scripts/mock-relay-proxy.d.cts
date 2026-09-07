@@ -19,7 +19,10 @@ export interface MockRelayConfig {
   verbose: boolean;
 }
 
+export interface RelayTrafficFrame { at: number; relayUrl: string; connectionId: number; command: string; subscriptionId: string | null; subscriptionName: string | null; filters?: Record<string, unknown>[]; eventId?: string; kind?: number }
+export interface RelayTrafficSnapshot { frames: RelayTrafficFrame[]; connectionCount: number; maxConcurrentConnections: number; rateLimitRejections: number; duplicateActiveSignatures: number }
 export interface MockRelayOptions {
+  rateLimit?: { windowMs: number; maxFrames: number };
   delayMs?: number | string;
   listenHost?: string;
   listenPort?: number | string;
@@ -42,6 +45,8 @@ export interface MockRelayOptions {
 }
 
 export interface MockRelayHandle {
+  trafficSnapshot: () => RelayTrafficSnapshot;
+  resetTraffic: () => void;
   close: () => Promise<void>;
   config: MockRelayConfig;
   connectionCount: () => number;

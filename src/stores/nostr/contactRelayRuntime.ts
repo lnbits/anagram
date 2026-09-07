@@ -437,7 +437,7 @@ export function createContactRelayRuntime({
   async function resolveTrackedContactReadRelayUrls(
     seedRelayUrls: string[] = []
   ): Promise<string[]> {
-    return resolvePrivateMessageReadRelayUrls(seedRelayUrls);
+    return resolveLoggedInReadRelayUrls(seedRelayUrls);
   }
 
   async function resolveContactRelayListReadRelayUrls(

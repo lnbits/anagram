@@ -206,19 +206,16 @@ describe('startup contact sync runtime', () => {
       'private-preferences',
       'private-contact-list-restore',
       'group-identity-secrets',
-      'group-relay-lists-refresh',
       'mute-list',
       'contact-cursor-state',
-      'logged-in-contact-profile',
-      'recent-chat-contacts-sync',
       'private-contact-list-subscribe',
-      'private-messages-subscribe',
-      'group-rosters-subscribe',
       'contact-profile-subscribe',
       'contact-relay-list-subscribe',
+      'private-messages-subscribe',
+      'group-rosters-subscribe',
       'message-history-restore',
     ]);
-    expect(subscribePrivateMessagesForLoggedInUser).toHaveBeenCalledWith(true, {
+    expect(subscribePrivateMessagesForLoggedInUser).toHaveBeenCalledWith(false, {
       restoreThrottleMs: PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS,
       startupTrackStep: true,
     });

@@ -2,7 +2,7 @@ import NDK, {
   giftWrap,
   isValidNip05,
   isValidPubkey,
-  type NDKEvent,
+  NDKEvent,
   NDKKind,
   NDKPrivateKeySigner,
   type NDKSigner,
@@ -18,6 +18,7 @@ import {
   type PrivateKeyValidationResult,
 } from 'src/services/inputSanitizerService';
 import { nostrEventDataService } from 'src/services/nostrEventDataService';
+import { getOrCreateOutboundGiftWrap } from 'src/stores/nostr/outboundGiftWrap';
 import type {
   GiftWrappedRumorPublishResult,
   NostrIdentifierResolutionResult,
@@ -498,9 +499,14 @@ export function createUserActions({
           scope === 'self'
             ? new NDKUser({ pubkey: signer.pubkey })
             : new NDKUser({ pubkey: recipientPubkey });
-        const giftWrapEvent = await giftWrap(rumorEvent, recipient, signer as any, {
-          rumorKind: NDKKind.PrivateDirectMessage,
-        });
+        const giftWrapEvent = new NDKEvent(
+          ndk,
+          await getOrCreateOutboundGiftWrap(storedEvent.event, scope, () =>
+            giftWrap(rumorEvent, recipient, signer as any, {
+              rumorKind: NDKKind.PrivateDirectMessage,
+            })
+          )
+        );
         const publishResult = await publishEventWithRelayStatuses(
           giftWrapEvent as { kind: number },
           [normalizedRelayUrl],

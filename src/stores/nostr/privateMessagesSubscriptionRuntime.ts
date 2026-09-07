@@ -798,7 +798,7 @@ export function createPrivateMessagesSubscriptionRuntime({
           currentSince: currentSubscriptionSince,
           ...buildSubscriptionRelayDetails(relayUrls),
         });
-        if (shouldTrackStartupStep) {
+        if (shouldTrackStartupStep && messageHistoryRestoreContext?.ready) {
           completeStartupStep('private-message-events');
         }
         return;
@@ -946,6 +946,9 @@ export function createPrivateMessagesSubscriptionRuntime({
         ...buildSubscriptionRelayDetails(relayUrls),
       });
     } catch (error) {
+      if (!privateMessagesSubscription) {
+        messageHistoryRestoreContext = null;
+      }
       if (shouldTrackStartupStep) {
         failStartupStep('private-message-events', error);
       }

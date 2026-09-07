@@ -196,6 +196,8 @@ describe('privateMessagesSubscriptionRuntime', () => {
       queuePrivateMessageIngestion,
     } = createRuntime({ subscribeWithReqLogging });
     await runtime.subscribePrivateMessagesForLoggedInUser(true, { startupTrackStep: true });
+    await runtime.subscribePrivateMessagesForLoggedInUser(false, { startupTrackStep: true });
+    expect(subscribeWithReqLogging).toHaveBeenCalledTimes(1);
     runtime.startPrivateMessagesHistoryRestore();
     expect(startPrivateMessagesStartupBackfill).not.toHaveBeenCalled();
     expect(startupRuntime.getStartupStepSnapshot('private-messages-subscribe').status).toBe(
@@ -217,6 +219,23 @@ describe('privateMessagesSubscriptionRuntime', () => {
     expect(startPrivateMessagesStartupBackfill).toHaveBeenCalledTimes(1);
     expect(startupRuntime.getStartupStepSnapshot('private-messages-subscribe').status).toBe(
       'success'
+    );
+  });
+
+  it('does not leave history waiting on a listener that failed to start', async () => {
+    const { runtime, startupRuntime } = createRuntime({
+      subscribeWithReqLogging: vi.fn(() => {
+        throw new Error('Subscription failed');
+      }),
+    });
+    await expect(
+      runtime.subscribePrivateMessagesForLoggedInUser(true, { startupTrackStep: true })
+    ).rejects.toThrow('Subscription failed');
+    expect(startupRuntime.getStartupStepSnapshot('private-messages-subscribe').status).toBe(
+      'error'
+    );
+    expect(() => runtime.startPrivateMessagesHistoryRestore()).toThrow(
+      'Start the message listener'
     );
   });
 

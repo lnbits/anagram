@@ -22,8 +22,19 @@ import type {
 } from 'src/stores/nostr/types';
 import type { Ref } from 'vue';
 
+type MessageStartupTrackId = 'private-message-events' | 'message-history-restore';
+
+interface MessageHistoryRestoreContext {
+  loggedInPubkeyHex: string;
+  recipientPubkeys: string[];
+  relayUrls: string[];
+  liveSince: number;
+  ready: boolean;
+  preparing: boolean;
+}
+
 interface PrivateMessagesSubscriptionRuntimeDeps {
-  beginStartupStep: (stepId: 'private-message-events') => void;
+  beginStartupStep: (stepId: MessageStartupTrackId) => void;
   buildFilterSinceDetails: (since: number | undefined) => Record<string, unknown>;
   buildPrivateMessageSubscriptionTargetDetails: (
     recipientPubkeys: string[],
@@ -35,19 +46,20 @@ interface PrivateMessagesSubscriptionRuntimeDeps {
   buildSubscriptionRelayDetails: (relayUrls: string[]) => Record<string, unknown>;
   bumpDeveloperDiagnosticsVersion: () => void;
   clearPrivateMessagesUiRefreshState: () => void;
-  completeStartupStep: (stepId: 'private-message-events') => void;
+  completeStartupStep: (stepId: MessageStartupTrackId) => void;
   ensureRelayConnections: (relayUrls: string[]) => Promise<void>;
   extractRelayUrlsFromEvent: (event: NDKEvent) => string[];
-  failStartupStep: (stepId: 'private-message-events', error: unknown) => void;
+  failStartupStep: (stepId: MessageStartupTrackId, error: unknown) => void;
   flushPrivateMessagesUiRefreshNow: () => void;
   formatSubscriptionLogValue: (value: string | null | undefined) => string | null;
   getFilterSince: () => number;
   getLoggedInPublicKeyHex: () => string | null;
   getOrCreateSigner: () => Promise<unknown>;
+  getPrivateMessagesIngestQueue: () => Promise<void>;
   getPrivateMessagesRestoreThrottleMs: () => number;
   getPrivateMessagesStartupLiveSince: () => number;
   getRelaySnapshots: (relayUrls: string[]) => unknown[];
-  getStartupStepSnapshot: (stepId: 'private-message-events') => { status: string };
+  getStartupStepSnapshot: (stepId: MessageStartupTrackId) => { status: string };
   getStoredAuthMethod: () => string | null;
   isRestoringStartupState: Ref<boolean>;
   listPrivateMessageRecipientPubkeys: () => Promise<string[]>;
@@ -112,6 +124,7 @@ export function createPrivateMessagesSubscriptionRuntime({
   getFilterSince,
   getLoggedInPublicKeyHex,
   getOrCreateSigner,
+  getPrivateMessagesIngestQueue,
   getPrivateMessagesRestoreThrottleMs,
   getPrivateMessagesStartupLiveSince,
   getRelaySnapshots,
@@ -150,7 +163,59 @@ export function createPrivateMessagesSubscriptionRuntime({
   let privateMessagesWatchdogLastRecoveryAt = 0;
   let privateMessagesSubscriptionShouldBeActive = false;
   let hasPrivateMessagesWatchdogOnlineListener = false;
+  let messageHistoryRestoreContext: MessageHistoryRestoreContext | null = null;
+  let messageHistoryRestoreRequested = false;
   const privateMessagesWatchdogRelayConnectionStates = new Map<string, boolean>();
+
+  function startPrivateMessagesHistoryRestore(): void {
+    if (!messageHistoryRestoreContext || !getLoggedInPublicKeyHex()) {
+      throw new Error('Start the message listener before restoring message history.');
+    }
+
+    beginStartupStep('message-history-restore');
+    messageHistoryRestoreRequested = true;
+    void runPendingMessageHistoryRestore();
+  }
+
+  async function runPendingMessageHistoryRestore(): Promise<void> {
+    const context = messageHistoryRestoreContext;
+    if (!messageHistoryRestoreRequested || !context?.ready || context.preparing) {
+      return;
+    }
+
+    messageHistoryRestoreRequested = false;
+    context.preparing = true;
+    try {
+      await getPrivateMessagesIngestQueue();
+      if (context !== messageHistoryRestoreContext) {
+        return;
+      }
+      try {
+        await refreshAllStoredContacts();
+      } catch (error) {
+        console.warn('Failed to refresh contacts before restoring message history', error);
+      }
+      if (
+        context !== messageHistoryRestoreContext ||
+        context.loggedInPubkeyHex !== getLoggedInPublicKeyHex()
+      ) {
+        return;
+      }
+
+      startPrivateMessagesStartupBackfill(
+        context.loggedInPubkeyHex,
+        context.recipientPubkeys,
+        context.relayUrls,
+        context.liveSince
+      );
+    } catch (error) {
+      if (context === messageHistoryRestoreContext) {
+        failStartupStep('message-history-restore', error);
+      }
+    } finally {
+      context.preparing = false;
+    }
+  }
 
   function ensurePrivateMessagesWatchdog(): void {
     if (typeof window === 'undefined') {
@@ -586,6 +651,7 @@ export function createPrivateMessagesSubscriptionRuntime({
   }
 
   function stopPrivateMessagesLiveSubscription(reason = 'replace'): void {
+    messageHistoryRestoreContext = null;
     if (privateMessagesSubscription) {
       logSubscription('private-messages', 'stop', {
         reason,
@@ -609,6 +675,8 @@ export function createPrivateMessagesSubscriptionRuntime({
   ): void {
     privateMessagesWatchdogLastRecoveryAt = 0;
     privateMessagesSubscriptionShouldBeActive = false;
+    messageHistoryRestoreRequested = false;
+    messageHistoryRestoreContext = null;
     privateMessagesWatchdogRelayConnectionStates.clear();
 
     if (!options.clearLastEventState) {
@@ -630,10 +698,14 @@ export function createPrivateMessagesSubscriptionRuntime({
     const hasActiveStartupTracking =
       getStartupStepSnapshot('private-message-events').status === 'in_progress';
     const shouldTrackStartupStep = options.startupTrackStep === true || hasActiveStartupTracking;
-    const shouldRunStartupBackfill =
+    const shouldResumeHistoryRestore =
+      messageHistoryRestoreRequested ||
+      getStartupStepSnapshot('message-history-restore').status === 'in_progress';
+    const shouldUseStartupWindow =
       !Number.isInteger(options.sinceOverride) &&
       (options.startupTrackStep === true ||
         hasActiveStartupTracking ||
+        shouldResumeHistoryRestore ||
         isRestoringStartupState.value);
     if (options.startupTrackStep === true) {
       beginStartupStep('private-message-events');
@@ -694,7 +766,7 @@ export function createPrivateMessagesSubscriptionRuntime({
       const filterSince =
         Number.isInteger(options.sinceOverride) && Number(options.sinceOverride) >= 0
           ? Math.floor(Number(options.sinceOverride))
-          : shouldRunStartupBackfill
+          : shouldUseStartupWindow
             ? getPrivateMessagesStartupLiveSince()
             : getFilterSince();
       const hasMatchingActiveSubscription =
@@ -793,6 +865,16 @@ export function createPrivateMessagesSubscriptionRuntime({
         '#p': recipientPubkeys,
         since: filterSince,
       };
+      const historyContext: MessageHistoryRestoreContext = {
+        loggedInPubkeyHex,
+        recipientPubkeys,
+        relayUrls,
+        liveSince: filterSince,
+        ready: false,
+        preparing: false,
+      };
+      messageHistoryRestoreContext = historyContext;
+      messageHistoryRestoreRequested = shouldResumeHistoryRestore;
       privateMessagesSubscription = subscribeWithReqLogging(
         'private-messages',
         'private-messages-live',
@@ -822,6 +904,10 @@ export function createPrivateMessagesSubscriptionRuntime({
             queuePrivateMessageIngestion(wrappedEvent, loggedInPubkeyHex);
           },
           onEose: () => {
+            if (historyContext !== messageHistoryRestoreContext) {
+              return;
+            }
+            historyContext.ready = true;
             markPrivateMessagesLiveCoverageNow();
             logSubscription('private-messages', 'eose', {
               signature,
@@ -835,35 +921,7 @@ export function createPrivateMessagesSubscriptionRuntime({
             if (shouldTrackStartupStep) {
               completeStartupStep('private-message-events');
             }
-            if (shouldRunStartupBackfill) {
-              void (async () => {
-                try {
-                  const contactRefreshSummary = await refreshAllStoredContacts();
-                  logSubscription('private-messages', 'contacts-refresh-after-eose', {
-                    signature,
-                    ...(contactRefreshSummary && typeof contactRefreshSummary === 'object'
-                      ? contactRefreshSummary
-                      : {}),
-                  });
-                } catch (error) {
-                  console.warn(
-                    'Failed to refresh contacts after private messages startup EOSE',
-                    error
-                  );
-                  logSubscription('private-messages', 'contacts-refresh-after-eose-error', {
-                    signature,
-                    error,
-                  });
-                } finally {
-                  startPrivateMessagesStartupBackfill(
-                    loggedInPubkeyHex,
-                    recipientPubkeys,
-                    relayUrls,
-                    filterSince
-                  );
-                }
-              })();
-            }
+            void runPendingMessageHistoryRestore();
           },
         },
         {
@@ -912,6 +970,7 @@ export function createPrivateMessagesSubscriptionRuntime({
     queuePrivateMessagesWatchdog,
     refreshPrivateMessagesLiveSubscription,
     resetPrivateMessagesSubscriptionRuntimeState,
+    startPrivateMessagesHistoryRestore,
     stopPrivateMessagesLiveSubscription,
     subscribePrivateMessagesForLoggedInUser,
   };

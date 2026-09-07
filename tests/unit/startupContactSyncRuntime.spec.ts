@@ -93,6 +93,7 @@ function createSessionInitializationRuntime(
     restorePrivatePreferences: task(),
     runLightweightSessionResume,
     startOutboundMessageReplay: task(),
+    startPrivateMessagesHistoryRestore: task(),
     setRestoreStartupStatePromise: (promise) => {
       restoreStartupStatePromise = promise;
     },
@@ -178,6 +179,7 @@ describe('startup contact sync runtime', () => {
       restorePrivatePreferences: task('private-preferences'),
       runLightweightSessionResume: vi.fn(async () => {}),
       startOutboundMessageReplay: task('outbound-message-replay'),
+      startPrivateMessagesHistoryRestore: task('message-history-restore'),
       setRestoreStartupStatePromise: (promise) => {
         restoreStartupStatePromise = promise;
       },
@@ -214,6 +216,7 @@ describe('startup contact sync runtime', () => {
       'group-rosters-subscribe',
       'contact-profile-subscribe',
       'contact-relay-list-subscribe',
+      'message-history-restore',
     ]);
     expect(subscribePrivateMessagesForLoggedInUser).toHaveBeenCalledWith(true, {
       restoreThrottleMs: PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS,
@@ -273,6 +276,7 @@ describe('startup contact sync runtime', () => {
       restorePrivatePreferences: task('private-preferences'),
       runLightweightSessionResume: vi.fn(async () => {}),
       startOutboundMessageReplay: task('outbound-message-replay'),
+      startPrivateMessagesHistoryRestore: task('message-history-restore'),
       setRestoreStartupStatePromise: (promise) => {
         restoreStartupStatePromise = promise;
       },
@@ -298,6 +302,13 @@ describe('startup contact sync runtime', () => {
     expect(beginStartupStep).toHaveBeenCalledWith('my-relays-subscribe');
     expect(subscribeMyRelayListUpdates).toHaveBeenCalledWith(['wss://relay.one/'], true);
     expect(completeStartupStep).toHaveBeenCalledWith('my-relays-subscribe');
+
+    taskOrder.length = 0;
+    completeStartupStep.mockClear();
+    await runtime.rerunStartupStep('message-history-restore');
+    expect(taskOrder).toEqual(['message-history-restore']);
+    expect(resetStartupStep).toHaveBeenCalledWith('message-history-restore');
+    expect(completeStartupStep).not.toHaveBeenCalled();
   });
 
   it('uses a completed checkpoint for one lightweight resume per runtime', async () => {

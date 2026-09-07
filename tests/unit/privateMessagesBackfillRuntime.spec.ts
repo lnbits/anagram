@@ -4,6 +4,7 @@ import {
   PRIVATE_MESSAGES_RECONNECT_LOOKBACK_SECONDS,
 } from 'src/stores/nostr/constants';
 import { createPrivateMessagesBackfillRuntime } from 'src/stores/nostr/privateMessagesBackfillRuntime';
+import type { PrivateMessagesBackfillState } from 'src/stores/nostr/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const serviceMocks = vi.hoisted(() => ({
@@ -38,6 +39,8 @@ const TARGET_EVENT_ID = 'f'.repeat(64);
 function createRuntime(
   overrides: {
     getPrivateMessagesStartupFloorSince?: ReturnType<typeof vi.fn>;
+    getPrivateMessagesBackfillResumeState?: () => PrivateMessagesBackfillState | null;
+    getPrivateMessagesIngestQueue?: () => Promise<void>;
     subscribeWithReqLogging?: ReturnType<typeof vi.fn>;
     resolveGroupChatEpochEntries?: (chat: {
       meta: Record<string, unknown>;
@@ -59,22 +62,27 @@ function createRuntime(
       } as never;
     });
 
+  const beginStartupInternalTask = vi.fn();
+  const completeStartupStep = vi.fn();
+  const failStartupStep = vi.fn();
+  const updateStartupInternalTask = vi.fn();
   const runtime = createPrivateMessagesBackfillRuntime({
-    beginStartupInternalTask: vi.fn(),
+    beginStartupInternalTask,
     buildFilterSinceDetails: (since) => ({ since }),
     buildFilterUntilDetails: (until) => ({ until }),
     buildPrivateMessageSubscriptionTargetDetails: vi.fn(async () => ({})),
     buildSubscriptionRelayDetails: (relayUrls) => ({ relayUrls }),
     completeStartupInternalTask: vi.fn(),
-    completeStartupStep: vi.fn(),
+    completeStartupStep,
     ensureRelayConnections: vi.fn(async () => {}),
     failStartupInternalTask: vi.fn(),
-    failStartupStep: vi.fn(),
+    failStartupStep,
     flushPrivateMessagesUiRefreshNow: vi.fn(),
     formatSubscriptionLogValue: (value) => value ?? null,
     getLoggedInPublicKeyHex: () => LOGGED_IN_PUBLIC_KEY,
-    getPrivateMessagesBackfillResumeState: vi.fn(() => null),
-    getPrivateMessagesIngestQueue: vi.fn(async () => {}),
+    getPrivateMessagesBackfillResumeState:
+      overrides.getPrivateMessagesBackfillResumeState ?? vi.fn(() => null),
+    getPrivateMessagesIngestQueue: overrides.getPrivateMessagesIngestQueue ?? vi.fn(async () => {}),
     getPrivateMessagesStartupFloorSince:
       overrides.getPrivateMessagesStartupFloorSince ?? vi.fn(() => 1700000000),
     logSubscription: vi.fn(),
@@ -96,13 +104,17 @@ function createRuntime(
       typeof value === 'number' ? new Date(value * 1000).toISOString() : null,
     updateStoredEventSinceFromCreatedAt: vi.fn(),
     updateStoredPrivateMessagesLastReceivedFromCreatedAt: vi.fn(),
-    updateStartupInternalTask: vi.fn(),
+    updateStartupInternalTask,
     writePrivateMessagesBackfillState: vi.fn(),
   });
 
   return {
     runtime,
     subscribeWithReqLogging,
+    beginStartupInternalTask,
+    completeStartupStep,
+    failStartupStep,
+    updateStartupInternalTask,
   };
 }
 
@@ -126,6 +138,110 @@ describe('privateMessagesBackfillRuntime', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('tracks history separately and completes only after downloaded messages are ingested', async () => {
+    let finishIngestion = () => {};
+    const ingestQueue = new Promise<void>((resolve) => {
+      finishIngestion = resolve;
+    });
+    const subscribeWithReqLogging = vi.fn((_label, _requestLabel, _filters, options) => {
+      Promise.resolve().then(() => {
+        options.onEvent({
+          id: TARGET_EVENT_ID,
+          kind: 1059,
+          created_at: 95,
+          pubkey: DIRECT_CHAT_PUBLIC_KEY,
+          tags: [],
+          content: '',
+        });
+        options.onEose();
+        options.onClose();
+      });
+      return { stop: vi.fn() } as never;
+    });
+    const { runtime, beginStartupInternalTask, completeStartupStep, updateStartupInternalTask } =
+      createRuntime({
+        subscribeWithReqLogging,
+        getPrivateMessagesIngestQueue: () => ingestQueue,
+        getPrivateMessagesBackfillResumeState: () => ({
+          pubkey: LOGGED_IN_PUBLIC_KEY,
+          nextSince: 90,
+          nextUntil: 100,
+          floorSince: 90,
+          delayMs: 0,
+          completed: false,
+        }),
+      });
+    runtime.startPrivateMessagesStartupBackfill(
+      LOGGED_IN_PUBLIC_KEY,
+      [LOGGED_IN_PUBLIC_KEY],
+      ['wss://relay.example'],
+      100
+    );
+    await vi.waitFor(() =>
+      expect(updateStartupInternalTask).toHaveBeenCalledWith(
+        'message-history-restore',
+        expect.any(String),
+        { eventCount: 1 }
+      )
+    );
+    expect(beginStartupInternalTask).toHaveBeenCalledWith(
+      'message-history-restore',
+      expect.any(String),
+      expect.any(String),
+      { eventCount: 0 }
+    );
+    expect(completeStartupStep).not.toHaveBeenCalled();
+    finishIngestion();
+    await vi.waitFor(() =>
+      expect(completeStartupStep).toHaveBeenCalledExactlyOnceWith('message-history-restore')
+    );
+    runtime.resetPrivateMessagesBackfillRuntimeState();
+  });
+
+  it('completes only history when there are no older windows to restore', () => {
+    const { runtime, completeStartupStep, subscribeWithReqLogging } = createRuntime();
+    runtime.startPrivateMessagesStartupBackfill(
+      LOGGED_IN_PUBLIC_KEY,
+      [LOGGED_IN_PUBLIC_KEY],
+      ['wss://relay.example'],
+      100
+    );
+    expect(completeStartupStep).toHaveBeenCalledExactlyOnceWith('message-history-restore');
+    expect(subscribeWithReqLogging).not.toHaveBeenCalled();
+    runtime.resetPrivateMessagesBackfillRuntimeState();
+  });
+
+  it('reports history failure without changing the live listener step', async () => {
+    const { runtime, failStartupStep, completeStartupStep } = createRuntime({
+      getPrivateMessagesBackfillResumeState: () => ({
+        pubkey: LOGGED_IN_PUBLIC_KEY,
+        nextSince: 90,
+        nextUntil: 100,
+        floorSince: 90,
+        delayMs: 0,
+        completed: false,
+      }),
+      subscribeWithReqLogging: vi.fn((_label, _requestLabel, _filters, options) => {
+        Promise.resolve().then(() => options.onClose());
+        return { stop: vi.fn() } as never;
+      }),
+    });
+    runtime.startPrivateMessagesStartupBackfill(
+      LOGGED_IN_PUBLIC_KEY,
+      [LOGGED_IN_PUBLIC_KEY],
+      ['wss://relay.example'],
+      100
+    );
+    await vi.waitFor(() =>
+      expect(failStartupStep).toHaveBeenCalledExactlyOnceWith(
+        'message-history-restore',
+        expect.any(Error)
+      )
+    );
+    expect(completeStartupStep).not.toHaveBeenCalled();
+    runtime.resetPrivateMessagesBackfillRuntimeState();
   });
 
   it('repairs missing direct-message targets from the conversation recipients', async () => {

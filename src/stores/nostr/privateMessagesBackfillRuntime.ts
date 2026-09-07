@@ -411,7 +411,7 @@ export function createPrivateMessagesBackfillRuntime({
             onEvent: (event) => {
               const wrappedEvent = event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
               eventCount += 1;
-              updateStartupInternalTask('private-messages-subscribe', options.startupTaskId, {
+              updateStartupInternalTask('message-history-restore', options.startupTaskId, {
                 eventCount,
               });
               updateStoredPrivateMessagesLastReceivedFromCreatedAt(wrappedEvent.created_at);
@@ -432,7 +432,7 @@ export function createPrivateMessagesBackfillRuntime({
               finish();
             },
             onClose: () => {
-              finish();
+              finish(new Error('Message history subscription closed before completing.'));
             },
           },
           {
@@ -1217,7 +1217,7 @@ export function createPrivateMessagesBackfillRuntime({
       )
     );
     if (!normalizedPubkey || relayUrls.length === 0 || normalizedRecipientPubkeys.length === 0) {
-      completeStartupStep('private-messages-subscribe');
+      completeStartupStep('message-history-restore');
       return;
     }
 
@@ -1241,7 +1241,7 @@ export function createPrivateMessagesBackfillRuntime({
           floorSince,
           floorSinceIso: toOptionalIsoTimestampFromUnix(floorSince),
         });
-        completeStartupStep('private-messages-subscribe');
+        completeStartupStep('message-history-restore');
         return;
       }
 
@@ -1267,14 +1267,14 @@ export function createPrivateMessagesBackfillRuntime({
             floorSince: state.floorSince,
             floorSinceIso: toOptionalIsoTimestampFromUnix(state.floorSince),
           });
-          completeStartupStep('private-messages-subscribe');
+          completeStartupStep('message-history-restore');
           return;
         }
 
         writePrivateMessagesBackfillState(state);
         const startupTaskId = buildStartupBackfillChunkTaskId(state.nextSince, state.nextUntil);
         const startupTaskLabel = formatStartupBackfillChunkLabel(state.nextSince, state.nextUntil);
-        beginStartupInternalTask('private-messages-subscribe', startupTaskId, startupTaskLabel, {
+        beginStartupInternalTask('message-history-restore', startupTaskId, startupTaskLabel, {
           eventCount: 0,
         });
         logSubscription('private-messages', 'backfill-window-start', {
@@ -1294,11 +1294,19 @@ export function createPrivateMessagesBackfillRuntime({
             signature,
             startupTaskId,
           });
-          completeStartupInternalTask('private-messages-subscribe', startupTaskId, {
+          await getPrivateMessagesIngestQueue();
+          if (runToken !== privateMessagesBackfillRunToken) {
+            return;
+          }
+          flushPrivateMessagesUiRefreshNow();
+          completeStartupInternalTask('message-history-restore', startupTaskId, {
             eventCount,
           });
         } catch (error) {
-          failStartupInternalTask('private-messages-subscribe', startupTaskId, error);
+          if (runToken !== privateMessagesBackfillRunToken) {
+            return;
+          }
+          failStartupInternalTask('message-history-restore', startupTaskId, error);
           throw error;
         }
 
@@ -1319,7 +1327,7 @@ export function createPrivateMessagesBackfillRuntime({
             floorSince: state.floorSince,
             floorSinceIso: toOptionalIsoTimestampFromUnix(state.floorSince),
           });
-          completeStartupStep('private-messages-subscribe');
+          completeStartupStep('message-history-restore');
           return;
         }
 
@@ -1357,12 +1365,15 @@ export function createPrivateMessagesBackfillRuntime({
       }
     })()
       .catch((error) => {
+        if (runToken !== privateMessagesBackfillRunToken) {
+          return;
+        }
         console.error('Failed to backfill private messages', error);
         logSubscription('private-messages', 'backfill-error', {
           signature,
           error,
         });
-        failStartupStep('private-messages-subscribe', error);
+        failStartupStep('message-history-restore', error);
       })
       .finally(() => {
         if (runToken !== privateMessagesBackfillRunToken) {

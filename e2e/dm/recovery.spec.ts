@@ -74,6 +74,16 @@ test('hard reload restores accepted DM chat list, unread count, and thread histo
       chatId: bob.session.publicKey,
     });
     await expectNoUnexpectedBrowserErrors([alice, bob]);
+    await alice.page.goto('/#/settings/developer');
+    await alice.page.getByRole('button', { name: /^Startup History/ }).click();
+    const startupHistory = alice.page.locator('.developer-card__section--startup-history');
+    const startupSteps = startupHistory.locator('.app-status__history-item');
+    await expect(startupSteps).toHaveCount(16);
+    await expect(startupSteps.nth(11)).toContainText('12/16');
+    await expect(startupSteps.nth(11)).toContainText('Listen for new messages');
+    await expect(startupSteps.nth(11).locator('.app-status__status-icon--success')).toBeVisible();
+    await expect(startupSteps.nth(15)).toContainText('16/16');
+    await expect(startupSteps.nth(15)).toContainText('Restore message history');
   } finally {
     await disposeUsers(alice, bob);
   }

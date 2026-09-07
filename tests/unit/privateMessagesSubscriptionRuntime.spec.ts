@@ -1,5 +1,10 @@
 import NDK, { type NDKEvent, type NDKFilter } from '@nostr-dev-kit/ndk';
 import { createPrivateMessagesSubscriptionRuntime } from 'src/stores/nostr/privateMessagesSubscriptionRuntime';
+import { createStartupRuntime } from 'src/stores/nostr/startupRuntime';
+import {
+  createInitialStartupStepSnapshots,
+  type StartupDisplaySnapshot,
+} from 'src/stores/nostr/startupState';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
 
@@ -29,7 +34,12 @@ type SubscriptionOptions = {
   onClose?: () => void;
 };
 
-function createRuntime(overrides: { subscribeWithReqLogging?: ReturnType<typeof vi.fn> } = {}) {
+function createRuntime(
+  overrides: {
+    subscribeWithReqLogging?: ReturnType<typeof vi.fn>;
+    refreshAllStoredContacts?: ReturnType<typeof vi.fn>;
+  } = {}
+) {
   const privateMessagesSubscriptionLiveCoverageAt = ref<number | null>(null);
   const subscribeWithReqLogging =
     overrides.subscribeWithReqLogging ??
@@ -51,27 +61,42 @@ function createRuntime(overrides: { subscribeWithReqLogging?: ReturnType<typeof 
     );
 
   const logSubscription = vi.fn();
+  const startupRuntime = createStartupRuntime({
+    startupSteps: ref(createInitialStartupStepSnapshots()),
+    startupDisplay: ref<StartupDisplaySnapshot>({
+      stepId: null,
+      label: null,
+      status: null,
+      showProgress: false,
+    }),
+    startupState: { startupDisplayShownAt: 0, startupDisplayTimer: null, startupDisplayToken: 0 },
+    startupStepMinProgressMs: 0,
+  });
+  const refreshAllStoredContacts = overrides.refreshAllStoredContacts ?? vi.fn(async () => ({}));
+  const startPrivateMessagesStartupBackfill = vi.fn();
+  const queuePrivateMessageIngestion = vi.fn();
   const runtime = createPrivateMessagesSubscriptionRuntime({
-    beginStartupStep: vi.fn(),
+    beginStartupStep: startupRuntime.beginStartupStep,
     buildFilterSinceDetails: (since) => ({ since }),
     buildPrivateMessageSubscriptionTargetDetails: vi.fn(async () => ({})),
     buildSubscriptionEventDetails: vi.fn(() => ({})),
     buildSubscriptionRelayDetails: (relayUrls) => ({ relayUrls }),
     bumpDeveloperDiagnosticsVersion: vi.fn(),
     clearPrivateMessagesUiRefreshState: vi.fn(),
-    completeStartupStep: vi.fn(),
+    completeStartupStep: startupRuntime.completeStartupStep,
     ensureRelayConnections: vi.fn(async () => {}),
     extractRelayUrlsFromEvent: vi.fn(() => RELAY_URLS),
-    failStartupStep: vi.fn(),
+    failStartupStep: startupRuntime.failStartupStep,
     flushPrivateMessagesUiRefreshNow: vi.fn(),
     formatSubscriptionLogValue: (value) => value ?? null,
     getFilterSince: () => 100,
     getLoggedInPublicKeyHex: () => LOGGED_IN_PUBLIC_KEY,
     getOrCreateSigner: vi.fn(async () => ({})),
+    getPrivateMessagesIngestQueue: vi.fn(async () => {}),
     getPrivateMessagesRestoreThrottleMs: () => 0,
     getPrivateMessagesStartupLiveSince: () => 90,
     getRelaySnapshots: vi.fn(() => []),
-    getStartupStepSnapshot: vi.fn(() => ({ status: 'idle' })),
+    getStartupStepSnapshot: startupRuntime.getStartupStepSnapshot,
     getStoredAuthMethod: () => 'nsec',
     isRestoringStartupState: ref(false),
     listPrivateMessageRecipientPubkeys: vi.fn(async () => [LOGGED_IN_PUBLIC_KEY]),
@@ -88,13 +113,13 @@ function createRuntime(overrides: { subscribeWithReqLogging?: ReturnType<typeof 
     privateMessagesSubscriptionRelayUrls: ref([]),
     privateMessagesSubscriptionSince: ref(null),
     privateMessagesSubscriptionStartedAt: ref(null),
-    queuePrivateMessageIngestion: vi.fn(),
-    refreshAllStoredContacts: vi.fn(async () => ({})),
+    queuePrivateMessageIngestion,
+    refreshAllStoredContacts,
     relaySignature: (relayUrls) => relayUrls.join(','),
     resolvePrivateMessageReadRelayUrls: vi.fn(async () => RELAY_URLS),
     schedulePostPrivateMessagesEoseChecks: vi.fn(),
     setPrivateMessagesRestoreThrottleMs: vi.fn(),
-    startPrivateMessagesStartupBackfill: vi.fn(),
+    startPrivateMessagesStartupBackfill,
     subscribeWithReqLogging,
     updateStoredEventSinceFromCreatedAt: vi.fn(),
     updateStoredPrivateMessagesLastReceivedFromCreatedAt: vi.fn(),
@@ -104,6 +129,9 @@ function createRuntime(overrides: { subscribeWithReqLogging?: ReturnType<typeof 
     logSubscription,
     privateMessagesSubscriptionLiveCoverageAt,
     runtime,
+    startupRuntime,
+    startPrivateMessagesStartupBackfill,
+    queuePrivateMessageIngestion,
     subscribeWithReqLogging,
   };
 }
@@ -117,6 +145,122 @@ describe('privateMessagesSubscriptionRuntime', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('listens independently and starts history only when step 16 is requested', async () => {
+    const {
+      runtime,
+      startupRuntime,
+      startPrivateMessagesStartupBackfill,
+      subscribeWithReqLogging,
+    } = createRuntime();
+    await runtime.subscribePrivateMessagesForLoggedInUser(true, { startupTrackStep: true });
+
+    expect(startupRuntime.getStartupStepSnapshot('private-messages-subscribe').status).toBe(
+      'success'
+    );
+    expect(startupRuntime.getStartupStepSnapshot('message-history-restore').status).toBe('pending');
+    expect(startPrivateMessagesStartupBackfill).not.toHaveBeenCalled();
+
+    runtime.startPrivateMessagesHistoryRestore();
+    await vi.waitFor(() =>
+      expect(startPrivateMessagesStartupBackfill).toHaveBeenCalledWith(
+        LOGGED_IN_PUBLIC_KEY,
+        [LOGGED_IN_PUBLIC_KEY],
+        RELAY_URLS,
+        90
+      )
+    );
+    expect(startupRuntime.getStartupStepSnapshot('private-messages-subscribe').status).toBe(
+      'success'
+    );
+    expect(startupRuntime.getStartupStepSnapshot('message-history-restore').status).toBe(
+      'in_progress'
+    );
+
+    runtime.startPrivateMessagesHistoryRestore();
+    await vi.waitFor(() => expect(startPrivateMessagesStartupBackfill).toHaveBeenCalledTimes(2));
+    expect(subscribeWithReqLogging).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for live EOSE before history and keeps receiving new messages afterward', async () => {
+    let liveOptions: SubscriptionOptions = {};
+    const subscribeWithReqLogging = vi.fn((_label, _requestLabel, _filters, options) => {
+      liveOptions = options;
+      return { stop: vi.fn() } as never;
+    });
+    const {
+      runtime,
+      startupRuntime,
+      startPrivateMessagesStartupBackfill,
+      queuePrivateMessageIngestion,
+    } = createRuntime({ subscribeWithReqLogging });
+    await runtime.subscribePrivateMessagesForLoggedInUser(true, { startupTrackStep: true });
+    await runtime.subscribePrivateMessagesForLoggedInUser(false, { startupTrackStep: true });
+    expect(subscribeWithReqLogging).toHaveBeenCalledTimes(1);
+    runtime.startPrivateMessagesHistoryRestore();
+    expect(startPrivateMessagesStartupBackfill).not.toHaveBeenCalled();
+    expect(startupRuntime.getStartupStepSnapshot('private-messages-subscribe').status).toBe(
+      'in_progress'
+    );
+
+    liveOptions.onEose?.();
+    await vi.waitFor(() => expect(startPrivateMessagesStartupBackfill).toHaveBeenCalledTimes(1));
+    liveOptions.onEose?.();
+    liveOptions.onEvent?.({
+      id: 'b'.repeat(64),
+      kind: 1059,
+      created_at: 100,
+      pubkey: LOGGED_IN_PUBLIC_KEY,
+      tags: [],
+      content: '',
+    } as NDKEvent);
+    expect(queuePrivateMessageIngestion).toHaveBeenCalledTimes(1);
+    expect(startPrivateMessagesStartupBackfill).toHaveBeenCalledTimes(1);
+    expect(startupRuntime.getStartupStepSnapshot('private-messages-subscribe').status).toBe(
+      'success'
+    );
+  });
+
+  it('does not leave history waiting on a listener that failed to start', async () => {
+    const { runtime, startupRuntime } = createRuntime({
+      subscribeWithReqLogging: vi.fn(() => {
+        throw new Error('Subscription failed');
+      }),
+    });
+    await expect(
+      runtime.subscribePrivateMessagesForLoggedInUser(true, { startupTrackStep: true })
+    ).rejects.toThrow('Subscription failed');
+    expect(startupRuntime.getStartupStepSnapshot('private-messages-subscribe').status).toBe(
+      'error'
+    );
+    expect(() => runtime.startPrivateMessagesHistoryRestore()).toThrow(
+      'Start the message listener'
+    );
+  });
+
+  it('does not start history after logout interrupts preparation', async () => {
+    let finishRefresh = () => {};
+    const refreshAllStoredContacts = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        })
+    );
+    const { runtime, startPrivateMessagesStartupBackfill } = createRuntime({
+      refreshAllStoredContacts,
+    });
+    await runtime.subscribePrivateMessagesForLoggedInUser(true, { startupTrackStep: true });
+    runtime.startPrivateMessagesHistoryRestore();
+    await vi.waitFor(() => expect(refreshAllStoredContacts).toHaveBeenCalled());
+    runtime.stopPrivateMessagesLiveSubscription('logout');
+    runtime.resetPrivateMessagesSubscriptionRuntimeState();
+    finishRefresh();
+    await Promise.resolve();
+    expect(startPrivateMessagesStartupBackfill).not.toHaveBeenCalled();
+    expect(() => runtime.startPrivateMessagesHistoryRestore()).toThrow(
+      'Start the message listener'
+    );
   });
 
   it('recreates the live subscription directly when forced', async () => {

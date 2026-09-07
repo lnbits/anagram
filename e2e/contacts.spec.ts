@@ -1,16 +1,92 @@
+import NDK, { NDKEvent, NDKKind, NDKPrivateKeySigner, NDKRelaySet } from '@nostr-dev-kit/ndk';
 import { expect, test } from '@playwright/test';
+import { PRIVATE_CONTACT_LIST_D_TAG } from '../src/stores/nostr/constants';
 import {
+  type BootstrappedUser,
   bootstrapUser,
   disposeUsers,
+  E2E_RELAY_URL,
   establishAcceptedDirectChat,
   expectNoUnexpectedBrowserErrors,
   expectPrivateContactListMember,
+  getDeveloperDiagnosticsSnapshot,
   publishOwnProfile,
   pullToRefresh,
   TEST_ACCOUNTS,
 } from './helpers';
 
 test.describe.configure({ mode: 'serial' });
+
+test('startup restores an older saved contact list without Contacts refresh', async ({
+  browser,
+}) => {
+  const signer = NDKPrivateKeySigner.generate();
+  const contactSigners = [NDKPrivateKeySigner.generate(), NDKPrivateKeySigner.generate()];
+  const ndk = new NDK({ explicitRelayUrls: [E2E_RELAY_URL], signer, enableOutboxModel: false });
+  const createdAt = Math.floor(Date.now() / 1000) - 120 * 24 * 60 * 60;
+  let alice: BootstrappedUser | undefined;
+
+  try {
+    await ndk.connect(5_000);
+    const relaySet = NDKRelaySet.fromRelayUrls([E2E_RELAY_URL], ndk, false);
+    for (const [index, contactSigner] of contactSigners.entries()) {
+      const profile = new NDKEvent(ndk, {
+        kind: NDKKind.Metadata,
+        pubkey: contactSigner.pubkey,
+        created_at: createdAt,
+        content: JSON.stringify({ name: `Old-list contact ${index + 1}` }),
+        tags: [],
+      });
+      await profile.sign(contactSigner);
+      await profile.publish(relaySet);
+    }
+
+    const listEvent = new NDKEvent(ndk, {
+      kind: NDKKind.FollowSet,
+      pubkey: signer.pubkey,
+      created_at: createdAt,
+      tags: [['d', PRIVATE_CONTACT_LIST_D_TAG]],
+      content: await signer.encrypt(
+        await signer.user(),
+        JSON.stringify(contactSigners.map((contactSigner) => ['p', contactSigner.pubkey])),
+        'nip44'
+      ),
+    });
+    // publishReplaceable would replace the historical timestamp with the current time.
+    await listEvent.publish(relaySet);
+    expect(listEvent.created_at).toBe(createdAt);
+
+    alice = await bootstrapUser(browser, {
+      privateKey: signer.privateKey,
+      displayName: 'Old-list owner',
+    });
+    const diagnostics = await getDeveloperDiagnosticsSnapshot(alice.page);
+    expect(diagnostics.session.filterSince).toBeGreaterThan(createdAt);
+
+    for (const contactSigner of contactSigners) {
+      await expectPrivateContactListMember(alice.page, contactSigner.pubkey);
+    }
+    await alice.page.goto('/#/contacts');
+    await expect(alice.page.getByText('Old-list contact 1', { exact: true })).toBeVisible();
+    await expect(alice.page.getByText('Old-list contact 2', { exact: true })).toBeVisible();
+
+    await alice.page.goto('/#/settings/developer');
+    await alice.page.getByText('Startup History', { exact: true }).click();
+    const contactListStep = alice.page.locator('.app-status__history-item').filter({
+      hasText: 'Restore encrypted private contact list',
+    });
+    await expect(contactListStep).toContainText('(2 entries)');
+    await expect(contactListStep).toContainText('Completed');
+    await expectNoUnexpectedBrowserErrors([alice]);
+  } finally {
+    if (alice) {
+      await disposeUsers(alice);
+    }
+    for (const relay of ndk.pool.relays.values()) {
+      relay.disconnect();
+    }
+  }
+});
 
 test('chat and contact headers place search beside their actions without titles', async ({
   browser,

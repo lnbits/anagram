@@ -62,7 +62,10 @@ describe('private contact list runtime', () => {
     vi.restoreAllMocks();
   });
 
-  it('tracks restored private contact-list entry counts on the startup step', async () => {
+  it.each([
+    'startup',
+    'subscription',
+  ] as const)('restores old private contact-list entries through %s without a message-history cutoff', async (source) => {
     const ndk = new NDK();
     Object.defineProperty(ndk, 'subscribe', {
       configurable: true,
@@ -75,7 +78,21 @@ describe('private contact list runtime', () => {
       content: 'encrypted-private-contact-list',
       tags: [['d', PRIVATE_CONTACT_LIST_D_TAG]],
     });
-    vi.spyOn(ndk, 'fetchEvent').mockResolvedValue(listEvent);
+    vi.spyOn(ndk, 'fetchEvent').mockImplementation(async (filters) => {
+      const filter = Array.isArray(filters) ? filters[0] : filters;
+      return typeof filter === 'object' && (filter.since ?? 0) > (listEvent.created_at ?? 0)
+        ? null
+        : listEvent;
+    });
+    const subscribeWithReqLogging = vi.fn<
+      Parameters<typeof createPrivateContactListRuntime>[0]['subscribeWithReqLogging']
+    >((_label, _requestLabel, filters, options) => {
+      const filter = Array.isArray(filters) ? filters[0] : filters;
+      if ((filter?.since ?? 0) <= (listEvent.created_at ?? 0)) {
+        options.onEvent?.(listEvent);
+      }
+      return { stop: vi.fn() } as never;
+    });
     const publishReplaceable = vi
       .spyOn(NDKEvent.prototype, 'publishReplaceable')
       .mockResolvedValue(undefined as never);
@@ -131,7 +148,6 @@ describe('private contact list runtime', () => {
       extractRelayUrlsFromEvent: vi.fn(() => []),
       failStartupStep: vi.fn(),
       formatSubscriptionLogValue: vi.fn((value) => value ?? null),
-      getFilterSince: vi.fn(() => 1_600_000_000),
       getLoggedInPublicKeyHex: vi.fn(() => LOGGED_IN_PUBKEY),
       getLoggedInSignerUser: vi.fn(async () => ({ pubkey: LOGGED_IN_PUBKEY }) as never),
       getStartupStepSnapshot: vi.fn(() => ({ status: 'in_progress' })),
@@ -146,25 +162,43 @@ describe('private contact list runtime', () => {
       resolvePrivateContactListPublishRelayUrls: vi.fn(async () => ['wss://relay.example/']),
       resolvePrivateContactListReadRelayUrls: vi.fn(async () => ['wss://relay.example/']),
       shouldApplyPrivateContactListEvent: vi.fn(() => true),
-      subscribeWithReqLogging: vi.fn(() => ({ stop: vi.fn() }) as never),
+      subscribeWithReqLogging,
       updateStoredEventSinceFromCreatedAt: vi.fn(),
       updateStartupStep,
     });
 
-    await runtime.restorePrivateContactList();
-
-    expect(ndk.fetchEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        since: 1_600_000_000,
-      }),
-      expect.anything(),
-      expect.anything()
+    const expectedFilter = {
+      kinds: [NDKKind.FollowSet],
+      authors: [LOGGED_IN_PUBKEY],
+      '#d': [PRIVATE_CONTACT_LIST_D_TAG],
+    };
+    if (source === 'startup') {
+      await runtime.restorePrivateContactList();
+      expect(ndk.fetchEvent).toHaveBeenCalledWith(
+        expectedFilter,
+        expect.anything(),
+        expect.anything()
+      );
+      expect(updateStartupStep).toHaveBeenCalledWith('private-contact-list-restore', {
+        eventCount: 0,
+      });
+      expect(completeStartupStep).toHaveBeenCalledWith('private-contact-list');
+    } else {
+      await runtime.subscribePrivateContactListUpdates();
+      expect(subscribeWithReqLogging).toHaveBeenCalledWith(
+        'private-contact-list',
+        'private-contact-list',
+        expectedFilter,
+        expect.anything(),
+        expect.anything()
+      );
+      expect(completeStartupStep).not.toHaveBeenCalled();
+    }
+    await vi.waitFor(() =>
+      expect(ensureContactListedInPrivateContactList).toHaveBeenCalledTimes(2)
     );
     expect(chatDataServiceMock.listChats).not.toHaveBeenCalled();
     expect(chatDataServiceMock.listAllMessages).not.toHaveBeenCalled();
-    expect(updateStartupStep).toHaveBeenCalledWith('private-contact-list-restore', {
-      eventCount: 0,
-    });
     expect(updateStartupStep).toHaveBeenLastCalledWith('private-contact-list-restore', {
       eventCount: 2,
     });
@@ -180,7 +214,6 @@ describe('private contact list runtime', () => {
       expect.anything()
     );
     expect(publishReplaceable).not.toHaveBeenCalled();
-    expect(completeStartupStep).toHaveBeenCalledWith('private-contact-list');
   });
 
   it('adds outgoing message targets during Contacts refresh and publishes them', async () => {
@@ -297,7 +330,6 @@ describe('private contact list runtime', () => {
       extractRelayUrlsFromEvent: vi.fn(() => []),
       failStartupStep: vi.fn(),
       formatSubscriptionLogValue: vi.fn((value) => value ?? null),
-      getFilterSince: vi.fn(() => 1_600_000_000),
       getLoggedInPublicKeyHex: vi.fn(() => LOGGED_IN_PUBKEY),
       getLoggedInSignerUser: vi.fn(async () => ({ pubkey: LOGGED_IN_PUBKEY }) as never),
       getStartupStepSnapshot: vi.fn(() => ({ status: 'completed' })),

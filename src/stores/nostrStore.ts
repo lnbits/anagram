@@ -1386,6 +1386,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     queuePrivateMessagesWatchdog,
     refreshPrivateMessagesLiveSubscription: refreshPrivateMessagesLiveSubscriptionImpl,
     resetPrivateMessagesSubscriptionRuntimeState,
+    startPrivateMessagesHistoryRestore,
     stopPrivateMessagesLiveSubscription,
     subscribePrivateMessagesForLoggedInUser: subscribePrivateMessagesForLoggedInUserImpl,
   } = createPrivateMessagesSubscriptionRuntime({
@@ -1406,6 +1407,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     getLoggedInPublicKeyHex,
     getOrCreateSigner,
     getPrivateMessagesRestoreThrottleMs: () => privateMessagesRestoreThrottleMs,
+    getPrivateMessagesIngestQueue: () => getPrivateMessagesIngestQueueRuntime(),
     getPrivateMessagesStartupLiveSince,
     getRelaySnapshots,
     getStartupStepSnapshot,
@@ -1581,7 +1583,6 @@ export const useNostrStore = defineStore('nostrStore', () => {
     extractRelayUrlsFromEvent,
     failStartupStep,
     formatSubscriptionLogValue,
-    getFilterSince,
     getLoggedInPublicKeyHex,
     getLoggedInSignerUser,
     getStartupStepSnapshot,
@@ -1842,6 +1843,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
         sessionRelayUrls: seedRelayUrls,
       }),
     startOutboundMessageReplay: () => startOutboundMessageReplayRuntime(),
+    startPrivateMessagesHistoryRestore,
     setRestoreStartupStatePromise: (promise) => {
       restoreStartupStatePromise = promise;
     },

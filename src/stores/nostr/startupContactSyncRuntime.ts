@@ -53,6 +53,7 @@ const STARTUP_RESTORE_STEP_ORDER = [
   'group-rosters-subscribe',
   'contact-profile-subscribe',
   'contact-relay-list-subscribe',
+  'message-history-restore',
 ] as const satisfies readonly StartupStepId[];
 
 const STARTUP_TASK_ERROR_MESSAGES: Record<StartupStepId, string> = {
@@ -72,6 +73,7 @@ const STARTUP_TASK_ERROR_MESSAGES: Record<StartupStepId, string> = {
   'group-rosters-subscribe': 'Failed to subscribe to group rosters on startup',
   'contact-profile-subscribe': 'Failed to subscribe to contact profile updates on startup',
   'contact-relay-list-subscribe': 'Failed to subscribe to contact relay list updates on startup',
+  'message-history-restore': 'Failed to restore message history on startup',
 };
 
 function isExpectedRelayQueryDeferral(error: unknown): boolean {
@@ -127,6 +129,7 @@ interface StartupContactSyncRuntimeDeps {
   restorePrivatePreferences: (seedRelayUrls?: string[]) => Promise<void>;
   runLightweightSessionResume: (seedRelayUrls?: string[]) => Promise<void>;
   startOutboundMessageReplay: () => Promise<void>;
+  startPrivateMessagesHistoryRestore: () => void;
   setRestoreStartupStatePromise: (promise: Promise<void> | null) => void;
   setSyncLoggedInContactProfilePromise: (promise: Promise<void> | null) => void;
   setSyncRecentChatContactsPromise: (promise: Promise<void> | null) => void;
@@ -184,6 +187,7 @@ export function createStartupContactSyncRuntime({
   restorePrivatePreferences,
   runLightweightSessionResume,
   startOutboundMessageReplay,
+  startPrivateMessagesHistoryRestore,
   setRestoreStartupStatePromise,
   setSyncLoggedInContactProfilePromise,
   setSyncRecentChatContactsPromise,
@@ -484,6 +488,9 @@ export function createStartupContactSyncRuntime({
       case 'contact-relay-list-subscribe':
         await subscribeContactRelayListUpdates(seedRelayUrls, forceSubscriptions);
         return;
+      case 'message-history-restore':
+        startPrivateMessagesHistoryRestore();
+        return;
     }
   }
 
@@ -504,7 +511,7 @@ export function createStartupContactSyncRuntime({
     try {
       await yieldToMainThread();
       await runStartupTaskBody(stepId, seedRelayUrls, options);
-      if (stepId !== 'private-messages-subscribe') {
+      if (stepId !== 'private-messages-subscribe' && stepId !== 'message-history-restore') {
         completeStartupStep(stepId);
       }
       logStartupRestore('task-complete', {

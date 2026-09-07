@@ -51,7 +51,6 @@ interface PrivateContactListRuntimeDeps {
   extractRelayUrlsFromEvent: (event: NDKEvent) => string[];
   failStartupStep: (stepId: 'private-contact-list', error: unknown) => void;
   formatSubscriptionLogValue: (value: string | null | undefined) => string | null;
-  getFilterSince: () => number;
   getLoggedInPublicKeyHex: () => string | null;
   getLoggedInSignerUser: () => Promise<NDKUser>;
   getStartupStepSnapshot: (stepId: 'private-contact-list') => { status: string };
@@ -104,7 +103,6 @@ export function createPrivateContactListRuntime({
   extractRelayUrlsFromEvent,
   failStartupStep,
   formatSubscriptionLogValue,
-  getFilterSince,
   getLoggedInPublicKeyHex,
   getLoggedInSignerUser,
   getStartupStepSnapshot,
@@ -534,11 +532,11 @@ export function createPrivateContactListRuntime({
         const relaySet = createReadyRelaySet(ndk, relayUrls);
         const listEvent = await fetchEventWithRelayTimeout(
           ndk,
+          // The latest contact snapshot remains valid regardless of the shared event cursor.
           {
             kinds: [NDKKind.FollowSet],
             authors: [loggedInPubkeyHex],
             '#d': [PRIVATE_CONTACT_LIST_D_TAG],
-            since: getFilterSince(),
           },
           {
             cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
@@ -614,7 +612,6 @@ export function createPrivateContactListRuntime({
       force,
       signature,
       pubkey: formatSubscriptionLogValue(loggedInPubkeyHex),
-      since: getFilterSince(),
       ...buildSubscriptionRelayDetails(relayUrls),
     });
 
@@ -629,16 +626,15 @@ export function createPrivateContactListRuntime({
       subscriptionTargetType: 'user',
       userTargetCount: 1,
       userTargetPubkeys: [formatSubscriptionLogValue(loggedInPubkeyHex)],
-      since: getFilterSince(),
       ...buildSubscriptionRelayDetails(relayUrls),
     });
 
     const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
+    // Reconnecting must also recover snapshots older than the shared event cursor.
     const privateContactListFilters: NDKFilter = {
       kinds: [NDKKind.FollowSet],
       authors: [loggedInPubkeyHex],
       '#d': [PRIVATE_CONTACT_LIST_D_TAG],
-      since: getFilterSince(),
     };
     privateContactListSubscription = subscribeWithReqLogging(
       'private-contact-list',

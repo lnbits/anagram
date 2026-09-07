@@ -22,7 +22,7 @@ export const STARTUP_STEP_DEFINITIONS = [
     order: 11,
     label: 'startup.subscribePrivateContactListUpdates',
   },
-  { id: 'private-messages-subscribe', order: 12, label: 'startup.subscribePrivateMessages' },
+  { id: 'private-messages-subscribe', order: 12, label: 'startup.listenForNewMessages' },
   { id: 'group-rosters-subscribe', order: 13, label: 'startup.subscribeGroupRosters' },
   { id: 'contact-profile-subscribe', order: 14, label: 'startup.subscribeContactProfileUpdates' },
   {
@@ -30,6 +30,7 @@ export const STARTUP_STEP_DEFINITIONS = [
     order: 15,
     label: 'startup.subscribeContactRelayListUpdates',
   },
+  { id: 'message-history-restore', order: 16, label: 'startup.restoreMessageHistory' },
 ] as const;
 
 export type StartupStepId = (typeof STARTUP_STEP_DEFINITIONS)[number]['id'];

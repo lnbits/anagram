@@ -1,0 +1,4 @@
+Version 0.7.4
+
+- Fixed Android release reproducibility by embedding a deterministic Git revision.
+- No application behavior changes.

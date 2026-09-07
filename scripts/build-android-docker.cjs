@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { readGitSha, resolveAppGitSha } = require('./app-build-identity.cjs');
 
 const projectRoot = path.resolve(__dirname, '..');
 const composeFile = path.resolve(projectRoot, 'docker-compose.android.yml');
@@ -11,6 +12,7 @@ const validCommands = new Set([
   'aab-release',
   'all-release',
 ]);
+const releaseCommands = new Set(['apk-release', 'aab-release', 'all-release']);
 
 const buildCommand = process.argv[2] || 'all-release';
 if (!validCommands.has(buildCommand)) {
@@ -32,6 +34,11 @@ if (!composeBin) {
 
 const composeArgs = composeBin.concat(['-f', composeFile]);
 const env = { ...process.env };
+env.APP_GIT_SHA = resolveAppGitSha({
+  appGitSha: process.env.APP_GIT_SHA,
+  isProduction: releaseCommands.has(buildCommand),
+  readFallbackSha: () => readGitSha(projectRoot),
+});
 
 run(composeArgs[0], composeArgs.slice(1).concat(['build', 'android-build']), env);
 run(
@@ -62,7 +69,15 @@ function detectComposeBinary() {
 }
 
 function getRunArgs(command) {
-  const args = ['run', '--rm', '-T', '-e', `ANDROID_BUILD_COMMAND=${command}`];
+  const args = [
+    'run',
+    '--rm',
+    '-T',
+    '-e',
+    `ANDROID_BUILD_COMMAND=${command}`,
+    '-e',
+    `APP_GIT_SHA=${env.APP_GIT_SHA}`,
+  ];
   const keystore = process.env.ANDROID_KEYSTORE_PATH;
 
   if (keystore && path.isAbsolute(keystore)) {

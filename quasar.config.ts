@@ -1,5 +1,5 @@
-import { execSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { configure } from 'quasar/wrappers';
@@ -22,7 +22,19 @@ interface AppBuildInfo {
   bundleId: string;
 }
 
+interface AppBuildIdentityModule {
+  readGitSha: (projectRoot: string) => string | null;
+  resolveAppGitSha: (options: {
+    appGitSha?: string;
+    isProduction: boolean;
+    readFallbackSha: () => string | null;
+  }) => string;
+}
+
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+const { readGitSha, resolveAppGitSha } =
+  require('./scripts/app-build-identity.cjs') as AppBuildIdentityModule;
 const packageJson = JSON.parse(
   readFileSync(path.join(projectRoot, 'package.json'), 'utf-8')
 ) as PackageJson;
@@ -54,21 +66,12 @@ function createResponsiveMediaQueryPlugin(): Plugin {
   };
 }
 
-function readGitSha(): string {
-  try {
-    return execSync('git rev-parse --short=12 HEAD', {
-      cwd: projectRoot,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
-      .toString()
-      .trim();
-  } catch {
-    return 'unknown';
-  }
-}
-
-function buildAppInfo(isProd: boolean): AppBuildInfo {
-  const gitSha = process.env.APP_GIT_SHA?.trim() || readGitSha();
+function buildAppInfo(isProd: boolean, requireKnownGitSha: boolean): AppBuildInfo {
+  const gitSha = resolveAppGitSha({
+    appGitSha: process.env.APP_GIT_SHA,
+    isProduction: requireKnownGitSha,
+    readFallbackSha: () => readGitSha(projectRoot),
+  });
   const envBundleId = process.env.APP_BUNDLE_ID?.trim();
   const releaseId = `${appVersion}-${gitSha}`;
 
@@ -268,7 +271,9 @@ self.addEventListener('fetch', (event) => {
 }
 
 export default configure((ctx) => {
-  const buildInfo = buildAppInfo(ctx.prod);
+  const requireKnownGitSha =
+    ctx.prod && !ctx.debug && ctx.modeName === 'capacitor' && ctx.targetName === 'android';
+  const buildInfo = buildAppInfo(ctx.prod, requireKnownGitSha);
   const enableAppShell = ctx.modeName === 'spa' && ctx.prod;
 
   return {

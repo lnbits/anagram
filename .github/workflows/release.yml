@@ -53,6 +53,7 @@ jobs:
 
       - name: Build signed Android release APK
         env:
+          APP_GIT_SHA: ${{ needs.validate-tag.outputs.commit }}
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/anagram-release.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}

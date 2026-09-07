@@ -41,6 +41,7 @@ export interface ContactMetadata {
   relay_list_event_created_at?: number;
   general_relay_entries?: ContactRelay[];
   dm_receive_relay_entries?: ContactRelay[];
+  dm_receive_relay_event_created_at?: number;
   private_contact_list_member?: boolean;
   muted?: boolean;
   blocked?: boolean;

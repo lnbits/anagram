@@ -231,10 +231,10 @@ describe('e2eBridge', () => {
     expect(moduleMocks.saveBrowserNotificationsPreference).toHaveBeenCalledWith(false);
     expect(moduleMocks.nostrStore.setDeveloperDiagnosticsEnabled).toHaveBeenCalledWith(true);
     expect(moduleMocks.nostrStore.savePrivateKey).toHaveBeenCalledWith('private-key');
-    expect(moduleMocks.nostrStore.updateLoggedInUserRelayList).toHaveBeenCalledWith([
-      { url: 'ws://relay.one' },
-      { url: 'ws://relay.two' },
-    ]);
+    expect(moduleMocks.nostrStore.updateLoggedInUserRelayList).toHaveBeenCalledWith(
+      [{ url: 'ws://relay.one' }, { url: 'ws://relay.two' }],
+      { refreshSubscriptions: false }
+    );
     expect(moduleMocks.chatStore.reload).toHaveBeenCalledTimes(1);
     expect(moduleMocks.messageStore.reloadLoadedMessages).toHaveBeenCalledTimes(1);
   });
@@ -295,9 +295,7 @@ describe('e2eBridge', () => {
 
     const bridge = (globalThis.window as typeof window & { __appE2E__: any }).__appE2E__;
     await bridge.refreshSession({ chatId: '  Chat-Id  ' });
-    expect(moduleMocks.nostrStore.subscribePrivateMessagesForLoggedInUser).toHaveBeenCalledWith(
-      true
-    );
+    expect(moduleMocks.nostrStore.subscribePrivateMessagesForLoggedInUser).toHaveBeenCalledWith();
     expect(moduleMocks.chatStore.reload).toHaveBeenCalledTimes(3);
     expect(moduleMocks.nostrStore.restorePrivateMessagesForRecipient).toHaveBeenCalledWith(
       PUBKEY_HEX,

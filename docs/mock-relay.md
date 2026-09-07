@@ -82,3 +82,29 @@ npm run dev:mock-relay:proxy -- --help
 ```
 
 While it is running, `http://127.0.0.1:7002/__mock-relay` returns the active configuration and accepted WebSocket connection count. Other HTTP requests, including NIP-11 relay information requests, are forwarded to the real relay.
+
+
+## Measure restore and resume traffic
+
+The programmatic proxy returned by `startMockRelayProxy()` provides `trafficSnapshot()`,
+`resetTraffic()`, and `disconnectClients()`. A snapshot records outbound frames by relay URL,
+connection, command, subscription ID/name and filter, and event ID/kind. Received EVENT, EOSE
+and OK records identify responses and acknowledgement acceptance. It also counts connections,
+maximum simultaneous connections, duplicate active filter signatures, and rate-limit rejections.
+No event content, signatures, private keys, or decrypted message text is recorded.
+
+Use `rateLimit: { windowMs: 100, maxFrames: 8 }` to enforce a sliding limit per client connection.
+REQ and EVENT consume the budget; excess REQs receive CLOSED and excess publications receive
+`OK false` with a cool-off reason. CLOSE frames are still recorded and release subscriptions.
+The per-connection limit keeps independent browser sessions from affecting one another.
+
+Run the regression scenarios with:
+
+```bash
+npm run test:e2e:local -- e2e/relay-traffic.spec.ts
+```
+
+Playwright attaches JSON snapshots for saved-state login, the complete history restore,
+lightweight resume, targeted replay, epoch changes, and a send immediately after login.
+`TRAFFIC_BASELINE=true` relaxes only the first scenario's assertions/rate limit for measurement
+against an earlier checkout; normal CI runs enforce the limit and traffic assertions.

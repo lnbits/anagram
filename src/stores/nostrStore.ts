@@ -69,6 +69,7 @@ import {
 } from 'src/stores/nostr/reconnectHealingRuntime';
 import { createRelayConnectionRuntime } from 'src/stores/nostr/relayConnectionRuntime';
 import { createRelayPublishRuntime } from 'src/stores/nostr/relayPublishRuntime';
+import { watchRelaySettingsSubscriptions } from 'src/stores/nostr/relaySettingsSubscriptions';
 import { createStartupContactSyncRuntime } from 'src/stores/nostr/startupContactSyncRuntime';
 import { createStartupRuntime } from 'src/stores/nostr/startupRuntime';
 import {
@@ -124,7 +125,7 @@ import { useRelayStore } from 'src/stores/relayStore';
 import type { ChatGroupEpochKey, MessageRelayStatus } from 'src/types/chat';
 import type { ContactRecord } from 'src/types/contact';
 import { buildBlossomUploadAuthorization, requireBlossomServerUrl } from 'src/utils/blossomServer';
-import { ref, watch } from 'vue';
+import { ref } from 'vue';
 
 export type {
   StartupDisplaySnapshot,
@@ -506,23 +507,19 @@ export const useNostrStore = defineStore('nostrStore', () => {
     pendingEventSinceState,
   });
 
-  relayStore.init();
-  watch(
-    () =>
-      relayStore.relayEntries.map(
-        (entry) => `${entry.url}:${entry.read !== false}:${entry.write !== false}`
-      ),
-    () => {
-      if (
-        !relayStore.isInitialized ||
-        isRestoringStartupState.value ||
-        !getPrivateMessagesSubscription()
-      )
-        return;
-      notifyReconnectHealingRelayListChangedRuntime();
+  watchRelaySettingsSubscriptions({
+    hydrate: () => {
+      if (getLoggedInPublicKeyHex()) relayStore.init();
     },
-    { flush: 'sync' }
-  );
+    signature: () =>
+      relayStore.relayEntries
+        .map((entry) => `${entry.url}:${entry.read !== false}:${entry.write !== false}`)
+        .sort()
+        .join('|'),
+    isRestoring: () => isRestoringStartupState.value,
+    hasSessionSubscriptions: () => Boolean(getPrivateMessagesSubscription()),
+    refresh: () => notifyReconnectHealingRelayListChangedRuntime(),
+  });
 
   function normalizeThrottleMs(value: number | undefined): number {
     if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
@@ -1388,6 +1385,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
   const {
     ensurePrivateMessagesWatchdog: ensurePrivateMessagesWatchdogImpl,
     getPrivateMessagesSubscription,
+    getLiveRecipientSince,
     getPrivateMessagesSubscriptionSignature,
     isPrivateMessagesSubscriptionRelayTracked,
     markPrivateMessagesWatchdogRelayDisconnected,
@@ -1478,6 +1476,8 @@ export const useNostrStore = defineStore('nostrStore', () => {
     startPrivateMessagesStartupBackfill: startPrivateMessagesStartupBackfillImpl,
     stopPrivateMessagesBackfill: stopPrivateMessagesBackfillImpl,
   } = createPrivateMessagesBackfillRuntime({
+    ensureLiveRecipientSubscription: () => subscribePrivateMessagesForLoggedInUserImpl(),
+    getLiveRecipientSince,
     beginStartupInternalTask,
     buildFilterSinceDetails,
     buildFilterUntilDetails,
@@ -1519,6 +1519,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
   stopPrivateMessagesBackfillRuntime = stopPrivateMessagesBackfillImpl;
 
   const {
+    hasActiveContactHydration,
     resetContactSubscriptionsRuntimeState,
     subscribeContactProfileUpdates,
     subscribeContactRelayListUpdates,
@@ -1549,6 +1550,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     markContactProfileEventApplied,
     markContactRelayListEventApplied,
     ndk,
+    queueRoutingRefresh: () => queueTrackedContactSubscriptionsRefresh(),
     parseContactProfileEvent,
     pruneTrackedContactProfileEventState,
     pruneTrackedContactRelayListEventState,
@@ -1669,6 +1671,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     markContactProfileEventApplied,
     markContactRelayListEventApplied,
     ndk,
+    hasActiveContactHydration,
     publishPrivateContactList,
     readContactRelayListEventSince,
     refreshContactRelayList,
@@ -1788,6 +1791,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     resetGroupRosterSubscriptionRuntimeState: resetGroupRosterSubscriptionRuntimeStateImpl,
     subscribeGroupMembershipRosterUpdates: subscribeGroupMembershipRosterUpdatesImpl,
   } = createGroupRosterSubscriptionRuntime({
+    hydrateMemberProfiles: () => subscribeContactProfileUpdates(),
     applyGroupMembershipRosterEvent,
     buildSubscriptionEventDetails,
     buildSubscriptionRelayDetails,

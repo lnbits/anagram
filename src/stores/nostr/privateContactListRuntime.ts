@@ -95,7 +95,6 @@ export function createPrivateContactListRuntime({
   beginStartupStep,
   bumpContactListVersion,
   buildPrivateContactListTags,
-  buildSubscriptionEventDetails,
   buildSubscriptionRelayDetails,
   chatStore,
   completeStartupStep,
@@ -104,9 +103,7 @@ export function createPrivateContactListRuntime({
   encryptPrivateContactListTags,
   ensureContactListedInPrivateContactList,
   ensureRelayConnections,
-  extractRelayUrlsFromEvent,
   failStartupStep,
-  formatSubscriptionLogValue,
   getLoggedInPublicKeyHex,
   getLoggedInSignerUser,
   getStartupStepSnapshot,
@@ -116,8 +113,6 @@ export function createPrivateContactListRuntime({
   ndk,
   queueTrackedContactSubscriptionsRefresh,
   reconcileAcceptedChatFromPrivateContactList,
-  refreshContactByPublicKey,
-  relaySignature,
   resolvePrivateContactListPublishRelayUrls,
   resolvePrivateContactListReadRelayUrls,
   shouldApplyPrivateContactListEvent,
@@ -129,6 +124,7 @@ export function createPrivateContactListRuntime({
   let privateContactListSubscription: ReturnType<NDK['subscribe']> | null = null;
   let privateContactListSubscriptionSignature = '';
   const desiredSubscriptions = createDesiredSubscriptions();
+  let generation = 0;
   let privateContactListApplyQueue = Promise.resolve();
 
   function normalizePrivateContactListTargets(
@@ -390,8 +386,11 @@ export function createPrivateContactListRuntime({
   }
 
   function queuePrivateContactListEventApplication(event: NDKEvent): void {
+    const runGeneration = generation;
     privateContactListApplyQueue = privateContactListApplyQueue
-      .then(() => applyPrivateContactListEvent(event))
+      .then(() => {
+        if (runGeneration === generation) return applyPrivateContactListEvent(event);
+      })
       .catch((error) => {
         console.error('Failed to process private contact list event', error);
       });
@@ -512,6 +511,7 @@ export function createPrivateContactListRuntime({
   }
 
   function stopPrivateContactListSubscription(reason = 'replace'): void {
+    generation += 1;
     desiredSubscriptions.stop();
     if (privateContactListSubscription) {
       logSubscription('private-contact-list', 'stop', {
@@ -528,12 +528,14 @@ export function createPrivateContactListRuntime({
     seedRelayUrls: string[] = [],
     _force = false
   ): Promise<void> {
+    const runGeneration = generation;
     const pubkey = getLoggedInPublicKeyHex();
     if (!pubkey) {
       desiredSubscriptions.stop();
       return;
     }
     const relayUrls = await resolvePrivateContactListReadRelayUrls(seedRelayUrls);
+    if (runGeneration !== generation || pubkey !== getLoggedInPublicKeyHex()) return;
     if (!relayUrls.length) {
       desiredSubscriptions.stop();
       return;
@@ -563,6 +565,7 @@ export function createPrivateContactListRuntime({
               relaySet: NDKRelaySet.fromRelayUrls(relayUrls, ndk, false),
               cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
               onEvent: (event) => {
+                if (runGeneration !== generation || pubkey !== getLoggedInPublicKeyHex()) return;
                 const wrappedEvent = event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
                 updateStoredEventSinceFromCreatedAt(wrappedEvent.created_at);
                 queuePrivateContactListEventApplication(wrappedEvent);

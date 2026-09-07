@@ -91,7 +91,8 @@ export function createRelayPublishRuntime({
       const isPublished = publishedRelayUrls.has(relayUrl);
       const detail = isPublished
         ? undefined
-        : (errorsByRelayUrl.get(relayUrl) ?? 'Relay did not acknowledge publish.');
+        : (errorsByRelayUrl.get(relayUrl) ??
+          'Delivery unknown: relay did not acknowledge publish.');
 
       return {
         relay_url: relayUrl,
@@ -238,7 +239,10 @@ export function createRelayPublishRuntime({
             }
 
             if (normalizedRelayUrl && !publishedRelayUrls.has(normalizedRelayUrl)) {
-              errorsByRelayUrl.set(normalizedRelayUrl, 'Relay did not acknowledge publish.');
+              errorsByRelayUrl.set(
+                normalizedRelayUrl,
+                'Delivery unknown: relay did not acknowledge publish.'
+              );
             }
           })
           .catch((error) => {

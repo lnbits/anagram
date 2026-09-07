@@ -429,6 +429,11 @@ class InputSanitizerService {
       meta.profile_event_created_at = profileEventCreatedAt;
     }
 
+    const dmRelayEventCreatedAt = this.normalizePositiveInteger(
+      value.dm_receive_relay_event_created_at
+    );
+    if (dmRelayEventCreatedAt) meta.dm_receive_relay_event_created_at = dmRelayEventCreatedAt;
+
     if (relayListEventCreatedAt) {
       meta.relay_list_event_created_at = relayListEventCreatedAt;
     }

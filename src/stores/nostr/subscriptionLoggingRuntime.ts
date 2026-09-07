@@ -1,8 +1,14 @@
 import type NDK from '@nostr-dev-kit/ndk';
-import type { NDKEvent, NDKFilter, NDKSubscriptionOptions } from '@nostr-dev-kit/ndk';
+import type {
+  NDKEvent,
+  NDKFilter,
+  NDKSubscription,
+  NDKSubscriptionOptions,
+} from '@nostr-dev-kit/ndk';
 import { chatDataService } from 'src/services/chatDataService';
 import { contactsService } from 'src/services/contactsService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
+import { observeConnectedRelayEose } from 'src/stores/nostr/subscriptionEose';
 import type { SubscriptionLogName } from 'src/stores/nostr/types';
 import type { ChatGroupEpochKey } from 'src/types/chat';
 import type { ContactRecord } from 'src/types/contact';
@@ -258,10 +264,21 @@ export function createSubscriptionLoggingRuntime({
     details: Record<string, unknown> = {}
   ) {
     const subId = createLoggedSubscriptionSubId(label);
+    let initialEoseDelivered = false;
+    const onEose = (source: NDKSubscription) => {
+      if (initialEoseDelivered) return;
+      initialEoseDelivered = true;
+      options.onEose?.(source);
+    };
     const subscription = ndk.subscribe(filters, {
       ...options,
       subId,
+      // Routing and batching are explicit. NDK regrouping would replace unrelated listeners.
+      groupable: false,
+      ...(options.onEose ? { onEose } : {}),
     });
+    if (options.onEose && !options.closeOnEose)
+      observeConnectedRelayEose(subscription, () => onEose(subscription));
     const reqFrame = buildNostrReqFrame(subId, subscription.filters);
     const reqStatement = buildLoggedNostrReqStatement(subId, subscription.filters);
     const relayUrls = Array.from(

@@ -238,18 +238,22 @@ export function createOutboundMessageReplayRuntime({
         }
 
         const retryableRelayStatuses = sortReplayRelayStatuses(
-          outboundEvent.relay_statuses.filter((relayStatus) => shouldReplayRelayStatus(relayStatus, { forceImmediate: false })).filter(
-            (relayStatus) =>
-              (!relayScope ||
-                relayScope.has(
-                  inputSanitizerService.normalizeRelayWs(relayStatus.relay_url) ?? ''
-                )) &&
-              Date.now() -
-                (lastAttempts.get(
-                  `${outboundEvent.event.id}:${relayStatus.scope}:${relayStatus.relay_url}`
-                ) ?? 0) >=
-                OUTBOUND_MESSAGE_REPLAY_RETRY_COOLDOWN_MS
-          )
+          outboundEvent.relay_statuses
+            .filter((relayStatus) =>
+              shouldReplayRelayStatus(relayStatus, { forceImmediate: false })
+            )
+            .filter(
+              (relayStatus) =>
+                (!relayScope ||
+                  relayScope.has(
+                    inputSanitizerService.normalizeRelayWs(relayStatus.relay_url) ?? ''
+                  )) &&
+                Date.now() -
+                  (lastAttempts.get(
+                    `${outboundEvent.event.id}:${relayStatus.scope}:${relayStatus.relay_url}`
+                  ) ?? 0) >=
+                  OUTBOUND_MESSAGE_REPLAY_RETRY_COOLDOWN_MS
+            )
         );
         if (retryableRelayStatuses.length === 0) {
           continue;

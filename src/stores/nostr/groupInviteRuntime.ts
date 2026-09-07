@@ -184,7 +184,7 @@ export function createGroupInviteRuntime({
     if (acceptedGroupEpochPublicKey) {
       try {
         await restoreGroupEpochHistory(normalizedTargetPubkey, acceptedGroupEpochPublicKey, {
-          force: true,
+          force: false,
         });
       } catch (error) {
         console.warn(

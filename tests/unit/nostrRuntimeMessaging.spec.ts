@@ -613,7 +613,7 @@ describe('nostr runtime messaging logic', () => {
     await runtime.ensureGroupInvitePubkeyIsContact(GROUP_KEY, 'Accepted Group');
 
     expect(restoreGroupEpochHistory).toHaveBeenCalledWith(GROUP_KEY, PUBKEY_B, {
-      force: true,
+      force: false,
     });
     expect(subscribeGroupMembershipRosterUpdates).toHaveBeenCalledWith(
       ['wss://relay.example/'],

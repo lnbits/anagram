@@ -186,4 +186,53 @@ describe('outboundMessageReplayRuntime', () => {
     expect(retryDirectMessageRelay).not.toHaveBeenCalled();
     expect(window.removeEventListener).toHaveBeenCalledWith('online', onlineHandler);
   });
+  it('coalesces startup, healing and relay notifications and retries only the connected relay', async () => {
+    const retry = vi.fn(async () => {});
+    serviceMocks.nostrEventDataService.listEventsByDirection.mockResolvedValue([
+      {
+        direction: 'out',
+        event: { id: 'event-1', kind: NDKKind.PrivateDirectMessage },
+        relay_statuses: [
+          makeRelayStatus({ relay_url: 'wss://connected.test/' }),
+          makeRelayStatus({ relay_url: 'wss://unrelated.test/' }),
+        ],
+      },
+    ]);
+    const runtime = createOutboundMessageReplayRuntime({
+      getLoggedInPublicKeyHex: () => 'a'.repeat(64),
+      logMessageRelayDiagnostics: vi.fn(),
+      retryDirectMessageRelay: retry,
+    });
+    await runtime.startOutboundMessageReplay();
+    runtime.notifyRelayConnected('wss://connected.test');
+    runtime.notifyRelayConnected('wss://connected.test/');
+    runtime.queueOutboundMessageReplay('reconnect-healing', 1500);
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(serviceMocks.nostrEventDataService.listEventsByDirection).toHaveBeenCalledTimes(1);
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(retry).toHaveBeenCalledWith(7, 'wss://connected.test/', 'recipient', {
+      trigger: 'outbox:relay-connected',
+    });
+    runtime.notifyRelayConnected('wss://connected.test/');
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(retry).toHaveBeenCalledTimes(1);
+    runtime.resetOutboundMessageReplayRuntimeState();
+  });
+
+  it('joins concurrent replay operations and an empty outbox produces no publication', async () => {
+    const retry = vi.fn(async () => {});
+    const runtime = createOutboundMessageReplayRuntime({
+      getLoggedInPublicKeyHex: () => 'a'.repeat(64),
+      logMessageRelayDiagnostics: vi.fn(),
+      retryDirectMessageRelay: retry,
+    });
+    await Promise.all([
+      runtime.runOutboundMessageReplay('startup'),
+      runtime.runOutboundMessageReplay('reconnect-healing'),
+      runtime.runOutboundMessageReplay('relay-connected'),
+    ]);
+    expect(serviceMocks.nostrEventDataService.listEventsByDirection).toHaveBeenCalledTimes(1);
+    expect(retry).not.toHaveBeenCalled();
+    runtime.resetOutboundMessageReplayRuntimeState();
+  });
 });

@@ -8,6 +8,7 @@ export interface AppE2EBootstrapOptions {
   privateKey: string;
   relayUrls: string[];
   developerDiagnosticsEnabled?: boolean;
+  passiveRestore?: boolean;
 }
 
 export interface AppE2ERefreshOptions {
@@ -77,6 +78,9 @@ export interface AppE2EWaitForAppReadyOptions {
 
 export interface AppE2EBridge {
   bootstrapSession(options: AppE2EBootstrapOptions): Promise<AppE2ESessionSnapshot>;
+  resumeSession(): Promise<void>;
+  waitForHistoryRestore(): Promise<void>;
+  seedFailedOutboundRelay(options: { eventId: string; relayUrl: string }): Promise<void>;
   getDeveloperDiagnosticsSnapshot(): Promise<DeveloperDiagnosticsSnapshot>;
   getSessionSnapshot(): Promise<AppE2ESessionSnapshot>;
   isPrivateContactListMember(options: AppE2EContactListMemberOptions): Promise<boolean>;
@@ -247,27 +251,28 @@ async function bootstrapSession(options: AppE2EBootstrapOptions): Promise<AppE2E
     throw new Error('Invalid private key supplied for e2e bootstrap.');
   }
 
-  let bootstrapPublishError: unknown = null;
-  for (let attempt = 0; attempt <= E2E_BOOTSTRAP_RETRY_DELAYS_MS.length; attempt += 1) {
-    try {
-      await nostrStore.updateLoggedInUserRelayList(relayEntries);
-      await nostrStore.publishMyRelayList(relayEntries, relayUrls);
-      bootstrapPublishError = null;
-      break;
-    } catch (error) {
-      bootstrapPublishError = error;
-      if (!isRetryableBootstrapError(error) || attempt >= E2E_BOOTSTRAP_RETRY_DELAYS_MS.length) {
-        throw error;
-      }
+  if (!options.passiveRestore) {
+    let bootstrapPublishError: unknown = null;
+    for (let attempt = 0; attempt <= E2E_BOOTSTRAP_RETRY_DELAYS_MS.length; attempt += 1) {
+      try {
+        await nostrStore.updateLoggedInUserRelayList(relayEntries, { refreshSubscriptions: false });
+        await nostrStore.publishMyRelayList(relayEntries, relayUrls);
+        bootstrapPublishError = null;
+        break;
+      } catch (error) {
+        bootstrapPublishError = error;
+        if (!isRetryableBootstrapError(error) || attempt >= E2E_BOOTSTRAP_RETRY_DELAYS_MS.length) {
+          throw error;
+        }
 
-      await waitForBootstrapRetry(E2E_BOOTSTRAP_RETRY_DELAYS_MS[attempt] ?? 300);
+        await waitForBootstrapRetry(E2E_BOOTSTRAP_RETRY_DELAYS_MS[attempt] ?? 300);
+      }
+    }
+
+    if (bootstrapPublishError) {
+      throw bootstrapPublishError;
     }
   }
-
-  if (bootstrapPublishError) {
-    throw bootstrapPublishError;
-  }
-
   await nostrStore.restoreStartupState(relayUrls);
   await Promise.all([chatStore.init(), messageStore.init()]);
   await Promise.all([chatStore.reload(), messageStore.reloadLoadedMessages()]);
@@ -282,6 +287,46 @@ async function bootstrapSession(options: AppE2EBootstrapOptions): Promise<AppE2E
     (candidatePublicKey) => nostrStore.encodeNpub(candidatePublicKey),
     relayUrls
   );
+}
+
+async function waitForHistoryRestore(): Promise<void> {
+  const { useNostrStore } = await import('src/stores/nostrStore');
+  const deadline = Date.now() + 150_000;
+  while (Date.now() < deadline) {
+    const step = useNostrStore().startupSteps.find((step) => step.id === 'message-history-restore');
+    if (step?.status === 'success') return;
+    if (step?.status === 'error') throw new Error(step.errorMessage ?? 'History restore failed');
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error('History restore did not complete');
+}
+
+async function seedFailedOutboundRelay(options: {
+  eventId: string;
+  relayUrl: string;
+}): Promise<void> {
+  const { nostrEventDataService } = await import('src/services/nostrEventDataService');
+  await nostrEventDataService.appendRelayStatuses(options.eventId, [
+    {
+      relay_url: options.relayUrl,
+      direction: 'outbound',
+      scope: 'recipient',
+      status: 'failed',
+      updated_at: new Date(Date.now() - 60_000).toISOString(),
+      detail: 'Test acknowledgement lost',
+    },
+  ]);
+}
+
+async function resumeSession(): Promise<void> {
+  const [{ useNostrStore }, { useRelayStore }] = await Promise.all([
+    import('src/stores/nostrStore'),
+    import('src/stores/relayStore'),
+  ]);
+  await useNostrStore().runReconnectHealing('session-resume', {
+    sessionRelayUrls: useRelayStore().relays,
+    propagateError: true,
+  });
 }
 
 async function getSessionSnapshot(): Promise<AppE2ESessionSnapshot> {
@@ -390,9 +435,8 @@ async function refreshSession(options: AppE2ERefreshOptions = {}): Promise<void>
   relayStore.init();
 
   await Promise.all([chatStore.init(), messageStore.init()]);
-  const previousPrivateMessagesEoseAt = nostrStore.privateMessagesSubscriptionLastEoseAt ?? null;
-  await nostrStore.subscribePrivateMessagesForLoggedInUser(true);
-  await waitForPrivateMessagesSubscriptionEose(nostrStore, previousPrivateMessagesEoseAt);
+  await nostrStore.subscribePrivateMessagesForLoggedInUser();
+  await waitForPrivateMessagesSubscriptionEose(nostrStore, null);
   await chatStore.reload();
 
   const normalizedChatId =
@@ -701,6 +745,9 @@ export function installAppE2EBridge(): void {
 
   const bridge: AppE2EBridge = {
     bootstrapSession,
+    resumeSession,
+    waitForHistoryRestore,
+    seedFailedOutboundRelay,
     getDeveloperDiagnosticsSnapshot,
     getSessionSnapshot,
     isPrivateContactListMember,

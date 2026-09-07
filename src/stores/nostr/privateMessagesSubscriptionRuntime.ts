@@ -7,10 +7,7 @@ import NDK, {
   type NDKSubscriptionOptions,
   normalizeRelayUrl,
 } from '@nostr-dev-kit/ndk';
-import { chatDataService } from 'src/services/chatDataService';
-import { contactsService } from 'src/services/contactsService';
 import {
-  PRIVATE_MESSAGES_LIVE_PROBE_TIMEOUT_MS,
   PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS,
   PRIVATE_MESSAGES_WATCHDOG_INTERVAL_MS,
   PRIVATE_MESSAGES_WATCHDOG_RECOVERY_COOLDOWN_MS,
@@ -115,24 +112,17 @@ interface PrivateMessagesSubscriptionRuntimeDeps {
 export function createPrivateMessagesSubscriptionRuntime({
   beginStartupStep,
   buildFilterSinceDetails,
-  buildPrivateMessageSubscriptionTargetDetails,
-  buildSubscriptionEventDetails,
   buildSubscriptionRelayDetails,
   bumpDeveloperDiagnosticsVersion,
   clearPrivateMessagesUiRefreshState,
   completeStartupStep,
   ensureRelayConnections,
-  extractRelayUrlsFromEvent,
   failStartupStep,
   flushPrivateMessagesUiRefreshNow,
-  formatSubscriptionLogValue,
-  getFilterSince,
   getLoggedInPublicKeyHex,
   getOrCreateSigner,
   getPrivateMessagesIngestQueue,
-  getPrivateMessagesRestoreThrottleMs,
   getPrivateMessagesStartupLiveSince,
-  getRelaySnapshots,
   getStartupStepSnapshot,
   getStoredAuthMethod,
   isRestoringStartupState,
@@ -151,8 +141,6 @@ export function createPrivateMessagesSubscriptionRuntime({
   privateMessagesSubscriptionSince,
   privateMessagesSubscriptionStartedAt,
   queuePrivateMessageIngestion,
-  refreshAllStoredContacts,
-  relaySignature,
   resolvePrivateMessageReadRelayUrls,
   schedulePostPrivateMessagesEoseChecks,
   setPrivateMessagesRestoreThrottleMs,
@@ -164,6 +152,8 @@ export function createPrivateMessagesSubscriptionRuntime({
   let privateMessagesSubscription: ReturnType<NDK['subscribe']> | null = null;
   let privateMessagesSubscriptionSignature = '';
   const subscriptions = createDesiredSubscriptions();
+  let generation = 0;
+  let desiredScopeCount = 0;
   const scopes = new Map<
     string,
     { signature: string; since: number; ready: boolean; subscription: ReturnType<NDK['subscribe']> }
@@ -304,162 +294,8 @@ export function createPrivateMessagesSubscriptionRuntime({
     bumpDeveloperDiagnosticsVersion();
   }
 
-  function normalizePrivateMessagesLiveProbeTimeoutMs(value: number | undefined): number {
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-      return PRIVATE_MESSAGES_LIVE_PROBE_TIMEOUT_MS;
-    }
-
-    return Math.max(1, Math.floor(value));
-  }
-
   function getPrivateMessagesSubscriptionSinceOverride(value: number | undefined): number | null {
-    return Number.isInteger(value) && Number(value) >= 0 ? Math.floor(Number(value)) : null;
-  }
-
-  async function probePrivateMessagesLiveSubscription(
-    options: RefreshPrivateMessagesLiveSubscriptionOptions = {}
-  ): Promise<boolean> {
-    const loggedInPubkeyHex = getLoggedInPublicKeyHex();
-    const authMethod = getStoredAuthMethod();
-    if (!loggedInPubkeyHex || !authMethod) {
-      logSubscription('private-messages', 'live-probe-skip', {
-        reason: 'missing-login',
-        pubkey: formatSubscriptionLogValue(loggedInPubkeyHex),
-        authMethod: authMethod ?? null,
-      });
-      return false;
-    }
-
-    await contactsService.init();
-    await chatDataService.init();
-    const relayUrls = await resolvePrivateMessageReadRelayUrls(options.seedRelayUrls);
-    if (relayUrls.length === 0) {
-      logSubscription('private-messages', 'live-probe-skip', {
-        reason: 'no-relays',
-        pubkey: formatSubscriptionLogValue(loggedInPubkeyHex),
-        authMethod,
-      });
-      return false;
-    }
-
-    const recipientPubkeys = await listPrivateMessageRecipientPubkeys();
-    if (recipientPubkeys.length === 0) {
-      logSubscription('private-messages', 'live-probe-skip', {
-        reason: 'no-recipients',
-        pubkey: formatSubscriptionLogValue(loggedInPubkeyHex),
-        authMethod,
-      });
-      return false;
-    }
-
-    const sinceOverride = getPrivateMessagesSubscriptionSinceOverride(options.sinceOverride);
-    const filterSince = sinceOverride ?? getFilterSince();
-    const timeoutMs = normalizePrivateMessagesLiveProbeTimeoutMs(options.probeTimeoutMs);
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
-    const privateMessageTargetDetails = await buildPrivateMessageSubscriptionTargetDetails(
-      recipientPubkeys,
-      loggedInPubkeyHex
-    );
-    const signature = `${recipientPubkeys.join(',')}:${relaySignature(relayUrls)}`;
-
-    await ensureRelayConnections(relayUrls);
-    logSubscription('private-messages', 'live-probe-start', {
-      signature,
-      pubkey: formatSubscriptionLogValue(loggedInPubkeyHex),
-      authMethod,
-      recipientCount: recipientPubkeys.length,
-      recipients: recipientPubkeys.map((value) => formatSubscriptionLogValue(value)),
-      timeoutMs,
-      ...buildFilterSinceDetails(filterSince),
-      ...buildSubscriptionRelayDetails(relayUrls),
-      ...privateMessageTargetDetails,
-    });
-
-    return new Promise<boolean>((resolve) => {
-      let didFinish = false;
-      let subscription: ReturnType<NDK['subscribe']> | null = null;
-      let timeoutId: ReturnType<typeof globalThis.setTimeout> | null = null;
-
-      const finish = (healthy: boolean, reason: string) => {
-        if (didFinish) {
-          return;
-        }
-
-        didFinish = true;
-        if (timeoutId !== null) {
-          globalThis.clearTimeout(timeoutId);
-          timeoutId = null;
-        }
-        if (subscription) {
-          subscription.stop();
-          subscription = null;
-        }
-
-        logSubscription('private-messages', healthy ? 'live-probe-ok' : 'live-probe-failed', {
-          reason,
-          signature,
-          timeoutMs,
-          ...buildFilterSinceDetails(filterSince),
-          ...buildSubscriptionRelayDetails(relayUrls),
-        });
-        resolve(healthy);
-      };
-
-      timeoutId = globalThis.setTimeout(() => {
-        finish(false, 'timeout');
-      }, timeoutMs);
-
-      try {
-        const filters: NDKFilter = {
-          kinds: [NDKKind.GiftWrap],
-          '#p': recipientPubkeys,
-          since: filterSince,
-        };
-        subscription = subscribeWithReqLogging(
-          'private-messages',
-          'private-messages-live-probe',
-          filters,
-          {
-            relaySet,
-            cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
-            closeOnEose: true,
-            onEvent: (event) => {
-              const wrappedEvent = event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
-              logSubscription('private-messages', 'live-probe-event', {
-                signature,
-                ...buildSubscriptionEventDetails(wrappedEvent),
-                ...buildSubscriptionRelayDetails(extractRelayUrlsFromEvent(wrappedEvent)),
-              });
-              updateStoredPrivateMessagesLastReceivedFromCreatedAt(wrappedEvent.created_at);
-              updateStoredEventSinceFromCreatedAt(wrappedEvent.created_at);
-              queuePrivateMessageIngestion(wrappedEvent, loggedInPubkeyHex);
-            },
-            onEose: () => {
-              markPrivateMessagesLiveCoverageNow();
-              flushPrivateMessagesUiRefreshNow();
-              schedulePostPrivateMessagesEoseChecks();
-              finish(true, 'eose');
-            },
-            onClose: () => {
-              finish(false, 'close');
-            },
-          },
-          {
-            signature,
-            timeoutMs,
-            ...buildFilterSinceDetails(filterSince),
-            ...buildSubscriptionRelayDetails(relayUrls),
-            ...privateMessageTargetDetails,
-          }
-        );
-      } catch (error) {
-        logSubscription('private-messages', 'live-probe-error', {
-          signature,
-          error,
-        });
-        finish(false, 'error');
-      }
-    });
+    return Number.isInteger(value) && Number(value) >= 0 ? Number(value) : null;
   }
 
   async function refreshPrivateMessagesLiveSubscription(
@@ -481,7 +317,10 @@ export function createPrivateMessagesSubscriptionRuntime({
         ...buildFilterSinceDetails(subscribeOptions.sinceOverride),
       });
       try {
-        await subscribePrivateMessagesForLoggedInUser(true, subscribeOptions);
+        await subscribePrivateMessagesForLoggedInUser(true, {
+          ...subscribeOptions,
+          unhealthy: true,
+        });
         return {
           recreatedLiveSubscription:
             privateMessagesSubscription !== null &&
@@ -514,29 +353,11 @@ export function createPrivateMessagesSubscriptionRuntime({
     }
     if (!privateMessagesSubscription) return recreateLiveSubscription('missing-subscription');
 
-    let probeSucceeded = false;
-    try {
-      probeSucceeded = await probePrivateMessagesLiveSubscription({
-        ...(options.seedRelayUrls ? { seedRelayUrls: options.seedRelayUrls } : {}),
-        ...(sinceOverride !== null ? { sinceOverride } : {}),
-        probeTimeoutMs: options.probeTimeoutMs,
-      });
-    } catch (error) {
-      logSubscription('private-messages', 'live-refresh-probe-error', {
-        error,
-        ...buildFilterSinceDetails(subscribeOptions.sinceOverride),
-      });
-    }
-
-    if (probeSucceeded) {
-      logSubscription('private-messages', 'live-refresh-keep', {
-        reason: 'probe-ok',
-        ...buildFilterSinceDetails(subscribeOptions.sinceOverride),
-      });
-      return { recreatedLiveSubscription: false };
-    }
-
-    return recreateLiveSubscription('probe-failed');
+    // NDK reissues the existing filters when transport reconnects. A second probe
+    // downloads the same window and is not evidence that a healthy listener needs replacing.
+    await ensureRelayConnections(privateMessagesSubscriptionRelayUrls.value);
+    await subscribePrivateMessagesForLoggedInUser(false, subscribeOptions);
+    return { recreatedLiveSubscription: false };
   }
 
   async function recoverPrivateMessagesSubscriptionFromWatchdog(
@@ -561,7 +382,7 @@ export function createPrivateMessagesSubscriptionRuntime({
       reason,
       ...details,
     });
-    await subscribePrivateMessagesForLoggedInUser(true, {
+    await subscribePrivateMessagesForLoggedInUser(false, {
       restoreThrottleMs: PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS,
     });
   }
@@ -593,6 +414,7 @@ export function createPrivateMessagesSubscriptionRuntime({
         const browserOffline = isBrowserOfflineForPrivateMessagesWatchdog();
         const relayUrls = normalizeRelayStatusUrls(privateMessagesSubscriptionRelayUrls.value);
         if (
+          scopes.size !== desiredScopeCount ||
           !privateMessagesSubscription ||
           !privateMessagesSubscriptionSignature ||
           relayUrls.length === 0
@@ -669,6 +491,8 @@ export function createPrivateMessagesSubscriptionRuntime({
   }
 
   function stopPrivateMessagesLiveSubscription(reason = 'replace'): void {
+    generation += 1;
+    desiredScopeCount = 0;
     messageHistoryRestoreContext = null;
     subscriptions.stop();
     scopes.clear();
@@ -711,7 +535,7 @@ export function createPrivateMessagesSubscriptionRuntime({
   }
 
   function subscribePrivateMessagesForLoggedInUser(
-    force = false,
+    _force = false,
     options: SubscribePrivateMessagesOptions = {}
   ): Promise<void> {
     // Serialize desired-state reads as well as creation; later callers recheck effective signatures.
@@ -720,8 +544,12 @@ export function createPrivateMessagesSubscriptionRuntime({
       .catch(() => {})
       .then(async () => {
         if (session !== getLoggedInPublicKeyHex()) return;
-        try { await reconcilePrivateMessages(force, options); }
-      catch (error) { if (options.startupTrackStep) failStartupStep('private-message-events', error); throw error; }
+        try {
+          await reconcilePrivateMessages(options.unhealthy === true, options);
+        } catch (error) {
+          if (options.startupTrackStep) failStartupStep('private-message-events', error);
+          throw error;
+        }
       });
     subscriptionSetup = operation;
     return operation;
@@ -731,6 +559,7 @@ export function createPrivateMessagesSubscriptionRuntime({
     unhealthy: boolean,
     options: SubscribePrivateMessagesOptions
   ): Promise<void> {
+    const runGeneration = generation;
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
     if (!loggedInPubkeyHex || !getStoredAuthMethod()) {
       stopPrivateMessagesLiveSubscription('missing-login');
@@ -746,11 +575,8 @@ export function createPrivateMessagesSubscriptionRuntime({
       recipients,
       await resolvePrivateMessageReadRelayUrls(options.seedRelayUrls)
     );
-    const requestedSince =
-      options.sinceOverride ??
-      (options.startupTrackStep || isRestoringStartupState.value
-        ? getPrivateMessagesStartupLiveSince()
-        : getFilterSince());
+    if (runGeneration !== generation || loggedInPubkeyHex !== getLoggedInPublicKeyHex()) return;
+    const requestedSince = options.sinceOverride ?? getPrivateMessagesStartupLiveSince();
     const activeKeys = new Set(
       routes.filter((route) => route.relayUrls.length).map((route) => route.publicKey)
     );
@@ -822,7 +648,9 @@ export function createPrivateMessagesSubscriptionRuntime({
           },
         };
       });
+    desiredScopeCount = desired.length;
     await subscriptions.reconcile(desired, unhealthy);
+    if (runGeneration !== generation) return;
     const relayUrls = normalizeRelayStatusUrls(routes.flatMap((route) => route.relayUrls));
     privateMessagesSubscription = [...scopes.values()][0]?.subscription ?? null;
     privateMessagesSubscriptionSignature = desired.map((item) => item.signature).join('|');
@@ -879,6 +707,7 @@ export function createPrivateMessagesSubscriptionRuntime({
   return {
     ensurePrivateMessagesWatchdog,
     getPrivateMessagesSubscription,
+    getLiveRecipientSince: (publicKey: string) => scopes.get(publicKey)?.since ?? null,
     getPrivateMessagesSubscriptionSignature,
     isPrivateMessagesSubscriptionRelayTracked,
     markPrivateMessagesWatchdogRelayDisconnected,

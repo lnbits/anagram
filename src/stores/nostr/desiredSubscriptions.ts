@@ -1,5 +1,7 @@
 import type { NDKFilter } from '@nostr-dev-kit/ndk';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
+import { RELAY_QUERY_TIMEOUT_MS } from 'src/stores/nostr/constants';
+import { RelayQueryTimeoutError } from 'src/stores/nostr/relayQueryUtils';
 import { normalizeRelayStatusUrlsValue } from 'src/stores/nostr/valueUtils';
 
 export function subscriptionSignature(
@@ -54,7 +56,8 @@ export function createDesiredSubscriptions() {
 
   function ensure(desired: DesiredSubscription, unhealthy = false): Promise<void> {
     const existing = entries.get(desired.key);
-    if (existing?.signature === desired.signature && (!unhealthy || !existing.subscription)) return existing.started;
+    if (existing?.signature === desired.signature && (!unhealthy || !existing.subscription))
+      return existing.started;
     remove(desired.key);
     let resolveReady!: () => void;
     let rejectReady!: (error: Error) => void;
@@ -99,16 +102,13 @@ export function createDesiredSubscriptions() {
     await Promise.all(desired.map((item) => ensure(item, unhealthy)));
   }
 
-  async function waitForEose(timeoutMs = 15_000): Promise<void> {
+  async function waitForEose(timeoutMs = RELAY_QUERY_TIMEOUT_MS): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
         Promise.all([...entries.values()].map((entry) => entry.ready)),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error('Timed out waiting for subscription EOSE.')),
-            timeoutMs
-          );
+          timer = setTimeout(() => reject(new RelayQueryTimeoutError(timeoutMs)), timeoutMs);
         }),
       ]);
     } finally {

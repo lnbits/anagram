@@ -49,6 +49,9 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    dependenciesInfo {
+        includeInApk = false
+    }
     signingConfigs {
         if (hasReleaseSigning) {
             release {

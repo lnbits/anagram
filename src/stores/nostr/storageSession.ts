@@ -5,7 +5,6 @@ import {
   EVENT_FILTER_LOOKBACK_SECONDS,
   EVENT_SINCE_STORAGE_KEY,
   PRIVATE_MESSAGES_BACKFILL_INITIAL_DELAY_MS,
-  PRIVATE_MESSAGES_BACKFILL_MAX_AGE_SECONDS,
   PRIVATE_MESSAGES_BACKFILL_MAX_DELAY_MS,
   PRIVATE_MESSAGES_BACKFILL_STATE_STORAGE_KEY,
   PRIVATE_MESSAGES_BACKFILL_WINDOW_SECONDS,
@@ -22,6 +21,10 @@ import type {
   PrivatePreferences,
 } from 'src/stores/nostr/types';
 import { normalizeBlossomServerUrl } from 'src/utils/blossomServer';
+import {
+  DEFAULT_MESSAGE_HISTORY_RESTORE_DAYS,
+  MESSAGE_HISTORY_RESTORE_DAYS,
+} from 'src/utils/messageHistoryRestore';
 import type { Ref } from 'vue';
 
 interface PendingEventSinceState {
@@ -47,6 +50,8 @@ export function createStorageSessionRuntime({
   normalizeEventId,
   pendingEventSinceState,
 }: StorageSessionRuntimeDeps) {
+  let messageHistoryRestoreDays: number | null = null;
+
   function setStoredEventSince(value: number): number {
     const normalizedValue =
       Number.isInteger(value) && Number(value) > 0
@@ -192,15 +197,31 @@ export function createStorageSessionRuntime({
   }
 
   function clearPrivateMessagesBackfillState(): void {
+    messageHistoryRestoreDays = null;
     if (hasStorage()) {
       window.localStorage.removeItem(PRIVATE_MESSAGES_BACKFILL_STATE_STORAGE_KEY);
     }
   }
 
+  function setMessageHistoryRestoreDays(days: number): void {
+    if (!MESSAGE_HISTORY_RESTORE_DAYS.some((option) => option === days)) {
+      throw new Error('Invalid message history restore duration.');
+    }
+    clearPrivateMessagesBackfillState();
+    messageHistoryRestoreDays = days;
+  }
+
   function getPrivateMessagesStartupFloorSince(
     baseUnixTime = Math.floor(Date.now() / 1000)
   ): number {
-    return Math.max(0, Math.floor(baseUnixTime) - PRIVATE_MESSAGES_BACKFILL_MAX_AGE_SECONDS);
+    // Resume an interrupted restore using its original boundary, not a saved preference.
+    // Fresh login and logout both clear the checkpoint and this session's selection.
+    const checkpoint = readPrivateMessagesBackfillState();
+    if (messageHistoryRestoreDays === null && checkpoint && !checkpoint.completed) {
+      return checkpoint.floorSince;
+    }
+    const days = messageHistoryRestoreDays ?? DEFAULT_MESSAGE_HISTORY_RESTORE_DAYS;
+    return Math.max(0, Math.floor(baseUnixTime) - days * 24 * 60 * 60);
   }
 
   function getPrivateMessagesStartupLiveSince(
@@ -219,7 +240,10 @@ export function createStorageSessionRuntime({
   function getPrivateMessagesEpochSwitchSince(
     baseUnixTime = Math.floor(Date.now() / 1000)
   ): number {
-    return Math.min(getFilterSince(), getPrivateMessagesStartupLiveSince(baseUnixTime));
+    return Math.max(
+      getPrivateMessagesStartupFloorSince(baseUnixTime),
+      Math.min(getFilterSince(), getPrivateMessagesStartupLiveSince(baseUnixTime))
+    );
   }
 
   function createInitialPrivateMessagesBackfillState(
@@ -630,6 +654,7 @@ export function createStorageSessionRuntime({
     readPrivatePreferencesFromStorage,
     readStoredPrivateMessagesLastReceivedCreatedAt,
     resetEventSinceForFreshLogin,
+    setMessageHistoryRestoreDays,
     setStoredEventSince,
     sha256Hex,
     toComparableTimestamp,

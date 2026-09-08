@@ -16,6 +16,7 @@ import NDK, {
 import { contactsService } from 'src/services/contactsService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { RELAY_PUBLISH_TIMEOUT_MS } from 'src/stores/nostr/constants';
+import { getOrCreateOutboundGiftWrap } from 'src/stores/nostr/outboundGiftWrap';
 import type {
   GiftWrappedRumorPublishResult,
   GroupIdentitySecretContent,
@@ -90,7 +91,8 @@ export function createRelayPublishRuntime({
       const isPublished = publishedRelayUrls.has(relayUrl);
       const detail = isPublished
         ? undefined
-        : (errorsByRelayUrl.get(relayUrl) ?? 'Relay did not acknowledge publish.');
+        : (errorsByRelayUrl.get(relayUrl) ??
+          'Delivery unknown: relay did not acknowledge publish.');
 
       return {
         relay_url: relayUrl,
@@ -237,7 +239,10 @@ export function createRelayPublishRuntime({
             }
 
             if (normalizedRelayUrl && !publishedRelayUrls.has(normalizedRelayUrl)) {
-              errorsByRelayUrl.set(normalizedRelayUrl, 'Relay did not acknowledge publish.');
+              errorsByRelayUrl.set(
+                normalizedRelayUrl,
+                'Delivery unknown: relay did not acknowledge publish.'
+              );
             }
           })
           .catch((error) => {
@@ -435,9 +440,15 @@ export function createRelayPublishRuntime({
     const combinedRelayStatuses: MessageRelayStatus[] = [];
 
     try {
-      const recipientGiftWrapEvent = await giftWrap(recipientRumorEvent, recipient, signer, {
-        rumorKind,
-      });
+      const recipientGiftWrapEvent =
+        options.localMessageId && recipientRumorNostrEvent
+          ? new NDKEvent(
+              ndk,
+              await getOrCreateOutboundGiftWrap(recipientRumorNostrEvent, 'recipient', () =>
+                giftWrap(recipientRumorEvent, recipient, signer, { rumorKind })
+              )
+            )
+          : await giftWrap(recipientRumorEvent, recipient, signer, { rumorKind });
       const recipientPublishResult = await publishEventWithRelayStatuses(
         recipientGiftWrapEvent,
         relayUrls,
@@ -467,9 +478,15 @@ export function createRelayPublishRuntime({
             normalizedRecipientPubkey,
             createdAt
           );
-          const selfGiftWrapEvent = await giftWrap(selfRumorEvent, senderRecipient, signer, {
-            rumorKind,
-          });
+          const selfGiftWrapEvent =
+            options.localMessageId && recipientRumorNostrEvent
+              ? new NDKEvent(
+                  ndk,
+                  await getOrCreateOutboundGiftWrap(recipientRumorNostrEvent, 'self', () =>
+                    giftWrap(selfRumorEvent, senderRecipient, signer, { rumorKind })
+                  )
+                )
+              : await giftWrap(selfRumorEvent, senderRecipient, signer, { rumorKind });
           const selfPublishResult = await publishEventWithRelayStatuses(
             selfGiftWrapEvent,
             selfRelayUrls,

@@ -80,13 +80,8 @@ function resolveMockRelayConfig(overrides = {}, environment = process.env) {
       7002,
       { minimum: 1 }
     ),
-    targetUrl: readTargetUrl(
-      firstDefined(overrides.targetUrl, environment.MOCK_RELAY_TARGET_URL)
-    ),
-    handshakeDelayMs: readDelay(
-      overrides.handshakeDelayMs,
-      'MOCK_RELAY_HANDSHAKE_DELAY_MS'
-    ),
+    targetUrl: readTargetUrl(firstDefined(overrides.targetUrl, environment.MOCK_RELAY_TARGET_URL)),
+    handshakeDelayMs: readDelay(overrides.handshakeDelayMs, 'MOCK_RELAY_HANDSHAKE_DELAY_MS'),
     requestDelayMs: readDelay(overrides.requestDelayMs, 'MOCK_RELAY_REQUEST_DELAY_MS'),
     ackDelayMs: readDelay(overrides.ackDelayMs, 'MOCK_RELAY_ACK_DELAY_MS'),
     eventDelayMs: readDelay(overrides.eventDelayMs, 'MOCK_RELAY_EVENT_DELAY_MS'),
@@ -194,11 +189,7 @@ function encodeWebSocketFrame(opcode, payload = Buffer.alloc(0)) {
 }
 
 function normalizeWebSocketCloseCode(code) {
-  if (
-    code >= 1000 &&
-    code <= 4999 &&
-    ![1004, 1005, 1006, 1015].includes(code)
-  ) {
+  if (code >= 1000 && code <= 4999 && ![1004, 1005, 1006, 1015].includes(code)) {
     return code;
   }
 
@@ -370,6 +361,22 @@ async function startMockRelayProxy(options = {}) {
   const sessions = new Set();
   const pendingTimeouts = new Set();
   let acceptedConnectionCount = 0;
+  let nextConnectionId = 0;
+  let maxConcurrentConnections = 0;
+  let rateLimitRejections = 0;
+  const frames = [];
+  const receivedFrames = [];
+  const activeSignatures = new Map();
+  let duplicateActiveSignatures = 0;
+  const rateLimit = options.rateLimit ?? null;
+  const trafficSnapshot = () => ({
+    frames: frames.slice(),
+    receivedFrames: receivedFrames.slice(),
+    connectionCount: acceptedConnectionCount,
+    maxConcurrentConnections,
+    rateLimitRejections,
+    duplicateActiveSignatures,
+  });
   let isClosing = false;
 
   const schedule = (callback, baseDelayMs) => {
@@ -393,7 +400,7 @@ async function startMockRelayProxy(options = {}) {
         'content-type': 'application/json; charset=utf-8',
         'cache-control': 'no-store',
       });
-      response.end(`${JSON.stringify({ ...config, connectionCount: acceptedConnectionCount }, null, 2)}\n`);
+      response.end(`${JSON.stringify({ ...config, ...trafficSnapshot() }, null, 2)}\n`);
       return;
     }
 
@@ -431,9 +438,12 @@ async function startMockRelayProxy(options = {}) {
       clientSocket,
       isClientClosed: false,
       pendingRequests: [],
+      frameTimes: [],
       upstream: null,
     };
     sessions.add(session);
+    const connectionId = ++nextConnectionId;
+    maxConcurrentConnections = Math.max(maxConcurrentConnections, sessions.size);
 
     const closeSession = ({ destroyClient = true } = {}) => {
       if (session.isClientClosed) {
@@ -441,6 +451,8 @@ async function startMockRelayProxy(options = {}) {
       }
       session.isClientClosed = true;
       sessions.delete(session);
+      for (const key of activeSignatures.keys())
+        if (key.startsWith(`${connectionId}:`)) activeSignatures.delete(key);
       if (destroyClient) {
         clientSocket.destroy();
       }
@@ -502,6 +514,61 @@ async function startMockRelayProxy(options = {}) {
       };
 
       const forwardClientData = (data) => {
+        try {
+          const frame = JSON.parse(String(data));
+          const command = frame[0];
+          const subscriptionId = command === 'REQ' || command === 'CLOSE' ? String(frame[1]) : null;
+          const filters = command === 'REQ' ? frame.slice(2) : undefined;
+          const eventId = command === 'EVENT' ? (frame[1]?.id ?? null) : null;
+          // Only protocol routing fields are retained. Never log content, signatures or secret tags.
+          frames.push({
+            at: Date.now(),
+            relayUrl: `ws://${config.listenHost}:${config.listenPort}`,
+            connectionId,
+            command,
+            subscriptionId,
+            subscriptionName: filters?.some((filter) => filter.kinds?.includes(1059))
+              ? filters.some((filter) => filter.until !== undefined)
+                ? 'private-messages-history'
+                : 'private-messages-live'
+              : filters?.some((filter) => filter['#d']?.includes('roster'))
+                ? 'group-roster'
+                : filters?.some((filter) => filter.kinds?.includes(0))
+                  ? 'contact-hydration'
+                  : (subscriptionId?.replace(/-[a-z0-9]+$/, '') ?? null),
+            ...(filters ? { filters } : {}),
+            ...(eventId ? { eventId, kind: frame[1]?.kind } : {}),
+          });
+          if (command === 'REQ') {
+            const signature = JSON.stringify(filters);
+            if (
+              [...activeSignatures].some(
+                ([key, value]) => key.startsWith(`${connectionId}:`) && value === signature
+              )
+            )
+              duplicateActiveSignatures += 1;
+            activeSignatures.set(`${connectionId}:${subscriptionId}`, signature);
+          } else if (command === 'CLOSE')
+            activeSignatures.delete(`${connectionId}:${subscriptionId}`);
+          if (rateLimit && (command === 'REQ' || command === 'EVENT')) {
+            const now = Date.now();
+            const frameTimes = session.frameTimes;
+            while (frameTimes.length && frameTimes[0] <= now - rateLimit.windowMs)
+              frameTimes.shift();
+            frameTimes.push(now);
+            if (frameTimes.length > rateLimit.maxFrames) {
+              rateLimitRejections += 1;
+              const reply =
+                command === 'EVENT'
+                  ? ['OK', eventId, false, 'rate-limited: cool off']
+                  : ['CLOSED', subscriptionId, 'rate-limited: cool off'];
+              clientSocket.write(encodeWebSocketFrame(0x1, Buffer.from(JSON.stringify(reply))));
+              return;
+            }
+          }
+        } catch {
+          /* Non-JSON frames are forwarded unchanged. */
+        }
         schedule(() => sendUpstream(data), config.requestDelayMs);
       };
 
@@ -560,6 +627,24 @@ async function startMockRelayProxy(options = {}) {
                     )
                   : []
             );
+        if (isTextMessage) {
+          try {
+            const message = JSON.parse(payload);
+            receivedFrames.push({
+              at: Date.now(),
+              command: message[0],
+              subscriptionId: message[0] === 'EVENT' || message[0] === 'EOSE' ? message[1] : null,
+              ...(message[0] === 'EVENT'
+                ? { eventId: message[2]?.id, kind: message[2]?.kind }
+                : {}),
+              ...(message[0] === 'OK'
+                ? { eventId: message[1], accepted: message[2] === true }
+                : {}),
+            });
+          } catch {
+            /* Ignore malformed diagnostic input. */
+          }
+        }
         const behavior = resolveRelayResponseBehavior(
           isTextMessage ? payload : null,
           config,
@@ -619,6 +704,9 @@ async function startMockRelayProxy(options = {}) {
   );
 
   return {
+    disconnectClients: () => {
+      for (const session of sessions) session.clientSocket.destroy();
+    },
     close: async () => {
       if (isClosing) {
         return;
@@ -636,6 +724,16 @@ async function startMockRelayProxy(options = {}) {
       await new Promise((resolve) => server.close(() => resolve()));
     },
     config,
+    trafficSnapshot,
+    resetTraffic: () => {
+      frames.length = 0;
+      receivedFrames.length = 0;
+      for (const session of sessions) session.frameTimes.length = 0;
+      acceptedConnectionCount = 0;
+      maxConcurrentConnections = sessions.size;
+      rateLimitRejections = 0;
+      duplicateActiveSignatures = 0;
+    },
     connectionCount: () => acceptedConnectionCount,
     relayUrl: `ws://${config.listenHost}:${config.listenPort}`,
   };

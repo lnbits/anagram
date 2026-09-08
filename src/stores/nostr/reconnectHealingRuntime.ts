@@ -153,9 +153,7 @@ export function createReconnectHealingRuntime({
   getLoggedInPublicKeyHex,
   getPrivateMessagesLiveEoseAt,
   getVisibleChatTarget,
-  isNativeAndroid,
   isRestoringStartupState,
-  queueOutboundMessageReplay,
   queuePrivateMessagesWatchdog,
   refreshDeveloperPendingQueues,
   refreshDirectMessages,
@@ -539,7 +537,7 @@ export function createReconnectHealingRuntime({
 
       let refreshedDirectMessages = false;
 
-      if (reason === 'session-resume') {
+      if (reason === 'session-resume' || reason === 'relay-list-changed') {
         await restartSessionSubscriptions(
           inputSanitizerService.normalizeStringArray(options.sessionRelayUrls ?? [])
         );
@@ -550,7 +548,7 @@ export function createReconnectHealingRuntime({
       );
       const previousPrivateMessagesLiveEoseAt = getPrivateMessagesLiveEoseAt();
       const directMessagesRefreshResult = await refreshDirectMessages({
-        forceLiveSubscriptionRecreate: isNativeAndroid(),
+        forceLiveSubscriptionRecreate: false,
         sinceMode: reason === 'session-resume' ? 'startup' : 'reconnect',
       });
       if (directMessagesRefreshResult.recreatedLiveSubscription) {
@@ -561,7 +559,7 @@ export function createReconnectHealingRuntime({
       await showReconnectHealingStatusLabel(RECONNECT_HEALING_STATUS_LABELS.checkingMessageRelays);
       queuePrivateMessagesWatchdog(0);
       await showReconnectHealingStatusLabel(RECONNECT_HEALING_STATUS_LABELS.retryingUnsentMessages);
-      queueOutboundMessageReplay('reconnect-healing', 0);
+      // Relay connections and the replay watchdog own eligible retries.
 
       await showReconnectHealingStatusLabel(
         RECONNECT_HEALING_STATUS_LABELS.applyingPendingMessageUpdates

@@ -1159,7 +1159,7 @@ describe('privateStateRuntime', () => {
 
     await runtime.restoreGroupIdentitySecrets(['wss://seed.example']);
 
-    expect(deps.refreshContactRelayList).toHaveBeenCalledWith(ndkMocks.groupPubkey);
+    expect(deps.refreshContactRelayList).not.toHaveBeenCalled();
     expect(serviceMocks.contactsService.updateContact).toHaveBeenCalledWith(7, {
       meta: expect.objectContaining({
         owner_public_key: 'f'.repeat(64),

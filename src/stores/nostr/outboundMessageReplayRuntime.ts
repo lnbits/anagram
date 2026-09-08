@@ -1,5 +1,6 @@
 import { NDKKind } from '@nostr-dev-kit/ndk';
 import { chatDataService } from 'src/services/chatDataService';
+import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { nostrEventDataService } from 'src/services/nostrEventDataService';
 import {
   OUTBOUND_MESSAGE_REPLAY_MAX_RETRY_TARGETS_PER_SWEEP,
@@ -56,7 +57,7 @@ function toRetryAgeMs(updatedAt: string): number {
 
 function shouldReplayRelayStatus(
   relayStatus: MessageRelayStatus,
-  options: {
+  _options: {
     forceImmediate: boolean;
   }
 ): relayStatus is MessageRelayStatus & {
@@ -70,10 +71,6 @@ function shouldReplayRelayStatus(
     (relayStatus.status !== 'pending' && relayStatus.status !== 'failed')
   ) {
     return false;
-  }
-
-  if (options.forceImmediate) {
-    return true;
   }
 
   return toRetryAgeMs(relayStatus.updated_at) >= OUTBOUND_MESSAGE_REPLAY_RETRY_COOLDOWN_MS;
@@ -130,6 +127,9 @@ export function createOutboundMessageReplayRuntime({
   let outboundMessageReplayQueuedReason: OutboundReplayReason | null = null;
   let outboundMessageReplayQueuedDelayMs: number | null = null;
   let hasOutboundMessageReplayOnlineListener = false;
+  let started = false;
+  const connectedRelayUrls = new Set<string>();
+  const lastAttempts = new Map<string, number>();
 
   function clearReplayTimer(): void {
     if (outboundMessageReplayTimeoutId !== null) {
@@ -180,7 +180,8 @@ export function createOutboundMessageReplayRuntime({
     const normalizedDelayMs = Math.max(0, Math.floor(delayMs));
 
     if (outboundMessageReplayRunPromise) {
-      queueReplayWhileRunning(reason, normalizedDelayMs);
+      // Equivalent lifecycle notifications join the current pass.
+      if (reason === 'relay-connected') queueReplayWhileRunning(reason, normalizedDelayMs);
       return;
     }
 
@@ -219,7 +220,8 @@ export function createOutboundMessageReplayRuntime({
         return;
       }
 
-      const forceImmediate = reason !== 'periodic-sweep';
+      const relayScope = reason === 'relay-connected' ? new Set(connectedRelayUrls) : null;
+      connectedRelayUrls.clear();
       let attemptedRelayCount = 0;
       let replayedEventCount = 0;
       let skippedEventCount = 0;
@@ -236,9 +238,22 @@ export function createOutboundMessageReplayRuntime({
         }
 
         const retryableRelayStatuses = sortReplayRelayStatuses(
-          outboundEvent.relay_statuses.filter((relayStatus) =>
-            shouldReplayRelayStatus(relayStatus, { forceImmediate })
-          )
+          outboundEvent.relay_statuses
+            .filter((relayStatus) =>
+              shouldReplayRelayStatus(relayStatus, { forceImmediate: false })
+            )
+            .filter(
+              (relayStatus) =>
+                (!relayScope ||
+                  relayScope.has(
+                    inputSanitizerService.normalizeRelayWs(relayStatus.relay_url) ?? ''
+                  )) &&
+                Date.now() -
+                  (lastAttempts.get(
+                    `${outboundEvent.event.id}:${relayStatus.scope}:${relayStatus.relay_url}`
+                  ) ?? 0) >=
+                  OUTBOUND_MESSAGE_REPLAY_RETRY_COOLDOWN_MS
+            )
         );
         if (retryableRelayStatuses.length === 0) {
           continue;
@@ -266,6 +281,10 @@ export function createOutboundMessageReplayRuntime({
             break outer;
           }
 
+          lastAttempts.set(
+            `${outboundEvent.event.id}:${relayStatus.scope}:${relayStatus.relay_url}`,
+            Date.now()
+          );
           attemptedRelayCount += 1;
           logMessageRelayDiagnostics('outbox-retry-start', {
             reason,
@@ -342,15 +361,23 @@ export function createOutboundMessageReplayRuntime({
 
   async function startOutboundMessageReplay(): Promise<void> {
     ensureOutboundMessageReplayWatchdog();
+    if (started) return;
+    started = true;
     queueOutboundMessageReplay('startup', OUTBOUND_MESSAGE_REPLAY_STARTUP_DELAY_MS);
   }
 
-  function notifyRelayConnected(): void {
+  function notifyRelayConnected(relayUrl: string): void {
+    const normalized = inputSanitizerService.normalizeRelayWs(relayUrl);
+    if (!normalized) return;
+    connectedRelayUrls.add(normalized);
     queueOutboundMessageReplay('relay-connected', OUTBOUND_MESSAGE_REPLAY_RELAY_RECONNECT_DELAY_MS);
   }
 
   function resetOutboundMessageReplayRuntimeState(): void {
     clearReplayTimer();
+    started = false;
+    connectedRelayUrls.clear();
+    lastAttempts.clear();
     outboundMessageReplayQueuedReason = null;
     outboundMessageReplayQueuedDelayMs = null;
     outboundMessageReplayRunPromise = null;

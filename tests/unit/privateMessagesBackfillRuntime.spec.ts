@@ -14,6 +14,7 @@ const serviceMocks = vi.hoisted(() => ({
     getMessageByEventIdOrEditReference: vi.fn(),
     init: vi.fn(),
     listLatestMessages: vi.fn(),
+    listChats: vi.fn(async () => []),
   },
   nostrEventDataService: {
     getEventById: vi.fn(),
@@ -23,6 +24,10 @@ const serviceMocks = vi.hoisted(() => ({
 
 vi.mock('src/services/chatDataService', () => ({
   chatDataService: serviceMocks.chatDataService,
+}));
+
+vi.mock('src/services/contactsService', () => ({
+  contactsService: { init: vi.fn(async () => {}), listContacts: vi.fn(async () => []) },
 }));
 
 vi.mock('src/services/nostrEventDataService', () => ({
@@ -38,9 +43,13 @@ const TARGET_EVENT_ID = 'f'.repeat(64);
 
 function createRuntime(
   overrides: {
+    getLiveRecipientSince?: (publicKey: string) => number | null;
+    ensureLiveRecipientSubscription?: () => Promise<void>;
     getPrivateMessagesStartupFloorSince?: ReturnType<typeof vi.fn>;
     getPrivateMessagesBackfillResumeState?: () => PrivateMessagesBackfillState | null;
     getPrivateMessagesIngestQueue?: () => Promise<void>;
+    ndk?: NDK;
+    readRelays?: string[];
     subscribeWithReqLogging?: ReturnType<typeof vi.fn>;
     resolveGroupChatEpochEntries?: (chat: {
       meta: Record<string, unknown>;
@@ -67,6 +76,8 @@ function createRuntime(
   const failStartupStep = vi.fn();
   const updateStartupInternalTask = vi.fn();
   const runtime = createPrivateMessagesBackfillRuntime({
+    getLiveRecipientSince: overrides.getLiveRecipientSince,
+    ensureLiveRecipientSubscription: overrides.ensureLiveRecipientSubscription,
     beginStartupInternalTask,
     buildFilterSinceDetails: (since) => ({ since }),
     buildFilterUntilDetails: (until) => ({ until }),
@@ -86,7 +97,7 @@ function createRuntime(
     getPrivateMessagesStartupFloorSince:
       overrides.getPrivateMessagesStartupFloorSince ?? vi.fn(() => 1700000000),
     logSubscription: vi.fn(),
-    ndk: new NDK(),
+    ndk: overrides.ndk ?? new NDK(),
     normalizeThrottleMs: (value) => value ?? 0,
     queuePrivateMessageIngestion: vi.fn(),
     relaySignature: (relayUrls) => relayUrls.join(','),
@@ -97,7 +108,9 @@ function createRuntime(
           epoch_public_key: GROUP_EPOCH_A,
         },
       ]),
-    resolvePrivateMessageReadRelayUrls: vi.fn(async () => ['wss://relay.example']),
+    resolvePrivateMessageReadRelayUrls: vi.fn(
+      async () => overrides.readRelays ?? ['wss://relay.example']
+    ),
     schedulePostPrivateMessagesEoseChecks: vi.fn(),
     subscribeWithReqLogging,
     toOptionalIsoTimestampFromUnix: (value) =>
@@ -200,6 +213,74 @@ describe('privateMessagesBackfillRuntime', () => {
     runtime.resetPrivateMessagesBackfillRuntimeState();
   });
 
+  it('continues older windows on the connected relay while another target is unavailable', async () => {
+    const ndk = new NDK();
+    const available = ndk.pool.getRelay('wss://available.example/', false, false);
+    ndk.pool.getRelay('wss://unavailable.example/', false, false);
+    vi.spyOn(available, 'connected', 'get').mockReturnValue(true);
+    const readRelays = ['wss://available.example/', 'wss://unavailable.example/'];
+    const { runtime, subscribeWithReqLogging, completeStartupStep, failStartupStep } =
+      createRuntime({
+        ndk,
+        readRelays,
+        getPrivateMessagesBackfillResumeState: () => ({
+          pubkey: LOGGED_IN_PUBLIC_KEY,
+          nextSince: 90,
+          nextUntil: 100,
+          floorSince: 80,
+          delayMs: 0,
+          completed: false,
+        }),
+      });
+    runtime.startPrivateMessagesStartupBackfill(
+      LOGGED_IN_PUBLIC_KEY,
+      [LOGGED_IN_PUBLIC_KEY],
+      readRelays,
+      100
+    );
+    await vi.waitFor(() =>
+      expect(completeStartupStep).toHaveBeenCalledExactlyOnceWith('message-history-restore')
+    );
+    expect(subscribeWithReqLogging).toHaveBeenCalledTimes(2);
+    for (const call of subscribeWithReqLogging.mock.calls) {
+      expect([...call[3].relaySet.relayUrls]).toEqual(['wss://available.example/']);
+    }
+    expect(failStartupStep).not.toHaveBeenCalled();
+  });
+
+  it('reports unavailable history relays instead of waiting forever without a request', async () => {
+    const ndk = new NDK();
+    ndk.pool.getRelay('wss://unavailable.example/', false, false);
+    const readRelays = ['wss://unavailable.example/'];
+    const { runtime, subscribeWithReqLogging, completeStartupStep, failStartupStep } =
+      createRuntime({
+        ndk,
+        readRelays,
+        getPrivateMessagesBackfillResumeState: () => ({
+          pubkey: LOGGED_IN_PUBLIC_KEY,
+          nextSince: 90,
+          nextUntil: 100,
+          floorSince: 90,
+          delayMs: 0,
+          completed: false,
+        }),
+      });
+    runtime.startPrivateMessagesStartupBackfill(
+      LOGGED_IN_PUBLIC_KEY,
+      [LOGGED_IN_PUBLIC_KEY],
+      readRelays,
+      100
+    );
+    await vi.waitFor(() =>
+      expect(failStartupStep).toHaveBeenCalledWith(
+        'message-history-restore',
+        expect.objectContaining({ name: 'RelayQueryUnavailableError' })
+      )
+    );
+    expect(subscribeWithReqLogging).not.toHaveBeenCalled();
+    expect(completeStartupStep).not.toHaveBeenCalled();
+  });
+
   it('completes only history when there are no older windows to restore', () => {
     const { runtime, completeStartupStep, subscribeWithReqLogging } = createRuntime();
     runtime.startPrivateMessagesStartupBackfill(
@@ -276,6 +357,57 @@ describe('privateMessagesBackfillRuntime', () => {
 
     expect(subscribeWithReqLogging).toHaveBeenCalledTimes(1);
 
+    runtime.resetPrivateMessagesBackfillRuntimeState();
+  });
+
+  it('does not query epoch history already covered by an active global window', async () => {
+    vi.setSystemTime(new Date(100_000));
+    serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue({
+      public_key: GROUP_CHAT_PUBLIC_KEY,
+      type: 'group',
+      meta: {},
+    });
+    const subscribe = vi.fn(() => ({ stop: vi.fn() }) as never);
+    const { runtime } = createRuntime({
+      subscribeWithReqLogging: subscribe,
+      getPrivateMessagesStartupFloorSince: vi.fn(() => 90),
+      getPrivateMessagesBackfillResumeState: () => ({
+        pubkey: LOGGED_IN_PUBLIC_KEY,
+        nextSince: 90,
+        nextUntil: 100,
+        floorSince: 90,
+        delayMs: 0,
+        completed: false,
+      }),
+    });
+    runtime.startPrivateMessagesStartupBackfill(
+      LOGGED_IN_PUBLIC_KEY,
+      [GROUP_EPOCH_A],
+      ['wss://relay.example'],
+      100
+    );
+    await vi.waitFor(() => expect(subscribe).toHaveBeenCalledTimes(1));
+    await runtime.restoreGroupEpochHistory(GROUP_CHAT_PUBLIC_KEY, GROUP_EPOCH_A);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    runtime.resetPrivateMessagesBackfillRuntimeState();
+  });
+
+  it('joins the live epoch listener before requesting only an uncovered history gap', async () => {
+    vi.setSystemTime(new Date(100_000));
+    serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue({
+      public_key: GROUP_CHAT_PUBLIC_KEY,
+      type: 'group',
+      meta: {},
+    });
+    const ensure = vi.fn(async () => {});
+    const { runtime, subscribeWithReqLogging } = createRuntime({
+      ensureLiveRecipientSubscription: ensure,
+      getLiveRecipientSince: () => 95,
+      getPrivateMessagesStartupFloorSince: vi.fn(() => 90),
+    });
+    await runtime.restoreGroupEpochHistory(GROUP_CHAT_PUBLIC_KEY, GROUP_EPOCH_A);
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(subscribeWithReqLogging.mock.calls[0]?.[2]).toMatchObject({ since: 90, until: 94 });
     runtime.resetPrivateMessagesBackfillRuntimeState();
   });
 

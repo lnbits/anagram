@@ -159,6 +159,7 @@ export interface GiftWrappedRumorPublishResult {
 }
 
 export interface SubscribePrivateMessagesOptions {
+  unhealthy?: boolean;
   restoreThrottleMs?: number;
   seedRelayUrls?: string[];
   sinceOverride?: number;

@@ -331,6 +331,12 @@ describe('relay and subscription runtimes', () => {
       subscribePrivateMessagesForLoggedInUser,
       subscribeWithReqLogging: vi.fn((_name, _label, _filters, options) => {
         capturedOnEvent = options.onEvent;
+        const snapshot = new NDKRelayList(ndk);
+        snapshot.pubkey = PUBKEY_A;
+        snapshot.created_at = 2222;
+        snapshot.bothRelayUrls = ['wss://relay.one/'];
+        options.onEvent?.(snapshot);
+        options.onEose?.();
         return {
           stop: subscriptionStop,
         } as never;
@@ -409,7 +415,7 @@ describe('relay and subscription runtimes', () => {
     expect(contactsServiceMock.createContact).toHaveBeenCalledTimes(1);
     expect(contactsServiceMock.updateContact).toHaveBeenCalledTimes(1);
     expect(bumpContactListVersion).toHaveBeenCalledTimes(2);
-    expect(subscribePrivateMessagesForLoggedInUser).toHaveBeenCalledWith(true);
+    expect(subscribePrivateMessagesForLoggedInUser).toHaveBeenCalledWith();
     expect(queueTrackedContactSubscriptionsRefresh).toHaveBeenCalled();
 
     expect(await runtime.fetchMyRelayListEntries(['wss://relay.one/'])).toEqual([
@@ -432,13 +438,7 @@ describe('relay and subscription runtimes', () => {
 
     await runtime.subscribeMyRelayListUpdates(['wss://relay.one/']);
     await runtime.subscribeMyRelayListUpdates(['wss://relay.one/']);
-    expect(logSubscription).toHaveBeenCalledWith(
-      'my-relay-list',
-      'skip',
-      expect.objectContaining({
-        reason: 'already-active',
-      })
-    );
+    expect(subscriptionStop).not.toHaveBeenCalled();
 
     const liveRelayEvent = new NDKRelayList(ndk);
     liveRelayEvent.pubkey = PUBKEY_A;

@@ -9,6 +9,7 @@ import NDK, {
 import { type ChatRow, chatDataService } from 'src/services/chatDataService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { nostrEventDataService } from 'src/services/nostrEventDataService';
+import { createHistoryCoverage } from 'src/services/nostrHistoryCoverageService';
 import {
   MISSING_MESSAGE_DEPENDENCY_REPAIR_RETRY_DELAYS_MS,
   MISSING_MESSAGE_DEPENDENCY_REPAIR_WINDOW_SECONDS,
@@ -18,12 +19,16 @@ import {
   PRIVATE_MESSAGES_RECONNECT_LOOKBACK_SECONDS,
   PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS,
 } from 'src/stores/nostr/constants';
+import { historyCoverageScope, uncoveredHistoryWindows } from 'src/stores/nostr/historyCoverage';
+import { resolvePrivateMessageRelayScopes } from 'src/stores/nostr/privateMessageRouting';
+import { createReadyRelaySet, RelayQueryUnavailableError } from 'src/stores/nostr/relayQueryUtils';
 import type { StartupStepId } from 'src/stores/nostr/startupState';
 import type {
   MissingMessageDependencyRepairReason,
   PrivateMessagesBackfillState,
   RepairMissingMessageDependencyOptions,
 } from 'src/stores/nostr/types';
+import { resolveGroupChatEpochEntriesValue } from 'src/stores/nostr/valueUtils';
 
 interface GroupEpochHistoryRestoreOptions {
   force?: boolean;
@@ -72,6 +77,8 @@ function toUnixTimestampFromIso(value: unknown): number | null {
 }
 
 interface PrivateMessagesBackfillRuntimeDeps {
+  ensureLiveRecipientSubscription?: () => Promise<void>;
+  getLiveRecipientSince?: (publicKey: string) => number | null;
   beginStartupInternalTask: (
     parentStepId: StartupStepId,
     taskId: string,
@@ -102,6 +109,7 @@ interface PrivateMessagesBackfillRuntimeDeps {
   flushPrivateMessagesUiRefreshNow: () => void;
   formatSubscriptionLogValue: (value: string | null | undefined) => string | null;
   getLoggedInPublicKeyHex: () => string | null;
+  isStartupRestoring?: () => boolean;
   getPrivateMessagesBackfillResumeState: (
     pubkeyHex: string,
     liveSince: number,
@@ -152,6 +160,8 @@ interface PrivateMessagesBackfillRuntimeDeps {
 }
 
 export function createPrivateMessagesBackfillRuntime({
+  ensureLiveRecipientSubscription = async () => {},
+  getLiveRecipientSince = () => null,
   beginStartupInternalTask,
   buildFilterSinceDetails,
   buildFilterUntilDetails,
@@ -165,6 +175,7 @@ export function createPrivateMessagesBackfillRuntime({
   flushPrivateMessagesUiRefreshNow,
   formatSubscriptionLogValue,
   getLoggedInPublicKeyHex,
+  isStartupRestoring = () => false,
   getPrivateMessagesBackfillResumeState,
   getPrivateMessagesIngestQueue,
   getPrivateMessagesStartupFloorSince,
@@ -189,6 +200,9 @@ export function createPrivateMessagesBackfillRuntime({
   let privateMessagesBackfillSignature = '';
   let privateMessagesBackfillDelayTimerId: ReturnType<typeof globalThis.setTimeout> | null = null;
   let privateMessagesBackfillDelayResolver: (() => void) | null = null;
+  const coverage = createHistoryCoverage(getLoggedInPublicKeyHex);
+  let globalWindow: { since: number; until: number; floor: number; recipients: string[] } | null =
+    null;
   const groupEpochHistoryRestorePromises = new Map<string, Promise<void>>();
   const restoredGroupEpochHistoryKeys = new Set<string>();
   const privateMessagesForRecipientRestorePromises = new Map<string, Promise<void>>();
@@ -305,6 +319,7 @@ export function createPrivateMessagesBackfillRuntime({
   }
 
   function stopPrivateMessagesBackfill(reason = 'replace'): void {
+    globalWindow = null;
     privateMessagesBackfillRunToken += 1;
     clearPrivateMessagesBackfillDelay();
 
@@ -354,13 +369,17 @@ export function createPrivateMessagesBackfillRuntime({
     until: number;
     signature: string;
     startupTaskId: string;
-  }): Promise<number> {
+  }): Promise<{ eventCount: number; relayUrls: string[] }> {
     const privateMessageTargetDetails = await buildPrivateMessageSubscriptionTargetDetails(
       options.recipientPubkeys,
       options.loggedInPubkeyHex
     );
 
-    return new Promise<number>((resolve, reject) => {
+    const relaySet = createReadyRelaySet(ndk, options.relayUrls);
+    if (!relaySet) throw new RelayQueryUnavailableError();
+    const queryRelayUrls = [...relaySet.relayUrls];
+
+    return new Promise<{ eventCount: number; relayUrls: string[] }>((resolve, reject) => {
       let didFinish = false;
       let eventCount = 0;
       let subscription: ReturnType<NDK['subscribe']> | null = null;
@@ -380,16 +399,15 @@ export function createPrivateMessagesBackfillRuntime({
           return;
         }
 
-        resolve(eventCount);
+        resolve({ eventCount, relayUrls: queryRelayUrls });
       };
 
       try {
-        const relaySet = NDKRelaySet.fromRelayUrls(options.relayUrls, ndk, false);
         logSubscription('private-messages', 'backfill-window-subscribe', {
           signature: options.signature,
           ...buildFilterSinceDetails(options.since),
           ...buildFilterUntilDetails(options.until),
-          ...buildSubscriptionRelayDetails(options.relayUrls),
+          ...buildSubscriptionRelayDetails(queryRelayUrls),
           recipientCount: options.recipientPubkeys.length,
           recipients: options.recipientPubkeys.map((value) => formatSubscriptionLogValue(value)),
           ...privateMessageTargetDetails,
@@ -439,7 +457,7 @@ export function createPrivateMessagesBackfillRuntime({
             signature: options.signature,
             ...buildFilterSinceDetails(options.since),
             ...buildFilterUntilDetails(options.until),
-            ...buildSubscriptionRelayDetails(options.relayUrls),
+            ...buildSubscriptionRelayDetails(queryRelayUrls),
           }
         );
 
@@ -1044,6 +1062,7 @@ export function createPrivateMessagesBackfillRuntime({
     epochPublicKey: string,
     options: GroupEpochHistoryRestoreOptions = {}
   ): Promise<void> {
+    if (isStartupRestoring() && !options.force) return;
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
     const normalizedEpochPublicKey = inputSanitizerService.normalizeHexKey(epochPublicKey);
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
@@ -1067,6 +1086,8 @@ export function createPrivateMessagesBackfillRuntime({
     if (!epochPublicKeys.includes(normalizedEpochPublicKey)) {
       return;
     }
+    if (!options.force) await ensureLiveRecipientSubscription();
+    if (loggedInPubkeyHex !== getLoggedInPublicKeyHex()) return;
 
     const relayUrls = await resolvePrivateMessageReadRelayUrls(options.seedRelayUrls);
     if (relayUrls.length === 0) {
@@ -1107,14 +1128,55 @@ export function createPrivateMessagesBackfillRuntime({
             return existingRestore;
           }
 
-          const restorePromise = runGroupEpochHistoryRestoreWindow({
-            loggedInPubkeyHex,
-            groupPublicKey: normalizedGroupPublicKey,
-            recipientPubkey: epochPublicKeyToRestore,
-            relayUrls,
-            since,
-            until: now,
-          })
+          const restorePromise = (async () => {
+            const entry = resolveGroupChatEpochEntriesValue(groupChat).find(
+              (entry) => entry.epoch_public_key === epochPublicKeyToRestore
+            );
+            const invitationSince = toUnixTimestampFromIso(entry?.invitation_created_at);
+            const floor =
+              invitationSince === null
+                ? since
+                : Math.max(since, invitationSince - 2 * 24 * 60 * 60);
+            const pendingCoverage = globalWindow
+              ? [
+                  {
+                    since: globalWindow.floor,
+                    until: globalWindow.recipients.includes(epochPublicKeyToRestore)
+                      ? globalWindow.until
+                      : globalWindow.since - 1,
+                  },
+                ]
+              : [];
+            const route = (
+              await resolvePrivateMessageRelayScopes([epochPublicKeyToRestore], relayUrls)
+            )[0];
+            if (!route?.relayUrls.length) return;
+            const liveSince = getLiveRecipientSince(epochPublicKeyToRestore);
+            const liveCoverage = liveSince === null ? [] : [{ since: liveSince, until: now }];
+            const gaps = uncoveredHistoryWindows(
+              { since: floor, until: now },
+              options.force
+                ? []
+                : [
+                    ...coverage.read(
+                      historyCoverageScope(epochPublicKeyToRestore, route.relayUrls)
+                    ),
+                    ...pendingCoverage,
+                    ...liveCoverage,
+                  ]
+            );
+            for (const gap of gaps) {
+              await runGroupEpochHistoryRestoreWindow({
+                loggedInPubkeyHex,
+                groupPublicKey: normalizedGroupPublicKey,
+                recipientPubkey: epochPublicKeyToRestore,
+                relayUrls: route.relayUrls,
+                ...gap,
+              });
+              await getPrivateMessagesIngestQueue();
+              coverage.add(historyCoverageScope(epochPublicKeyToRestore, route.relayUrls), gap);
+            }
+          })()
             .then(() => {
               restoredGroupEpochHistoryKeys.add(restoreKey);
             })
@@ -1222,7 +1284,7 @@ export function createPrivateMessagesBackfillRuntime({
     }
 
     const signature = `${normalizedPubkey}:${normalizedRecipientPubkeys.join(',')}:${relaySignature(relayUrls)}:${liveSince}`;
-    if (privateMessagesBackfillPromise && privateMessagesBackfillSignature === signature) {
+    if (privateMessagesBackfillPromise) {
       return;
     }
 
@@ -1285,15 +1347,51 @@ export function createPrivateMessagesBackfillRuntime({
         });
 
         try {
-          const eventCount = await runPrivateMessagesBackfillWindow({
-            loggedInPubkeyHex: normalizedPubkey,
-            recipientPubkeys: normalizedRecipientPubkeys,
-            relayUrls,
+          const chats = await chatDataService.listChats();
+          if (runToken !== privateMessagesBackfillRunToken) return;
+          const currentRecipients = [
+            ...new Set([
+              ...normalizedRecipientPubkeys,
+              ...chats
+                .filter((chat) => chat.type === 'group')
+                .flatMap((chat) =>
+                  resolveGroupChatEpochEntries(chat).map((entry) => entry.epoch_public_key)
+                ),
+            ]),
+          ];
+          globalWindow = {
             since: state.nextSince,
             until: state.nextUntil,
-            signature,
-            startupTaskId,
-          });
+            floor: state.floorSince,
+            recipients: currentRecipients,
+          };
+          const routes = await resolvePrivateMessageRelayScopes(
+            currentRecipients,
+            await resolvePrivateMessageReadRelayUrls()
+          );
+          let eventCount = 0;
+          for (const route of routes) {
+            for (const gap of uncoveredHistoryWindows(
+              {
+                since: Math.max(state.nextSince, route.since ?? state.nextSince),
+                until: state.nextUntil,
+              },
+              coverage.read(historyCoverageScope(route.publicKey, route.relayUrls))
+            )) {
+              const result = await runPrivateMessagesBackfillWindow({
+                loggedInPubkeyHex: normalizedPubkey,
+                recipientPubkeys: [route.publicKey],
+                relayUrls: route.relayUrls,
+                ...gap,
+                signature,
+                startupTaskId,
+              });
+              eventCount += result.eventCount;
+              await getPrivateMessagesIngestQueue();
+              if (runToken !== privateMessagesBackfillRunToken) return;
+              coverage.add(historyCoverageScope(route.publicKey, result.relayUrls), gap);
+            }
+          }
           await getPrivateMessagesIngestQueue();
           if (runToken !== privateMessagesBackfillRunToken) {
             return;
@@ -1348,6 +1446,12 @@ export function createPrivateMessagesBackfillRuntime({
           completed: false,
         };
         writePrivateMessagesBackfillState(state);
+        globalWindow = {
+          since: state.nextSince,
+          until: state.nextUntil,
+          floor: state.floorSince,
+          recipients: [],
+        };
 
         logSubscription('private-messages', 'backfill-wait', {
           signature,
@@ -1384,6 +1488,7 @@ export function createPrivateMessagesBackfillRuntime({
         privateMessagesBackfillSubscription = null;
         privateMessagesBackfillPromise = null;
         privateMessagesBackfillSignature = '';
+        globalWindow = null;
       });
   }
 

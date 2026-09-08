@@ -69,6 +69,7 @@ import {
 } from 'src/stores/nostr/reconnectHealingRuntime';
 import { createRelayConnectionRuntime } from 'src/stores/nostr/relayConnectionRuntime';
 import { createRelayPublishRuntime } from 'src/stores/nostr/relayPublishRuntime';
+import { watchRelaySettingsSubscriptions } from 'src/stores/nostr/relaySettingsSubscriptions';
 import { createStartupContactSyncRuntime } from 'src/stores/nostr/startupContactSyncRuntime';
 import { createStartupRuntime } from 'src/stores/nostr/startupRuntime';
 import {
@@ -124,7 +125,7 @@ import { useRelayStore } from 'src/stores/relayStore';
 import type { ChatGroupEpochKey, MessageRelayStatus } from 'src/types/chat';
 import type { ContactRecord } from 'src/types/contact';
 import { buildBlossomUploadAuthorization, requireBlossomServerUrl } from 'src/utils/blossomServer';
-import { ref, watch } from 'vue';
+import { ref } from 'vue';
 
 export type {
   StartupDisplaySnapshot,
@@ -255,7 +256,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
   let markPrivateMessagesWatchdogRelayDisconnectedRuntime: (relayUrl: string) => void = () => {};
   let queuePrivateMessagesWatchdogRuntime: (delayMs?: number) => void = () => {};
   let queueOutboundMessageReplayRuntime: (reason: string, delayMs?: number) => void = () => {};
-  let notifyOutboundMessageReplayRelayConnectedRuntime: () => void = () => {};
+  let notifyOutboundMessageReplayRelayConnectedRuntime: (relayUrl: string) => void = () => {};
   let notifyReconnectHealingBrowserOnlineRuntime: () => void = () => {};
   let notifyReconnectHealingVisibilityHiddenRuntime: () => void = () => {};
   let notifyReconnectHealingVisibilityRegainRuntime: () => void = () => {};
@@ -506,16 +507,19 @@ export const useNostrStore = defineStore('nostrStore', () => {
     pendingEventSinceState,
   });
 
-  watch(
-    () =>
-      relayStore.relayEntries.map(
-        (entry) => `${entry.url}:${entry.read !== false}:${entry.write !== false}`
-      ),
-    () => {
-      queueTrackedContactSubscriptionsRefresh();
-      notifyReconnectHealingRelayListChangedRuntime();
-    }
-  );
+  watchRelaySettingsSubscriptions({
+    hydrate: () => {
+      if (getLoggedInPublicKeyHex()) relayStore.init();
+    },
+    signature: () =>
+      relayStore.relayEntries
+        .map((entry) => `${entry.url}:${entry.read !== false}:${entry.write !== false}`)
+        .sort()
+        .join('|'),
+    isRestoring: () => isRestoringStartupState.value,
+    hasSessionSubscriptions: () => Boolean(getPrivateMessagesSubscription()),
+    refresh: () => notifyReconnectHealingRelayListChangedRuntime(),
+  });
 
   function normalizeThrottleMs(value: number | undefined): number {
     if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
@@ -1016,8 +1020,8 @@ export const useNostrStore = defineStore('nostrStore', () => {
     queuePrivateMessagesWatchdog: (delayMs) => {
       queuePrivateMessagesWatchdogRuntime(delayMs);
     },
-    queueOutboundMessageReplay: () => {
-      notifyOutboundMessageReplayRelayConnectedRuntime();
+    queueOutboundMessageReplay: (relayUrl) => {
+      notifyOutboundMessageReplayRelayConnectedRuntime(relayUrl);
     },
     relayAuthFailureListenerUrls,
     relayConnectRetryBaseDelayMs: RELAY_CONNECT_RETRY_BASE_DELAY_MS,
@@ -1130,6 +1134,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     getPrivateMessagesEpochSubscriptionRefreshTimerId: () =>
       privateMessagesEpochSubscriptionRefreshTimerId,
     normalizeRelayStatusUrls,
+    isStartupRestoring: () => isRestoringStartupState.value,
     normalizeThrottleMs,
     privateMessagesEpochSubscriptionRefreshDebounceMs:
       PRIVATE_MESSAGES_EPOCH_SUBSCRIPTION_REFRESH_DEBOUNCE_MS,
@@ -1380,6 +1385,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
   const {
     ensurePrivateMessagesWatchdog: ensurePrivateMessagesWatchdogImpl,
     getPrivateMessagesSubscription,
+    getLiveRecipientSince,
     getPrivateMessagesSubscriptionSignature,
     isPrivateMessagesSubscriptionRelayTracked,
     markPrivateMessagesWatchdogRelayDisconnected,
@@ -1430,7 +1436,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     queuePrivateMessageIngestion,
     refreshAllStoredContacts: () => refreshAllStoredContactsRuntime(),
     relaySignature,
-    resolvePrivateMessageReadRelayUrls,
+    resolvePrivateMessageReadRelayUrls: resolveLoggedInReadRelayUrls,
     schedulePostPrivateMessagesEoseChecks,
     setPrivateMessagesRestoreThrottleMs: (value) => {
       privateMessagesRestoreThrottleMs = value;
@@ -1470,6 +1476,8 @@ export const useNostrStore = defineStore('nostrStore', () => {
     startPrivateMessagesStartupBackfill: startPrivateMessagesStartupBackfillImpl,
     stopPrivateMessagesBackfill: stopPrivateMessagesBackfillImpl,
   } = createPrivateMessagesBackfillRuntime({
+    ensureLiveRecipientSubscription: () => subscribePrivateMessagesForLoggedInUserImpl(),
+    getLiveRecipientSince,
     beginStartupInternalTask,
     buildFilterSinceDetails,
     buildFilterUntilDetails,
@@ -1483,6 +1491,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     flushPrivateMessagesUiRefreshNow,
     formatSubscriptionLogValue,
     getLoggedInPublicKeyHex,
+    isStartupRestoring: () => isRestoringStartupState.value,
     getPrivateMessagesBackfillResumeState,
     getPrivateMessagesIngestQueue: () => getPrivateMessagesIngestQueueRuntime(),
     getPrivateMessagesStartupFloorSince,
@@ -1492,7 +1501,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     queuePrivateMessageIngestion,
     relaySignature,
     resolveGroupChatEpochEntries,
-    resolvePrivateMessageReadRelayUrls,
+    resolvePrivateMessageReadRelayUrls: resolveLoggedInReadRelayUrls,
     schedulePostPrivateMessagesEoseChecks,
     subscribeWithReqLogging,
     toOptionalIsoTimestampFromUnix,
@@ -1510,6 +1519,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
   stopPrivateMessagesBackfillRuntime = stopPrivateMessagesBackfillImpl;
 
   const {
+    hasActiveContactHydration,
     resetContactSubscriptionsRuntimeState,
     subscribeContactProfileUpdates,
     subscribeContactRelayListUpdates,
@@ -1540,6 +1550,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     markContactProfileEventApplied,
     markContactRelayListEventApplied,
     ndk,
+    queueRoutingRefresh: () => queueTrackedContactSubscriptionsRefresh(),
     parseContactProfileEvent,
     pruneTrackedContactProfileEventState,
     pruneTrackedContactRelayListEventState,
@@ -1660,6 +1671,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     markContactProfileEventApplied,
     markContactRelayListEventApplied,
     ndk,
+    hasActiveContactHydration,
     publishPrivateContactList,
     readContactRelayListEventSince,
     refreshContactRelayList,
@@ -1779,6 +1791,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     resetGroupRosterSubscriptionRuntimeState: resetGroupRosterSubscriptionRuntimeStateImpl,
     subscribeGroupMembershipRosterUpdates: subscribeGroupMembershipRosterUpdatesImpl,
   } = createGroupRosterSubscriptionRuntime({
+    hydrateMemberProfiles: () => subscribeContactProfileUpdates(),
     applyGroupMembershipRosterEvent,
     buildSubscriptionEventDetails,
     buildSubscriptionRelayDetails,
@@ -2111,11 +2124,10 @@ export const useNostrStore = defineStore('nostrStore', () => {
     restartSessionSubscriptions: async (relayUrls) => {
       ensureStoredEventSince();
       await Promise.all([
-        subscribeMyRelayListUpdates(relayUrls, true),
-        subscribePrivateContactListUpdates(relayUrls, true),
-        subscribeGroupMembershipRosterUpdatesRuntime(relayUrls, true),
-        subscribeContactProfileUpdates(relayUrls, true),
-        subscribeContactRelayListUpdates(relayUrls, true),
+        subscribeMyRelayListUpdates(relayUrls),
+        subscribePrivateContactListUpdates(relayUrls),
+        subscribeGroupMembershipRosterUpdatesRuntime(relayUrls),
+        subscribeContactProfileUpdates(relayUrls),
       ]);
     },
     setIsReconnectHealing: (value) => {

@@ -312,6 +312,10 @@ class InputSanitizerService {
     }
 
     const meta: ContactMetadata = {};
+    for (const key of ['general_relay_entries', 'dm_receive_relay_entries'] as const) {
+      if (Array.isArray(value[key]))
+        meta[key] = this.normalizeRelayListMetadataEntries(value[key] as ContactRelay[]);
+    }
     const name = this.readOptionalString(value.name);
     const about = this.readOptionalString(value.about);
     const picture = this.readOptionalString(value.picture);
@@ -424,6 +428,11 @@ class InputSanitizerService {
     if (profileEventCreatedAt) {
       meta.profile_event_created_at = profileEventCreatedAt;
     }
+
+    const dmRelayEventCreatedAt = this.normalizePositiveInteger(
+      value.dm_receive_relay_event_created_at
+    );
+    if (dmRelayEventCreatedAt) meta.dm_receive_relay_event_created_at = dmRelayEventCreatedAt;
 
     if (relayListEventCreatedAt) {
       meta.relay_list_event_created_at = relayListEventCreatedAt;

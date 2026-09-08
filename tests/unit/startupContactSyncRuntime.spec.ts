@@ -50,7 +50,13 @@ function createSessionInitializationRuntime(
         throw options.resumeError;
       })
     : vi.fn(async () => {});
-  const task = () => vi.fn(async () => {});
+  const networkTasks: ReturnType<typeof vi.fn>[] = [];
+  const task = () => {
+    const operation = vi.fn(async () => {});
+    networkTasks.push(operation);
+    return operation;
+  };
+  const ensureRelayConnections = vi.fn(async () => {});
   const restoreMyRelayList = options.restoreMyRelayListError
     ? vi.fn(async () => {
         throw options.restoreMyRelayListError;
@@ -68,7 +74,7 @@ function createSessionInitializationRuntime(
       seal: vi.fn(),
     })),
     deriveContactCursorDTag: vi.fn(async () => null),
-    ensureRelayConnections: vi.fn(async () => {}),
+    ensureRelayConnections,
     ensureStoredEventSince: vi.fn(),
     fetchContactCursorEvents: vi.fn(async () => new Map()),
     failStartupStep: vi.fn(),
@@ -112,6 +118,8 @@ function createSessionInitializationRuntime(
   });
 
   return {
+    networkTasks,
+    ensureRelayConnections,
     beginStartupStep,
     runLightweightSessionResume,
     runtime,
@@ -119,6 +127,12 @@ function createSessionInitializationRuntime(
 }
 
 describe('startup contact sync runtime', () => {
+  it('recent-chat synchronization performs no relay work', async () => {
+    const { runtime, networkTasks, ensureRelayConnections } = createSessionInitializationRuntime();
+    await runtime.syncRecentChatContacts(['wss://relay.example/']);
+    expect(ensureRelayConnections).not.toHaveBeenCalled();
+    for (const operation of networkTasks) expect(operation).not.toHaveBeenCalled();
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -206,19 +220,16 @@ describe('startup contact sync runtime', () => {
       'private-preferences',
       'private-contact-list-restore',
       'group-identity-secrets',
-      'group-relay-lists-refresh',
       'mute-list',
       'contact-cursor-state',
-      'logged-in-contact-profile',
-      'recent-chat-contacts-sync',
       'private-contact-list-subscribe',
-      'private-messages-subscribe',
-      'group-rosters-subscribe',
       'contact-profile-subscribe',
       'contact-relay-list-subscribe',
+      'private-messages-subscribe',
+      'group-rosters-subscribe',
       'message-history-restore',
     ]);
-    expect(subscribePrivateMessagesForLoggedInUser).toHaveBeenCalledWith(true, {
+    expect(subscribePrivateMessagesForLoggedInUser).toHaveBeenCalledWith(false, {
       restoreThrottleMs: PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS,
       startupTrackStep: true,
     });

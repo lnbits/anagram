@@ -12,6 +12,7 @@ import type {
 import type { ContactMetadata, ContactRecord, ContactRelay } from 'src/types/contact';
 
 interface ContactProfileRuntimeDeps {
+  hasActiveContactHydration?: (publicKey: string) => boolean;
   applyContactProfileEventStateToMeta: (
     meta: ContactMetadata | undefined,
     eventState: ContactProfileEventState | null | undefined
@@ -100,6 +101,7 @@ interface ContactProfileRuntimeDeps {
 }
 
 export function createContactProfileRuntime({
+  hasActiveContactHydration = () => false,
   applyContactProfileEventStateToMeta,
   applyContactRelayListEventStateToMeta,
   backgroundGroupContactRefreshStartedAt,
@@ -122,7 +124,6 @@ export function createContactProfileRuntime({
   ndk,
   publishPrivateContactList,
   readContactRelayListEventSince,
-  refreshContactRelayList,
   resolveGroupDisplayName,
   shouldPreserveExistingGroupRelays,
 }: ContactProfileRuntimeDeps) {
@@ -404,11 +405,6 @@ export function createContactProfileRuntime({
       const contact = await ensureContactStoredAsGroup(normalizedGroupPublicKey, {
         fallbackName,
       });
-      try {
-        await refreshContactRelayList(normalizedGroupPublicKey, seedRelayUrls);
-      } catch (error) {
-        console.warn('Failed to refresh group contact relay list', normalizedGroupPublicKey, error);
-      }
       if (contact) {
         await chatStore.syncContactProfile(normalizedGroupPublicKey);
       }
@@ -429,6 +425,14 @@ export function createContactProfileRuntime({
   ): void {
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
     if (!normalizedGroupPublicKey) {
+      return;
+    }
+
+    if (hasActiveContactHydration(normalizedGroupPublicKey)) {
+      // A ticket establishes group identity locally even while the shared profile listener hydrates it.
+      void ensureContactStoredAsGroup(normalizedGroupPublicKey, { fallbackName }).catch((error) => {
+        console.warn('Failed to apply restored group identity', error);
+      });
       return;
     }
 

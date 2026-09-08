@@ -170,7 +170,7 @@ describe('reconnectHealingRuntime', () => {
     ]);
     expectStatusLabelsWereVisibleForMinimumDuration(statusLabelUpdates);
     expect(queuePrivateMessagesWatchdog).toHaveBeenCalledWith(0);
-    expect(queueOutboundMessageReplay).toHaveBeenCalledWith('reconnect-healing', 0);
+    expect(queueOutboundMessageReplay).not.toHaveBeenCalled();
     expect(refreshDirectMessages).toHaveBeenCalledWith({
       forceLiveSubscriptionRecreate: false,
       sinceMode: 'reconnect',
@@ -195,7 +195,7 @@ describe('reconnectHealingRuntime', () => {
     );
   });
 
-  it('forces the private messages live subscription rebuild during Android healing', async () => {
+  it('preserves healthy private message subscriptions during Android healing', async () => {
     const { refreshDirectMessages, runtime, statusLabelUpdates } = createRuntime({
       isNativeAndroid: true,
     });
@@ -205,7 +205,7 @@ describe('reconnectHealingRuntime', () => {
     await runPromise;
 
     expect(refreshDirectMessages).toHaveBeenCalledWith({
-      forceLiveSubscriptionRecreate: true,
+      forceLiveSubscriptionRecreate: false,
       sinceMode: 'reconnect',
     });
     expectStatusLabelsWereVisibleForMinimumDuration(statusLabelUpdates);
@@ -226,7 +226,7 @@ describe('reconnectHealingRuntime', () => {
 
     expect(restartSessionSubscriptions).toHaveBeenCalledWith(['wss://relay.one/']);
     expect(refreshDirectMessages).toHaveBeenCalledWith({
-      forceLiveSubscriptionRecreate: true,
+      forceLiveSubscriptionRecreate: false,
       sinceMode: 'startup',
     });
     expectStatusLabels(statusLabelUpdates, [

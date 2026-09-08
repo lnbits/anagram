@@ -91,6 +91,7 @@ describe('private contact list runtime', () => {
       if ((filter?.since ?? 0) <= (listEvent.created_at ?? 0)) {
         options.onEvent?.(listEvent);
       }
+      options.onEose?.();
       return { stop: vi.fn() } as never;
     });
     const publishReplaceable = vi
@@ -128,6 +129,8 @@ describe('private contact list runtime', () => {
       didChange: true,
     }));
 
+    const queueTrackedContactSubscriptionsRefresh = vi.fn();
+    const isRestoringStartupState = ref(true);
     const runtime = createPrivateContactListRuntime({
       beginStartupStep: vi.fn(),
       bumpContactListVersion: vi.fn(),
@@ -151,11 +154,11 @@ describe('private contact list runtime', () => {
       getLoggedInPublicKeyHex: vi.fn(() => LOGGED_IN_PUBKEY),
       getLoggedInSignerUser: vi.fn(async () => ({ pubkey: LOGGED_IN_PUBKEY }) as never),
       getStartupStepSnapshot: vi.fn(() => ({ status: 'in_progress' })),
-      isRestoringStartupState: ref(true),
+      isRestoringStartupState,
       logSubscription: vi.fn(),
       markPrivateContactListEventApplied: vi.fn(),
       ndk,
-      queueTrackedContactSubscriptionsRefresh: vi.fn(),
+      queueTrackedContactSubscriptionsRefresh,
       reconcileAcceptedChatFromPrivateContactList: vi.fn(async () => {}),
       refreshContactByPublicKey: vi.fn(async () => {}),
       relaySignature: vi.fn((relays) => relays.join(',')),
@@ -172,31 +175,20 @@ describe('private contact list runtime', () => {
       authors: [LOGGED_IN_PUBKEY],
       '#d': [PRIVATE_CONTACT_LIST_D_TAG],
     };
-    if (source === 'startup') {
-      await runtime.restorePrivateContactList();
-      expect(ndk.fetchEvent).toHaveBeenCalledWith(
-        expectedFilter,
-        expect.anything(),
-        expect.anything()
-      );
-      expect(updateStartupStep).toHaveBeenCalledWith('private-contact-list-restore', {
-        eventCount: 0,
-      });
-      expect(completeStartupStep).toHaveBeenCalledWith('private-contact-list');
-    } else {
-      await runtime.subscribePrivateContactListUpdates();
-      expect(subscribeWithReqLogging).toHaveBeenCalledWith(
-        'private-contact-list',
-        'private-contact-list',
-        expectedFilter,
-        expect.anything(),
-        expect.anything()
-      );
-      expect(completeStartupStep).not.toHaveBeenCalled();
-    }
+    if (source === 'startup') await runtime.restorePrivateContactList();
+    else await runtime.subscribePrivateContactListUpdates();
+    expect(subscribeWithReqLogging).toHaveBeenCalledWith(
+      'private-contact-list',
+      'private-contact-list',
+      expectedFilter,
+      expect.anything(),
+      expect.anything()
+    );
+    expect(ndk.fetchEvent).not.toHaveBeenCalled();
     await vi.waitFor(() =>
       expect(ensureContactListedInPrivateContactList).toHaveBeenCalledTimes(2)
     );
+
     expect(chatDataServiceMock.listChats).not.toHaveBeenCalled();
     expect(chatDataServiceMock.listAllMessages).not.toHaveBeenCalled();
     expect(updateStartupStep).toHaveBeenLastCalledWith('private-contact-list-restore', {
@@ -213,6 +205,17 @@ describe('private contact list runtime', () => {
       PUBKEY_D,
       expect.anything()
     );
+    expect(publishReplaceable).not.toHaveBeenCalled();
+    isRestoringStartupState.value = false;
+    ensureContactListedInPrivateContactList.mockResolvedValue({ contact: null, didChange: false });
+    subscribeWithReqLogging.mock.calls[0]?.[3].onEvent?.(listEvent);
+    await vi.waitFor(() =>
+      expect(ensureContactListedInPrivateContactList).toHaveBeenCalledTimes(4)
+    );
+    await runtime.subscribePrivateContactListUpdates([], true);
+    expect(queueTrackedContactSubscriptionsRefresh).not.toHaveBeenCalled();
+    expect(subscribeWithReqLogging).toHaveBeenCalledTimes(1);
+    expect(subscribeWithReqLogging.mock.results[0]?.value.stop).not.toHaveBeenCalled();
     expect(publishReplaceable).not.toHaveBeenCalled();
   });
 

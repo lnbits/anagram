@@ -51,7 +51,7 @@ interface RelayConnectionRuntimeDeps {
   relayConnectRetryMaxDelayMs: number;
   relayConnectRetryStateByUrl: Map<string, RelayConnectRetryState>;
   relayConnectPromises: Map<string, Promise<void>>;
-  queueOutboundMessageReplay: () => void;
+  queueOutboundMessageReplay: (relayUrl: string) => void;
   setCachedSigner: (signer: NDKSigner | null) => void;
   setCachedSignerSessionKey: (sessionKey: string | null) => void;
   setConnectPromise: (promise: Promise<void> | null) => void;
@@ -463,7 +463,7 @@ export function createRelayConnectionRuntime({
       bumpRelayStatusVersion();
       logRelayLifecycle('connect', relay);
       if (getLoggedInPublicKeyHex()) {
-        queueOutboundMessageReplay();
+        queueOutboundMessageReplay(relay.url);
       }
       if (isPrivateMessagesSubscriptionRelayTracked(relay.url)) {
         queuePrivateMessagesWatchdog(0);

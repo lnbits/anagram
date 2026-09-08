@@ -355,7 +355,17 @@ describe('userActions runtime', () => {
     });
     ndkMocks.giftWrap.mockResolvedValue({
       kind: NDKKind.GiftWrap,
+      toNostrEvent: async () => ({
+        kind: NDKKind.GiftWrap,
+        id: 'a'.repeat(64),
+        sig: 'b'.repeat(128),
+        tags: [],
+        content: '',
+        pubkey: 'c'.repeat(64),
+        created_at: 1700000000,
+      }),
     });
+    serviceMocks.nostrEventDataService.upsertEvent.mockImplementation(async (input) => input);
     deps.publishEventWithRelayStatuses.mockResolvedValue({
       relayStatuses: failureStatuses,
       error: new Error('publish failed'),

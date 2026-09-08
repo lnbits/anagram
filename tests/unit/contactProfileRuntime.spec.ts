@@ -187,7 +187,8 @@ describe('contactProfileRuntime group refresh', () => {
     await secondRefresh;
 
     expect(deps.fetchContactProfile).toHaveBeenCalledTimes(1);
-    expect(deps.refreshContactRelayList).toHaveBeenCalledTimes(1);
+    expect(deps.fetchContactRelayList).toHaveBeenCalledTimes(1);
+    expect(deps.refreshContactRelayList).not.toHaveBeenCalled();
     expect(deps.groupContactRefreshPromises.size).toBe(0);
   });
 
@@ -341,7 +342,7 @@ describe('contactProfileRuntime group refresh', () => {
     ).resolves.toBeNull();
   });
 
-  it('forwards seed relay urls through group contact refreshes', async () => {
+  it('fetches group relay metadata once and forwards seed relay urls', async () => {
     const { deps, setUser } = createDeps();
     setUser(GROUP_PUBKEY);
     const existingGroup = makeContact(GROUP_PUBKEY, {
@@ -358,7 +359,8 @@ describe('contactProfileRuntime group refresh', () => {
     ]);
 
     expect(deps.fetchContactRelayList).toHaveBeenCalledWith(GROUP_PUBKEY, ['wss://relay.seed/']);
-    expect(deps.refreshContactRelayList).toHaveBeenCalledWith(GROUP_PUBKEY, ['wss://relay.seed/']);
+    expect(deps.fetchContactRelayList).toHaveBeenCalledTimes(1);
+    expect(deps.refreshContactRelayList).not.toHaveBeenCalled();
   });
 
   it('throttles background group refreshes with the runtime cooldown', async () => {
@@ -385,7 +387,8 @@ describe('contactProfileRuntime group refresh', () => {
     await flushPromises();
 
     expect(deps.fetchContactProfile).toHaveBeenCalledTimes(1);
-    expect(deps.refreshContactRelayList).toHaveBeenCalledTimes(1);
+    expect(deps.fetchContactRelayList).toHaveBeenCalledTimes(1);
+    expect(deps.refreshContactRelayList).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(BACKGROUND_GROUP_CONTACT_REFRESH_COOLDOWN_MS + 1);
     runtime.queueBackgroundGroupContactRefresh(GROUP_PUBKEY, 'Study Group');
@@ -394,6 +397,7 @@ describe('contactProfileRuntime group refresh', () => {
     await secondRefresh;
 
     expect(deps.fetchContactProfile).toHaveBeenCalledTimes(2);
-    expect(deps.refreshContactRelayList).toHaveBeenCalledTimes(2);
+    expect(deps.fetchContactRelayList).toHaveBeenCalledTimes(2);
+    expect(deps.refreshContactRelayList).not.toHaveBeenCalled();
   });
 });

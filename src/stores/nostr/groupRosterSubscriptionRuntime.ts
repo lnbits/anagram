@@ -7,8 +7,14 @@ import NDK, {
   type NDKSubscriptionOptions,
 } from '@nostr-dev-kit/ndk';
 import { GROUP_SHARED_ROSTER_FOLLOW_SET_D_TAG } from 'src/stores/nostr/constants';
+import {
+  bucketRelayTargets,
+  createDesiredSubscriptions,
+  subscriptionSignature,
+} from 'src/stores/nostr/desiredSubscriptions';
 
 interface GroupRosterSubscriptionRuntimeDeps {
+  hydrateMemberProfiles?: () => Promise<void>;
   applyGroupMembershipRosterEvent: (
     event: NDKEvent,
     options?: {
@@ -55,202 +61,121 @@ interface GroupRosterSubscriptionRuntimeDeps {
 }
 
 export function createGroupRosterSubscriptionRuntime({
+  hydrateMemberProfiles = async () => {},
   applyGroupMembershipRosterEvent,
-  buildSubscriptionEventDetails,
   buildSubscriptionRelayDetails,
   ensureRelayConnections,
-  extractRelayUrlsFromEvent,
-  formatSubscriptionLogValue,
-  getFilterSince,
   getLoggedInPublicKeyHex,
   getStoredAuthMethod,
   listGroupMembershipRosterSubscriptionContexts,
-  logSubscription,
   ndk,
-  relaySignature,
-  restoreGroupMembershipRoster,
   subscribeWithReqLogging,
   updateStoredEventSinceFromCreatedAt,
 }: GroupRosterSubscriptionRuntimeDeps) {
-  let groupRosterSubscription: ReturnType<NDK['subscribe']> | null = null;
-  let groupRosterSubscriptionSignature = '';
+  const subscriptions = createDesiredSubscriptions();
+  let generation = 0;
+  let initialHydrationCount = 0;
   let groupRosterApplyQueue = Promise.resolve();
+  const latestEvents = new Map<string, NDKEvent>();
+  const epochs = new Map<string, string>();
 
-  function buildSubscriptionContextDetails(
-    contexts: Array<{
-      currentEpochPublicKey: string;
-      groupPublicKey: string;
-      relayUrls: string[];
-    }>
-  ): Record<string, unknown> {
-    return {
-      groupCount: contexts.length,
-      groups: contexts.map((context) => ({
-        groupPublicKey:
-          formatSubscriptionLogValue(context.groupPublicKey) ?? context.groupPublicKey,
-        currentEpochPublicKey:
-          formatSubscriptionLogValue(context.currentEpochPublicKey) ??
-          context.currentEpochPublicKey,
-        relayCount: context.relayUrls.length,
-      })),
-    };
-  }
-
-  function queueGroupRosterEventApplication(event: NDKEvent, seedRelayUrls: string[] = []): void {
+  function apply(event: NDKEvent, relayUrls: string[]): void {
     groupRosterApplyQueue = groupRosterApplyQueue
       .then(async () => {
-        await applyGroupMembershipRosterEvent(event, { seedRelayUrls });
-      })
-      .catch((error) => {
-        console.error('Failed to process incoming group roster event', error);
-      });
-  }
-
-  async function syncCurrentGroupRosters(
-    contexts: Array<{
-      currentEpochPublicKey: string;
-      groupPublicKey: string;
-      relayUrls: string[];
-    }>,
-    seedRelayUrls: string[] = []
-  ): Promise<void> {
-    for (const context of contexts) {
-      try {
-        await restoreGroupMembershipRoster(context.groupPublicKey, seedRelayUrls);
-      } catch (error) {
-        console.warn('Failed to refresh current group roster after subscription start', {
-          groupPublicKey: context.groupPublicKey,
-          error,
+        const changed = await applyGroupMembershipRosterEvent(event, {
+          seedRelayUrls: relayUrls,
+          refreshMemberProfiles: false,
         });
-      }
-    }
-  }
-
-  function stopGroupRosterSubscription(reason = 'replace'): void {
-    if (groupRosterSubscription) {
-      logSubscription('group-roster', 'stop', {
-        reason,
-        signature: groupRosterSubscriptionSignature || null,
-      });
-      groupRosterSubscription.stop();
-      groupRosterSubscription = null;
-    }
-
-    groupRosterSubscriptionSignature = '';
+        if (changed && initialHydrationCount === 0) await hydrateMemberProfiles();
+      })
+      .catch((error) => console.warn('Failed to apply group roster', error));
   }
 
   async function subscribeGroupMembershipRosterUpdates(
     seedRelayUrls: string[] = [],
-    force = false
+    _force = false
   ): Promise<void> {
-    const loggedInPubkeyHex = getLoggedInPublicKeyHex();
-    const authMethod = getStoredAuthMethod();
-    if (!loggedInPubkeyHex || !authMethod) {
-      stopGroupRosterSubscription('missing-login');
+    const runGeneration = generation;
+    if (!getLoggedInPublicKeyHex() || !getStoredAuthMethod()) {
+      subscriptions.stop();
       return;
     }
-
     const contexts = await listGroupMembershipRosterSubscriptionContexts(seedRelayUrls);
-    if (contexts.length === 0) {
-      stopGroupRosterSubscription('no-groups');
-      return;
-    }
-
-    const relayUrls = Array.from(new Set(contexts.flatMap((context) => context.relayUrls))).sort(
-      (first, second) => first.localeCompare(second)
-    );
-    if (relayUrls.length === 0) {
-      stopGroupRosterSubscription('no-relays');
-      return;
-    }
-
-    const signature = `${relaySignature(relayUrls)}:${contexts
-      .map(
-        (context) =>
-          `${context.groupPublicKey}:${context.currentEpochPublicKey}:${relaySignature(context.relayUrls)}`
-      )
-      .join(',')}`;
-    if (!force && groupRosterSubscription && groupRosterSubscriptionSignature === signature) {
-      logSubscription('group-roster', 'skip', {
-        reason: 'already-active',
-        signature,
-        ...buildSubscriptionRelayDetails(relayUrls),
-        ...buildSubscriptionContextDetails(contexts),
-      });
-      return;
-    }
-
-    logSubscription('group-roster', 'prepare', {
-      force,
-      signature,
-      since: getFilterSince(),
-      ...buildSubscriptionRelayDetails(relayUrls),
-      ...buildSubscriptionContextDetails(contexts),
-    });
-
-    await ensureRelayConnections(relayUrls);
-    stopGroupRosterSubscription();
-
-    logSubscription('group-roster', 'start', {
-      force,
-      signature,
-      since: getFilterSince(),
-      ...buildSubscriptionRelayDetails(relayUrls),
-      ...buildSubscriptionContextDetails(contexts),
-    });
-
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
-    const filters: NDKFilter = {
-      kinds: [NDKKind.FollowSet],
-      authors: contexts.map((context) => context.groupPublicKey),
-      '#d': [GROUP_SHARED_ROSTER_FOLLOW_SET_D_TAG],
-      since: getFilterSince(),
-    };
-    groupRosterSubscription = subscribeWithReqLogging(
-      'group-roster',
-      'group-roster',
-      filters,
-      {
-        relaySet,
-        cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
-        onEvent: (event) => {
-          const wrappedEvent = event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
-          logSubscription('group-roster', 'event', {
-            signature,
-            ...buildSubscriptionEventDetails(wrappedEvent),
-            ...buildSubscriptionRelayDetails(extractRelayUrlsFromEvent(wrappedEvent)),
-          });
-          updateStoredEventSinceFromCreatedAt(wrappedEvent.created_at);
-          queueGroupRosterEventApplication(wrappedEvent, seedRelayUrls);
-        },
-        onEose: () => {
-          logSubscription('group-roster', 'eose', {
-            signature,
-          });
-        },
-      },
-      {
-        signature,
-        ...buildSubscriptionRelayDetails(relayUrls),
-        ...buildSubscriptionContextDetails(contexts),
+    if (runGeneration !== generation) return;
+    for (const context of contexts) {
+      if (epochs.get(context.groupPublicKey) !== context.currentEpochPublicKey) {
+        epochs.set(context.groupPublicKey, context.currentEpochPublicKey);
+        const event = latestEvents.get(context.groupPublicKey);
+        if (event) apply(event, context.relayUrls);
       }
+    }
+    const buckets = bucketRelayTargets(
+      contexts.map((context) => ({
+        publicKey: context.groupPublicKey,
+        relayUrls: context.relayUrls,
+      }))
     );
-    groupRosterSubscriptionSignature = signature;
-
-    logSubscription('group-roster', 'active', {
-      signature,
-      ...buildSubscriptionRelayDetails(relayUrls),
-      ...buildSubscriptionContextDetails(contexts),
-    });
-
-    await syncCurrentGroupRosters(contexts, seedRelayUrls);
+    initialHydrationCount += 1;
+    try {
+      await subscriptions.reconcile(
+        buckets.map(({ publicKeys, relayUrls }) => {
+          const filters: NDKFilter = {
+            kinds: [NDKKind.FollowSet],
+            authors: publicKeys,
+            '#d': [GROUP_SHARED_ROSTER_FOLLOW_SET_D_TAG],
+          };
+          const signature = subscriptionSignature(filters, relayUrls);
+          return {
+            key: relayUrls.join('|'),
+            signature,
+            prepare: () => ensureRelayConnections(relayUrls),
+            applied: () => groupRosterApplyQueue,
+            start: (onEose: () => void, onClose: () => void) =>
+              subscribeWithReqLogging(
+                'group-roster',
+                'group-roster',
+                filters,
+                {
+                  relaySet: NDKRelaySet.fromRelayUrls(relayUrls, ndk, false),
+                  cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+                  onEvent: (event) => {
+                    const wrapped = event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
+                    const previous = latestEvents.get(wrapped.pubkey);
+                    if (
+                      previous &&
+                      ((previous.created_at ?? 0) > (wrapped.created_at ?? 0) ||
+                        (previous.created_at === wrapped.created_at && previous.id <= wrapped.id))
+                    )
+                      return;
+                    latestEvents.set(wrapped.pubkey, wrapped);
+                    updateStoredEventSinceFromCreatedAt(wrapped.created_at);
+                    apply(wrapped, relayUrls);
+                  },
+                  onEose,
+                  onClose,
+                },
+                { signature, ...buildSubscriptionRelayDetails(relayUrls) }
+              ),
+          };
+        })
+      );
+      await subscriptions.waitForEose();
+      await hydrateMemberProfiles();
+    } finally {
+      initialHydrationCount -= 1;
+    }
   }
 
+  function stopGroupRosterSubscription(_reason = 'replace'): void {
+    generation += 1;
+    subscriptions.stop();
+  }
   function resetGroupRosterSubscriptionRuntimeState(reason = 'replace'): void {
     stopGroupRosterSubscription(reason);
     groupRosterApplyQueue = Promise.resolve();
+    latestEvents.clear();
+    epochs.clear();
   }
-
   return {
     resetGroupRosterSubscriptionRuntimeState,
     stopGroupRosterSubscription,

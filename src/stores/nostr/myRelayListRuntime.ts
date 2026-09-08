@@ -11,8 +11,16 @@ import NDK, {
 import { contactsService } from 'src/services/contactsService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { useNip65RelayStore } from 'src/stores/nip65RelayStore';
+import {
+  createDesiredSubscriptions,
+  subscriptionSignature,
+} from 'src/stores/nostr/desiredSubscriptions';
 import { createReadyRelaySet, fetchEventWithRelayTimeout } from 'src/stores/nostr/relayQueryUtils';
 import type { AuthMethod, RelayListMetadataEntry } from 'src/stores/nostr/types';
+import {
+  contactRelayListsEqualValue,
+  mergeRelayEntriesWithDirectMessageReceiveRelayEntriesValue,
+} from 'src/stores/nostr/valueUtils';
 import type { ContactRelay } from 'src/types/contact';
 
 const DIRECT_MESSAGE_RECEIVE_RELAY_TAG = 'relay';
@@ -63,23 +71,17 @@ interface ApplyMyRelayListEntriesOptions {
 export function createMyRelayListRuntime({
   beginStartupStep,
   bumpContactListVersion,
-  buildSubscriptionEventDetails,
   buildSubscriptionRelayDetails,
   completeStartupStep,
   ensureRelayConnections,
-  extractRelayUrlsFromEvent,
   failStartupStep,
-  formatSubscriptionLogValue,
-  getFilterSince,
   getLoggedInPublicKeyHex,
   getLoggedInSignerUser,
-  getRelaySnapshots,
   getStoredAuthMethod,
   logSubscription,
   ndk,
   queueTrackedContactSubscriptionsRefresh,
   relayEntriesFromRelayList,
-  relaySignature,
   resolveLoggedInPublishRelayUrls,
   resolveLoggedInReadRelayUrls,
   subscribePrivateMessagesForLoggedInUser,
@@ -89,7 +91,10 @@ export function createMyRelayListRuntime({
   let restoreMyRelayListPromise: Promise<void> | null = null;
   let myRelayListSubscription: ReturnType<NDK['subscribe']> | null = null;
   let myRelayListSubscriptionSignature = '';
+  const desiredSubscriptions = createDesiredSubscriptions();
+  let generation = 0;
   let myRelayListApplyQueue = Promise.resolve();
+  let latestRelaySnapshot: { createdAt: number; id: string } | null = null;
 
   async function publishMyRelayList(
     relayEntries: RelayListMetadataEntry[],
@@ -166,7 +171,7 @@ export function createMyRelayListRuntime({
       bumpContactListVersion();
       if (shouldRefreshSubscriptions) {
         try {
-          await subscribePrivateMessagesForLoggedInUser(true);
+          await subscribePrivateMessagesForLoggedInUser();
         } catch (error) {
           console.warn('Failed to subscribe to private messages', error);
         }
@@ -175,12 +180,24 @@ export function createMyRelayListRuntime({
       return;
     }
 
+    if (
+      contactRelayListsEqualValue(
+        existingContact.meta?.general_relay_entries ?? existingContact.relays,
+        normalizedRelayEntries
+      )
+    )
+      return;
+
     await contactsService.updateContact(existingContact.id, {
-      relays: normalizedRelayEntries,
+      meta: { ...existingContact.meta, general_relay_entries: normalizedRelayEntries },
+      relays: mergeRelayEntriesWithDirectMessageReceiveRelayEntriesValue(
+        normalizedRelayEntries,
+        existingContact.meta?.dm_receive_relay_entries ?? []
+      ),
     });
     bumpContactListVersion();
     if (shouldRefreshSubscriptions) {
-      await subscribePrivateMessagesForLoggedInUser(true);
+      await subscribePrivateMessagesForLoggedInUser();
       queueTrackedContactSubscriptionsRefresh();
     }
   }
@@ -207,7 +224,6 @@ export function createMyRelayListRuntime({
       {
         kinds: [NDKKind.RelayList],
         authors: [user.pubkey],
-        since: getFilterSince(),
       },
       {
         cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
@@ -256,13 +272,8 @@ export function createMyRelayListRuntime({
     beginStartupStep('my-relay-list');
     restoreMyRelayListPromise = (async () => {
       try {
-        const relayEntries = await fetchMyRelayListEntries(seedRelayUrls);
-        if (relayEntries === null) {
-          completeStartupStep('my-relay-list');
-          return;
-        }
-
-        await applyMyRelayListEntries(relayEntries, { refreshSubscriptions: false });
+        await subscribeMyRelayListUpdates(seedRelayUrls);
+        await desiredSubscriptions.waitForEose();
         completeStartupStep('my-relay-list');
       } catch (error) {
         failStartupStep('my-relay-list', error);
@@ -276,12 +287,13 @@ export function createMyRelayListRuntime({
   }
 
   function stopMyRelayListSubscription(reason = 'replace'): void {
+    generation += 1;
+    desiredSubscriptions.stop();
     if (myRelayListSubscription) {
       logSubscription('my-relay-list', 'stop', {
         reason,
         signature: myRelayListSubscriptionSignature || null,
       });
-      myRelayListSubscription.stop();
       myRelayListSubscription = null;
     }
 
@@ -290,111 +302,80 @@ export function createMyRelayListRuntime({
 
   async function subscribeMyRelayListUpdates(
     seedRelayUrls: string[] = [],
-    force = false
+    _force = false
   ): Promise<void> {
-    const loggedInPubkeyHex = getLoggedInPublicKeyHex();
-    if (!loggedInPubkeyHex) {
-      stopMyRelayListSubscription('missing-login');
+    const runGeneration = generation;
+    const pubkey = getLoggedInPublicKeyHex();
+    if (!pubkey) {
+      desiredSubscriptions.stop();
       return;
     }
-
     const relayUrls = await resolveLoggedInReadRelayUrls(seedRelayUrls);
-    if (relayUrls.length === 0) {
-      stopMyRelayListSubscription('no-relays');
+    if (runGeneration !== generation || pubkey !== getLoggedInPublicKeyHex()) return;
+    if (!relayUrls.length) {
+      desiredSubscriptions.stop();
       return;
     }
-
-    const signature = `${loggedInPubkeyHex}:${relaySignature(relayUrls)}`;
-    if (!force && myRelayListSubscription && myRelayListSubscriptionSignature === signature) {
-      logSubscription('my-relay-list', 'skip', {
-        reason: 'already-active',
-        signature,
-        pubkey: formatSubscriptionLogValue(loggedInPubkeyHex),
-        ...buildSubscriptionRelayDetails(relayUrls),
-      });
-      return;
-    }
-
-    logSubscription('my-relay-list', 'prepare', {
-      force,
-      signature,
-      pubkey: formatSubscriptionLogValue(loggedInPubkeyHex),
-      since: getFilterSince(),
-      ...buildSubscriptionRelayDetails(relayUrls),
-      relaySnapshots: getRelaySnapshots(relayUrls),
-    });
-
-    await ensureRelayConnections(relayUrls);
-    await getLoggedInSignerUser();
-    stopMyRelayListSubscription();
-
-    logSubscription('my-relay-list', 'start', {
-      force,
-      signature,
-      pubkey: formatSubscriptionLogValue(loggedInPubkeyHex),
-      subscriptionTargetType: 'user',
-      userTargetCount: 1,
-      userTargetPubkeys: [formatSubscriptionLogValue(loggedInPubkeyHex)],
-      since: getFilterSince(),
-      ...buildSubscriptionRelayDetails(relayUrls),
-      relaySnapshots: getRelaySnapshots(relayUrls),
-    });
-
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
-    const myRelayListFilters: NDKFilter = {
-      kinds: [NDKKind.RelayList],
-      authors: [loggedInPubkeyHex],
-      since: getFilterSince(),
-    };
-    myRelayListSubscription = subscribeWithReqLogging(
-      'my-relay-list',
-      'my-relay-list',
-      myRelayListFilters,
+    const filters: NDKFilter = { kinds: [NDKKind.RelayList], authors: [pubkey] };
+    const signature = subscriptionSignature(filters, relayUrls);
+    await desiredSubscriptions.reconcile([
       {
-        relaySet,
-        cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
-        onEvent: (event) => {
-          const wrappedEvent = event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
-          logSubscription('my-relay-list', 'event', {
-            signature,
-            ...buildSubscriptionEventDetails(wrappedEvent),
-            ...buildSubscriptionRelayDetails(extractRelayUrlsFromEvent(wrappedEvent)),
-          });
-          updateStoredEventSinceFromCreatedAt(wrappedEvent.created_at);
-          myRelayListApplyQueue = myRelayListApplyQueue
-            .then(async () => {
-              const relayList = NDKRelayList.from(wrappedEvent);
-              await applyMyRelayListEntries(relayEntriesFromRelayList(relayList));
-            })
-            .catch((error) => {
-              console.error('Failed to process my relay list event', error);
-            });
+        key: 'my-relay-list',
+        signature,
+        prepare: async () => {
+          await ensureRelayConnections(relayUrls);
+          await getLoggedInSignerUser();
         },
-        onEose: () => {
-          logSubscription('my-relay-list', 'eose', {
-            signature,
-          });
+        applied: () => myRelayListApplyQueue,
+        start: (onEose, onClose) => {
+          myRelayListSubscriptionSignature = signature;
+          myRelayListSubscription = subscribeWithReqLogging(
+            'my-relay-list',
+            'my-relay-list',
+            filters,
+            {
+              relaySet: NDKRelaySet.fromRelayUrls(relayUrls, ndk, false),
+              cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+              onEvent: (event) => {
+                if (runGeneration !== generation || pubkey !== getLoggedInPublicKeyHex()) return;
+                const wrappedEvent = event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
+                updateStoredEventSinceFromCreatedAt(wrappedEvent.created_at);
+                myRelayListApplyQueue = myRelayListApplyQueue.then(async () => {
+                  if (runGeneration !== generation) return;
+                  const next = {
+                    createdAt: wrappedEvent.created_at ?? 0,
+                    id: wrappedEvent.id ?? '',
+                  };
+                  if (
+                    latestRelaySnapshot &&
+                    (latestRelaySnapshot.createdAt > next.createdAt ||
+                      (latestRelaySnapshot.createdAt === next.createdAt &&
+                        latestRelaySnapshot.id <= next.id))
+                  )
+                    return;
+                  latestRelaySnapshot = next;
+                  await applyMyRelayListEntries(
+                    relayEntriesFromRelayList(NDKRelayList.from(wrappedEvent)),
+                    { refreshSubscriptions: !restoreMyRelayListPromise }
+                  );
+                });
+              },
+              onEose,
+              onClose,
+            },
+            { signature, ...buildSubscriptionRelayDetails(relayUrls) }
+          );
+          return myRelayListSubscription;
         },
       },
-      {
-        signature,
-        ...buildSubscriptionRelayDetails(relayUrls),
-      }
-    );
-    myRelayListSubscriptionSignature = signature;
-
-    logSubscription('my-relay-list', 'active', {
-      signature,
-      pubkey: formatSubscriptionLogValue(loggedInPubkeyHex),
-      ...buildSubscriptionRelayDetails(relayUrls),
-      relaySnapshots: getRelaySnapshots(relayUrls),
-    });
+    ]);
   }
 
   function resetMyRelayListRuntimeState(reason = 'replace'): void {
     stopMyRelayListSubscription(reason);
     restoreMyRelayListPromise = null;
     myRelayListApplyQueue = Promise.resolve();
+    latestRelaySnapshot = null;
   }
 
   return {

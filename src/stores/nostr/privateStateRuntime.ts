@@ -1243,8 +1243,7 @@ export function createPrivateStateRuntime({
     const nextMembers = await Promise.all(
       nonOwnerMemberPubkeys.map(async (memberPublicKey) => {
         const existingMember = existingMembersByPubkey.get(memberPublicKey) ?? null;
-        const shouldRefreshProfile =
-          options.refreshMemberProfiles === true || existingMember === null;
+        const shouldRefreshProfile = options.refreshMemberProfiles === true;
         let previewContact: Pick<
           ContactRecord,
           'public_key' | 'name' | 'given_name' | 'meta'
@@ -1458,16 +1457,6 @@ export function createPrivateStateRuntime({
       await contactsService.getContactByPublicKey(normalizedGroupPublicKey);
     if (!existingGroupContact || existingGroupContact.type !== 'group') {
       return false;
-    }
-
-    try {
-      await refreshContactRelayList(normalizedGroupPublicKey);
-    } catch (error) {
-      console.warn(
-        'Failed to refresh group relay list before restoring group members',
-        normalizedGroupPublicKey,
-        error
-      );
     }
 
     const groupContact = await contactsService.getContactByPublicKey(normalizedGroupPublicKey);

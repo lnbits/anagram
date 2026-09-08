@@ -490,6 +490,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     readPrivatePreferencesFromStorage,
 
     resetEventSinceForFreshLogin,
+    setMessageHistoryRestoreDays,
 
     sha256Hex,
     toComparableTimestamp,
@@ -2274,6 +2275,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     restorePrivateContactList,
     restorePrivatePreferences,
     restoreStartupState,
+    setMessageHistoryRestoreDays,
     setAppLifecycleRouteChatId: (chatId: string | null) => {
       setAppLifecycleRouteChatIdRuntime(chatId);
     },

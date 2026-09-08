@@ -47,6 +47,7 @@ export interface SeededMessageSnapshot {
 
 export interface BootstrapUserOptions {
   passiveRestore?: boolean;
+  historyRestoreDays?: number;
   relayUrls?: string[];
 }
 
@@ -741,7 +742,7 @@ export async function bootstrapSessionOnPage(
 
   const bootstrapResult = await evaluateWithAppBridgeRetry(
     page,
-    async ({ privateKey, relayUrls, passiveRestore }) => {
+    async ({ privateKey, relayUrls, passiveRestore, historyRestoreDays }) => {
       const bridge = window.__appE2E__;
       if (!bridge) {
         return { ok: false, message: 'E2E bridge is not available.' };
@@ -752,6 +753,7 @@ export async function bootstrapSessionOnPage(
           privateKey,
           relayUrls,
           passiveRestore,
+          historyRestoreDays,
         });
       } catch (error) {
         return {
@@ -766,6 +768,7 @@ export async function bootstrapSessionOnPage(
       privateKey: account.privateKey,
       relayUrls,
       passiveRestore: options.passiveRestore,
+      historyRestoreDays: options.historyRestoreDays,
     }
   );
 

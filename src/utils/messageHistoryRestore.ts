@@ -1,0 +1,2 @@
+export const MESSAGE_HISTORY_RESTORE_DAYS = [7, 14, 21, 30, 60, 90, 365] as const;
+export const DEFAULT_MESSAGE_HISTORY_RESTORE_DAYS = 21;

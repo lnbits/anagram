@@ -9,6 +9,7 @@ export interface AppE2EBootstrapOptions {
   relayUrls: string[];
   developerDiagnosticsEnabled?: boolean;
   passiveRestore?: boolean;
+  historyRestoreDays?: number;
 }
 
 export interface AppE2ERefreshOptions {
@@ -249,6 +250,10 @@ async function bootstrapSession(options: AppE2EBootstrapOptions): Promise<AppE2E
   const validation = await nostrStore.savePrivateKey(privateKey);
   if (!validation.isValid) {
     throw new Error('Invalid private key supplied for e2e bootstrap.');
+  }
+
+  if (options.historyRestoreDays !== undefined) {
+    nostrStore.setMessageHistoryRestoreDays(options.historyRestoreDays);
   }
 
   if (!options.passiveRestore) {

@@ -1,5 +1,12 @@
-import NDK, { NDKNip46Backend, NDKPrivateKeySigner, normalizeRelayUrl } from '@nostr-dev-kit/ndk';
-import { type BrowserContext, expect, test } from '@playwright/test';
+import NDK, {
+  NDKEvent,
+  NDKKind,
+  NDKNip46Backend,
+  NDKPrivateKeySigner,
+  NDKRelaySet,
+  normalizeRelayUrl,
+} from '@nostr-dev-kit/ndk';
+import { type BrowserContext, expect, type Page, test } from '@playwright/test';
 import {
   acceptFirstRequest,
   bootstrapExtensionUser,
@@ -58,6 +65,151 @@ async function seedAuthContext(context: BrowserContext): Promise<void> {
     [E2E_RELAY_URL]
   );
 }
+
+async function seedOnboardingProfile(): Promise<NDKPrivateKeySigner> {
+  const signer = NDKPrivateKeySigner.generate();
+  const ndk = new NDK({ explicitRelayUrls: [E2E_RELAY_URL], signer, enableOutboxModel: false });
+  try {
+    await ndk.connect(5_000);
+    const event = new NDKEvent(ndk, {
+      kind: NDKKind.Metadata,
+      created_at: Math.floor(Date.now() / 1000) - 400 * 86400,
+      tags: [],
+      content: JSON.stringify({ name: 'History slider profile' }),
+    });
+    await event.publish(NDKRelaySet.fromRelayUrls([E2E_RELAY_URL], ndk, false));
+    return signer;
+  } finally {
+    for (const relay of ndk.pool.relays.values()) relay.disconnect();
+  }
+}
+
+async function loginToConfirmProfile(page: Page, signer: NDKPrivateKeySigner): Promise<void> {
+  await page.getByRole('button', { name: 'Login', exact: true }).click();
+  await page.getByRole('button', { name: 'Login with Key (not recommended)', exact: true }).click();
+  await page.getByLabel('Private Key (nsec or hex)', { exact: true }).fill(signer.privateKey);
+  await page.getByRole('button', { name: 'Login', exact: true }).click();
+  await page.getByTestId('auth-onboarding-relays-next-button').click({ timeout: 30_000 });
+  await expect(page.getByText('Confirm profile', { exact: true })).toBeVisible({ timeout: 20_000 });
+}
+
+test('Confirm profile offers all history durations and starts the selected restore', async ({
+  browser,
+}, info) => {
+  const signer = await seedOnboardingProfile();
+  const context = await browser.newContext();
+  await seedAuthContext(context);
+  const page = await context.newPage();
+  try {
+    await page.goto('/#/auth');
+    await loginToConfirmProfile(page, signer);
+    const slider = page.getByRole('slider', { name: 'Restore message history' });
+    const value = page.getByTestId('auth-history-restore-value');
+    const warning = page.getByTestId('auth-history-restore-warning');
+    await expect(value).toHaveText('3 weeks');
+    await expect(warning).toBeHidden();
+    const labels = ['1 week', '2 weeks', '3 weeks', '1 month', '2 months', '3 months', '1 year'];
+    await expect(slider.locator('.q-slider__marker-labels')).toHaveText(labels);
+    const sliderControl = slider.locator('[tabindex="0"]');
+    await sliderControl.press('PageDown');
+    for (const [index, label] of labels.entries()) {
+      if (index > 0) await sliderControl.press('ArrowRight');
+      await expect(value).toHaveText(label);
+      await expect(slider).toHaveAttribute('aria-valuetext', label);
+      if (index > 2) await expect(warning).toContainText('Restoring more history may take longer.');
+      else await expect(warning).toBeHidden();
+    }
+    for (const width of [1100, 390]) {
+      await page.setViewportSize({ width, height: 850 });
+      const panelBox = await page.getByTestId('auth-history-restore').boundingBox();
+      const logoutBox = await page.getByTestId('auth-onboarding-logout-button').boundingBox();
+      if (!panelBox || !logoutBox) throw new Error('Onboarding controls are missing');
+      expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(logoutBox.y);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width
+      );
+      await info.attach(`history-slider-${width}`, {
+        body: await page.screenshot({ fullPage: true }),
+        contentType: 'image/png',
+      });
+    }
+    const confirmedAt = Math.floor(Date.now() / 1000);
+    await page.getByTestId('auth-onboarding-continue-button').click();
+    await expect(page).toHaveURL(/#\/chats$/, { timeout: 30_000 });
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(() => {
+            const value = localStorage.getItem('nostr-private-messages-backfill-state');
+            return value ? (JSON.parse(value).floorSince as number) : null;
+          }),
+        { timeout: 30_000 }
+      )
+      .toBeGreaterThanOrEqual(confirmedAt - 365 * 86400);
+    const floorSince = await page.evaluate(
+      () =>
+        JSON.parse(localStorage.getItem('nostr-private-messages-backfill-state') ?? '{}')
+          .floorSince as number
+    );
+    expect(floorSince).toBeLessThan(confirmedAt - 364 * 86400);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Confirm profile logout returns to login and the next login defaults to three weeks', async ({
+  browser,
+}) => {
+  const signer = await seedOnboardingProfile();
+  const context = await browser.newContext();
+  await seedAuthContext(context);
+  const page = await context.newPage();
+  try {
+    await page.goto('/#/auth');
+    await loginToConfirmProfile(page, signer);
+    await page
+      .getByRole('slider', { name: 'Restore message history' })
+      .locator('[tabindex="0"]')
+      .press('PageUp');
+    await expect(page.getByTestId('auth-history-restore-value')).toHaveText('1 year');
+    await page.getByTestId('auth-onboarding-logout-button').click();
+    await expect(page.getByRole('button', { name: 'Login', exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
+    expect(
+      await page.evaluate(() =>
+        ['nsec', 'npub', 'auth-method'].map((key) => localStorage.getItem(key))
+      )
+    ).toEqual([null, null, null]);
+    // Logout removes relay settings too; reseed the local-only fixture after cleanup.
+    await page.reload();
+    await loginToConfirmProfile(page, signer);
+    await expect(page.getByTestId('auth-history-restore-value')).toHaveText('3 weeks');
+    await expect(page.getByTestId('auth-history-restore-warning')).toBeHidden();
+  } finally {
+    await context.close();
+  }
+});
+
+test('registration onboarding logout clears the session and opens login', async ({ browser }) => {
+  const context = await browser.newContext();
+  await seedAuthContext(context);
+  const page = await context.newPage();
+  try {
+    await page.goto('/#/register');
+    await page.getByRole('button', { name: 'Login Now', exact: true }).click();
+    await page.getByTestId('auth-onboarding-logout-button').click({ timeout: 30_000 });
+    await expect(page).toHaveURL(/#\/auth$/, { timeout: 30_000 });
+    await expect(page.getByRole('button', { name: 'Login', exact: true })).toBeVisible();
+    expect(
+      await page.evaluate(() =>
+        ['nsec', 'npub', 'auth-method'].map((key) => localStorage.getItem(key))
+      )
+    ).toEqual([null, null, null]);
+  } finally {
+    await context.close();
+  }
+});
 
 async function startTestNip46BunkerBackend(
   relayUrl = E2E_RELAY_URL

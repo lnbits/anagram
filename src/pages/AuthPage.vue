@@ -619,6 +619,12 @@
             </q-list>
           </div>
 
+          <MessageHistoryRestoreSlider
+            v-if="onboardingStatus === 'found'"
+            v-model="messageHistoryRestoreDays"
+            :disable="isOnboardingContinuing || isLoggingOut"
+          />
+
           <div v-if="onboardingStatus === 'found'" class="auth-card__button-row">
             <q-btn
               outline
@@ -629,7 +635,8 @@
               class="auth-card__button"
               data-testid="auth-onboarding-logout-button"
               :disable="isOnboardingContinuing"
-              @click="nostrStore.logout"
+              @click="logoutFromOnboarding"
+              :loading="isLoggingOut"
             />
             <q-btn
               unelevated
@@ -639,6 +646,7 @@
               class="auth-card__button"
               data-testid="auth-onboarding-continue-button"
               :loading="isOnboardingContinuing"
+              :disable="isLoggingOut"
               @click="continueFromOnboarding"
             />
           </div>
@@ -652,6 +660,7 @@
               class="auth-card__button"
               data-testid="auth-onboarding-skip-button"
               :loading="isOnboardingContinuing"
+              :disable="isLoggingOut"
               @click="continueFromOnboarding"
             />
             <q-btn
@@ -692,6 +701,7 @@
                 class="auth-card__button"
                 data-testid="auth-onboarding-skip-button"
                 :loading="isOnboardingContinuing"
+                :disable="isLoggingOut"
                 @click="continueFromOnboarding"
               />
             </div>
@@ -710,7 +720,8 @@
               class="auth-card__button"
               data-testid="auth-onboarding-logout-button"
               :disable="isOnboardingContinuing"
-              @click="nostrStore.logout"
+              @click="logoutFromOnboarding"
+              :loading="isLoggingOut"
             />
             <q-btn
               unelevated
@@ -719,7 +730,7 @@
               :label="$t('common.next')"
               class="auth-card__button"
               data-testid="auth-onboarding-relays-next-button"
-              :disable="!canSearchSelectedOnboardingRelays"
+              :disable="!canSearchSelectedOnboardingRelays || isLoggingOut"
               @click="findProfileFromOnboardingRelays"
             />
           </div>
@@ -735,7 +746,7 @@
               :label="$t('common.saveStartUsingApp')"
               class="auth-card__button"
               data-testid="auth-onboarding-profile-start-button"
-              :disable="!canCompleteOnboardingProfileSetup"
+              :disable="!canCompleteOnboardingProfileSetup || isLoggingOut"
               :loading="isOnboardingContinuing"
               @click="completeOnboardingProfileSetup"
             />
@@ -782,6 +793,9 @@ import { normalizeRelayUrl } from '@nostr-dev-kit/ndk';
 import { toDataURL as createQrDataUrl } from 'qrcode';
 import BrowserNotificationsLoginDialog from 'src/components/BrowserNotificationsLoginDialog.vue';
 import CachedAvatar from 'src/components/CachedAvatar.vue';
+import MessageHistoryRestoreSlider from 'src/components/MessageHistoryRestoreSlider.vue';
+import { useOnboardingLogout } from 'src/composables/useOnboardingLogout';
+import { DEFAULT_MESSAGE_HISTORY_RESTORE_DAYS } from 'src/utils/messageHistoryRestore';
 import { useBrowserNotificationsLoginPrompt } from 'src/composables/useBrowserNotificationsLoginPrompt';
 import { useNostrStore, type UserProfileLookupResult } from 'src/stores/nostrStore';
 import type { PublishUserMetadataInput } from 'src/stores/nostrStore';
@@ -801,6 +815,8 @@ import { t } from 'src/i18n';
 const route = useRoute();
 const router = useRouter();
 const nostrStore = useNostrStore();
+const { isLoggingOut, logoutFromOnboarding } = useOnboardingLogout();
+const messageHistoryRestoreDays = ref<number>(DEFAULT_MESSAGE_HISTORY_RESTORE_DAYS);
 const relayStore = useRelayStore();
 const nip65RelayStore = useNip65RelayStore();
 const {
@@ -1266,6 +1282,7 @@ function openRemoteSignerConnectUri(): void {
 }
 
 async function startProfileOnboarding(): Promise<void> {
+  messageHistoryRestoreDays.value = DEFAULT_MESSAGE_HISTORY_RESTORE_DAYS;
   const publicKey = nostrStore.getLoggedInPublicKeyHex();
   if (!publicKey) {
     throw new Error('Failed to resolve the logged-in public key.');
@@ -1643,6 +1660,7 @@ async function completeOnboardingProfileSetup(): Promise<void> {
     }
 
     keepOnlySelectedOnboardingRelays();
+    nostrStore.setMessageHistoryRestoreDays(messageHistoryRestoreDays.value);
     await handleBrowserNotificationsAfterLogin();
     await goToHome();
   } catch (error) {
@@ -1708,6 +1726,7 @@ async function continueFromOnboarding(): Promise<void> {
   isOnboardingContinuing.value = true;
   try {
     keepOnlySelectedOnboardingRelays();
+    nostrStore.setMessageHistoryRestoreDays(messageHistoryRestoreDays.value);
     await handleBrowserNotificationsAfterLogin();
     await goToHome();
   } catch (error) {

@@ -4,7 +4,6 @@ import {
   EVENT_FILTER_LOOKBACK_SECONDS,
   EVENT_SINCE_STORAGE_KEY,
   PRIVATE_MESSAGES_BACKFILL_INITIAL_DELAY_MS,
-  PRIVATE_MESSAGES_BACKFILL_MAX_AGE_SECONDS,
   PRIVATE_MESSAGES_BACKFILL_MAX_DELAY_MS,
   PRIVATE_MESSAGES_BACKFILL_STATE_STORAGE_KEY,
   PRIVATE_MESSAGES_LAST_RECEIVED_EVENT_STORAGE_KEY,
@@ -121,11 +120,11 @@ describe('storageSession runtime', () => {
     runtime.updateStoredPrivateMessagesLastReceivedFromCreatedAt(1100);
     expect(runtime.readStoredPrivateMessagesLastReceivedCreatedAt()).toBe(1200);
     expect(runtime.getPrivateMessagesStartupFloorSince(10_000)).toBe(
-      Math.max(0, 10_000 - PRIVATE_MESSAGES_BACKFILL_MAX_AGE_SECONDS)
+      Math.max(0, 10_000 - 21 * 86400)
     );
     expect(runtime.getPrivateMessagesStartupLiveSince(10_000)).toBe(
       Math.max(
-        Math.max(0, 10_000 - PRIVATE_MESSAGES_BACKFILL_MAX_AGE_SECONDS),
+        Math.max(0, 10_000 - 21 * 86400),
         1200 - PRIVATE_MESSAGES_STARTUP_LIVE_LOOKBACK_SECONDS
       )
     );
@@ -189,6 +188,87 @@ describe('storageSession runtime', () => {
     expect(runtime.getPrivateMessagesStartupLiveSince(now)).toBe(
       now - PRIVATE_MESSAGES_STARTUP_LIVE_LOOKBACK_SECONDS
     );
+  });
+
+  it('defaults to three weeks and accepts each onboarding history duration without storing a preference', () => {
+    const localStorage = createMockStorage();
+    (globalThis as Record<string, unknown>).window = { localStorage: localStorage.api };
+    const { runtime } = createRuntimeHarness();
+    const now = 1_800_000_000;
+    expect(runtime.getPrivateMessagesStartupFloorSince(now)).toBe(now - 21 * 86400);
+
+    for (const days of [7, 14, 21, 30, 60, 90, 365]) {
+      runtime.setMessageHistoryRestoreDays(days);
+      expect(runtime.getPrivateMessagesStartupFloorSince(now)).toBe(now - days * 86400);
+    }
+    expect(localStorage.store.size).toBe(0);
+    for (const invalid of [0, -1, 22, 366, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => runtime.setMessageHistoryRestoreDays(invalid)).toThrow();
+    }
+  });
+
+  it('resumes the selected history boundary after reload but resets it on fresh login or logout', () => {
+    const localStorage = createMockStorage();
+    (globalThis as Record<string, unknown>).window = { localStorage: localStorage.api };
+    const { runtime } = createRuntimeHarness();
+    const now = 1_800_000_000;
+    runtime.setMessageHistoryRestoreDays(365);
+    const floorSince = runtime.getPrivateMessagesStartupFloorSince(now);
+    const checkpoint = runtime.getPrivateMessagesBackfillResumeState(
+      PUBKEY_A,
+      now - 86400,
+      floorSince
+    );
+    if (!checkpoint) throw new Error('Expected a backfill checkpoint');
+    runtime.writePrivateMessagesBackfillState(checkpoint);
+
+    const reloaded = createRuntimeHarness().runtime;
+    expect(reloaded.getPrivateMessagesStartupFloorSince(now + 60)).toBe(floorSince);
+    expect(reloaded.getPrivateMessagesBackfillResumeState(PUBKEY_A, now, floorSince)).toEqual(
+      checkpoint
+    );
+    reloaded.resetEventSinceForFreshLogin();
+    expect(reloaded.getPrivateMessagesStartupFloorSince(now)).toBe(now - 21 * 86400);
+    expect(reloaded.readPrivateMessagesBackfillState()).toBeNull();
+
+    reloaded.setMessageHistoryRestoreDays(90);
+    reloaded.clearPrivateMessagesBackfillState();
+    expect(reloaded.getPrivateMessagesStartupFloorSince(now)).toBe(now - 21 * 86400);
+  });
+
+  it('keeps newly discovered group epoch subscriptions inside the selected history window', () => {
+    const { runtime, refs } = createRuntimeHarness();
+    const now = 1_800_000_000;
+    refs.eventSince.value = now - 90 * 86400;
+    for (const days of [7, 14, 21, 30, 60]) {
+      runtime.setMessageHistoryRestoreDays(days);
+      expect(runtime.getPrivateMessagesEpochSwitchSince(now)).toBe(now - days * 86400);
+    }
+    refs.eventSince.value = now;
+    expect(runtime.getPrivateMessagesEpochSwitchSince(now)).toBe(
+      now - PRIVATE_MESSAGES_STARTUP_LIVE_LOOKBACK_SECONDS
+    );
+  });
+
+  it('replaces an earlier completed restore boundary when confirming a new duration', () => {
+    const localStorage = createMockStorage();
+    (globalThis as Record<string, unknown>).window = { localStorage: localStorage.api };
+    const { runtime } = createRuntimeHarness();
+    const now = 1_800_000_000;
+    const oldFloor = now - 7 * 86400;
+    runtime.writePrivateMessagesBackfillState({
+      pubkey: PUBKEY_A,
+      nextSince: oldFloor,
+      nextUntil: oldFloor,
+      floorSince: oldFloor,
+      delayMs: 3000,
+      completed: true,
+    });
+    runtime.setMessageHistoryRestoreDays(90);
+    const floorSince = runtime.getPrivateMessagesStartupFloorSince(now);
+    expect(
+      runtime.getPrivateMessagesBackfillResumeState(PUBKEY_A, now - 2 * 86400, floorSince)
+    ).toMatchObject({ floorSince: now - 90 * 86400, completed: false });
   });
 
   it('buffers eventSince updates during startup restore and resets storage on fresh login', () => {

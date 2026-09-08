@@ -109,7 +109,7 @@ test('Confirm profile offers all history durations and starts the selected resto
     await expect(value).toHaveText('3 weeks');
     await expect(warning).toBeHidden();
     const labels = ['1 week', '2 weeks', '3 weeks', '1 month', '2 months', '3 months', '1 year'];
-    await expect(slider.locator('.q-slider__marker-labels')).toHaveText(labels);
+    await expect(slider.locator('.q-slider__marker-labels')).toHaveCount(0);
     const sliderControl = slider.locator('[tabindex="0"]');
     await sliderControl.press('PageDown');
     for (const [index, label] of labels.entries()) {

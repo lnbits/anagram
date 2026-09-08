@@ -11,7 +11,6 @@
       :step="1"
       markers
       snap
-      :marker-labels="labels.map((label, value) => ({ label: label.replace(' ', '\n'), value }))"
       :disable="disable"
       :aria-label="$t('auth.restoreMessageHistory')"
       :aria-valuetext="selectedLabel"
@@ -54,19 +53,6 @@ const selectedLabel = computed(() => labels.value[selectedIndex.value]);
 <style scoped>
 .history-restore {
   margin: 24px 0;
-}
-
-.history-restore :deep(.q-slider) {
-  width: calc(100% - 40px);
-  margin: 0 20px;
-}
-
-.history-restore :deep(.q-slider__marker-labels) {
-  max-width: 42px;
-  white-space: pre-line;
-  text-align: center;
-  font-size: 11px;
-  line-height: 1.3;
 }
 
 .history-restore__warning {

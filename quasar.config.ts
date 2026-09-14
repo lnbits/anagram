@@ -271,6 +271,16 @@ self.addEventListener('fetch', (event) => {
 }
 
 export default configure((ctx) => {
+  const macRelease = process.env.ANAGRAM_MACOS_RELEASE === 'true';
+  if (
+    macRelease &&
+    (!process.env.CSC_NAME ||
+      !process.env.CSC_KEYCHAIN ||
+      !process.env.APPLE_TEAM_ID ||
+      !process.env.ANAGRAM_MACOS_NOTARY_PROFILE)
+  ) {
+    throw new Error('Signed macOS releases must use .github/scripts/macos-release.cjs build');
+  }
   const requireKnownGitSha =
     ctx.prod && !ctx.debug && ctx.modeName === 'capacitor' && ctx.targetName === 'android';
   const buildInfo = buildAppInfo(ctx.prod, requireKnownGitSha);
@@ -318,9 +328,23 @@ export default configure((ctx) => {
         appId: 'com.nostr.chat',
         productName: 'Anagram',
         artifactName: `\${productName}-\${version}-\${os}-\${arch}.\${ext}`,
+        forceCodeSigning: macRelease,
+        afterSign: macRelease
+          ? path.join(projectRoot, '.github/scripts/macos-release.cjs')
+          : undefined,
         mac: {
           category: 'public.app-category.social-networking',
           target: ['zip'],
+          identity: macRelease ? process.env.CSC_NAME : null,
+          type: 'distribution',
+          hardenedRuntime: true,
+          timestamp: 'http://timestamp.apple.com/ts',
+          entitlements: path.join(projectRoot, 'src-electron/entitlements.mac.plist'),
+          entitlementsInherit: path.join(projectRoot, 'src-electron/entitlements.mac.plist'),
+          preAutoEntitlements: false,
+          strictVerify: true,
+          // The release afterSign hook requires Accepted and staples before ZIP creation.
+          notarize: false,
         },
         win: {
           target: ['nsis'],

@@ -184,7 +184,15 @@ npm run build:electron:win
 npm run build:electron:linux
 ```
 
-Local macOS builds remain unsigned. GitHub Actions releases sign, notarize, staple, and verify `Anagram.app` before uploading `anagram-macos.zip`; see [macOS release setup](./docs/macos-release.md) for the six required secrets and validation details.
+The standard macOS build command remains unsigned. GitHub Actions releases sign, notarize, staple, and verify `Anagram.app` before uploading `anagram-macos.zip`; see [macOS release setup](./docs/macos-release.md) for the six required secrets and validation details.
+
+To test the signed release locally, replace the placeholders in the Git-ignored `.env.macos-release` file with real credentials, then run:
+
+```bash
+npm run build:electron:mac:release
+```
+
+This loads the credentials for the release wrapper, creates a temporary directory, and produces the verified `release-assets/anagram-macos.zip`. It does not publish a release or push a tag.
 
 Build Android outputs:
 

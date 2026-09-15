@@ -32,6 +32,14 @@ The account must have accepted any pending Apple Developer agreements. No App St
 
 `npm run dev:electron`, `npm run build:electron:dir`, and `npm run build:electron:mac` remain unsigned and do not contact Apple's notary service. Leave `ANAGRAM_MACOS_RELEASE` unset for these commands. The release wrapper sets it only for its build subprocess. Windows, Linux, and Android continue to use their existing build paths.
 
+For a signed local build, put the six credentials listed above in `.env.macos-release` at the repository root, replacing any mock values. This filename is already Git-ignored and is not automatically loaded by Quasar. Keep the file readable only by your user (`chmod 600 .env.macos-release`). Run:
+
+```bash
+npm run build:electron:mac:release
+```
+
+The command uses Node's `--env-file` support to load the credentials, creates a fresh `RUNNER_TEMP`, and invokes the same release wrapper used by GitHub Actions. It signs, notarizes, staples, extracts, and verifies `release-assets/anagram-macos.zip`, then cleans up the temporary credentials and keychain. It does not publish a release or push a tag. Keep signing credentials out of the main `.env`, which Quasar automatically loads into its application build definitions.
+
 Repository checks cover identity selection, credential failures, notarization status handling, ordering, verification failures, and cleanup using simulated Apple tools. Run:
 
 ```bash

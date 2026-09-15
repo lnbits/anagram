@@ -6,6 +6,7 @@ import {
   establishAcceptedDirectChat,
   expectBrowserStorageToBeEmpty,
   expectNoUnexpectedBrowserErrors,
+  getDeveloperDiagnosticsSnapshot,
   logoutFromSettings,
   reloadAndWaitForApp,
   TEST_ACCOUNTS,
@@ -49,9 +50,32 @@ test('Blossom server preference is encrypted, restored, and shown in Settings or
   const alice = await bootstrapUser(browser, TEST_ACCOUNTS.mediaSettingsAlice);
   const customServerUrl = 'https://media.example.com';
   const defaultServerUrl = 'https://blossom.nostr.build';
+  const waitForSessionReady = async () => {
+    // A rendered Settings input does not mean the background session restore has
+    // finished. Logging out during that restore tears down its message listener.
+    await expect
+      .poll(
+        async () => {
+          const snapshot = await getDeveloperDiagnosticsSnapshot(alice.page);
+          const healing = await alice.page.evaluate(
+            async () => (await window.__appE2E__?.isReconnectHealing()) ?? true
+          );
+          return {
+            restoring: snapshot.session.isRestoringStartupState,
+            listening: snapshot.privateMessagesSubscription.active,
+            receivedEose: Boolean(snapshot.privateMessagesSubscription.lastEoseAt),
+            healing,
+          };
+        },
+        { timeout: 30_000, message: 'Session startup and relay subscriptions are ready' }
+      )
+      .toEqual({ restoring: false, listening: true, receivedEose: true, healing: false });
+  };
 
   try {
-    await alice.page.goto('/#/settings/profile');
+    await waitForSessionReady();
+    await alice.page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await expect(alice.page).toHaveURL(/#\/settings\/profile$/);
     await expect(alice.page.locator('.settings-menu__item .q-item__label')).toHaveText([
       'Profile',
       'Relays',
@@ -76,6 +100,7 @@ test('Blossom server preference is encrypted, restored, and shown in Settings or
     await expect(serverInput).toHaveValue(customServerUrl);
 
     await reloadAndWaitForApp(alice.page);
+    await waitForSessionReady();
     await expect(serverInput).toHaveValue(customServerUrl);
 
     await Promise.all([
@@ -84,6 +109,7 @@ test('Blossom server preference is encrypted, restored, and shown in Settings or
     ]);
     await expectBrowserStorageToBeEmpty(alice.page);
     await bootstrapSessionOnPage(alice.page, TEST_ACCOUNTS.mediaSettingsAlice);
+    await waitForSessionReady();
     await alice.page.getByRole('button', { name: 'Settings', exact: true }).click();
     await alice.page.getByTestId('settings-media-data-storage-item').click();
     await expect(alice.page).toHaveURL(/#\/settings\/media-data-storage$/);

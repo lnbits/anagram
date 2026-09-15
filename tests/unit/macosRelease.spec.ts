@@ -53,6 +53,7 @@ describe('macOS release identity selection', () => {
 
 interface FixtureOptions {
   fail?: string;
+  failureOutput?: { stdout?: string; stderr?: string };
   status?: string;
   missing?: string;
   identities?: string;
@@ -102,7 +103,15 @@ function releaseFixture(options: FixtureOptions = {}) {
       operation === options.fail ||
       (`final ${operation}` === options.fail && args.at(-1)?.includes('/extracted/'))
     ) {
-      return { status: 1, stdout: env.P12_PASSWORD, stderr: env.APPLE_APP_SPECIFIC_PASSWORD };
+      // The builder subprocess cannot echo credentials removed from its environment.
+      return {
+        status: 1,
+        stdout: options.failureOutput?.stdout ?? spawnOptions.env.P12_PASSWORD ?? '',
+        stderr:
+          options.failureOutput?.stderr ??
+          spawnOptions.env.APPLE_APP_SPECIFIC_PASSWORD ??
+          'Simulated command failure.',
+      };
     }
     let stdout = '';
     if (command === 'security') {
@@ -297,6 +306,56 @@ describe('macOS release lifecycle', () => {
     expect(fs.existsSync(path.join(result.root, 'anagram-macos-release'))).toBe(false);
     expect(result.messages.join('\n')).not.toContain('private-');
     expect(result.calls.some(({ args }) => args[0] === 'delete-keychain')).toBe(true);
+  });
+
+  it('reports credential validation errors with authentication guidance and redacted values', () => {
+    const result = releaseFixture({
+      fail: 'xcrun notarytool store-credentials',
+      failureOutput: {
+        stdout: JSON.stringify({
+          certificate: Buffer.from('test certificate').toString('base64'),
+          p12Password: 'private-p12-password',
+          keychainPassword: 'private-keychain-password',
+          appleId: 'private-apple-id@example.test',
+          teamId: team,
+          password: 'private-notary-password',
+          encodedAppleId: encodeURIComponent('private-apple-id@example.test'),
+        }),
+        stderr: 'Error: HTTP status code: 401. Invalid credentials.',
+      },
+    });
+    const diagnostic = result.messages.join('\n');
+    expect(result.fakeProcess.exitCode).toBe(1);
+    expect(diagnostic).toContain('xcrun notarytool store-credentials failed (exit 1).');
+    expect(diagnostic).toContain('HTTP status code: 401. Invalid credentials.');
+    expect(diagnostic).toContain('Check APPLE_ID and APPLE_APP_SPECIFIC_PASSWORD');
+    expect(diagnostic).toContain('[REDACTED]');
+    for (const [name, value] of Object.entries(result.fakeProcess.env)) {
+      if (name === 'RUNNER_TEMP' || !value) continue;
+      expect(diagnostic).not.toContain(value);
+      expect(diagnostic).not.toContain(encodeURIComponent(value));
+    }
+  });
+
+  it('redacts account emails in submission errors without passing passwords to the builder', () => {
+    const result = releaseFixture({
+      fail: 'xcrun notarytool submit',
+      failureOutput: {
+        stderr:
+          'Error: HTTP status code: 401. Invalid credentials for private-apple-id@example.test.',
+      },
+    });
+    const diagnostic = result.messages.join('\n');
+    expect(result.fakeProcess.exitCode).toBe(1);
+    expect(diagnostic).toContain('xcrun notarytool submit failed (exit 1).');
+    expect(diagnostic).toContain('HTTP status code: 401. Invalid credentials for [REDACTED EMAIL]');
+    expect(diagnostic).not.toContain('private-');
+    const submission = result.calls.find(({ args }) => args[1] === 'submit');
+    expect(submission?.env.APPLE_ID).toBeUndefined();
+    expect(submission?.env.APPLE_APP_SPECIFIC_PASSWORD).toBeUndefined();
+    expect(submission?.env.P12_PASSWORD).toBeUndefined();
+    expect(fs.existsSync(result.asset)).toBe(false);
+    expect(fs.existsSync(path.join(result.root, 'anagram-macos-release'))).toBe(false);
   });
 
   it('does not build with an identity from another team', () => {

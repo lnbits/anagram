@@ -46,6 +46,7 @@ export interface SeededMessageSnapshot {
 }
 
 export interface BootstrapUserOptions {
+  landingPath?: string;
   passiveRestore?: boolean;
   historyRestoreDays?: number;
   relayUrls?: string[];
@@ -789,7 +790,10 @@ export async function bootstrapSessionOnPage(
     null
   );
 
-  await waitForChatsShell(page);
+  if (options.landingPath) {
+    await page.goto(`/#${options.landingPath}`);
+    await waitForAppBridge(page);
+  } else await waitForChatsShell(page);
 
   return session;
 }

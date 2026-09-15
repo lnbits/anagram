@@ -111,19 +111,21 @@ class DeveloperTraceDataService {
   private mutationQueue = Promise.resolve();
 
   async appendEntry(entry: DeveloperTraceEntry): Promise<void> {
-    const normalizedEntry = normalizeEntry(entry);
+    return this.appendEntries([entry]);
+  }
 
+  async appendEntries(entries: DeveloperTraceEntry[]): Promise<void> {
+    const normalizedEntries = entries.map(normalizeEntry);
+    if (!normalizedEntries.length) return;
     return this.enqueueMutation(async () => {
       const db = await this.getDatabase();
-      if (!db) {
-        return;
-      }
-
+      if (!db) return;
       const transaction = db.transaction(DEVELOPER_TRACE_STORE, 'readwrite');
+      const completed = waitForTransaction(transaction);
       const store = transaction.objectStore(DEVELOPER_TRACE_STORE);
-      await requestToPromise(store.put(normalizedEntry) as IDBRequest<IDBValidKey>);
-      await this.pruneOverflowEntries(store);
-      await waitForTransaction(transaction);
+      for (const entry of normalizedEntries) store.put(entry);
+      // One count/prune per batch, inside the same serialized transaction.
+      await Promise.all([this.pruneOverflowEntries(store), completed]);
     });
   }
 

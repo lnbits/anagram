@@ -1,4 +1,4 @@
-import { NDKRelayStatus } from '@nostr-dev-kit/ndk';
+import { type NDKEvent, NDKPrivateKeySigner, NDKRelayStatus } from '@nostr-dev-kit/ndk';
 import {
   calculateRelayConnectRetryDelayMs,
   createRelayConnectionRuntime,
@@ -26,6 +26,7 @@ type FakeRelay = {
   disconnect: ReturnType<typeof vi.fn>;
   emit: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
+  off: ReturnType<typeof vi.fn>;
   publish: (event: unknown, timeoutMs?: number) => Promise<boolean>;
 };
 
@@ -51,6 +52,7 @@ function createFakeRelay(url = 'wss://relay.example/') {
     disconnect: vi.fn(),
     emit: vi.fn(),
     on: vi.fn(),
+    off: vi.fn(),
     publish: rawPublish,
   } as unknown as FakeRelay;
 
@@ -72,6 +74,7 @@ function createRuntimeHarness(
     hasActivatedPool?: boolean;
     isPrivateMessagesSubscriptionRelayTracked?: boolean;
     loggedInPublicKeyHex?: string | null;
+    signer?: NDKPrivateKeySigner;
   } = {}
 ) {
   const { connectivity, rawConnect, relay } = createFakeRelay();
@@ -100,6 +103,7 @@ function createRuntimeHarness(
     relayConnectionFilter: undefined,
   };
 
+  const logDeveloperTrace = vi.fn();
   const runtime = createRelayConnectionRuntime({
     authenticatedRelayUrls: new Set<string>(),
     buildRelaySnapshot: () => ({
@@ -117,21 +121,21 @@ function createRuntimeHarness(
     }),
     bumpRelayStatusVersion: vi.fn(),
     configuredRelayUrls,
-    getCachedSigner: () => null,
-    getCachedSignerSessionKey: () => null,
+    getCachedSigner: () => options.signer ?? null,
+    getCachedSignerSessionKey: () => (options.signer ? `nsec:${options.signer.pubkey}` : null),
     getConnectPromise: () => connectPromise,
     getHasActivatedPool: () => hasActivatedPool,
     getHasRelayStatusListeners: () => hasRelayStatusListeners,
-    getLoggedInPublicKeyHex: () => options.loggedInPublicKeyHex ?? null,
+    getLoggedInPublicKeyHex: () => options.signer?.pubkey ?? options.loggedInPublicKeyHex ?? null,
     getNip46SignerPayload: () => null,
     loadPrivateKeyHex: async () => null,
-    getStoredAuthMethod: () => null,
+    getStoredAuthMethod: () => (options.signer ? 'nsec' : null),
     hasNip07Extension: () => false,
     initialConnectTimeoutMs: 3000,
     relayFirstHealthyWaitMs: 80,
     isPrivateMessagesSubscriptionRelayTracked: () =>
       options.isPrivateMessagesSubscriptionRelayTracked ?? false,
-    logDeveloperTrace: vi.fn(),
+    logDeveloperTrace,
     logRelayLifecycle: vi.fn(),
     markPrivateMessagesWatchdogRelayDisconnected: vi.fn(),
     ndk: ndk as never,
@@ -158,6 +162,7 @@ function createRuntimeHarness(
 
   return {
     connectivity,
+    logDeveloperTrace,
     configuredRelayUrls,
     ndk,
     pool,
@@ -174,6 +179,81 @@ function createRuntimeHarness(
 describe('relayConnectionRuntime', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('waits for the signed NIP-42 AUTH acknowledgement before emitting authed', async () => {
+    vi.useFakeTimers();
+    const signer = NDKPrivateKeySigner.generate();
+    const f = createRuntimeHarness({ signer });
+    f.connectivity._status = NDKRelayStatus.AUTHENTICATING;
+    let acknowledge = () => {};
+    const auth = vi.fn(
+      (_event: NDKEvent) =>
+        new Promise<void>((resolve) => {
+          acknowledge = resolve;
+        })
+    );
+    const retryPendingAuthPublishes = vi.fn();
+    Object.assign(f.connectivity, { auth, retryPendingAuthPublishes });
+    const result = f.ndk.relayAuthDefaultPolicy?.(f.relay as never, 'fixture-challenge');
+    await vi.waitFor(() => expect(auth).toHaveBeenCalledTimes(1));
+    expect(f.relay.emit).not.toHaveBeenCalledWith('authed');
+    expect(f.relay.status).toBe(NDKRelayStatus.AUTHENTICATING);
+    const event = auth.mock.calls[0]?.[0];
+    expect(event?.kind).toBe(22242);
+    expect(event?.pubkey).toBe(signer.pubkey);
+    expect(event?.tags).toEqual([
+      ['relay', f.relay.url],
+      ['challenge', 'fixture-challenge'],
+    ]);
+    expect(event?.verifySignature(false)).toBe(true);
+    acknowledge();
+    await expect(result).resolves.toBe(false);
+    expect(f.relay.status).toBe(NDKRelayStatus.AUTHENTICATED);
+    expect(f.relay.emit).toHaveBeenCalledExactlyOnceWith('authed');
+    expect(retryPendingAuthPublishes).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('quarantines a failed AUTH exchange once, suppresses 1300 repeats, and clears quarantine on session reset', async () => {
+    vi.useFakeTimers();
+    const f = createRuntimeHarness({ signer: NDKPrivateKeySigner.generate() });
+    f.connectivity._status = NDKRelayStatus.AUTHENTICATING;
+    const auth = vi.fn(async () => {
+      throw new Error('relay needs serviceUrl to be configured before AUTH can work');
+    });
+    Object.assign(f.connectivity, { auth });
+    await f.ndk.relayAuthDefaultPolicy?.(f.relay as never, 'challenge');
+    const listener = f.relay.on.mock.calls.find(([name]) => name === 'auth:failed')?.[1];
+    for (let i = 0; i < 1300; i++) listener(new Error('same failure'));
+    await f.ndk.relayAuthDefaultPolicy?.(f.relay as never, 'challenge');
+    expect(auth).toHaveBeenCalledTimes(1);
+    expect(f.logDeveloperTrace.mock.calls.filter((call) => call[2] === 'auth-failed')).toHaveLength(
+      1
+    );
+    expect(f.runtime.getRelayConnectionAttemptBlockReason(f.relay.url)).toContain(
+      'authentication failed'
+    );
+    f.runtime.resetRelayAuthentication();
+    expect(f.runtime.getRelayConnectionAttemptBlockReason(f.relay.url)).toBeNull();
+    expect(f.relay.off).toHaveBeenCalledWith('auth:failed', listener);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['timeout', 'reset'])('cleans up an unanswered AUTH exchange on %s', async (reason) => {
+    vi.useFakeTimers();
+    const f = createRuntimeHarness({ signer: NDKPrivateKeySigner.generate() });
+    const auth = vi.fn(() => new Promise(() => {}));
+    Object.assign(f.connectivity, { auth });
+    const result = f.ndk.relayAuthDefaultPolicy?.(f.relay as never, 'challenge');
+    await vi.waitFor(() => expect(auth).toHaveBeenCalledTimes(1));
+    if (reason === 'reset') f.runtime.resetRelayAuthentication();
+    else await vi.advanceTimersByTimeAsync(15_000);
+    await result;
+    expect(f.relay.emit).not.toHaveBeenCalledWith('authed');
+    expect(vi.getTimerCount()).toBe(0);
+    expect(f.relay.off).toHaveBeenCalledWith('disconnect', expect.any(Function));
   });
 
   it('reuses the same in-flight connect promise while the socket is still connecting', async () => {

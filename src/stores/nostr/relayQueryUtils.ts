@@ -8,6 +8,7 @@ import {
   normalizeRelayUrl,
 } from '@nostr-dev-kit/ndk';
 import { RELAY_QUERY_TIMEOUT_MS } from 'src/stores/nostr/constants';
+import { isRelayQueryReady } from 'src/stores/nostr/relayReadiness';
 import { selectReadyRelayUrls } from 'src/stores/nostr/relayTimeoutUtils';
 
 type RelayQueryNdk = Pick<NDK, 'fetchEvent' | 'fetchEvents' | 'subscribe'>;
@@ -38,7 +39,7 @@ function isNdkRelayConnected(ndk: Pick<NDK, 'pool'>, relayUrl: string): boolean 
   try {
     const normalizedRelayUrl = normalizeRelayUrl(relayUrl);
     const relay = ndk.pool?.relays?.get(normalizedRelayUrl);
-    return Boolean(relay?.connected);
+    return isRelayQueryReady(relay);
   } catch {
     return false;
   }
@@ -50,10 +51,6 @@ export function createReadyRelaySet(ndk: NDK, relayUrls: string[]): NDKRelaySet 
   );
   if (readyRelayUrls.length > 0) {
     return NDKRelaySet.fromRelayUrls(readyRelayUrls, ndk, false);
-  }
-
-  if ((ndk.pool?.relays?.size ?? 0) === 0) {
-    return NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
   }
 
   return null;

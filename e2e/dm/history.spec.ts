@@ -88,6 +88,7 @@ for (const days of [7, 21, 90]) {
         {
           relayUrls: [proxy.relayUrl, unavailableRelayUrl],
           passiveRestore: true,
+          landingPath: '/settings/developer',
           ...(days === 21 ? {} : { historyRestoreDays: days }),
         }
       );
@@ -106,7 +107,12 @@ for (const days of [7, 21, 90]) {
         .toBe(true);
       // Only the initial snapshot needs the deliberate delay to reproduce the stall.
       proxy.config.eoseDelayMs = 0;
-      await restored.page.evaluate(async () => window.__appE2E__?.waitForHistoryRestore());
+      await restored.page.evaluate(async () =>
+        window.__appE2E__?.waitForHistoryRestore({ allowPartial: true })
+      );
+      expect(await restored.page.evaluate(() => window.__appE2E__?.getHistoryRestoreStatus())).toBe(
+        'error'
+      );
       const traffic = proxy.trafficSnapshot();
       // Opening the unread chat is a local read-cursor mutation, outside passive restore.
       await navigateToChat(restored.page, sender.pubkey);
@@ -141,3 +147,122 @@ for (const days of [7, 21, 90]) {
     }
   });
 }
+
+test('a restore burst stays navigable and terminates with silent and auth-failing relays', async ({
+  browser,
+}) => {
+  test.setTimeout(240_000);
+  const receiver = NDKPrivateKeySigner.generate();
+  const sender = NDKPrivateKeySigner.generate();
+  const ndk = new NDK({
+    explicitRelayUrls: [E2E_RELAY_URL],
+    signer: receiver,
+    enableOutboxModel: false,
+  });
+  const proxy = await startMockRelayProxy({
+    listenPort: 7018,
+    targetUrl: E2E_RELAY_URL,
+    eoseDelayMs: 3000,
+  });
+  const silent = await startMockRelayProxy({
+    listenPort: 7019,
+    targetUrl: E2E_RELAY_URL,
+    dropEose: true,
+    dropEvents: true,
+  });
+  const auth = await startMockRelayProxy({
+    listenPort: 7020,
+    targetUrl: E2E_RELAY_URL,
+    authFailureMessage: 'relay needs serviceUrl to be configured before AUTH can work',
+  });
+  let restored: BootstrappedUser | undefined;
+  const count = 256;
+  const prefix = `restore-burst-${receiver.pubkey.slice(0, 8)}`;
+  try {
+    await ndk.connect(5000);
+    const relays = NDKRelaySet.fromRelayUrls([E2E_RELAY_URL], ndk, false);
+    const recipient = await receiver.user();
+    const createdAt = Math.floor(Date.now() / 1000) - 5 * 86400;
+    const contactList = new NDKEvent(ndk, {
+      kind: NDKKind.FollowSet,
+      pubkey: receiver.pubkey,
+      created_at: createdAt - 100,
+      tags: [['d', PRIVATE_CONTACT_LIST_D_TAG]],
+      content: await receiver.encrypt(recipient, JSON.stringify([['p', sender.pubkey]]), 'nip44'),
+    });
+    await contactList.publish(relays);
+    for (let i = 0; i < count; i++) {
+      const rumor = new NDKEvent(ndk, {
+        kind: NDKKind.PrivateDirectMessage,
+        pubkey: sender.pubkey,
+        created_at: createdAt + i,
+        tags: [['p', receiver.pubkey]],
+        content: `${prefix}-${i}`,
+      });
+      const seal = new NDKEvent(ndk, {
+        kind: NDKKind.GiftWrapSeal,
+        created_at: createdAt + i,
+        tags: [],
+        content: JSON.stringify(await rumor.toNostrEvent()),
+      });
+      await seal.encrypt(recipient, sender, 'nip44');
+      await seal.sign(sender);
+      const wrapperSigner = NDKPrivateKeySigner.generate();
+      const wrapper = new NDKEvent(ndk, {
+        kind: NDKKind.GiftWrap,
+        created_at: createdAt + i,
+        tags: [['p', receiver.pubkey]],
+        content: JSON.stringify(await seal.toNostrEvent()),
+      });
+      await wrapper.encrypt(recipient, wrapperSigner, 'nip44');
+      await wrapper.sign(wrapperSigner);
+      await wrapper.publish(relays);
+    }
+    restored = await bootstrapUser(
+      browser,
+      { privateKey: receiver.privateKey, displayName: 'Restore burst fixture' },
+      {
+        passiveRestore: true,
+        landingPath: '/settings/developer',
+        relayUrls: [proxy.relayUrl, silent.relayUrl, auth.relayUrl],
+      }
+    );
+    const page = restored.page;
+    await expect
+      .poll(
+        () =>
+          proxy.trafficSnapshot().receivedFrames.filter((frame) => frame.kind === NDKKind.GiftWrap)
+            .length,
+        { timeout: 45_000 }
+      )
+      .toBeGreaterThan(0);
+    expect(await page.evaluate(() => window.__appE2E__?.getHistoryRestoreStatus())).toBe(
+      'in_progress'
+    );
+    // The deterministic burst plus delayed EOSE keeps restore active during both interactions.
+    await page.getByRole('button', { name: 'Contacts', exact: true }).click({ timeout: 10_000 });
+    await expect(page).toHaveURL(/#\/contacts$/, { timeout: 10_000 });
+    await page.getByRole('button', { name: 'Chats', exact: true }).click({ timeout: 10_000 });
+    await expect(page).toHaveURL(/#\/chats$/, { timeout: 10_000 });
+    proxy.config.eoseDelayMs = 0;
+    await page.evaluate(() => window.__appE2E__?.waitForHistoryRestore({ allowPartial: true }));
+    expect(await page.evaluate(() => window.__appE2E__?.getHistoryRestoreStatus())).toBe('error');
+    expect(auth.trafficSnapshot().frames.filter((frame) => frame.command === 'AUTH')).toHaveLength(
+      1
+    );
+    await navigateToChat(page, sender.pubkey);
+    await waitForThreadMessage(page, `${prefix}-${count - 1}`, { chatId: sender.pubkey });
+    const restoredCount = await page.evaluate(
+      ({ chatId, prefix }) => window.__appE2E__?.countStoredMessages({ chatId, prefix }),
+      { chatId: sender.pubkey, prefix }
+    );
+    expect(restoredCount).toBe(count);
+    expect(proxy.trafficSnapshot().duplicateActiveSignatures).toBe(0);
+  } finally {
+    if (restored) await disposeUsers(restored);
+    for (const relay of ndk.pool.relays.values()) relay.disconnect();
+    await proxy.close();
+    await silent.close();
+    await auth.close();
+  }
+});

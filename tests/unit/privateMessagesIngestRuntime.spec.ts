@@ -111,7 +111,9 @@ function createDeps() {
     applyPendingIncomingDeletionsForMessage: vi.fn(async (messageRow) => messageRow),
     applyPendingIncomingReactionsForMessage: vi.fn(async (messageRow) => messageRow),
     buildInboundRelayStatuses: vi.fn(() => [makeRelayStatus()]),
-    buildInboundTraceDetails: vi.fn(() => ({})),
+    buildInboundTraceDetails: vi.fn(
+      (_details: { wrappedEvent: NDKEvent; [key: string]: unknown }) => ({})
+    ),
     buildLoggedNostrEvent: vi.fn(() => ({ logged: true })),
     buildReplyPreviewFromTargetEvent: vi.fn().mockResolvedValue(null),
     buildSubscriptionEventDetails: vi.fn(() => ({})),
@@ -287,6 +289,87 @@ describe('privateMessagesIngestRuntime', () => {
       'queued-background',
       'last-background',
     ]);
+  });
+
+  it('yields a large burst to a timer after at most 16 items and drains foreground and newly accepted work', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('scheduler', undefined);
+    try {
+      const deps = createDeps();
+      const order: string[] = [];
+      deps.buildInboundTraceDetails.mockImplementation(({ wrappedEvent }) => {
+        order.push(wrappedEvent.id);
+        return {};
+      });
+      const runtime = createPrivateMessagesIngestRuntime(deps);
+      let atTimer = 0;
+      let foreground: Promise<boolean> | undefined;
+      setTimeout(() => {
+        atTimer = order.length;
+        foreground = runtime.queuePrivateMessageIngestion(
+          makeWrappedEvent({ id: 'foreground', kind: NDKKind.Text }),
+          'b'.repeat(64),
+          { priority: 'foreground' }
+        );
+      }, 0);
+      for (let i = 0; i < 1024; i++)
+        runtime.queuePrivateMessageIngestion(
+          makeWrappedEvent({ id: String(i), kind: NDKKind.Text }),
+          'b'.repeat(64)
+        );
+      let drained = false;
+      const drain = runtime.getPrivateMessagesIngestQueue().then(() => {
+        drained = true;
+      });
+      // First browser task must run before the burst drains, independent of CPU speed.
+      await vi.advanceTimersToNextTimerAsync();
+      expect(atTimer).toBeGreaterThan(0);
+      expect(atTimer).toBeLessThanOrEqual(16);
+      expect(drained).toBe(false);
+      await vi.runAllTimersAsync();
+      await drain;
+      await foreground;
+      expect(order.indexOf('foreground')).toBeLessThanOrEqual(16);
+      expect(order.filter((id) => id !== 'foreground')).toEqual(
+        Array.from({ length: 1024 }, (_, i) => String(i))
+      );
+      expect(order).toHaveLength(1025);
+      expect(drained).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('cancels active and queued ingestion on reset without persisting into the next session', async () => {
+    const deps = createDeps();
+    let releaseContext: (value: null) => void = () => {};
+    deps.resolveIncomingPrivateMessageRecipientContext.mockImplementationOnce(
+      () =>
+        new Promise<null>((resolve) => {
+          releaseContext = resolve;
+        })
+    );
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+    const active = runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64));
+    const queued = runtime.queuePrivateMessageIngestion(
+      makeWrappedEvent({ id: 'queued' }),
+      'b'.repeat(64)
+    );
+    const drain = runtime.getPrivateMessagesIngestQueue();
+    runtime.resetPrivateMessagesIngestRuntimeState();
+    await expect(active).resolves.toBe(false);
+    await expect(queued).resolves.toBe(false);
+    await drain;
+    releaseContext(null);
+    await runtime.queuePrivateMessageIngestion(
+      makeWrappedEvent({ kind: NDKKind.Text }),
+      'c'.repeat(64)
+    );
+    await runtime.getPrivateMessagesIngestQueue();
+    expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
+    expect(ndkMocks.giftUnwrap).not.toHaveBeenCalled();
   });
 
   it('creates request chats for first-contact direct messages and queues UI refreshes', async () => {

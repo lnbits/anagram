@@ -1,4 +1,4 @@
-import { NDKRelaySet } from '@nostr-dev-kit/ndk';
+import { NDKRelaySet, NDKRelayStatus } from '@nostr-dev-kit/ndk';
 import {
   createReadyRelaySet,
   fetchEventsWithRelayTimeout,
@@ -18,7 +18,7 @@ describe('relayQueryUtils', () => {
     const ndk = {
       pool: {
         relays: new Map([
-          ['wss://fast.example/', { connected: true }],
+          ['wss://fast.example/', { connected: true, status: NDKRelayStatus.CONNECTED }],
           ['wss://slow.example/', { connected: false }],
         ]),
         getRelay: vi.fn(),

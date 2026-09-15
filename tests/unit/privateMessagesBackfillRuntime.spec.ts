@@ -1,4 +1,4 @@
-import NDK from '@nostr-dev-kit/ndk';
+import NDK, { NDKRelayStatus } from '@nostr-dev-kit/ndk';
 import {
   MISSING_MESSAGE_DEPENDENCY_REPAIR_WINDOW_SECONDS,
   PRIVATE_MESSAGES_RECONNECT_LOOKBACK_SECONDS,
@@ -43,6 +43,7 @@ const TARGET_EVENT_ID = 'f'.repeat(64);
 
 function createRuntime(
   overrides: {
+    queuePrivateMessageIngestion?: () => Promise<boolean>;
     getLiveRecipientSince?: (publicKey: string) => number | null;
     ensureLiveRecipientSubscription?: () => Promise<void>;
     getPrivateMessagesStartupFloorSince?: ReturnType<typeof vi.fn>;
@@ -68,6 +69,9 @@ function createRuntime(
 
       return {
         stop: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+        removeAllListeners: vi.fn(),
       } as never;
     });
 
@@ -75,6 +79,24 @@ function createRuntime(
   const completeStartupStep = vi.fn();
   const failStartupStep = vi.fn();
   const updateStartupInternalTask = vi.fn();
+  const ndk = overrides.ndk ?? new NDK();
+  if (!overrides.ndk) {
+    const getRelay = ndk.pool.getRelay.bind(ndk.pool);
+    vi.spyOn(ndk.pool, 'getRelay').mockImplementation((...args) => {
+      const relay = getRelay(...args);
+      vi.spyOn(relay, 'connected', 'get').mockReturnValue(true);
+      vi.spyOn(relay, 'status', 'get').mockReturnValue(NDKRelayStatus.CONNECTED);
+      return relay;
+    });
+  }
+  if (!overrides.ndk) ndk.pool.getRelay('wss://relay.example/', false, false);
+  // Discard NDK's unrelated connection/validation housekeeping before starting the runtime.
+  const currentTime = Date.now();
+  vi.clearAllTimers();
+  vi.setSystemTime(currentTime);
+  const writePrivateMessagesBackfillState = vi.fn();
+  const failStartupInternalTask = vi.fn();
+  const completeStartupInternalTask = vi.fn();
   const runtime = createPrivateMessagesBackfillRuntime({
     getLiveRecipientSince: overrides.getLiveRecipientSince,
     ensureLiveRecipientSubscription: overrides.ensureLiveRecipientSubscription,
@@ -83,10 +105,10 @@ function createRuntime(
     buildFilterUntilDetails: (until) => ({ until }),
     buildPrivateMessageSubscriptionTargetDetails: vi.fn(async () => ({})),
     buildSubscriptionRelayDetails: (relayUrls) => ({ relayUrls }),
-    completeStartupInternalTask: vi.fn(),
+    completeStartupInternalTask,
     completeStartupStep,
     ensureRelayConnections: vi.fn(async () => {}),
-    failStartupInternalTask: vi.fn(),
+    failStartupInternalTask,
     failStartupStep,
     flushPrivateMessagesUiRefreshNow: vi.fn(),
     formatSubscriptionLogValue: (value) => value ?? null,
@@ -97,9 +119,9 @@ function createRuntime(
     getPrivateMessagesStartupFloorSince:
       overrides.getPrivateMessagesStartupFloorSince ?? vi.fn(() => 1700000000),
     logSubscription: vi.fn(),
-    ndk: overrides.ndk ?? new NDK(),
+    ndk,
     normalizeThrottleMs: (value) => value ?? 0,
-    queuePrivateMessageIngestion: vi.fn(),
+    queuePrivateMessageIngestion: overrides.queuePrivateMessageIngestion ?? vi.fn(),
     relaySignature: (relayUrls) => relayUrls.join(','),
     resolveGroupChatEpochEntries:
       overrides.resolveGroupChatEpochEntries ??
@@ -118,11 +140,14 @@ function createRuntime(
     updateStoredEventSinceFromCreatedAt: vi.fn(),
     updateStoredPrivateMessagesLastReceivedFromCreatedAt: vi.fn(),
     updateStartupInternalTask,
-    writePrivateMessagesBackfillState: vi.fn(),
+    writePrivateMessagesBackfillState,
   });
 
   return {
     runtime,
+    writePrivateMessagesBackfillState,
+    failStartupInternalTask,
+    completeStartupInternalTask,
     subscribeWithReqLogging,
     beginStartupInternalTask,
     completeStartupStep,
@@ -171,7 +196,7 @@ describe('privateMessagesBackfillRuntime', () => {
         options.onEose();
         options.onClose();
       });
-      return { stop: vi.fn() } as never;
+      return { stop: vi.fn(), on: vi.fn(), off: vi.fn(), removeAllListeners: vi.fn() } as never;
     });
     const { runtime, beginStartupInternalTask, completeStartupStep, updateStartupInternalTask } =
       createRuntime({
@@ -218,6 +243,7 @@ describe('privateMessagesBackfillRuntime', () => {
     const available = ndk.pool.getRelay('wss://available.example/', false, false);
     ndk.pool.getRelay('wss://unavailable.example/', false, false);
     vi.spyOn(available, 'connected', 'get').mockReturnValue(true);
+    vi.spyOn(available, 'status', 'get').mockReturnValue(NDKRelayStatus.CONNECTED);
     const readRelays = ['wss://available.example/', 'wss://unavailable.example/'];
     const { runtime, subscribeWithReqLogging, completeStartupStep, failStartupStep } =
       createRuntime({
@@ -239,13 +265,16 @@ describe('privateMessagesBackfillRuntime', () => {
       100
     );
     await vi.waitFor(() =>
-      expect(completeStartupStep).toHaveBeenCalledExactlyOnceWith('message-history-restore')
+      expect(failStartupStep).toHaveBeenCalledExactlyOnceWith(
+        'message-history-restore',
+        expect.any(Error)
+      )
     );
     expect(subscribeWithReqLogging).toHaveBeenCalledTimes(2);
     for (const call of subscribeWithReqLogging.mock.calls) {
       expect([...call[3].relaySet.relayUrls]).toEqual(['wss://available.example/']);
     }
-    expect(failStartupStep).not.toHaveBeenCalled();
+    expect(completeStartupStep).not.toHaveBeenCalled();
   });
 
   it('reports unavailable history relays instead of waiting forever without a request', async () => {
@@ -274,11 +303,228 @@ describe('privateMessagesBackfillRuntime', () => {
     await vi.waitFor(() =>
       expect(failStartupStep).toHaveBeenCalledWith(
         'message-history-restore',
-        expect.objectContaining({ name: 'RelayQueryUnavailableError' })
+        expect.objectContaining({ message: expect.stringContaining('partial') })
       )
     );
     expect(subscribeWithReqLogging).not.toHaveBeenCalled();
     expect(completeStartupStep).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    NDKRelayStatus.AUTH_REQUESTED,
+    NDKRelayStatus.AUTHENTICATING,
+  ])('skips auth status %s and retains the earliest incomplete checkpoint through later windows', async (status) => {
+    const ndk = new NDK();
+    const ready = ndk.pool.getRelay('wss://ready.example/', false, false);
+    const auth = ndk.pool.getRelay('wss://auth.example/', false, false);
+    for (const relay of [ready, auth]) vi.spyOn(relay, 'connected', 'get').mockReturnValue(true);
+    vi.spyOn(ready, 'status', 'get').mockReturnValue(NDKRelayStatus.CONNECTED);
+    vi.spyOn(auth, 'status', 'get').mockReturnValue(status);
+    const state = {
+      pubkey: LOGGED_IN_PUBLIC_KEY,
+      nextSince: 90,
+      nextUntil: 100,
+      floorSince: 80,
+      delayMs: 0,
+      completed: false,
+    };
+    const f = createRuntime({
+      ndk,
+      readRelays: [ready.url, auth.url],
+      getPrivateMessagesBackfillResumeState: () => state,
+    });
+    f.runtime.startPrivateMessagesStartupBackfill(
+      LOGGED_IN_PUBLIC_KEY,
+      [LOGGED_IN_PUBLIC_KEY],
+      [ready.url, auth.url],
+      100
+    );
+    await vi.runAllTimersAsync();
+    expect(f.subscribeWithReqLogging).toHaveBeenCalledTimes(2);
+    expect(f.failStartupStep).toHaveBeenCalledTimes(1);
+    expect(f.writePrivateMessagesBackfillState).toHaveBeenLastCalledWith(state);
+    f.runtime.resetPrivateMessagesBackfillRuntimeState();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('times out a silent relay once, continues older windows, then retries only missing coverage', async () => {
+    const ndk = new NDK();
+    const ready = ndk.pool.getRelay('wss://ready.example/', false, false);
+    const silent = ndk.pool.getRelay('wss://silent.example/', false, false);
+    for (const relay of [ready, silent]) {
+      vi.spyOn(relay, 'connected', 'get').mockReturnValue(true);
+      vi.spyOn(relay, 'status', 'get').mockReturnValue(NDKRelayStatus.CONNECTED);
+    }
+    let recovered = false;
+    const subscriptions: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
+    const subscribe = vi.fn((_label, _request, _filters, options) => {
+      const sub = { stop: vi.fn(), on: vi.fn(), off: vi.fn(), removeAllListeners: vi.fn() };
+      subscriptions.push(sub);
+      if (recovered || options.relaySet.relayUrls[0] === ready.url)
+        queueMicrotask(() => options.onEose());
+      return sub as never;
+    });
+    const state = {
+      pubkey: LOGGED_IN_PUBLIC_KEY,
+      nextSince: 90,
+      nextUntil: 100,
+      floorSince: 80,
+      delayMs: 0,
+      completed: false,
+    };
+    const f = createRuntime({
+      ndk,
+      readRelays: [ready.url, silent.url],
+      subscribeWithReqLogging: subscribe,
+      getPrivateMessagesBackfillResumeState: () => state,
+    });
+    f.runtime.startPrivateMessagesStartupBackfill(
+      LOGGED_IN_PUBLIC_KEY,
+      [LOGGED_IN_PUBLIC_KEY],
+      [ready.url, silent.url],
+      100
+    );
+    await vi.runAllTimersAsync();
+    expect(subscribe).toHaveBeenCalledTimes(3);
+    expect(f.failStartupStep).toHaveBeenCalledTimes(1);
+    expect(f.writePrivateMessagesBackfillState).toHaveBeenLastCalledWith(state);
+    expect(subscriptions.every((sub) => sub.stop.mock.calls.length === 1)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    recovered = true;
+    subscribe.mockClear();
+    f.runtime.startPrivateMessagesStartupBackfill(
+      LOGGED_IN_PUBLIC_KEY,
+      [LOGGED_IN_PUBLIC_KEY],
+      [ready.url, silent.url],
+      100
+    );
+    await vi.runAllTimersAsync();
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect(subscribe.mock.calls.every((call) => call[3].relaySet.relayUrls[0] === silent.url)).toBe(
+      true
+    );
+    expect(f.completeStartupStep).toHaveBeenCalledTimes(1);
+    expect(f.writePrivateMessagesBackfillState).toHaveBeenLastCalledWith(
+      expect.objectContaining({ completed: true })
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('cancels an active restore without checkpointing accepted but undrained work', async () => {
+    const sub = { stop: vi.fn(), on: vi.fn(), off: vi.fn(), removeAllListeners: vi.fn() };
+    const subscribe = vi.fn(() => sub as never);
+    const state = {
+      pubkey: LOGGED_IN_PUBLIC_KEY,
+      nextSince: 90,
+      nextUntil: 100,
+      floorSince: 80,
+      delayMs: 0,
+      completed: false,
+    };
+    const f = createRuntime({
+      subscribeWithReqLogging: subscribe,
+      getPrivateMessagesBackfillResumeState: () => state,
+    });
+    f.runtime.startPrivateMessagesStartupBackfill(
+      LOGGED_IN_PUBLIC_KEY,
+      [LOGGED_IN_PUBLIC_KEY],
+      ['wss://relay.example'],
+      100
+    );
+    await vi.waitFor(() => expect(subscribe).toHaveBeenCalledTimes(1));
+    f.runtime.resetPrivateMessagesBackfillRuntimeState();
+    await vi.runAllTimersAsync();
+    expect(sub.stop).toHaveBeenCalledTimes(1);
+    expect(f.completeStartupStep).not.toHaveBeenCalled();
+    expect(f.failStartupStep).not.toHaveBeenCalled();
+    expect(f.writePrivateMessagesBackfillState).toHaveBeenLastCalledWith(state);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('coalesces progress during a burst but reports the final exact count', async () => {
+    const state = {
+      pubkey: LOGGED_IN_PUBLIC_KEY,
+      nextSince: 90,
+      nextUntil: 100,
+      floorSince: 90,
+      delayMs: 0,
+      completed: false,
+    };
+    const f = createRuntime({
+      getPrivateMessagesBackfillResumeState: () => state,
+      subscribeWithReqLogging: vi.fn((_label, _request, _filters, options) => {
+        queueMicrotask(() => {
+          for (let i = 0; i < 1300; i++)
+            options.onEvent({
+              id: i.toString(16).padStart(64, '0'),
+              kind: 1059,
+              created_at: 95,
+              pubkey: DIRECT_CHAT_PUBLIC_KEY,
+              tags: [],
+              content: '',
+            });
+          options.onEose();
+        });
+        return { stop: vi.fn(), on: vi.fn(), off: vi.fn(), removeAllListeners: vi.fn() } as never;
+      }),
+    });
+    f.runtime.startPrivateMessagesStartupBackfill(
+      LOGGED_IN_PUBLIC_KEY,
+      [LOGGED_IN_PUBLIC_KEY],
+      ['wss://relay.example'],
+      100
+    );
+    await vi.runAllTimersAsync();
+    expect(f.updateStartupInternalTask.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(f.updateStartupInternalTask).toHaveBeenLastCalledWith(
+      'message-history-restore',
+      expect.any(String),
+      { eventCount: 1300 }
+    );
+    expect(f.completeStartupInternalTask).toHaveBeenLastCalledWith(
+      'message-history-restore',
+      expect.any(String),
+      { eventCount: 1300 }
+    );
+  });
+
+  it('retains the retry window when downloaded events could not be ingested', async () => {
+    const state = {
+      pubkey: LOGGED_IN_PUBLIC_KEY,
+      nextSince: 90,
+      nextUntil: 100,
+      floorSince: 90,
+      delayMs: 0,
+      completed: false,
+    };
+    const f = createRuntime({
+      getPrivateMessagesBackfillResumeState: () => state,
+      queuePrivateMessageIngestion: async () => false,
+      subscribeWithReqLogging: vi.fn((_label, _request, _filters, options) => {
+        queueMicrotask(() => {
+          options.onEvent({
+            id: TARGET_EVENT_ID,
+            kind: 1059,
+            created_at: 95,
+            pubkey: DIRECT_CHAT_PUBLIC_KEY,
+            tags: [],
+            content: '',
+          });
+          options.onEose();
+        });
+        return { stop: vi.fn(), on: vi.fn(), off: vi.fn(), removeAllListeners: vi.fn() } as never;
+      }),
+    });
+    f.runtime.startPrivateMessagesStartupBackfill(
+      LOGGED_IN_PUBLIC_KEY,
+      [LOGGED_IN_PUBLIC_KEY],
+      ['wss://relay.example'],
+      100
+    );
+    await vi.runAllTimersAsync();
+    expect(f.completeStartupStep).not.toHaveBeenCalled();
+    expect(f.failStartupStep).toHaveBeenCalledTimes(1);
+    expect(f.writePrivateMessagesBackfillState).toHaveBeenLastCalledWith(state);
   });
 
   it('completes only history when there are no older windows to restore', () => {
@@ -306,7 +552,7 @@ describe('privateMessagesBackfillRuntime', () => {
       }),
       subscribeWithReqLogging: vi.fn((_label, _requestLabel, _filters, options) => {
         Promise.resolve().then(() => options.onClose());
-        return { stop: vi.fn() } as never;
+        return { stop: vi.fn(), on: vi.fn(), off: vi.fn(), removeAllListeners: vi.fn() } as never;
       }),
     });
     runtime.startPrivateMessagesStartupBackfill(
@@ -341,6 +587,9 @@ describe('privateMessagesBackfillRuntime', () => {
 
       return {
         stop: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+        removeAllListeners: vi.fn(),
       } as never;
     });
     const { runtime } = createRuntime({
@@ -367,7 +616,9 @@ describe('privateMessagesBackfillRuntime', () => {
       type: 'group',
       meta: {},
     });
-    const subscribe = vi.fn(() => ({ stop: vi.fn() }) as never);
+    const subscribe = vi.fn(
+      () => ({ stop: vi.fn(), on: vi.fn(), off: vi.fn(), removeAllListeners: vi.fn() }) as never
+    );
     const { runtime } = createRuntime({
       subscribeWithReqLogging: subscribe,
       getPrivateMessagesStartupFloorSince: vi.fn(() => 90),
@@ -445,6 +696,9 @@ describe('privateMessagesBackfillRuntime', () => {
 
       return {
         stop: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+        removeAllListeners: vi.fn(),
       } as never;
     });
     const { runtime } = createRuntime({
@@ -500,6 +754,9 @@ describe('privateMessagesBackfillRuntime', () => {
 
       return {
         stop: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+        removeAllListeners: vi.fn(),
       } as never;
     });
     const { runtime } = createRuntime({
@@ -566,6 +823,9 @@ describe('privateMessagesBackfillRuntime', () => {
 
       return {
         stop: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+        removeAllListeners: vi.fn(),
       } as never;
     });
     const { runtime } = createRuntime({
@@ -640,6 +900,9 @@ describe('privateMessagesBackfillRuntime', () => {
 
       return {
         stop: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+        removeAllListeners: vi.fn(),
       } as never;
     });
     const { runtime } = createRuntime({
@@ -674,6 +937,9 @@ describe('privateMessagesBackfillRuntime', () => {
 
       return {
         stop: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+        removeAllListeners: vi.fn(),
       } as never;
     });
     const { runtime } = createRuntime({
@@ -749,6 +1015,9 @@ describe('privateMessagesBackfillRuntime', () => {
 
       return {
         stop: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+        removeAllListeners: vi.fn(),
       } as never;
     });
     const { runtime } = createRuntime({
@@ -801,6 +1070,9 @@ describe('privateMessagesBackfillRuntime', () => {
 
       return {
         stop: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+        removeAllListeners: vi.fn(),
       } as never;
     });
     const { runtime } = createRuntime({

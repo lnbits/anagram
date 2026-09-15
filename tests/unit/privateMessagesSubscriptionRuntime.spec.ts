@@ -1,5 +1,10 @@
 import { EventEmitter } from 'node:events';
-import NDK, { type NDKEvent, type NDKFilter, type NDKSubscription } from '@nostr-dev-kit/ndk';
+import NDK, {
+  type NDKEvent,
+  type NDKFilter,
+  NDKRelayStatus,
+  type NDKSubscription,
+} from '@nostr-dev-kit/ndk';
 import { RELAY_QUERY_TIMEOUT_MS } from 'src/stores/nostr/constants';
 import { createPrivateMessagesSubscriptionRuntime } from 'src/stores/nostr/privateMessagesSubscriptionRuntime';
 import { createStartupRuntime } from 'src/stores/nostr/startupRuntime';
@@ -237,7 +242,7 @@ describe('privateMessagesSubscriptionRuntime', () => {
 
   it('starts step 16 after a slow live snapshot when another relay is unavailable', async () => {
     vi.useFakeTimers();
-    const healthy = { connected: true };
+    const healthy = { connected: true, status: NDKRelayStatus.CONNECTED };
     const unavailable = { connected: false };
     const subscription = Object.assign(new EventEmitter(), {
       relaySet: { relays: new Set([healthy, unavailable]) },
@@ -271,6 +276,30 @@ describe('privateMessagesSubscriptionRuntime', () => {
     expect(subscription.stop).not.toHaveBeenCalled();
     expect(subscription.listenerCount('eose')).toBe(0);
     expect(subscription.listenerCount('close')).toBe(0);
+  });
+
+  it('bounds the live EOSE handoff so step 16 can run even with a silent connected relay', async () => {
+    vi.useFakeTimers();
+    const f = createRuntime({ subscribeWithReqLogging: vi.fn(() => ({ stop: vi.fn() }) as never) });
+    await f.runtime.subscribePrivateMessagesForLoggedInUser(false, { startupTrackStep: true });
+    f.runtime.startPrivateMessagesHistoryRestore();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(f.startPrivateMessagesStartupBackfill).toHaveBeenCalledTimes(1);
+    expect(f.startupRuntime.getStartupStepSnapshot('private-messages-subscribe').status).toBe(
+      'error'
+    );
+    f.runtime.stopPrivateMessagesLiveSubscription();
+  });
+
+  it('cancels the live EOSE deadline on logout', async () => {
+    vi.useFakeTimers();
+    const f = createRuntime({ subscribeWithReqLogging: vi.fn(() => ({ stop: vi.fn() }) as never) });
+    await f.runtime.subscribePrivateMessagesForLoggedInUser(false, { startupTrackStep: true });
+    f.runtime.startPrivateMessagesHistoryRestore();
+    f.runtime.resetPrivateMessagesSubscriptionRuntimeState();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(f.startPrivateMessagesStartupBackfill).not.toHaveBeenCalled();
+    f.runtime.stopPrivateMessagesLiveSubscription();
   });
 
   it('does not leave history waiting on a listener that failed to start', async () => {

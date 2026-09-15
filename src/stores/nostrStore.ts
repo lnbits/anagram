@@ -987,6 +987,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
   const shouldPreserveExistingGroupRelays = shouldPreserveExistingGroupRelaysValue;
 
   const {
+    resetRelayAuthentication,
     ensureRelayConnections,
     fetchRelayNip11Info,
     getOrCreateSigner: getOrCreateSignerImpl,
@@ -1978,6 +1979,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     },
     resetPrivateMessagesBackfillRuntimeState: () => {
       resetPrivateMessagesBackfillRuntimeStateRuntime();
+      resetRelayAuthentication();
     },
     resetPrivateContactListRuntimeState,
     resetReconnectHealingRuntimeState: () => {

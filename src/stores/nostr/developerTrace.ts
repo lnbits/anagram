@@ -34,6 +34,30 @@ export function createDeveloperTraceRuntime({
   developerTraceVersion,
   developerDiagnosticsStorageKey,
 }: DeveloperTraceRuntimeDeps) {
+  const pendingEntries = new Map<string, DeveloperTraceEntry>();
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingOwner: string | null = null;
+  let persistence = Promise.resolve();
+  let generation = 0;
+
+  function flushTraceBatch(): Promise<void> {
+    if (flushTimer !== null) clearTimeout(flushTimer);
+    flushTimer = null;
+    if (pendingOwner !== getLoggedInPublicKeyHex()) pendingEntries.clear();
+    const entries = [...pendingEntries.values()];
+    pendingEntries.clear();
+    if (!entries.length) return persistence;
+    const currentGeneration = generation;
+    persistence = persistence
+      .then(async () => {
+        if (currentGeneration !== generation) return;
+        await developerTraceDataService.appendEntries(entries);
+        if (currentGeneration === generation) bumpDeveloperTraceVersion();
+      })
+      .catch((error) => console.error('Failed to persist developer trace batch.', error));
+    return persistence;
+  }
+
   function readDeveloperDiagnosticsEnabled(): boolean {
     return readDeveloperDiagnosticsEnabledFromStorage(developerDiagnosticsStorageKey);
   }
@@ -194,31 +218,62 @@ export function createDeveloperTraceRuntime({
       return;
     }
 
-    developerTraceState.developerTraceCounter += 1;
-    const entry: DeveloperTraceEntry = {
-      id: `${Date.now()}-${developerTraceState.developerTraceCounter}`,
-      timestamp: new Date().toISOString(),
+    const owner = getLoggedInPublicKeyHex();
+    if (owner !== pendingOwner) {
+      pendingEntries.clear();
+      pendingOwner = owner;
+    }
+    // Relay errors may carry changing connection counters and stack frames. Group
+    // by the actionable error and relay, preserving the first context and totals.
+    const error = normalizedDetails.error;
+    const errorMessage =
+      error && typeof error === 'object' && 'message' in error ? error.message : error;
+    const key = JSON.stringify([
       level,
       scope,
       phase,
-      details: normalizedDetails,
-    };
-
-    void developerTraceDataService
-      .appendEntry(entry)
-      .then(() => {
-        bumpDeveloperTraceVersion();
-      })
-      .catch((error) => {
-        console.error('Failed to persist developer trace entry.', error);
+      scope === 'relay' || scope === 'relay-connect'
+        ? [
+            normalizedDetails.url ?? normalizedDetails.relayUrl,
+            errorMessage,
+            normalizedDetails.reason,
+          ]
+        : normalizedDetails,
+    ]);
+    const existing = pendingEntries.get(key);
+    if (existing) {
+      existing.details.repeatCount = Number(existing.details.repeatCount ?? 1) + 1;
+      existing.details.lastSeenAt = new Date().toISOString();
+    } else {
+      developerTraceState.developerTraceCounter += 1;
+      pendingEntries.set(key, {
+        id: `${Date.now()}-${developerTraceState.developerTraceCounter}`,
+        timestamp: new Date().toISOString(),
+        level,
+        scope,
+        phase,
+        details: { ...normalizedDetails, repeatCount: 1 },
       });
+    }
+    if (pendingEntries.size >= 256) void flushTraceBatch();
+    else if (flushTimer === null)
+      flushTimer = setTimeout(() => {
+        void flushTraceBatch();
+      }, 250);
   }
 
   async function listDeveloperTraceEntries(): Promise<DeveloperTraceEntry[]> {
+    await flushTraceBatch();
     return developerTraceDataService.listEntries();
   }
 
   async function clearDeveloperTraceEntries(): Promise<void> {
+    generation += 1;
+    if (flushTimer !== null) clearTimeout(flushTimer);
+    flushTimer = null;
+    pendingEntries.clear();
+    pendingOwner = null;
+    await persistence;
     await developerTraceDataService.clearEntries();
     bumpDeveloperTraceVersion();
   }

@@ -80,6 +80,7 @@ function resolveMockRelayConfig(overrides = {}, environment = process.env) {
       7002,
       { minimum: 1 }
     ),
+    authFailureMessage: typeof overrides.authFailureMessage === 'string' ? overrides.authFailureMessage : null,
     targetUrl: readTargetUrl(firstDefined(overrides.targetUrl, environment.MOCK_RELAY_TARGET_URL)),
     handshakeDelayMs: readDelay(overrides.handshakeDelayMs, 'MOCK_RELAY_HANDSHAKE_DELAY_MS'),
     requestDelayMs: readDelay(overrides.requestDelayMs, 'MOCK_RELAY_REQUEST_DELAY_MS'),
@@ -497,6 +498,9 @@ async function startMockRelayProxy(options = {}) {
         ].join('\r\n')
       );
 
+      if (config.authFailureMessage) {
+        clientSocket.write(encodeWebSocketFrame(0x1, Buffer.from(JSON.stringify(['AUTH', 'fixture-challenge']))));
+      }
       const upstream = new WebSocket(config.targetUrl);
       session.upstream = upstream;
 
@@ -539,6 +543,13 @@ async function startMockRelayProxy(options = {}) {
             ...(filters ? { filters } : {}),
             ...(eventId ? { eventId, kind: frame[1]?.kind } : {}),
           });
+          if (config.authFailureMessage && (command === 'AUTH' || command === 'REQ')) {
+            const reply = command === 'AUTH'
+              ? ['OK', frame[1]?.id, false, config.authFailureMessage]
+              : ['CLOSED', subscriptionId, 'auth-required: authenticate first'];
+            clientSocket.write(encodeWebSocketFrame(0x1, Buffer.from(JSON.stringify(reply))));
+            return;
+          }
           if (command === 'REQ') {
             const signature = JSON.stringify(filters);
             if (

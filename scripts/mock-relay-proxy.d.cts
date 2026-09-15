@@ -2,6 +2,7 @@ export type MockRelayHangMode = 'none' | 'handshake' | 'responses';
 export type MockRelayMessageType = 'ack' | 'event' | 'eose' | 'other';
 
 export interface MockRelayConfig {
+  authFailureMessage: string | null;
   listenHost: string;
   listenPort: number;
   targetUrl: string;
@@ -46,6 +47,7 @@ export interface RelayTrafficSnapshot {
   duplicateActiveSignatures: number;
 }
 export interface MockRelayOptions {
+  authFailureMessage?: string;
   rateLimit?: { windowMs: number; maxFrames: number };
   delayMs?: number | string;
   listenHost?: string;

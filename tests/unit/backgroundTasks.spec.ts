@@ -14,6 +14,30 @@ describe('backgroundTasks', () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    'throw',
+    'reject',
+  ])('uses a real timer task if scheduler.yield fails via %s', async (mode) => {
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, 'scheduler', {
+      configurable: true,
+      value: {
+        yield: () => {
+          if (mode === 'throw') throw new Error('unavailable');
+          return Promise.reject(new Error('unavailable'));
+        },
+      },
+    });
+    const order: string[] = [];
+    setTimeout(() => order.push('navigation'), 0);
+    const yielded = yieldToMainThread().then(() => order.push('ingest'));
+    await Promise.resolve();
+    expect(order).toEqual([]);
+    await vi.runAllTimersAsync();
+    await yielded;
+    expect(order).toEqual(['navigation', 'ingest']);
+  });
+
   it('starts work after yielding the current interaction turn', async () => {
     vi.useFakeTimers();
     const task = vi.fn();

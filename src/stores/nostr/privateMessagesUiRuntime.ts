@@ -18,6 +18,8 @@ export function createPrivateMessagesUiRuntime({
   waitForPrivateMessagesIngestQueue,
 }: PrivateMessagesUiRuntimeDeps) {
   let privateMessagesUiRefreshQueue = Promise.resolve();
+  let refreshQueued = false;
+  let generation = 0;
   let privateMessagesUiRefreshTimeoutId: ReturnType<typeof globalThis.setTimeout> | null = null;
   let shouldReloadChatsOnPrivateMessagesUiRefresh = false;
   let shouldReloadMessagesOnPrivateMessagesUiRefresh = false;
@@ -67,39 +69,47 @@ export function createPrivateMessagesUiRuntime({
       shouldReloadMessagesOnPrivateMessagesUiRefresh = true;
     }
 
-    const throttleMs = normalizeThrottleMs(options.throttleMs);
-    if (throttleMs <= 0) {
-      privateMessagesUiRefreshQueue = privateMessagesUiRefreshQueue.then(() =>
-        flushPrivateMessagesUiRefresh()
-      );
-      return;
-    }
-
-    if (privateMessagesUiRefreshTimeoutId !== null) {
-      return;
-    }
-
+    if (privateMessagesUiRefreshTimeoutId !== null || refreshQueued) return;
     privateMessagesUiRefreshTimeoutId = globalThis.setTimeout(() => {
       privateMessagesUiRefreshTimeoutId = null;
-      privateMessagesUiRefreshQueue = privateMessagesUiRefreshQueue.then(() =>
-        flushPrivateMessagesUiRefresh()
-      );
-    }, throttleMs);
+      void flushPrivateMessagesUiRefreshNow();
+    }, normalizeThrottleMs(options.throttleMs));
   }
 
-  function flushPrivateMessagesUiRefreshNow(): void {
+  function flushPrivateMessagesUiRefreshNow(): Promise<void> {
     if (privateMessagesUiRefreshTimeoutId !== null) {
       globalThis.clearTimeout(privateMessagesUiRefreshTimeoutId);
       privateMessagesUiRefreshTimeoutId = null;
     }
-
-    privateMessagesUiRefreshQueue = privateMessagesUiRefreshQueue.then(() =>
-      flushPrivateMessagesUiRefresh()
-    );
+    if (refreshQueued) return privateMessagesUiRefreshQueue;
+    refreshQueued = true;
+    const currentGeneration = generation;
+    privateMessagesUiRefreshQueue = privateMessagesUiRefreshQueue.then(async () => {
+      try {
+        // Consume flags only after the burst has drained; requests during the wait
+        // share this reload instead of creating one whole-store reload per item.
+        await waitForPrivateMessagesIngestQueue();
+        if (currentGeneration !== generation) return;
+        await flushPrivateMessagesUiRefresh();
+      } finally {
+        if (currentGeneration === generation) {
+          refreshQueued = false;
+          if (
+            shouldReloadChatsOnPrivateMessagesUiRefresh ||
+            shouldReloadMessagesOnPrivateMessagesUiRefresh
+          )
+            queuePrivateMessagesUiRefresh();
+        }
+      }
+    });
+    return privateMessagesUiRefreshQueue;
   }
 
   async function runPendingChatChecks(): Promise<void> {
+    const currentGeneration = generation;
     try {
+      await waitForPrivateMessagesIngestQueue();
+      if (currentGeneration !== generation) return;
       await chatDataService.init();
       let chatIds: string[] = [];
 
@@ -161,6 +171,7 @@ export function createPrivateMessagesUiRuntime({
   }
 
   function schedulePostPrivateMessagesEoseChecks(): void {
+    const currentGeneration = generation;
     shouldRunPostPrivateMessagesEoseChecks = true;
     if (postPrivateMessagesEoseChecksTimeoutId !== null) {
       return;
@@ -177,6 +188,7 @@ export function createPrivateMessagesUiRuntime({
         .then(async () => {
           try {
             await waitForPrivateMessagesIngestQueue();
+            if (currentGeneration !== generation) return;
             await refreshDeveloperPendingQueues();
             const { useMessageStore } = await import('src/stores/messageStore');
             await useMessageStore().syncChatsReadStateFromSeenBoundary();
@@ -204,6 +216,8 @@ export function createPrivateMessagesUiRuntime({
   function resetPrivateMessagesUiRuntimeState(
     options: { includeRefreshQueue?: boolean } = {}
   ): void {
+    generation += 1;
+    refreshQueued = false;
     clearPrivateMessagesUiRefreshState();
 
     if (chatChecksTimeoutId !== null) {

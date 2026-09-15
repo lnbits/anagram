@@ -1,4 +1,4 @@
-import type { NDKSubscription } from '@nostr-dev-kit/ndk';
+import { NDKRelayStatus, type NDKSubscription } from '@nostr-dev-kit/ndk';
 import { RELAY_QUERY_TIMEOUT_MS } from 'src/stores/nostr/constants';
 import { observeConnectedRelayEose } from 'src/stores/nostr/subscriptionEose';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 afterEach(() => vi.useRealTimers());
 it('keeps observing a slow snapshot after the initial query wait has expired', () => {
   vi.useFakeTimers();
-  const healthy = { connected: true },
+  const healthy = { connected: true, status: NDKRelayStatus.CONNECTED },
     unavailable = { connected: false };
   const subscription = {
     relaySet: { relays: new Set([healthy, unavailable]) },
@@ -44,7 +44,7 @@ it.each(['eose', 'close'])('releases its observer when the subscription emits %s
 
 it('completes from every connected relay EOSE while retaining the listener for a late connection', () => {
   vi.useFakeTimers();
-  const healthy = { connected: true },
+  const healthy = { connected: true, status: NDKRelayStatus.CONNECTED },
     late = { connected: false };
   const subscription = {
     relaySet: { relays: new Set([healthy, late]) },

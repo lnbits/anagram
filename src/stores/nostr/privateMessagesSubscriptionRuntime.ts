@@ -23,6 +23,7 @@ import type {
   SubscribePrivateMessagesOptions,
 } from 'src/stores/nostr/types';
 import type { Ref } from 'vue';
+import { HISTORY_RELAY_TIMEOUT_MS } from './relaySnapshot';
 
 type MessageStartupTrackId = 'private-message-events' | 'message-history-restore';
 
@@ -166,6 +167,11 @@ export function createPrivateMessagesSubscriptionRuntime({
   let hasPrivateMessagesWatchdogOnlineListener = false;
   let messageHistoryRestoreContext: MessageHistoryRestoreContext | null = null;
   let messageHistoryRestoreRequested = false;
+  let historyReadyTimer: ReturnType<typeof setTimeout> | null = null;
+  function clearHistoryReadyTimer(): void {
+    if (historyReadyTimer !== null) clearTimeout(historyReadyTimer);
+    historyReadyTimer = null;
+  }
   const privateMessagesWatchdogRelayConnectionStates = new Map<string, boolean>();
 
   function startPrivateMessagesHistoryRestore(): void {
@@ -175,6 +181,25 @@ export function createPrivateMessagesSubscriptionRuntime({
 
     beginStartupStep('message-history-restore');
     messageHistoryRestoreRequested = true;
+    if (!messageHistoryRestoreContext.ready && historyReadyTimer === null) {
+      const context = messageHistoryRestoreContext;
+      historyReadyTimer = setTimeout(() => {
+        historyReadyTimer = null;
+        if (context !== messageHistoryRestoreContext) return;
+        logSubscription('private-messages', 'initial-history-wait-timeout', {
+          timeoutMs: HISTORY_RELAY_TIMEOUT_MS,
+          relayUrls: context.relayUrls,
+        });
+        failStartupStep(
+          'private-message-events',
+          new Error('Initial message snapshot is partial.')
+        );
+        // Backfill owns its own per-relay accounting. A silent live snapshot must
+        // not prevent older windows from even being attempted.
+        context.ready = true;
+        void runPendingMessageHistoryRestore();
+      }, HISTORY_RELAY_TIMEOUT_MS);
+    }
     void runPendingMessageHistoryRestore();
   }
 
@@ -184,6 +209,7 @@ export function createPrivateMessagesSubscriptionRuntime({
       return;
     }
 
+    clearHistoryReadyTimer();
     messageHistoryRestoreRequested = false;
     context.preparing = true;
     try {
@@ -493,6 +519,7 @@ export function createPrivateMessagesSubscriptionRuntime({
   function stopPrivateMessagesLiveSubscription(reason = 'replace'): void {
     generation += 1;
     desiredScopeCount = 0;
+    clearHistoryReadyTimer();
     messageHistoryRestoreContext = null;
     subscriptions.stop();
     scopes.clear();
@@ -519,6 +546,7 @@ export function createPrivateMessagesSubscriptionRuntime({
     privateMessagesWatchdogLastRecoveryAt = 0;
     privateMessagesSubscriptionShouldBeActive = false;
     messageHistoryRestoreRequested = false;
+    clearHistoryReadyTimer();
     messageHistoryRestoreContext = null;
     privateMessagesWatchdogRelayConnectionStates.clear();
 
@@ -683,6 +711,7 @@ export function createPrivateMessagesSubscriptionRuntime({
         [...scopes.values()].some((state) => !state.ready)
       )
         return;
+      clearHistoryReadyTimer();
       messageHistoryRestoreContext.ready = true;
       markPrivateMessagesLiveCoverageNow();
       privateMessagesSubscriptionLastEoseAt.value ??= new Date().toISOString();

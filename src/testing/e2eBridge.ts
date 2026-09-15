@@ -80,7 +80,9 @@ export interface AppE2EWaitForAppReadyOptions {
 export interface AppE2EBridge {
   bootstrapSession(options: AppE2EBootstrapOptions): Promise<AppE2ESessionSnapshot>;
   resumeSession(): Promise<void>;
-  waitForHistoryRestore(): Promise<void>;
+  waitForHistoryRestore(options?: { allowPartial?: boolean }): Promise<void>;
+  getHistoryRestoreStatus(): Promise<string | undefined>;
+  countStoredMessages(options: { chatId: string; prefix: string }): Promise<number>;
   seedFailedOutboundRelay(options: { eventId: string; relayUrl: string }): Promise<void>;
   getDeveloperDiagnosticsSnapshot(): Promise<DeveloperDiagnosticsSnapshot>;
   getSessionSnapshot(): Promise<AppE2ESessionSnapshot>;
@@ -294,12 +296,26 @@ async function bootstrapSession(options: AppE2EBootstrapOptions): Promise<AppE2E
   );
 }
 
-async function waitForHistoryRestore(): Promise<void> {
+async function countStoredMessages(options: { chatId: string; prefix: string }): Promise<number> {
+  const { chatDataService } = await import('src/services/chatDataService');
+  return (await chatDataService.listAllMessages()).filter(
+    (message) =>
+      message.chat_public_key === options.chatId && message.message.startsWith(options.prefix)
+  ).length;
+}
+
+async function getHistoryRestoreStatus(): Promise<string | undefined> {
+  const { useNostrStore } = await import('src/stores/nostrStore');
+  return useNostrStore().startupSteps.find((step) => step.id === 'message-history-restore')?.status;
+}
+
+async function waitForHistoryRestore(options: { allowPartial?: boolean } = {}): Promise<void> {
   const { useNostrStore } = await import('src/stores/nostrStore');
   const deadline = Date.now() + 150_000;
   while (Date.now() < deadline) {
     const step = useNostrStore().startupSteps.find((step) => step.id === 'message-history-restore');
     if (step?.status === 'success') return;
+    if (step?.status === 'error' && options.allowPartial) return;
     if (step?.status === 'error') throw new Error(step.errorMessage ?? 'History restore failed');
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
   }
@@ -752,6 +768,8 @@ export function installAppE2EBridge(): void {
     bootstrapSession,
     resumeSession,
     waitForHistoryRestore,
+    getHistoryRestoreStatus,
+    countStoredMessages,
     seedFailedOutboundRelay,
     getDeveloperDiagnosticsSnapshot,
     getSessionSnapshot,

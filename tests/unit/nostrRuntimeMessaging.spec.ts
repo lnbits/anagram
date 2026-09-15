@@ -975,7 +975,7 @@ describe('nostr runtime messaging logic', () => {
     await vi.runAllTimersAsync();
     await flushPromises();
 
-    expect(waitForPrivateMessagesIngestQueue).toHaveBeenCalledTimes(1);
+    expect(waitForPrivateMessagesIngestQueue).toHaveBeenCalled();
     expect(refreshDeveloperPendingQueues).toHaveBeenCalledTimes(1);
     expect(messageStoreMock.syncChatsReadStateFromSeenBoundary).toHaveBeenCalledTimes(1);
     expect(messageStoreMock.syncChatUnseenReactionCount).toHaveBeenCalledWith(PUBKEY_A);

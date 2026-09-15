@@ -117,13 +117,18 @@ export function yieldToMainThread(): Promise<void> {
   const scheduler = (globalThis as typeof globalThis & { scheduler?: BackgroundScheduler })
     .scheduler;
 
+  const yieldWithTimer = () =>
+    new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, 0);
+    });
   if (typeof scheduler?.yield === 'function') {
-    return scheduler.yield();
+    try {
+      return scheduler.yield().catch(yieldWithTimer);
+    } catch {
+      return yieldWithTimer();
+    }
   }
-
-  return new Promise<void>((resolve) => {
-    globalThis.setTimeout(resolve, 0);
-  });
+  return yieldWithTimer();
 }
 
 export function yieldToNextPaint(): Promise<void> {

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
 
 const developerTraceDataServiceMock = vi.hoisted(() => ({
-  appendEntry: vi.fn(async () => {}),
+  appendEntries: vi.fn(async () => {}),
   listEntries: vi.fn(async () => []),
   clearEntries: vi.fn(async () => {}),
 }));
@@ -516,8 +516,9 @@ describe('nostr runtime core logic', () => {
       'relays=wss://relay.one, wss://relay.two',
       'reqStatement=["REQ","private-messages-1","{\\"kinds\\":[4],\\"limit\\":100}"]',
     ]);
-    expect(developerTraceDataServiceMock.appendEntry).toHaveBeenCalledTimes(2);
-    expect(developerTraceVersion.value).toBe(2);
+    await runtime.listDeveloperTraceEntries();
+    expect(developerTraceDataServiceMock.appendEntries).toHaveBeenCalledTimes(1);
+    expect(developerTraceVersion.value).toBe(1);
     expect(console.info).toHaveBeenCalledWith(
       '[subscription:private-messages] req',
       'relays=wss://relay.one, wss://relay.two',

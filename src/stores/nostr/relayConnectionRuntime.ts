@@ -1,4 +1,6 @@
 import NDK, {
+  NDKEvent,
+  NDKKind,
   NDKNip07Signer,
   NDKNip46Signer,
   NDKPrivateKeySigner,
@@ -16,6 +18,8 @@ import type {
   RelayConnectionState,
   RelayConnectRetryState,
 } from 'src/stores/nostr/types';
+import { isRelayQuarantined, isRelayQueryReady, setRelayQuarantined } from './relayReadiness';
+import { HISTORY_RELAY_TIMEOUT_MS } from './relaySnapshot';
 
 interface RelayConnectionRuntimeDeps {
   authenticatedRelayUrls: Set<string>;
@@ -259,6 +263,42 @@ export function createRelayConnectionRuntime({
   setHasActivatedPool,
   setHasRelayStatusListeners,
 }: RelayConnectionRuntimeDeps) {
+  const authRelays = new Set<NDKRelay>();
+  const authCancellations = new Set<() => void>();
+  const authFailureListeners = new Map<NDKRelay, (error: Error) => void>();
+  let authGeneration = 0;
+
+  function quarantineRelay(relay: NDKRelay, error: unknown): void {
+    if (isRelayQuarantined(relay)) return;
+    authRelays.add(relay);
+    setRelayQuarantined(relay, true);
+    authenticatedRelayUrls.delete(relay.url);
+    cancelRelayAutoReconnect(relay);
+    relay.disconnect();
+    bumpRelayStatusVersion();
+    logDeveloperTrace('warn', 'relay', 'auth-failed', {
+      ...buildRelaySnapshot(relay),
+      error,
+      quarantined: true,
+      retry: 'Next session or replacement relay configuration',
+    });
+  }
+
+  function resetRelayAuthentication(): void {
+    authGeneration += 1;
+    for (const cancel of authCancellations) cancel();
+    for (const relay of authRelays) {
+      relay.disconnect();
+      setRelayQuarantined(relay, false);
+    }
+    for (const [relay, listener] of authFailureListeners) relay.off('auth:failed', listener);
+    authFailureListeners.clear();
+    relayAuthFailureListenerUrls.clear();
+    authRelays.clear();
+    authenticatedRelayUrls.clear();
+    relayConnectRetryStateByUrl.clear();
+  }
+
   const previousRelayConnectionFilter = ndk.relayConnectionFilter;
   ndk.relayConnectionFilter = (relayUrl) => {
     return (
@@ -274,7 +314,9 @@ export function createRelayConnectionRuntime({
     }
 
     const relay = ndk.pool.relays.get(normalizedRelayUrl);
-    if (relay?.connected) {
+    if (relay && isRelayQuarantined(relay))
+      return 'Relay authentication failed; retry requires a new session or relay configuration.';
+    if (isRelayQueryReady(relay)) {
       return null;
     }
 
@@ -411,28 +453,60 @@ export function createRelayConnectionRuntime({
   }
 
   ndk.relayAuthDefaultPolicy = async (relay, challenge) => {
-    if (authenticatedRelayUrls.has(relay.url)) {
-      setRelayConnectivityStatus(relay, NDKRelayStatus.AUTHENTICATED);
-      logDeveloperTrace('info', 'relay', 'auth-skip-already-authenticated', {
-        ...buildRelaySnapshot(relay),
-        challengeLength: challenge.length,
-      });
-      relay.emit('authed');
-      return false;
-    }
-
-    try {
-      await getOrCreateSigner();
-      return true;
-    } catch (error) {
-      logDeveloperTrace('warn', 'relay', 'auth-skip-missing-signer', {
-        ...buildRelaySnapshot(relay),
-        challengeLength: challenge.length,
-        error,
-      });
+    if (isRelayQuarantined(relay)) {
       relay.disconnect();
       return false;
     }
+    const generation = authGeneration;
+    authRelays.add(relay);
+    ensureRelayAuthFailureListener(relay);
+    // NDK 3.0.3's boolean policy emits authed before AUTH is acknowledged.
+    // Own this exchange using its existing AUTH transport and pending-publish
+    // cleanup, then return false so NDK does not start a second exchange.
+    const connectivity = relay.connectivity as unknown as {
+      auth: (event: NDKEvent) => Promise<unknown>;
+      retryPendingAuthPublishes: () => void;
+    };
+    let cancel = () => {};
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const disconnected = () => cancel();
+    try {
+      await Promise.race([
+        (async () => {
+          const signer = await getOrCreateSigner();
+          const event = new NDKEvent(ndk);
+          event.kind = NDKKind.ClientAuth;
+          event.tags = [
+            ['relay', relay.url],
+            ['challenge', challenge],
+          ];
+          await event.sign(signer);
+          if (generation !== authGeneration || isRelayQuarantined(relay)) return;
+          await connectivity.auth(event);
+        })(),
+        new Promise<never>((_resolve, reject) => {
+          cancel = () => reject(new Error('Relay authentication cancelled or disconnected.'));
+          authCancellations.add(cancel);
+          relay.on('disconnect', disconnected);
+          timeout = setTimeout(
+            () => reject(new Error('Relay authentication timed out.')),
+            HISTORY_RELAY_TIMEOUT_MS
+          );
+        }),
+      ]);
+      if (generation !== authGeneration || isRelayQuarantined(relay)) return false;
+      setRelayConnectivityStatus(relay, NDKRelayStatus.AUTHENTICATED);
+      authenticatedRelayUrls.add(relay.url);
+      relay.emit('authed');
+      connectivity.retryPendingAuthPublishes();
+    } catch (error) {
+      if (generation === authGeneration) quarantineRelay(relay, error);
+    } finally {
+      clearTimeout(timeout);
+      relay.off('disconnect', disconnected);
+      authCancellations.delete(cancel);
+    }
+    return false;
   };
 
   function ensureRelayStatusListeners(): void {
@@ -442,6 +516,7 @@ export function createRelayConnectionRuntime({
 
     for (const relay of ndk.pool.relays.values()) {
       guardRelayConnection(relay);
+      ensureRelayAuthFailureListener(relay);
     }
     if (typeof window !== 'undefined') {
       window.addEventListener('offline', () => {
@@ -453,6 +528,7 @@ export function createRelayConnectionRuntime({
 
     ndk.pool.on('relay:connecting', (relay) => {
       guardRelayConnection(relay);
+      ensureRelayAuthFailureListener(relay);
       authenticatedRelayUrls.delete(relay.url);
       bumpRelayStatusVersion();
       logRelayLifecycle('connecting', relay);
@@ -505,31 +581,13 @@ export function createRelayConnectionRuntime({
   }
 
   function ensureRelayAuthFailureListener(relay: NDKRelay | null | undefined): void {
-    if (!relay || relayAuthFailureListenerUrls.has(relay.url)) {
+    if (!relay || authFailureListeners.has(relay)) {
       return;
     }
 
-    relay.on('auth:failed', (error) => {
-      const errorMessage = error instanceof Error ? error.message : String(error ?? '');
-      if (errorMessage.toLowerCase().includes('already authenticated')) {
-        authenticatedRelayUrls.add(relay.url);
-        setRelayConnectivityStatus(relay, NDKRelayStatus.AUTHENTICATED);
-        bumpRelayStatusVersion();
-        logDeveloperTrace('info', 'relay', 'auth-failed-already-authenticated', {
-          ...buildRelaySnapshot(relay),
-          error: errorMessage,
-        });
-        relay.emit('authed');
-        return;
-      }
-
-      authenticatedRelayUrls.delete(relay.url);
-      bumpRelayStatusVersion();
-      logDeveloperTrace('warn', 'relay', 'auth-failed', {
-        ...buildRelaySnapshot(relay),
-        error,
-      });
-    });
+    const listener = (error: Error) => quarantineRelay(relay, error);
+    relay.on('auth:failed', listener);
+    authFailureListeners.set(relay, listener);
     relayAuthFailureListenerUrls.add(relay.url);
   }
 
@@ -591,7 +649,7 @@ export function createRelayConnectionRuntime({
 
   function isRelayConnected(relayUrl: string): boolean {
     const relay = ndk.pool.relays.get(relayUrl) ?? ndk.pool.getRelay(relayUrl, false);
-    return Boolean(relay?.connected);
+    return isRelayQueryReady(relay);
   }
 
   async function waitForFirstHealthyRelay(relayUrls: string[]): Promise<void> {
@@ -662,7 +720,7 @@ export function createRelayConnectionRuntime({
       return 'issue';
     }
 
-    return relay.connected ? 'connected' : 'issue';
+    return isRelayQueryReady(relay) ? 'connected' : 'issue';
   }
 
   function isRelayConnectionPending(relayUrl: string): boolean {
@@ -694,6 +752,7 @@ export function createRelayConnectionRuntime({
 
   return {
     ensureRelayConnections,
+    resetRelayAuthentication,
     fetchRelayNip11Info,
     getRelayConnectionAttemptBlockReason,
     getOrCreateSigner,

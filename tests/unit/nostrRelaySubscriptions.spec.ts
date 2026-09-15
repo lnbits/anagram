@@ -461,3 +461,15 @@ describe('relay and subscription runtimes', () => {
     expect(relaySetSpy).toHaveBeenCalledWith(['wss://relay.one/'], ndk, false);
   });
 });
+
+// These fixtures mock network IO. Model query readiness explicitly; readiness
+// filtering and unavailable pools are covered by relayQueryUtils/relaySnapshot.
+vi.mock('src/stores/nostr/relayQueryUtils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('src/stores/nostr/relayQueryUtils')>();
+  const { NDKRelaySet } = await import('@nostr-dev-kit/ndk');
+  return {
+    ...actual,
+    createReadyRelaySet: (ndk: import('@nostr-dev-kit/ndk').default, urls: string[]) =>
+      NDKRelaySet.fromRelayUrls(urls, ndk, false),
+  };
+});

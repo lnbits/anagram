@@ -1,7 +1,7 @@
 {
   "name": "anagram",
   "productName": "Anagram",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "Anagram is a desktop and web private messaging client for Nostr.",
   "author": "LNbits",
   "homepage": "https://github.com/lnbits/anagram/",
@@ -29,6 +29,7 @@
     "build:electron": "node ./scripts/quasar.cjs build -m electron -b builder --publish never",
     "build:electron:dir": "node ./scripts/quasar.cjs build -m electron -b builder -s --publish never",
     "build:electron:mac": "node ./scripts/quasar.cjs build -m electron -b builder -T mac --publish never",
+    "build:electron:mac:release": "RUNNER_TEMP=\"$(mktemp -d)\" node --env-file=.env.macos-release .github/scripts/macos-release.cjs build",
     "build:electron:win": "node ./scripts/quasar.cjs build -m electron -b builder -T win --publish never",
     "build:electron:linux": "node ./scripts/quasar.cjs build -m electron -b builder -T linux --publish never",
     "version:bump": "node ./scripts/bump-version.cjs",

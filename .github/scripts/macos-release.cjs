@@ -11,7 +11,19 @@ const credentialNames = [
   'APPLE_APP_SPECIFIC_PASSWORD',
 ];
 
-// Capture credential-bearing commands. Never include their arguments or output in errors.
+function redactCredentials(output) {
+  const values = credentialNames
+    .flatMap((name) => {
+      const value = process.env[name];
+      return value ? [value, JSON.stringify(value).slice(1, -1), encodeURIComponent(value)] : [];
+    })
+    .sort((left, right) => right.length - left.length);
+  for (const value of values) output = output.split(value).join('[REDACTED]');
+  return output.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[REDACTED EMAIL]');
+}
+
+// Capture credential-bearing commands. Never include their arguments in errors.
+// Only notarytool diagnostics are shown, with credential values removed.
 function run(command, args, { inherit = false, env = process.env } = {}) {
   const result = spawnSync(command, args, {
     encoding: 'utf8',
@@ -19,7 +31,21 @@ function run(command, args, { inherit = false, env = process.env } = {}) {
     env,
   });
   if (result.error || result.status !== 0) {
-    throw new Error(`${command} ${args[0]} failed (exit ${result.status ?? 'unknown'}).`);
+    const isNotarytool = command === 'xcrun' && args[0] === 'notarytool';
+    const operation = isNotarytool ? `notarytool ${args[1]}` : args[0];
+    let message = `${command} ${operation} failed (exit ${result.status ?? 'unknown'}).`;
+    if (isNotarytool) {
+      const diagnostic = redactCredentials(
+        [result.stderr, result.stdout].filter(Boolean).join('\n')
+      ).trim();
+      if (diagnostic) message += `\n${diagnostic}`;
+      if (/HTTP status code:\s*401\b/i.test(diagnostic)) {
+        message +=
+          '\nCheck APPLE_ID and APPLE_APP_SPECIFIC_PASSWORD in your release credentials.' +
+          ' The password must be an Apple Account app-specific password.';
+      }
+    }
+    throw new Error(message);
   }
   return result.stdout ?? '';
 }

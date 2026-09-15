@@ -338,7 +338,7 @@ export default configure((ctx) => {
           identity: macRelease ? process.env.CSC_NAME : null,
           type: 'distribution',
           hardenedRuntime: true,
-          timestamp: 'http://timestamp.apple.com/ts',
+          // @electron/osx-sign passes --timestamp to use Apple's default timestamp service.
           entitlements: path.join(projectRoot, 'src-electron/entitlements.mac.plist'),
           entitlementsInherit: path.join(projectRoot, 'src-electron/entitlements.mac.plist'),
           preAutoEntitlements: false,

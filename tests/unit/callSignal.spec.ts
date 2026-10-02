@@ -52,4 +52,26 @@ describe('private call signal validation', () => {
     ).toBe('hangup');
     expect(parse({ action: 'end', reason: 'unknown' })).toBeNull();
   });
+  it('accepts a ringing acknowledgement without an endpoint and preserves negotiated media capabilities', () => {
+    expect(
+      parse({
+        action: 'ringing',
+        address: undefined,
+        mimeType: undefined,
+        mediaVersion: 2,
+        videoSupported: true,
+      })
+    ).toEqual({
+      protocol: CALL_PROTOCOL,
+      callId: signal.callId,
+      action: 'ringing',
+      mode: 'video',
+      expiresAt: signal.expiresAt,
+      mediaVersion: 2,
+      videoSupported: true,
+    });
+    expect(parse({ mediaVersion: 3 })).toBeNull();
+    expect(parse({ videoSupported: 'yes' })).toBeNull();
+    expect(parse({ action: 'end', reason: 'unsupported' })?.reason).toBe('unsupported');
+  });
 });

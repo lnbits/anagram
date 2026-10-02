@@ -1,8 +1,17 @@
 import { CALL_PROTOCOL, CALL_RING_TIMEOUT_MS, type CallSignal } from 'src/types/call';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const END_REASONS = new Set(['hangup', 'declined', 'busy', 'timeout', 'failed', 'cancelled']);
+const END_REASONS = new Set([
+  'hangup',
+  'declined',
+  'busy',
+  'timeout',
+  'failed',
+  'cancelled',
+  'unsupported',
+]);
 export const CALL_MIME_TYPES = ['video/webm;codecs=vp8,opus', 'audio/webm;codecs=opus'] as const;
+export const CALL_VIDEO_MIME_TYPE = 'video/webm;codecs=vp8';
 
 // Do not trust encrypted payloads: peers can still send malformed or stale signals.
 export function parseCallSignal(
@@ -22,9 +31,11 @@ export function parseCallSignal(
       value.protocol !== CALL_PROTOCOL ||
       typeof value.callId !== 'string' ||
       !UUID.test(value.callId) ||
-      !['invite', 'accept', 'end'].includes(value.action) ||
+      !['invite', 'ringing', 'accept', 'end'].includes(value.action) ||
       !['audio', 'video'].includes(value.mode) ||
-      typeof value.expiresAt !== 'string'
+      typeof value.expiresAt !== 'string' ||
+      (value.mediaVersion !== undefined && value.mediaVersion !== 2) ||
+      (value.videoSupported !== undefined && typeof value.videoSupported !== 'boolean')
     )
       return null;
     const expiration = Date.parse(value.expiresAt);
@@ -36,7 +47,7 @@ export function parseCallSignal(
       return null;
     if (value.action === 'end') {
       if (!END_REASONS.has(value.reason)) return null;
-    } else {
+    } else if (value.action !== 'ringing') {
       if (
         !value.address ||
         typeof value.address.id !== 'string' ||
@@ -66,9 +77,14 @@ export function parseCallSignal(
       action: value.action,
       expiresAt: new Date(expiration).toISOString(),
       mode: value.mode,
+      ...(value.mediaVersion === 2
+        ? { mediaVersion: 2, videoSupported: value.videoSupported === true }
+        : {}),
       ...(value.action === 'end'
         ? { reason: value.reason }
-        : { address: value.address, mimeType: value.mimeType }),
+        : value.action === 'ringing'
+          ? {}
+          : { address: value.address, mimeType: value.mimeType }),
     };
   } catch {
     return null;

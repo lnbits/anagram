@@ -2,9 +2,12 @@ import { defineStore } from 'pinia';
 import {
   callMediaSupported,
   createCallMediaReceiver,
+  getCallCamera,
   getCallMedia,
+  getCallMicrophone,
   recordCallMedia,
 } from 'src/services/callMediaService';
+import { primeCallAudio } from 'src/services/callPlaybackService';
 import { hasSeenCallControl, rememberCallControl } from 'src/services/callReplayCache';
 import { chatDataService } from 'src/services/chatDataService';
 import { contactsService } from 'src/services/contactsService';
@@ -49,6 +52,9 @@ export const useCallStore = defineStore('calls', () =>
       rememberCallControl(useNostrStore().getLoggedInPublicKeyHex() ?? '', peer, id),
     createEndpoint: createIrohCallEndpoint,
     getMedia: getCallMedia,
+    getMicrophone: getCallMicrophone,
+    getCamera: getCallCamera,
+    unlockPlayback: primeCallAudio,
     createReceiver: createCallMediaReceiver,
     record: recordCallMedia,
   })

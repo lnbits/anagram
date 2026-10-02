@@ -2,10 +2,18 @@ export const CALL_SIGNAL_KIND = 21117;
 export const CALL_PROTOCOL = 'anagram/iroh-call/1';
 export const CALL_RING_TIMEOUT_MS = 60_000;
 export const CALL_CONNECT_TIMEOUT_MS = 30_000;
+export const CALL_SUPPORT_TIMEOUT_MS = 10_000;
 
 export type CallMode = 'audio' | 'video';
 export type CallPhase = 'preparing' | 'outgoing' | 'incoming' | 'connecting' | 'active' | 'ended';
-export type CallEndReason = 'hangup' | 'declined' | 'busy' | 'timeout' | 'failed' | 'cancelled';
+export type CallEndReason =
+  | 'hangup'
+  | 'declined'
+  | 'busy'
+  | 'timeout'
+  | 'failed'
+  | 'cancelled'
+  | 'unsupported';
 export interface CallAddress {
   id: string;
   relayUrl: string;
@@ -13,12 +21,14 @@ export interface CallAddress {
 export interface CallSignal {
   protocol: typeof CALL_PROTOCOL;
   callId: string;
-  action: 'invite' | 'accept' | 'end';
+  action: 'invite' | 'ringing' | 'accept' | 'end';
   expiresAt: string;
   mode: CallMode;
   address?: CallAddress;
   mimeType?: string;
   reason?: CallEndReason;
+  mediaVersion?: 2;
+  videoSupported?: boolean;
 }
 export interface CallSession {
   id: string;
@@ -30,6 +40,9 @@ export interface CallSession {
   startedAt: string | null;
   microphoneMuted: boolean;
   cameraMuted: boolean;
+  peerConfirmed?: boolean;
+  mediaVersion?: 2;
+  videoAvailable?: boolean;
   endReason?: CallEndReason;
 }
 export interface CallConnection {

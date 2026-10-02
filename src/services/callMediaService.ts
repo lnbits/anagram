@@ -1,31 +1,74 @@
 import type { CallMode } from 'src/types/call';
-import { CALL_MIME_TYPES } from 'src/utils/callSignal';
+import { CALL_MIME_TYPES, CALL_VIDEO_MIME_TYPE } from 'src/utils/callSignal';
 
 export function callMediaSupported(mode: CallMode): boolean {
-  const mime = CALL_MIME_TYPES[mode === 'video' ? 0 : 1];
+  const mime = CALL_MIME_TYPES[1];
   return (
+    globalThis.isSecureContext === true &&
+    typeof WebAssembly !== 'undefined' &&
+    typeof WebSocket !== 'undefined' &&
+    typeof crypto.randomUUID === 'function' &&
     typeof MediaRecorder !== 'undefined' &&
     typeof MediaSource !== 'undefined' &&
     Boolean(navigator.mediaDevices?.getUserMedia) &&
     Boolean(mime) &&
     MediaRecorder.isTypeSupported(mime) &&
-    MediaSource.isTypeSupported(mime)
+    MediaSource.isTypeSupported(mime) &&
+    (mode === 'audio' ||
+      (MediaRecorder.isTypeSupported(CALL_VIDEO_MIME_TYPE) &&
+        MediaSource.isTypeSupported(CALL_VIDEO_MIME_TYPE)))
   );
 }
 
-export function getCallMedia(mode: CallMode): Promise<MediaStream> {
-  return navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    video:
-      mode === 'video'
-        ? {
-            width: { ideal: 640 },
-            height: { ideal: 360 },
-            frameRate: { ideal: 24, max: 24 },
-            facingMode: 'user',
-          }
-        : false,
-  });
+export function callCaptureErrorKey(cause: unknown): string {
+  const name = cause && typeof cause === 'object' && 'name' in cause ? cause.name : '';
+  if (name === 'NotAllowedError' || name === 'SecurityError') return 'call.error.permission';
+  if (name === 'NotFoundError' || name === 'OverconstrainedError')
+    return 'call.error.deviceMissing';
+  if (name === 'NotReadableError' || name === 'AbortError') return 'call.error.deviceBusy';
+  return 'call.error.capture';
+}
+
+function audioConstraints(deviceId?: string): MediaTrackConstraints {
+  return {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+    ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+  };
+}
+const videoConstraints: MediaTrackConstraints = {
+  width: { ideal: 640 },
+  height: { ideal: 360 },
+  frameRate: { ideal: 24, max: 24 },
+  facingMode: 'user',
+};
+export function getCallMicrophone(deviceId?: string): Promise<MediaStream> {
+  return navigator.mediaDevices.getUserMedia({ audio: audioConstraints(deviceId), video: false });
+}
+export function getCallCamera(): Promise<MediaStream> {
+  return navigator.mediaDevices.getUserMedia({ audio: false, video: videoConstraints });
+}
+export async function getCallMedia(mode: CallMode, deviceId?: string): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: audioConstraints(deviceId),
+      video: mode === 'video' ? videoConstraints : false,
+    });
+  } catch (cause) {
+    // A disconnected preference must not prevent starting the next call.
+    if (
+      deviceId &&
+      cause instanceof DOMException &&
+      (cause.name === 'NotFoundError' ||
+        (cause.name === 'OverconstrainedError' &&
+          'constraint' in cause &&
+          cause.constraint === 'deviceId'))
+    ) {
+      return getCallMedia(mode);
+    }
+    throw cause;
+  }
 }
 
 export interface CallMediaReceiver {
@@ -42,13 +85,15 @@ export function createCallMediaReceiver(mimeType: string, onError: () => void): 
   const pending: Uint8Array<ArrayBuffer>[] = [];
   let queuedBytes = 0;
   let closed = false;
+  let lastPrunedUntil = 0;
   const pump = () => {
     if (closed || !buffer || buffer.updating) return;
     try {
       if (buffer.buffered.length) {
         const end = buffer.buffered.end(buffer.buffered.length - 1);
-        if (end > 12 && buffer.buffered.start(0) < end - 8) {
-          buffer.remove(0, end - 8);
+        if (end > 12 && end - 8 > lastPrunedUntil + 1 && buffer.buffered.start(0) < end - 8) {
+          lastPrunedUntil = end - 8;
+          buffer.remove(0, lastPrunedUntil);
           return;
         }
       }

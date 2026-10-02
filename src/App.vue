@@ -1,5 +1,6 @@
 <template>
   <router-view />
+  <CallPanel />
   <transition name="foreground-message-banner">
     <div
       v-if="foregroundMessageBanner"
@@ -37,6 +38,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Notify, useQuasar } from 'quasar';
 import CachedAvatar from 'src/components/CachedAvatar.vue';
+import CallPanel from 'src/components/CallPanel.vue';
 import {
   FOREGROUND_MESSAGE_ACTIVITY_EVENT,
   readForegroundMessageActivityDetail,

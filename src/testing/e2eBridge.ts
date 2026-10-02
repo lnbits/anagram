@@ -1,6 +1,7 @@
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import { PRIVATE_CONTACT_LIST_MEMBER_CONTACT_META_KEY } from 'src/stores/nostr/constants';
 import type { DeveloperDiagnosticsSnapshot } from 'src/stores/nostr/types';
+import type { CallSession } from 'src/types/call';
 import type { MessageAttachmentMetadata } from 'src/types/chat';
 import { saveBrowserNotificationsPreference } from 'src/utils/browserNotificationPreference';
 
@@ -78,6 +79,13 @@ export interface AppE2EWaitForAppReadyOptions {
 }
 
 export interface AppE2EBridge {
+  getCallSnapshot(): Promise<{
+    session: CallSession | null;
+    audioEnabled: boolean[];
+    videoEnabled: boolean[];
+    hasLocalStream: boolean;
+    failureDetail: string;
+  }>;
   bootstrapSession(options: AppE2EBootstrapOptions): Promise<AppE2ESessionSnapshot>;
   resumeSession(): Promise<void>;
   waitForHistoryRestore(): Promise<void>;
@@ -749,6 +757,17 @@ export function installAppE2EBridge(): void {
   }
 
   const bridge: AppE2EBridge = {
+    async getCallSnapshot() {
+      const { useCallStore } = await import('src/stores/callStore');
+      const call = useCallStore();
+      return {
+        session: call.session ? { ...call.session } : null,
+        audioEnabled: call.localStream?.getAudioTracks().map((track) => track.enabled) ?? [],
+        videoEnabled: call.localStream?.getVideoTracks().map((track) => track.enabled) ?? [],
+        hasLocalStream: Boolean(call.localStream),
+        failureDetail: call.failureDetail,
+      };
+    },
     bootstrapSession,
     resumeSession,
     waitForHistoryRestore,

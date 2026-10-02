@@ -1,0 +1,8 @@
+{
+  "iroh": "1.3.0",
+  "wasmBindgen": "0.2.122",
+  "hashes": {
+    "anagram_iroh_calls.js": "adb56eb2414bf55bce023ee1364c680bea2558705a75a041631997d9cb795119",
+    "anagram_iroh_calls_bg.wasm": "e06a289d428b97a81dc73e2dbee827767b87577aca9c9817d4828582d23d4ed6"
+  }
+}

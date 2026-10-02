@@ -44,6 +44,7 @@ build/Release
 
 # Dependency directories
 node_modules/
+iroh-calls/target/
 .quasar/
 .gradle-android/
 .android-release/

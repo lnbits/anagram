@@ -10,8 +10,10 @@ import type {
 } from 'src/stores/nostr/privateMessagesIngestTypes';
 import { isPlainRecord } from 'src/stores/nostr/shared';
 import { resolveLatestReadBoundaryAtValue } from 'src/stores/nostr/valueUtils';
+import { CALL_SIGNAL_KIND } from 'src/types/call';
 import type { NostrEventDirection } from 'src/types/chat';
 import type { ContactRecord } from 'src/types/contact';
+import { parseCallSignal } from 'src/utils/callSignal';
 import {
   buildImageAttachmentPreviewText,
   extractMediaAttachmentsFromTags,
@@ -53,6 +55,7 @@ export function createPrivateMessagesIngestRuntime({
   normalizeThrottleMs,
   normalizeTimestamp,
   persistIncomingGroupEpochTicket,
+  processIncomingCallSignal,
   processIncomingDeletionRumorEvent,
   processIncomingReactionRumorEvent,
   queueBackgroundGroupContactRefresh,
@@ -346,6 +349,23 @@ export function createPrivateMessagesIngestRuntime({
           recipients,
         }),
       });
+      return;
+    }
+
+    // Call controls never enter chat, contact, message, unread, or notification persistence.
+    // Only one-to-one rumors addressed to the active account can negotiate a call.
+    if (rumorEvent.kind === CALL_SIGNAL_KIND) {
+      if (
+        !isSelfSentMessage &&
+        !recipientContext.groupChatPublicKey &&
+        recipientContext.recipientPubkey === loggedInPubkeyHex &&
+        recipients.length === 1 &&
+        recipients[0] === loggedInPubkeyHex &&
+        !isPubkeyBlocked(senderPubkeyHex)
+      ) {
+        const signal = parseCallSignal(rumorEvent.content, rumorEvent.created_at);
+        if (signal) await processIncomingCallSignal?.(senderPubkeyHex, signal);
+      }
       return;
     }
 

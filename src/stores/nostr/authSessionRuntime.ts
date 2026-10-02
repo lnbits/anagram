@@ -76,6 +76,7 @@ interface AuthSessionRuntimeDeps {
   relayConnectPromises: { clear: () => void };
   relayStatusVersion: Ref<number>;
   resetContactSubscriptionsRuntimeState: (reason?: string) => void;
+  resetCalls?: () => void;
   resetEventSinceForFreshLogin: () => void;
   resetGroupRosterSubscriptionRuntimeState: (reason?: string) => void;
   resetMyRelayListRuntimeState: (reason?: string) => void;
@@ -137,6 +138,7 @@ export function createAuthSessionRuntime({
   relayConnectPromises,
   relayStatusVersion,
   resetContactSubscriptionsRuntimeState,
+  resetCalls,
   resetEventSinceForFreshLogin,
   resetGroupRosterSubscriptionRuntimeState,
   resetMyRelayListRuntimeState,
@@ -424,6 +426,7 @@ export function createAuthSessionRuntime({
   }
 
   function clearPrivateKey(options: { clearSecureStorage?: boolean } = {}): void {
+    resetCalls?.();
     const activeSigner = ndk.signer as (NDKSigner & { stop?: () => void }) | undefined;
     activeSigner?.stop?.();
     cachedPrivateKeyHex = null;

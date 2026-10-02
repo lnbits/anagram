@@ -24,6 +24,8 @@
               <div class="thread-header__time">{{ $t('common.lastActive', { time: headerTime }) }}</div>
             </div>
           </div>
+          <q-btn v-if="canCall" flat dense round icon="call" data-testid="thread-audio-call" :aria-label="$t('call.startAudio')" :disable="callStore.session !== null && callStore.session.phase !== 'ended'" @click="callStore.start(chat.publicKey, 'audio')" />
+          <q-btn v-if="canCall" flat dense round icon="videocam" data-testid="thread-video-call" :aria-label="$t('call.startVideo')" :disable="callStore.session !== null && callStore.session.phase !== 'ended'" @click="callStore.start(chat.publicKey, 'video')" />
           <q-btn
             flat
             dense
@@ -362,6 +364,7 @@ import ReconnectHealingBanner from 'src/components/ReconnectHealingBanner.vue';
 import StartupHistoryBanner from 'src/components/StartupHistoryBanner.vue';
 import { contactsService } from 'src/services/contactsService';
 import { useChatStore } from 'src/stores/chatStore';
+import { useCallStore } from 'src/stores/callStore';
 import { useMessageStore } from 'src/stores/messageStore';
 import { useNostrStore } from 'src/stores/nostrStore';
 import { useTrustedMediaStore } from 'src/stores/trustedMediaStore';
@@ -453,6 +456,8 @@ const isThreadScrollLocked = ref(false);
 const isAutomaticBottomScrollEnabled = ref(true);
 const $q = useQuasar();
 const chatStore = useChatStore();
+const callStore = useCallStore();
+const canCall = computed(() => props.chat?.type === 'user' && props.chat.publicKey !== nostrStore.getLoggedInPublicKeyHex() && props.chat.meta.inbox_state !== 'blocked');
 const messageStore = useMessageStore();
 const nostrStore = useNostrStore();
 const trustedMediaStore = useTrustedMediaStore();

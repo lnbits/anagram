@@ -15,12 +15,14 @@ import {
   type NsecValidationResult,
   type PrivateKeyValidationResult,
 } from 'src/services/inputSanitizerService';
+import { useCallStore } from 'src/stores/callStore';
 import { useChatStore } from 'src/stores/chatStore';
 import { useNip65RelayStore } from 'src/stores/nip65RelayStore';
 import { createAppLifecycleRuntime } from 'src/stores/nostr/appLifecycleRuntime';
 import { createAuthIdentityRuntime } from 'src/stores/nostr/authIdentityRuntime';
 import { createAuthSessionRuntime } from 'src/stores/nostr/authSessionRuntime';
 import { createBlossomSettingsRuntime } from 'src/stores/nostr/blossomSettingsRuntime';
+import { createCallSignalingRuntime } from 'src/stores/nostr/callSignalingRuntime';
 import {
   DEFAULT_EVENT_SINCE_LOOKBACK_SECONDS,
   DEVELOPER_DIAGNOSTICS_STORAGE_KEY,
@@ -1322,6 +1324,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     normalizeThrottleMs,
     normalizeTimestamp,
     persistIncomingGroupEpochTicket,
+    processIncomingCallSignal: (peer, signal) => useCallStore().receiveSignal(peer, signal),
     processIncomingDeletionRumorEvent,
     processIncomingReactionRumorEvent,
     queueBackgroundGroupContactRefresh: (groupPublicKey, fallbackName, seedRelayUrls) => {
@@ -1968,6 +1971,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     relayStatusVersion,
     resetContactSubscriptionsRuntimeState,
     resetEventSinceForFreshLogin,
+    resetCalls: () => useCallStore().reset(),
     resetGroupRosterSubscriptionRuntimeState,
     resetMyRelayListRuntimeState,
     resetMuteListRuntimeState: () => {
@@ -2201,7 +2205,17 @@ export const useNostrStore = defineStore('nostrStore', () => {
   });
   refreshDeveloperPendingQueuesRuntime = refreshDeveloperPendingQueues;
 
+  const { sendCallSignal } = createCallSignalingRuntime({
+    ndk,
+    getOwnPubkey: getLoggedInPublicKeyHex,
+    isBlocked: (peer) => isPubkeyBlockedRuntime(peer),
+    refreshRelays: refreshContactRelayList,
+    getAppRelays: getAppRelayUrls,
+    sendRumor: sendGiftWrappedRumor,
+  });
+
   return {
+    sendCallSignal,
     clearPrivateKey: clearPrivateKeyImpl,
     createRemoteSignerNostrConnectLogin: createRemoteSignerNostrConnectLoginImpl,
     createGroupChat,

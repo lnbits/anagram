@@ -1,6 +1,7 @@
 import type { NDKEvent, NDKSigner, NostrEvent } from '@nostr-dev-kit/ndk';
 import type { ChatRow } from 'src/services/chatDataService';
 import type { MessageRow } from 'src/stores/nostr/types';
+import type { CallSignal } from 'src/types/call';
 import type { MessageRelayStatus, MessageReplyPreview, NostrEventDirection } from 'src/types/chat';
 import type { ContactRecord } from 'src/types/contact';
 
@@ -49,6 +50,7 @@ export interface InboundTraceOptions {
 }
 
 export interface PrivateMessagesIngestRuntimeDeps {
+  processIncomingCallSignal?: (senderPubkey: string, signal: CallSignal) => Promise<void>;
   appendRelayStatusesToMessageEvent: (
     messageId: number,
     relayStatuses: MessageRelayStatus[],

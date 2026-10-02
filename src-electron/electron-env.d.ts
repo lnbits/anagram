@@ -9,6 +9,8 @@ declare namespace NodeJS {
 
 interface DesktopRuntimeInfo {
   isElectron: true;
+  onCallScreenPicker?: (listener: (request: { id: string; sources: Array<{ id: string; name: string; thumbnail: string }> } | null) => void) => () => void;
+  selectCallScreen?: (id: string, sourceId: string | null) => void;
   platform: NodeJS.Platform;
   isSecureStorageAvailable: () => Promise<boolean>;
   encryptPrivateKey: (privateKeyHex: string) => Promise<string>;

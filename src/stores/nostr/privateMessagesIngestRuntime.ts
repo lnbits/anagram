@@ -13,6 +13,7 @@ import { resolveLatestReadBoundaryAtValue } from 'src/stores/nostr/valueUtils';
 import { CALL_SIGNAL_KIND } from 'src/types/call';
 import type { NostrEventDirection } from 'src/types/chat';
 import type { ContactRecord } from 'src/types/contact';
+import { parseRoomSignal } from 'src/utils/callRoom';
 import { parseCallSignal } from 'src/utils/callSignal';
 import {
   buildImageAttachmentPreviewText,
@@ -56,6 +57,7 @@ export function createPrivateMessagesIngestRuntime({
   normalizeTimestamp,
   persistIncomingGroupEpochTicket,
   processIncomingCallSignal,
+  processIncomingRoomSignal,
   processIncomingDeletionRumorEvent,
   processIncomingReactionRumorEvent,
   queueBackgroundGroupContactRefresh,
@@ -365,6 +367,10 @@ export function createPrivateMessagesIngestRuntime({
       ) {
         const signal = parseCallSignal(rumorEvent.content, rumorEvent.created_at);
         if (signal) await processIncomingCallSignal?.(senderPubkeyHex, signal);
+        else {
+          const roomSignal = parseRoomSignal(rumorEvent.content, rumorEvent.created_at);
+          if (roomSignal) await processIncomingRoomSignal?.(senderPubkeyHex, roomSignal);
+        }
       }
       return;
     }

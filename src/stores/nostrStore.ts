@@ -15,6 +15,7 @@ import {
   type NsecValidationResult,
   type PrivateKeyValidationResult,
 } from 'src/services/inputSanitizerService';
+import { useCallRoomStore } from 'src/stores/callRoomStore';
 import { useCallStore } from 'src/stores/callStore';
 import { useChatStore } from 'src/stores/chatStore';
 import { useNip65RelayStore } from 'src/stores/nip65RelayStore';
@@ -1325,6 +1326,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
     normalizeTimestamp,
     persistIncomingGroupEpochTicket,
     processIncomingCallSignal: (peer, signal) => useCallStore().receiveSignal(peer, signal),
+    processIncomingRoomSignal: (peer, signal) => useCallRoomStore().receive(peer, signal),
     processIncomingDeletionRumorEvent,
     processIncomingReactionRumorEvent,
     queueBackgroundGroupContactRefresh: (groupPublicKey, fallbackName, seedRelayUrls) => {
@@ -1971,7 +1973,10 @@ export const useNostrStore = defineStore('nostrStore', () => {
     relayStatusVersion,
     resetContactSubscriptionsRuntimeState,
     resetEventSinceForFreshLogin,
-    resetCalls: () => useCallStore().reset(),
+    resetCalls: () => {
+      useCallStore().reset();
+      useCallRoomStore().reset();
+    },
     resetGroupRosterSubscriptionRuntimeState,
     resetMyRelayListRuntimeState,
     resetMuteListRuntimeState: () => {
@@ -2205,7 +2210,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
   });
   refreshDeveloperPendingQueuesRuntime = refreshDeveloperPendingQueues;
 
-  const { sendCallSignal } = createCallSignalingRuntime({
+  const { sendCallSignal, sendRoomSignal } = createCallSignalingRuntime({
     ndk,
     getOwnPubkey: getLoggedInPublicKeyHex,
     isBlocked: (peer) => isPubkeyBlockedRuntime(peer),
@@ -2216,6 +2221,7 @@ export const useNostrStore = defineStore('nostrStore', () => {
 
   return {
     sendCallSignal,
+    sendRoomSignal,
     clearPrivateKey: clearPrivateKeyImpl,
     createRemoteSignerNostrConnectLogin: createRemoteSignerNostrConnectLoginImpl,
     createGroupChat,

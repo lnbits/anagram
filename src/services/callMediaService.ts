@@ -49,6 +49,21 @@ export function getCallMicrophone(deviceId?: string): Promise<MediaStream> {
 export function getCallCamera(): Promise<MediaStream> {
   return navigator.mediaDevices.getUserMedia({ audio: false, video: videoConstraints });
 }
+export function canShareCallScreen(): boolean {
+  return (
+    callMediaSupported('video') && typeof navigator.mediaDevices?.getDisplayMedia === 'function'
+  );
+}
+export function getCallScreen(): Promise<MediaStream> {
+  return navigator.mediaDevices.getDisplayMedia({
+    audio: false,
+    video: {
+      width: { ideal: 1920, max: 1920 },
+      height: { ideal: 1080, max: 1080 },
+      frameRate: { ideal: 15, max: 15 },
+    },
+  });
+}
 export async function getCallMedia(mode: CallMode, deviceId?: string): Promise<MediaStream> {
   try {
     return await navigator.mediaDevices.getUserMedia({
@@ -146,12 +161,13 @@ export function recordCallMedia(
   stream: MediaStream,
   mimeType: string,
   send: (bytes: Uint8Array) => Promise<void>,
-  onError: () => void
+  onError: () => void,
+  options?: { videoBitsPerSecond?: number }
 ): () => void {
   const recorder = new MediaRecorder(stream, {
     mimeType,
     audioBitsPerSecond: 32_000,
-    videoBitsPerSecond: 600_000,
+    videoBitsPerSecond: options?.videoBitsPerSecond ?? 600_000,
   });
   let stopped = false;
   let queuedBytes = 0;

@@ -5,6 +5,7 @@ import {
   getCallCamera,
   getCallMedia,
   getCallMicrophone,
+  getCallScreen,
   recordCallMedia,
 } from 'src/services/callMediaService';
 import { primeCallAudio } from 'src/services/callPlaybackService';
@@ -12,12 +13,14 @@ import { hasSeenCallControl, rememberCallControl } from 'src/services/callReplay
 import { chatDataService } from 'src/services/chatDataService';
 import { contactsService } from 'src/services/contactsService';
 import { createIrohCallEndpoint } from 'src/services/irohCallTransport';
+import { useCallRoomStore } from 'src/stores/callRoomStore';
 import { createCallRuntime } from 'src/stores/nostr/callRuntime';
 import { resolveIncomingChatInboxStateValue } from 'src/stores/nostr/valueUtils';
 import { useNostrStore } from 'src/stores/nostrStore';
+import type { CallMode } from 'src/types/call';
 
-export const useCallStore = defineStore('calls', () =>
-  createCallRuntime({
+export const useCallStore = defineStore('calls', () => {
+  const runtime = createCallRuntime({
     sendSignal: (peer, signal) => useNostrStore().sendCallSignal(peer, signal),
     getOwnPubkey: () => useNostrStore().getLoggedInPublicKeyHex(),
     async resolvePeer(peer) {
@@ -46,6 +49,7 @@ export const useCallStore = defineStore('calls', () =>
       return { name: contact?.name || chat?.name || peer.slice(0, 12) };
     },
     supported: callMediaSupported,
+    otherCallBusy: () => useCallRoomStore().busy,
     hasSeen: (peer, id) =>
       hasSeenCallControl(useNostrStore().getLoggedInPublicKeyHex() ?? '', peer, id),
     remember: (peer, id) =>
@@ -54,8 +58,19 @@ export const useCallStore = defineStore('calls', () =>
     getMedia: getCallMedia,
     getMicrophone: getCallMicrophone,
     getCamera: getCallCamera,
+    getScreen: getCallScreen,
     unlockPlayback: primeCallAudio,
     createReceiver: createCallMediaReceiver,
     record: recordCallMedia,
-  })
-);
+  });
+  return {
+    ...runtime,
+    async start(peer: string, mode: CallMode) {
+      if (useCallRoomStore().busy) {
+        runtime.error.value = 'room.error.busy';
+        return;
+      }
+      await runtime.start(peer, mode);
+    },
+  };
+});

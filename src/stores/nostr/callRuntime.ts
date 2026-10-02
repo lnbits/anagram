@@ -15,24 +15,27 @@ import {
 import { CALL_MIME_TYPES, CALL_VIDEO_MIME_TYPE } from 'src/utils/callSignal';
 import { ref, shallowRef } from 'vue';
 
-interface CallRuntimeDeps {
+export interface CallRuntimeDeps {
   sendSignal(peer: string, signal: CallSignal): Promise<void>;
   getOwnPubkey(): string | null;
   resolvePeer(peer: string): Promise<{ name: string } | null>;
   supported(mode: CallMode): boolean;
+  otherCallBusy?(): boolean;
   hasSeen?(peer: string, id: string): boolean;
   remember?(peer: string, id: string): void;
   createEndpoint(): Promise<CallEndpoint>;
   getMedia(mode: CallMode, deviceId?: string): Promise<MediaStream>;
   getMicrophone?(deviceId: string): Promise<MediaStream>;
   getCamera?(): Promise<MediaStream>;
+  getScreen?(): Promise<MediaStream>;
   unlockPlayback?(): void;
   createReceiver(mime: string, onError: () => void): CallMediaReceiver;
   record(
     stream: MediaStream,
     mime: string,
     send: (data: Uint8Array) => Promise<void>,
-    onError: () => void
+    onError: () => void,
+    options?: { videoBitsPerSecond?: number }
   ): () => void;
 }
 interface Context {
@@ -43,6 +46,10 @@ interface Context {
   connection?: CallConnection;
   receiver?: CallMediaReceiver;
   videoReceiver?: CallMediaReceiver;
+  screenReceiver?: CallMediaReceiver;
+  screenStream?: MediaStream;
+  stopScreenRecording?: () => void;
+  acquiringScreen?: boolean;
   stream?: MediaStream;
   stopRecording?: () => void;
   stopVideoRecording?: () => void;
@@ -65,6 +72,8 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
   const localStream = shallowRef<MediaStream | null>(null);
   const remoteMediaUrl = ref('');
   const remoteVideoUrl = ref('');
+  const remoteScreenUrl = ref('');
+  const localScreenStream = shallowRef<MediaStream | null>(null);
   const error = ref('');
   const deviceError = ref('');
   const microphoneDeviceId = ref('');
@@ -101,6 +110,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       expiresAt: new Date(Date.now() + CALL_RING_TIMEOUT_MS).toISOString(),
       mediaVersion: 2,
       videoSupported: deps.supported('video'),
+      screenSupported: deps.supported('video'),
       ...(action === 'end'
         ? { reason: reason ?? 'hangup' }
         : action === 'ringing'
@@ -120,6 +130,11 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     clearInterval(ctx.heartbeat);
     ctx.stopRecording?.();
     ctx.stopVideoRecording?.();
+    ctx.stopScreenRecording?.();
+    ctx.screenStream?.getTracks().forEach((track) => {
+      track.onended = null;
+      track.stop();
+    });
     ctx.stream?.getTracks().forEach((track) => {
       track.onended = null;
       track.stop();
@@ -128,6 +143,9 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     void ctx.endpoint?.close().catch(() => {});
     ctx.receiver?.close();
     ctx.videoReceiver?.close();
+    ctx.screenReceiver?.close();
+    localScreenStream.value = null;
+    remoteScreenUrl.value = '';
     localStream.value = null;
     remoteMediaUrl.value = '';
     remoteVideoUrl.value = '';
@@ -161,6 +179,8 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       peerConfirmed: true,
       mediaVersion: ctx.splitMedia ? 2 : undefined,
       videoAvailable: ctx.splitMedia && ctx.peerVideoSupported && deps.supported('video'),
+      screenAvailable:
+        ctx.splitMedia && incoming.screenSupported === true && deps.supported('video'),
     });
   }
   function reserve(
@@ -203,10 +223,10 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     armTimeout(ctx, CALL_RING_TIMEOUT_MS);
     return ctx;
   }
-  async function prepare(ctx: Context) {
+  async function prepare(ctx: Context, captureMode: CallMode = ctx.mode) {
     let stream: MediaStream;
     try {
-      stream = await deps.getMedia(ctx.mode, microphoneDeviceId.value);
+      stream = await deps.getMedia(captureMode, microphoneDeviceId.value);
     } catch (cause) {
       captureFailed(ctx, cause);
       return false;
@@ -322,6 +342,33 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
               fail(ctx, new Error('Video decoder failed'))
             );
             remoteVideoUrl.value = ctx.videoReceiver.url;
+          }
+        } else if (
+          data[0] === 6 &&
+          data.length > 1 &&
+          ctx.ready &&
+          ctx.splitMedia &&
+          session.value?.screenAvailable &&
+          ctx.screenReceiver
+        ) {
+          ctx.screenReceiver.append(data.subarray(1));
+        } else if (
+          data[0] === 7 &&
+          data.length === 2 &&
+          (data[1] === 0 || data[1] === 1) &&
+          ctx.ready &&
+          ctx.splitMedia &&
+          session.value?.screenAvailable
+        ) {
+          checkMediaChangeRate(ctx);
+          ctx.screenReceiver?.close();
+          ctx.screenReceiver = undefined;
+          remoteScreenUrl.value = '';
+          if (data[1] === 1) {
+            ctx.screenReceiver = deps.createReceiver(CALL_VIDEO_MIME_TYPE, () =>
+              fail(ctx, new Error('Screen decoder failed'))
+            );
+            remoteScreenUrl.value = ctx.screenReceiver.url;
           }
         } else if (data[0] !== 1 || data.length !== 1) {
           throw new Error('Unexpected call frame');
@@ -444,7 +491,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     if (receivedGeneration !== generation || deps.getOwnPubkey() !== own) return;
     if (!contact || Date.parse(incoming.expiresAt) <= Date.now()) return;
     if (seen(peer, incoming.callId) || context?.id === incoming.callId) return;
-    if (context || !deps.supported(incoming.mode)) {
+    if (context || deps.otherCallBusy?.() || !deps.supported(incoming.mode)) {
       remember(peer, incoming.callId);
       void deps
         .sendSignal(peer, {
@@ -452,7 +499,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
           action: 'end',
           address: undefined,
           mimeType: undefined,
-          reason: context ? 'busy' : 'unsupported',
+          reason: context || deps.otherCallBusy?.() ? 'busy' : 'unsupported',
         })
         .catch(() => {});
       return;
@@ -464,14 +511,15 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     armTimeout(next, Math.max(1, Date.parse(incoming.expiresAt) - Date.now()));
     void deps.sendSignal(peer, signal(next, 'ringing')).catch(() => {});
   }
-  async function accept() {
+  async function accept(mode?: CallMode) {
     const ctx = context;
     const invite = incomingInvite;
     if (!ctx || !invite || session.value?.phase !== 'incoming') return;
     deps.unlockPlayback?.();
-    patch({ phase: 'preparing' });
+    const captureMode = mode === 'audio' ? 'audio' : ctx.mode;
+    patch({ phase: 'preparing', cameraMuted: captureMode === 'audio' });
     try {
-      if (!(await prepare(ctx))) return;
+      if (!(await prepare(ctx, captureMode))) return;
       // Start accepting before publication so a fast caller cannot outrun the listener.
       void connect(ctx, invite);
       await deps.sendSignal(ctx.peer, signal(ctx, 'accept'));
@@ -623,6 +671,85 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       if (alive(ctx)) changingMedia.value = false;
     }
   }
+  async function stopScreenSharing() {
+    const ctx = context;
+    if (!ctx) return;
+    ctx.acquiringScreen = false;
+    ctx.stopScreenRecording?.();
+    ctx.stopScreenRecording = undefined;
+    ctx.screenStream?.getTracks().forEach((track) => {
+      track.onended = null;
+      track.stop();
+    });
+    ctx.screenStream = undefined;
+    localScreenStream.value = null;
+    patch({ screenSharing: false });
+    try {
+      if (ctx.ready && session.value?.screenAvailable)
+        await ctx.connection?.send(new Uint8Array([7, 0]));
+    } catch (cause) {
+      fail(ctx, cause);
+    }
+  }
+  async function startScreenSharing() {
+    const ctx = context;
+    if (
+      !ctx?.ready ||
+      !ctx.connection ||
+      !session.value?.screenAvailable ||
+      !deps.getScreen ||
+      ctx.screenStream ||
+      ctx.acquiringScreen
+    )
+      return;
+    ctx.acquiringScreen = true;
+    deviceError.value = '';
+    let screen: MediaStream | undefined;
+    try {
+      // Capture is invoked before any await so the browser sees the user's gesture.
+      screen = await deps.getScreen();
+      if (!alive(ctx) || !ctx.acquiringScreen) {
+        screen.getTracks().forEach((track) => {
+          track.stop();
+        });
+        return;
+      }
+      if (!screen.getVideoTracks().length) throw new Error('No screen video track');
+      ctx.screenStream = screen;
+      localScreenStream.value = screen;
+      patch({ screenSharing: true });
+      screen.getTracks().forEach((track) => {
+        track.onended = () => {
+          void stopScreenSharing();
+        };
+      });
+      await ctx.connection.send(new Uint8Array([7, 1]));
+      if (!alive(ctx) || ctx.screenStream !== screen) return;
+      ctx.stopScreenRecording = deps.record(
+        new MediaStream(screen.getVideoTracks()),
+        CALL_VIDEO_MIME_TYPE,
+        (frame) => {
+          frame[0] = 6;
+          return ctx.connection?.send(frame);
+        },
+        () => {
+          deviceError.value = 'call.error.screen';
+          void stopScreenSharing();
+        },
+        { videoBitsPerSecond: 1_500_000 }
+      );
+    } catch {
+      if (alive(ctx)) {
+        deviceError.value = 'call.error.screen';
+        if (ctx.screenStream) await stopScreenSharing();
+      }
+      screen?.getTracks().forEach((track) => {
+        track.stop();
+      });
+    } finally {
+      ctx.acquiringScreen = false;
+    }
+  }
   function reset() {
     generation += 1;
     end();
@@ -644,6 +771,10 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     localStream,
     remoteMediaUrl,
     remoteVideoUrl,
+    remoteScreenUrl,
+    localScreenStream,
+    startScreenSharing,
+    stopScreenSharing,
     error,
     deviceError,
     microphoneDeviceId,

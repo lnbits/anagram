@@ -30,14 +30,12 @@ const bobAccount = {
 };
 
 // Check decoded, audible samples in both directions, rather than container time alone.
-async function expectAudible(page: Page) {
+async function expectAudible(page: Page, selector = '[data-testid="call-remote-audio"]') {
   await expect
     .poll(
       () =>
-        page.evaluate(async () => {
-          const element = document.querySelector<HTMLAudioElement>(
-            '[data-testid="call-remote-audio"]'
-          );
+        page.evaluate(async (selector) => {
+          const element = document.querySelector<HTMLAudioElement>(selector);
           if (!element || element.paused || element.muted || !element.src.startsWith('blob:'))
             return false;
           const scope = window as unknown as {
@@ -67,7 +65,7 @@ async function expectAudible(page: Page) {
           const samples = new Float32Array(2048);
           scope.callAudioTest.analyser.getFloatTimeDomainData(samples);
           return samples.some((value) => Math.abs(value) > 0.003);
-        }),
+        }, selector),
       { timeout: 15_000 }
     )
     .toBe(true);
@@ -97,7 +95,7 @@ test('video and audio calls carry real media over Iroh, support mute and survive
     expect(
       (await bob.page.evaluate(() => window.__appE2E__.getCallSnapshot())).hasLocalStream
     ).toBe(false);
-    await bob.page.getByTestId('call-accept').click();
+    await bob.page.getByTestId('call-accept-video').click();
     for (const user of [alice, bob]) {
       await expect(user.page.getByTestId('call-status')).toHaveText(/\d+:\d{2}/);
       await expect
@@ -121,6 +119,7 @@ test('video and audio calls carry real media over Iroh, support mute and survive
     await alice.page.getByTestId('call-camera').click();
     await alice.page.getByLabel('Minimize call').click();
     await expect(alice.page.getByTestId('call-compact')).toBeVisible();
+    await expect(alice.page.getByTestId('call-panel')).not.toBeVisible();
     await alice.page.evaluate(() => {
       location.hash = '/contacts';
     });
@@ -394,5 +393,200 @@ test('blocked audio playback has its own recovery action and works in the mobile
     await expectNoUnexpectedBrowserErrors([alice, bob]);
   } finally {
     await disposeUsers(alice, bob);
+  }
+});
+
+test('video invitations can be answered with audio and screen sharing stays separate from the camera', async ({
+  browser,
+}) => {
+  const alice = await bootstrapUser(
+    browser,
+    { privateKey: '81'.repeat(32), displayName: 'Screen Alice' },
+    { callMedia: true }
+  );
+  const bob = await bootstrapUser(
+    browser,
+    { privateKey: '82'.repeat(32), displayName: 'Screen Bob' },
+    { callMedia: true }
+  );
+  try {
+    await establishAcceptedDirectChat(alice, bob);
+    await navigateToChat(alice.page, bob.session.publicKey);
+    await alice.page.getByTestId('thread-video-call').click();
+    await bob.page.getByTestId('call-accept').click();
+    await expect(bob.page.getByTestId('call-status')).toHaveText(/\d+:\d{2}/);
+    expect(
+      (await bob.page.evaluate(() => window.__appE2E__.getCallSnapshot())).videoEnabled
+    ).toEqual([]);
+    await expectAudible(alice.page);
+    await expectAudible(bob.page);
+    // Deterministic screen content; native screen selection is exercised separately in Electron.
+    await alice.page.evaluate(() => {
+      navigator.mediaDevices.getDisplayMedia = () =>
+        navigator.mediaDevices.getUserMedia({ audio: false, video: true });
+    });
+    const popupPromise = alice.page.waitForEvent('popup');
+    await alice.page.getByTestId('call-share-screen').click();
+    const popup = await popupPromise;
+    await expect
+      .poll(() =>
+        bob.page
+          .getByTestId('call-screen-media')
+          .evaluate((node) => (node as HTMLVideoElement).videoWidth)
+      )
+      .toBeGreaterThan(0);
+    await expect
+      .poll(() =>
+        bob.page
+          .getByTestId('call-remote-media')
+          .evaluate((node) => (node as HTMLVideoElement).videoWidth)
+      )
+      .toBeGreaterThan(0);
+    await expectAudible(bob.page);
+    await expect(popup.getByTestId('call-screen-media')).toBeVisible();
+    const receiverWindowPromise = bob.page.waitForEvent('popup');
+    await bob.page.getByTestId('call-open-window').click();
+    const receiverWindow = await receiverWindowPromise;
+    for (const id of ['call-screen-media', 'call-remote-media']) {
+      await expect
+        .poll(() =>
+          receiverWindow.getByTestId(id).evaluate((node) => {
+            const canvas = node as HTMLCanvasElement;
+            return canvas
+              .getContext('2d')
+              ?.getImageData(0, 0, canvas.width, canvas.height)
+              .data.some((value, index) => index % 4 !== 3 && value > 0);
+          })
+        )
+        .toBe(true);
+    }
+    await expectAudible(bob.page);
+    await receiverWindow.close();
+    await popup.close();
+    await expect(alice.page.getByTestId('call-screen-media')).toBeVisible();
+    await alice.page.getByTestId('call-share-screen').click();
+    await expect(bob.page.getByTestId('call-screen-media')).toHaveCount(0);
+    await expectAudible(alice.page);
+    await expectAudible(bob.page);
+    await alice.page.getByTestId('call-hangup').click();
+    await expectNoUnexpectedBrowserErrors([alice, bob]);
+  } finally {
+    await disposeUsers(alice, bob);
+  }
+});
+
+test('three users join a shared call link, exchange Iroh media, share screens and leave cleanly', async ({
+  browser,
+}) => {
+  test.slow();
+  const alice = await bootstrapUser(
+    browser,
+    { privateKey: '83'.repeat(32), displayName: 'Room Alice' },
+    { callMedia: true }
+  );
+  const bob = await bootstrapUser(
+    browser,
+    { privateKey: '84'.repeat(32), displayName: 'Room Bob' },
+    { callMedia: true }
+  );
+  const charlie = await bootstrapUser(
+    browser,
+    { privateKey: '85'.repeat(32), displayName: 'Room Charlie' },
+    { callMedia: true }
+  );
+  try {
+    await alice.page.getByTestId('start-new-chat-button').click();
+    const chatPage = alice.page;
+    const callTabPromise = alice.context.waitForEvent('page');
+    await chatPage.getByTestId('start-call-room').click();
+    alice.page = await callTabPromise;
+    await expect(chatPage.getByTestId('start-new-chat-button')).toBeVisible();
+    await expect(chatPage.getByTestId('room-panel')).toHaveCount(0);
+    await alice.page.getByTestId('room-create-audio').click();
+    await expect(alice.page.getByTestId('room-status')).toHaveText('Call is open');
+    const link = await alice.page.getByTestId('room-link').inputValue();
+    // Neither guest needs an existing accepted DM with the host or with each other.
+    for (const guest of [bob, charlie]) {
+      await guest.page.goto(link);
+      await guest.page.getByTestId('room-join-audio').click();
+      await expect(guest.page.getByTestId('room-status')).toHaveText('Call is open');
+    }
+    for (const user of [alice, bob, charlie]) {
+      for (const other of [alice, bob, charlie].filter((other) => other !== user)) {
+        await expectAudible(user.page, `[data-testid="room-audio-${other.session.publicKey}"]`);
+      }
+    }
+    await alice.page.getByTestId('room-camera').click();
+    await expect
+      .poll(() =>
+        bob.page
+          .getByTestId(`room-peer-${alice.session.publicKey}`)
+          .locator('video')
+          .evaluate((node) => (node as HTMLVideoElement).videoWidth)
+      )
+      .toBeGreaterThan(0);
+    await charlie.page.evaluate(() => {
+      navigator.mediaDevices.getDisplayMedia = () =>
+        navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    });
+    await charlie.page.getByTestId('room-share-screen').click();
+    for (const user of [alice, bob])
+      await expect
+        .poll(() =>
+          user.page
+            .getByTestId('call-screen-media')
+            .evaluate((node) => (node as HTMLVideoElement).videoWidth)
+        )
+        .toBeGreaterThan(0);
+    for (const size of [
+      { width: 1440, height: 900 },
+      { width: 800, height: 500 },
+      { width: 390, height: 844 },
+      { width: 844, height: 390 },
+    ]) {
+      await bob.page.setViewportSize(size);
+      await expect
+        .poll(() =>
+          bob.page.getByTestId('room-panel').evaluate((node) => {
+            const rect = node.getBoundingClientRect();
+            const controls = node.querySelector('.room-controls')?.getBoundingClientRect();
+            const media = node.querySelector('.call-stage')?.getBoundingClientRect();
+            return (
+              rect.width >= innerWidth - 2 &&
+              rect.bottom <= innerHeight + 1 &&
+              controls.bottom <= innerHeight + 1 &&
+              media.height > 0 &&
+              node.scrollHeight <= node.clientHeight + 1 &&
+              node.scrollWidth <= node.clientWidth + 1
+            );
+          })
+        )
+        .toBe(true);
+    }
+    await bob.page.setViewportSize({ width: 1440, height: 960 });
+    const popupPromise = charlie.page.waitForEvent('popup');
+    await charlie.page.getByTestId('room-open-window').click();
+    const popup = await popupPromise;
+    await popup.setViewportSize({ width: 800, height: 500 });
+    await expect
+      .poll(() =>
+        popup.evaluate(
+          () =>
+            document.documentElement.scrollHeight <= innerHeight &&
+            document.documentElement.scrollWidth <= innerWidth
+        )
+      )
+      .toBe(true);
+    await popup.close();
+    await charlie.page.getByTestId('room-share-screen').click();
+    await charlie.page.getByTestId('room-leave').click();
+    await expect(bob.page.getByTestId(`room-peer-${charlie.session.publicKey}`)).toHaveCount(0);
+    await expectAudible(bob.page, `[data-testid="room-audio-${alice.session.publicKey}"]`);
+    await alice.page.getByTestId('room-leave').click();
+    await expect(bob.page.getByTestId('room-status')).toHaveText('Call ended');
+    await expect(bob.page.locator('audio[src^="blob:"]')).toHaveCount(0);
+    await expectNoUnexpectedBrowserErrors([alice, bob, charlie]);
+  } finally {
+    await disposeUsers(alice, bob, charlie);
   }
 });

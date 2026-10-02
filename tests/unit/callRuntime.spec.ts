@@ -73,6 +73,7 @@ function harness() {
     getOwnPubkey: () => own,
     resolvePeer: vi.fn().mockResolvedValue({ name: 'Alice' }),
     supported: vi.fn(() => true),
+    otherCallBusy: vi.fn(() => false),
     createEndpoint: vi.fn().mockResolvedValue(endpoint),
     getMedia: vi
       .fn()
@@ -83,6 +84,9 @@ function harness() {
       .fn()
       .mockResolvedValue(new MediaStream([microphone] as unknown as MediaStreamTrack[])),
     getCamera: vi
+      .fn()
+      .mockResolvedValue(new MediaStream([camera] as unknown as MediaStreamTrack[])),
+    getScreen: vi
       .fn()
       .mockResolvedValue(new MediaStream([camera] as unknown as MediaStreamTrack[])),
     unlockPlayback: vi.fn(),
@@ -116,6 +120,22 @@ afterEach(() => {
 });
 
 describe('call negotiation and lifetime', () => {
+  it('reports busy during a room only to eligible contacts and deduplicates the invitation', async () => {
+    const h = setup();
+    h.deps.otherCallBusy.mockReturnValue(true);
+    h.deps.resolvePeer.mockResolvedValueOnce(null);
+    await h.runtime.receiveSignal(peer, invite());
+    expect(h.deps.sendSignal).not.toHaveBeenCalled();
+    const offer = invite();
+    await h.runtime.receiveSignal(peer, offer);
+    await h.runtime.receiveSignal(peer, offer);
+    expect(h.deps.sendSignal).toHaveBeenCalledOnce();
+    expect(h.deps.sendSignal).toHaveBeenCalledWith(
+      peer,
+      expect.objectContaining({ reason: 'busy', action: 'end' })
+    );
+    expect(h.deps.getMedia).not.toHaveBeenCalled();
+  });
   it('waits for peer acceptance and a confirmed Iroh connection before sending media', async () => {
     const h = setup();
     await h.runtime.start(peer, 'video');
@@ -472,5 +492,66 @@ describe('call negotiation and lifetime', () => {
     expect(h.runtime.remoteMediaUrl.value).toBe(audio.url);
     expect(h.runtime.remoteVideoUrl.value).toBe('');
     expect(h.runtime.session.value?.phase).toBe('active');
+  });
+});
+
+describe('answer mode and independent screen sharing', () => {
+  it('answers a video invitation without opening a camera when audio is chosen', async () => {
+    const h = setup();
+    await h.runtime.receiveSignal(peer, invite({ mediaVersion: 2, videoSupported: true }));
+    await h.runtime.accept('audio');
+    await vi.waitFor(() => expect(h.runtime.session.value?.phase).toBe('active'));
+    expect(h.deps.getMedia).toHaveBeenCalledWith('audio', '');
+    expect(h.runtime.localStream.value?.getVideoTracks()).toHaveLength(0);
+    expect(h.runtime.session.value?.cameraMuted).toBe(true);
+    expect(h.runtime.session.value?.mode).toBe('video');
+  });
+  it('shares a separate screen container and stops it without ending audio', async () => {
+    const h = setup();
+    await h.runtime.receiveSignal(
+      peer,
+      invite({ mediaVersion: 2, videoSupported: true, screenSupported: true })
+    );
+    await h.runtime.accept('audio');
+    await vi.waitFor(() => expect(h.runtime.session.value?.phase).toBe('active'));
+    await h.runtime.startScreenSharing();
+    expect(h.runtime.localScreenStream.value?.getVideoTracks()).toHaveLength(1);
+    expect(h.connection.send).toHaveBeenCalledWith(new Uint8Array([7, 1]));
+    expect(h.deps.record).toHaveBeenCalledTimes(2);
+    await h.runtime.stopScreenSharing();
+    expect(h.connection.send).toHaveBeenCalledWith(new Uint8Array([7, 0]));
+    expect(h.runtime.session.value?.phase).toBe('active');
+    expect(h.microphone.stop).not.toHaveBeenCalled();
+    expect(h.runtime.localScreenStream.value).toBeNull();
+  });
+  it('does not send screen frames to a peer without the screen capability', async () => {
+    const h = setup();
+    await h.runtime.receiveSignal(peer, invite({ mediaVersion: 2, videoSupported: true }));
+    await h.runtime.accept('audio');
+    await vi.waitFor(() => expect(h.runtime.session.value?.phase).toBe('active'));
+    await h.runtime.startScreenSharing();
+    expect(h.deps.getScreen).not.toHaveBeenCalled();
+  });
+  it('stops screen capture that resolves after a hangup', async () => {
+    const h = setup();
+    let finishCapture: (stream: MediaStream) => void = () => {};
+    h.deps.getScreen.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishCapture = resolve;
+        })
+    );
+    await h.runtime.receiveSignal(
+      peer,
+      invite({ mediaVersion: 2, videoSupported: true, screenSupported: true })
+    );
+    await h.runtime.accept('audio');
+    await vi.waitFor(() => expect(h.runtime.session.value?.phase).toBe('active'));
+    const acquiring = h.runtime.startScreenSharing();
+    h.runtime.end();
+    finishCapture(new MediaStream([h.camera] as unknown as MediaStreamTrack[]));
+    await acquiring;
+    expect(h.camera.stop).toHaveBeenCalled();
+    expect(h.runtime.localScreenStream.value).toBeNull();
   });
 });

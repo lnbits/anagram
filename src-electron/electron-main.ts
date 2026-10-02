@@ -8,6 +8,8 @@ import {
   safeStorage,
   shell,
 } from 'electron';
+import { installCallScreenCapture } from './callScreenCapture';
+import { isCallLobbyWindow } from './callWindowPolicy';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -128,6 +130,31 @@ function applyUnreadChatBadge(): void {
   app.setBadgeCount(count > 0 ? Math.min(count, MAX_UNREAD_CHAT_BADGE_COUNT) : 0);
 }
 
+function configureCallWindows(window: BrowserWindow): void {
+  installCallScreenCapture(window);
+  window.webContents.setWindowOpenHandler(({ url, frameName }) => {
+    if (isCallLobbyWindow(url, window.webContents.getURL())) {
+      return { action: 'allow', overrideBrowserWindowOptions: {
+        autoHideMenuBar: true,
+        width: window.getBounds().width, height: window.getBounds().height,
+        webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, preload: getPreloadPath() },
+      } };
+    }
+    if (url === 'about:blank' && frameName === 'anagram-call-stage') {
+      return { action: 'allow', overrideBrowserWindowOptions: { autoHideMenuBar: true, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true } } };
+    }
+    if (isSafeExternalHttpUrl(url)) void shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  window.webContents.on('did-create-window', (child, details) => {
+    if (isCallLobbyWindow(details.url, window.webContents.getURL())) configureCallWindows(child);
+    else child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    child.webContents.on('will-navigate', (event, url) => {
+      if (!isCallLobbyWindow(details.url, window.webContents.getURL()) || !isCallLobbyWindow(url, window.webContents.getURL())) event.preventDefault();
+    });
+  });
+}
+
 function getPreloadPath(): string {
   return path.resolve(
     currentDir,
@@ -240,12 +267,7 @@ async function createWindow(): Promise<void> {
     mainWindow?.show();
   });
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (isSafeExternalHttpUrl(url)) {
-      void shell.openExternal(url);
-    }
-    return { action: 'deny' };
-  });
+  configureCallWindows(mainWindow);
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (!shouldToggleDevTools(input)) {

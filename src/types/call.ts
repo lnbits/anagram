@@ -29,6 +29,7 @@ export interface CallSignal {
   reason?: CallEndReason;
   mediaVersion?: 2;
   videoSupported?: boolean;
+  screenSupported?: boolean;
 }
 export interface CallSession {
   id: string;
@@ -43,6 +44,8 @@ export interface CallSession {
   peerConfirmed?: boolean;
   mediaVersion?: 2;
   videoAvailable?: boolean;
+  screenAvailable?: boolean;
+  screenSharing?: boolean;
   endReason?: CallEndReason;
 }
 export interface CallConnection {

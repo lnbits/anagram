@@ -4,6 +4,8 @@ import { contactsService } from 'src/services/contactsService';
 import { inputSanitizerService } from 'src/services/inputSanitizerService';
 import type { createRelayPublishRuntime } from 'src/stores/nostr/relayPublishRuntime';
 import { CALL_SIGNAL_KIND, type CallSignal } from 'src/types/call';
+import type { CallRoomSignal } from 'src/types/callRoom';
+import { parseRoomSignal, roomRelays } from 'src/utils/callRoom';
 import { parseCallSignal } from 'src/utils/callSignal';
 import { resolvePreferredContactRelayUrls } from 'src/utils/contactRelayUrls';
 
@@ -23,7 +25,13 @@ export function createCallSignalingRuntime(deps: {
     const content = JSON.stringify(signal);
     const now = Math.floor(Date.now() / 1000);
     if (!parseCallSignal(content, now)) throw new Error('Invalid call signal.');
-    await deps.refreshRelays(peer);
+    let refreshError: unknown;
+    try {
+      await deps.refreshRelays(peer);
+    } catch (cause) {
+      refreshError = cause;
+    }
+    // A metadata relay timing out must not discard an already known delivery route.
     const contact = await contactsService.getContactByPublicKey(peer);
     if (
       contact?.type === 'group' ||
@@ -39,6 +47,7 @@ export function createCallSignalingRuntime(deps: {
         ...(contact?.sendMessagesToAppRelays ? deps.getAppRelays() : []),
       ])
       .map((entry) => entry.url);
+    if (!relays.length && refreshError) throw refreshError;
     await deps.sendRumor(
       peer,
       relays,
@@ -54,5 +63,41 @@ export function createCallSignalingRuntime(deps: {
       { publishSelfCopy: false }
     );
   }
-  return { sendCallSignal };
+  async function sendRoomSignal(
+    peerInput: string,
+    signal: CallRoomSignal,
+    relayHints: string[]
+  ): Promise<void> {
+    const peer = inputSanitizerService.normalizeHexKey(peerInput);
+    const own = deps.getOwnPubkey();
+    const relays = roomRelays(relayHints);
+    const content = JSON.stringify(signal);
+    if (
+      !peer ||
+      !own ||
+      peer === own ||
+      deps.isBlocked(peer) ||
+      !relays ||
+      !parseRoomSignal(content, Math.floor(Date.now() / 1000))
+    )
+      throw new Error('Invalid room control');
+    await deps.sendRumor(
+      peer,
+      relays,
+      CALL_SIGNAL_KIND,
+      (sender, recipient, createdAt) => {
+        if (sender !== own || deps.getOwnPubkey() !== own || deps.isBlocked(peer))
+          throw new Error('Call session changed');
+        return new NDKEvent(deps.ndk, {
+          kind: CALL_SIGNAL_KIND,
+          pubkey: sender,
+          created_at: createdAt,
+          tags: [['p', recipient]],
+          content,
+        });
+      },
+      { publishSelfCopy: false }
+    );
+  }
+  return { sendCallSignal, sendRoomSignal };
 }

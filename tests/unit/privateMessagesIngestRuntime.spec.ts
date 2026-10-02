@@ -1,6 +1,7 @@
 import { type NDKEvent, NDKKind, nip19 } from '@nostr-dev-kit/ndk';
 import { createPrivateMessagesIngestRuntime } from 'src/stores/nostr/privateMessagesIngestRuntime';
 import { CALL_PROTOCOL, CALL_SIGNAL_KIND } from 'src/types/call';
+import { ROOM_PROTOCOL } from 'src/types/callRoom';
 import type { MessageRelayStatus } from 'src/types/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -144,6 +145,7 @@ function createDeps() {
     ),
     persistIncomingGroupEpochTicket: vi.fn().mockResolvedValue(undefined),
     processIncomingCallSignal: vi.fn().mockResolvedValue(undefined),
+    processIncomingRoomSignal: vi.fn().mockResolvedValue(undefined),
     processIncomingDeletionRumorEvent: vi.fn().mockResolvedValue(undefined),
     processIncomingReactionRumorEvent: vi.fn().mockResolvedValue(undefined),
     queueBackgroundGroupContactRefresh: vi.fn(),
@@ -248,6 +250,33 @@ describe('privateMessagesIngestRuntime', () => {
     expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
     expect(serviceMocks.nostrEventDataService.upsertEvent).not.toHaveBeenCalled();
     expect(deps.chatStore.recordIncomingActivity).not.toHaveBeenCalled();
+    expect(deps.showIncomingMessageBrowserNotification).not.toHaveBeenCalled();
+  });
+
+  it('routes room controls by the authenticated author without creating chat messages', async () => {
+    const deps = createDeps();
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+    const signal = {
+      protocol: ROOM_PROTOCOL,
+      action: 'closed',
+      roomId: crypto.randomUUID(),
+      senderSession: crypto.randomUUID(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+    ndkMocks.giftUnwrap.mockResolvedValue(
+      makeRumorEvent({
+        recipientPubkey: 'b'.repeat(64),
+        kind: CALL_SIGNAL_KIND,
+        createdAt: Math.floor(Date.now() / 1000),
+        content: JSON.stringify(signal),
+      })
+    );
+    await runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64));
+    expect(deps.processIncomingRoomSignal).toHaveBeenCalledWith('a'.repeat(64), signal);
+    expect(deps.processIncomingCallSignal).not.toHaveBeenCalled();
+    expect(serviceMocks.chatDataService.createChat).not.toHaveBeenCalled();
+    expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
+    expect(serviceMocks.nostrEventDataService.upsertEvent).not.toHaveBeenCalled();
     expect(deps.showIncomingMessageBrowserNotification).not.toHaveBeenCalled();
   });
 

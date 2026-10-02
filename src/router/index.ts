@@ -15,6 +15,7 @@ import {
   removeTopLevelBunkerLoginQueryParam,
   withoutBunkerLoginQueryParam,
 } from 'src/utils/bunkerLoginQuery';
+import { parseRoomLink } from 'src/utils/callRoom';
 import { finalizePendingLogoutCleanup, hasPendingLogoutCleanup } from 'src/utils/logoutCleanup';
 import {
   createMemoryHistory,
@@ -64,6 +65,29 @@ export default route(() => {
     }
 
     const resolveNavigation = (hasLoggedInUser: boolean) => {
+      if (
+        !hasLoggedInUser &&
+        to.name === 'join-call' &&
+        typeof to.params.invite === 'string' &&
+        parseRoomLink(to.params.invite)
+      ) {
+        try {
+          sessionStorage.setItem('anagram.pendingCallInvite', to.params.invite);
+        } catch {
+          /* The link can still be pasted after login. */
+        }
+      }
+      if (hasLoggedInUser && to.name !== 'join-call') {
+        let pending: string | null = null;
+        try {
+          pending = sessionStorage.getItem('anagram.pendingCallInvite');
+          sessionStorage.removeItem('anagram.pendingCallInvite');
+        } catch {
+          /* Session storage is optional. */
+        }
+        if (pending && parseRoomLink(pending))
+          return { name: 'join-call', params: { invite: pending } };
+      }
       const isAuthRoute = to.name === 'auth' || to.name === 'register';
       const routeBunkerToken = readBunkerLoginQueryParam(to.query);
       const topLevelBunkerToken = readTopLevelBunkerLoginQueryParam();

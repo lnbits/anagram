@@ -2,6 +2,12 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('desktopRuntime', {
   isElectron: true,
+  onCallScreenPicker: (listener: (request: { id: string; sources: Array<{ id: string; name: string; thumbnail: string }> } | null) => void) => {
+    const handler = (_event: unknown, request: { id: string; sources: Array<{ id: string; name: string; thumbnail: string }> } | null) => listener(request);
+    ipcRenderer.on('desktop:call-screen-picker', handler);
+    return () => ipcRenderer.removeListener('desktop:call-screen-picker', handler);
+  },
+  selectCallScreen: (id: string, sourceId: string | null) => ipcRenderer.send('desktop:call-screen-selected', { id, sourceId }),
   platform: process.platform,
   isSecureStorageAvailable: async () => {
     return Boolean(await ipcRenderer.invoke('desktop:secure-storage:is-available'));

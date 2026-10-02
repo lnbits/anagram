@@ -35,7 +35,8 @@ export function parseCallSignal(
       !['audio', 'video'].includes(value.mode) ||
       typeof value.expiresAt !== 'string' ||
       (value.mediaVersion !== undefined && value.mediaVersion !== 2) ||
-      (value.videoSupported !== undefined && typeof value.videoSupported !== 'boolean')
+      (value.videoSupported !== undefined && typeof value.videoSupported !== 'boolean') ||
+      (value.screenSupported !== undefined && typeof value.screenSupported !== 'boolean')
     )
       return null;
     const expiration = Date.parse(value.expiresAt);
@@ -78,7 +79,13 @@ export function parseCallSignal(
       expiresAt: new Date(expiration).toISOString(),
       mode: value.mode,
       ...(value.mediaVersion === 2
-        ? { mediaVersion: 2, videoSupported: value.videoSupported === true }
+        ? {
+            mediaVersion: 2,
+            videoSupported: value.videoSupported === true,
+            ...(value.screenSupported === undefined
+              ? {}
+              : { screenSupported: value.screenSupported }),
+          }
         : {}),
       ...(value.action === 'end'
         ? { reason: value.reason }

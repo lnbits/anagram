@@ -13,6 +13,7 @@ import { resolveLatestReadBoundaryAtValue } from 'src/stores/nostr/valueUtils';
 import { CALL_SIGNAL_KIND } from 'src/types/call';
 import type { NostrEventDirection } from 'src/types/chat';
 import type { ContactRecord } from 'src/types/contact';
+import { callHistoryFromTags } from 'src/utils/callHistory';
 import { parseRoomSignal } from 'src/utils/callRoom';
 import { parseCallSignal } from 'src/utils/callSignal';
 import {
@@ -996,8 +997,10 @@ export function createPrivateMessagesIngestRuntime({
       : null;
     const attachments = extractMediaAttachmentsFromTags(rumorEvent.tags);
     const editTargetEventId = readMessageEditTargetEventId(rumorEvent.tags);
+    const callHistory = !resolvedGroupChatPublicKey ? callHistoryFromTags(rumorEvent.tags) : null;
     let messageMeta: Record<string, unknown> = {
       source: 'nostr',
+      ...(callHistory ? { call_history: callHistory } : {}),
       kind: NDKKind.PrivateDirectMessage,
       wrapper_event_id: wrappedEvent.id ?? '',
       ...buildMentionMetadata(messageText, loggedInPubkeyHex),

@@ -29,6 +29,7 @@ export class CallEndpoint {
     close(): Promise<void>;
     connect(peer_id: string, relay_url: string, call_id: string): Promise<CallConnection>;
     static create(relay_url?: string | null): Promise<CallEndpoint>;
+    static create_with_relays(urls: string[]): Promise<CallEndpoint>;
     id(): string;
     online(): Promise<void>;
     relay_url(): string;
@@ -76,6 +77,7 @@ export interface InitOutput {
     readonly callendpoint_close: (a: number) => number;
     readonly callendpoint_connect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly callendpoint_create: (a: number, b: number) => number;
+    readonly callendpoint_create_with_relays: (a: number, b: number) => number;
     readonly callendpoint_id: (a: number, b: number) => void;
     readonly callendpoint_online: (a: number) => number;
     readonly callendpoint_relay_url: (a: number, b: number) => void;
@@ -93,14 +95,14 @@ export interface InitOutput {
     readonly __wbg_intounderlyingsource_free: (a: number, b: number) => void;
     readonly intounderlyingsource_cancel: (a: number) => void;
     readonly intounderlyingsource_pull: (a: number, b: number) => number;
-    readonly __wasm_bindgen_func_elem_3673: (a: number, b: number, c: number, d: number) => void;
-    readonly __wasm_bindgen_func_elem_3044: (a: number, b: number, c: number, d: number) => void;
-    readonly __wasm_bindgen_func_elem_2286: (a: number, b: number, c: number) => void;
-    readonly __wasm_bindgen_func_elem_2286_2: (a: number, b: number, c: number) => void;
-    readonly __wasm_bindgen_func_elem_2286_3: (a: number, b: number, c: number) => void;
-    readonly __wasm_bindgen_func_elem_4632: (a: number, b: number) => void;
-    readonly __wasm_bindgen_func_elem_3823: (a: number, b: number) => void;
-    readonly __wasm_bindgen_func_elem_1084: (a: number, b: number) => void;
+    readonly __wasm_bindgen_func_elem_3692: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_3063: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_2307: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_2307_2: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_2307_3: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_4649: (a: number, b: number) => void;
+    readonly __wasm_bindgen_func_elem_3841: (a: number, b: number) => void;
+    readonly __wasm_bindgen_func_elem_1106: (a: number, b: number) => void;
     readonly __wbindgen_export: (a: number, b: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_export3: (a: number) => void;

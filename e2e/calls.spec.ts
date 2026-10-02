@@ -6,6 +6,7 @@ import {
   establishAcceptedDirectChat,
   expectNoUnexpectedBrowserErrors,
   navigateToChat,
+  openAppRelaysSettings,
   reloadAndWaitForApp,
 } from './helpers';
 
@@ -71,6 +72,17 @@ async function expectAudible(page: Page, selector = '[data-testid="call-remote-a
     .toBe(true);
 }
 
+async function chooseCustomCallRelay(page: Page) {
+  await openAppRelaysSettings(page);
+  await page.getByTestId('settings-relays-iroh-tab').click();
+  await page.getByTestId('iroh-new-relay').fill('https://localhost:7004/');
+  await page.getByTestId('iroh-add-relay').click();
+  await expect(page.getByTestId('iroh-new-relay')).toHaveValue('');
+  await page.getByTestId('iroh-mode-custom').click();
+  await expect(page.getByTestId('iroh-mode-custom')).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByTestId('iroh-new-relay')).toBeEnabled();
+}
+
 test('video and audio calls carry real media over Iroh, support mute and survive navigation', async ({
   browser,
 }) => {
@@ -88,6 +100,13 @@ test('video and audio calls carry real media over Iroh, support mute and survive
     await establishAcceptedDirectChat(alice, bob);
     await navigateToChat(alice.page, bob.session.publicKey);
     await navigateToChat(bob.page, alice.session.publicKey);
+    await chooseCustomCallRelay(alice.page);
+    await reloadAndWaitForApp(alice.page);
+    await navigateToChat(alice.page, bob.session.publicKey);
+    const selectedRelaySockets: string[] = [];
+    alice.page.on('websocket', (socket) => {
+      if (new URL(socket.url()).hostname === 'localhost') selectedRelaySockets.push(socket.url());
+    });
     const beforeAlice = await alice.page.locator('.thread-message-entry').count();
     const beforeBob = await bob.page.locator('.thread-message-entry').count();
     await alice.page.getByTestId('thread-video-call').click();
@@ -108,6 +127,21 @@ test('video and audio calls carry real media over Iroh, support mute and survive
         .toBe(true);
     }
     await expectAudible(alice.page);
+    await expectAudible(bob.page);
+    const oldCameraUrl = await bob.page.getByTestId('call-remote-media').getAttribute('src');
+    await alice.page.getByTestId('call-camera-menu').click();
+    await alice.page.getByTestId('call-camera-source-0').click();
+    await expect(bob.page.getByTestId('call-remote-media')).not.toHaveAttribute(
+      'src',
+      oldCameraUrl!
+    );
+    await expect
+      .poll(() =>
+        bob.page
+          .getByTestId('call-remote-media')
+          .evaluate((node) => (node as HTMLVideoElement).videoWidth)
+      )
+      .toBeGreaterThan(0);
     await expectAudible(bob.page);
     await alice.page.getByTestId('call-microphone').click();
     await alice.page.getByTestId('call-camera').click();
@@ -203,16 +237,17 @@ test('video and audio calls carry real media over Iroh, support mute and survive
     await expect(alice.page.getByTestId('call-status')).toHaveText('Call ended');
     await alice.page.getByTestId('call-dismiss').click();
     await bob.page.getByTestId('call-dismiss').click();
-    await expect(alice.page.locator('.thread-message-entry')).toHaveCount(beforeAlice);
-    await expect(bob.page.locator('.thread-message-entry')).toHaveCount(beforeBob);
+    await expect(alice.page.locator('.thread-message-entry')).toHaveCount(beforeAlice + 2);
+    await expect(bob.page.locator('.thread-message-entry')).toHaveCount(beforeBob + 2);
     expect(publicAddressRequests).toEqual([]);
+    expect(selectedRelaySockets.length).toBeGreaterThan(0);
     await expectNoUnexpectedBrowserErrors([alice, bob]);
   } finally {
     await disposeUsers(alice, bob);
   }
 });
 
-test('declining and cancelling calls leaves no chat messages or restored ringing', async ({
+test('call history survives reload, offers redial and does not restore ringing', async ({
   browser,
 }) => {
   const alice = await bootstrapUser(
@@ -240,12 +275,22 @@ test('declining and cancelling calls leaves no chat messages or restored ringing
     await expect(alice.page.getByTestId('call-status')).toHaveText('Call declined');
     await alice.page.getByTestId('call-dismiss').click();
     await bob.page.getByTestId('call-dismiss').click();
+    await navigateToChat(bob.page, alice.session.publicKey);
+    await expect(bob.page.getByTestId('message-call-history')).toHaveCount(1);
+    await expect(bob.page.getByTestId('message-call-history')).toContainText('Declined');
+    await expect(alice.page.getByTestId('message-call-history')).toHaveCount(1);
     await reloadAndWaitForApp(bob.page);
+    await navigateToChat(bob.page, alice.session.publicKey);
     await expect(bob.page.getByTestId('call-panel')).not.toBeVisible();
-    await alice.page.getByTestId('thread-audio-call').click();
+    await expect(bob.page.getByTestId('message-call-history')).toHaveCount(1);
+    await alice.page.getByTestId('message-call-again').click();
     await expect(bob.page.getByTestId('call-status')).toHaveText('Incoming call');
     await alice.page.getByTestId('call-hangup').click();
     await expect(bob.page.getByTestId('call-status')).toHaveText('Call cancelled');
+    await alice.page.getByTestId('call-dismiss').click();
+    await bob.page.getByTestId('call-dismiss').click();
+    await expect(alice.page.getByTestId('message-call-history')).toHaveCount(2);
+    await expect(bob.page.getByTestId('message-call-history')).toHaveCount(2);
     await expectNoUnexpectedBrowserErrors([alice, bob]);
   } finally {
     await disposeUsers(alice, bob);
@@ -495,16 +540,45 @@ test('three users join a shared call link, exchange Iroh media, share screens an
     { callMedia: true }
   );
   try {
+    await chooseCustomCallRelay(alice.page);
+    await alice.page.goto('/#/chats');
     await alice.page.getByTestId('start-new-chat-button').click();
     const chatPage = alice.page;
     const callTabPromise = alice.context.waitForEvent('page');
     await chatPage.getByTestId('start-call-room').click();
     alice.page = await callTabPromise;
+    const selectedRelaySockets: string[] = [];
+    alice.page.on('websocket', (socket) => {
+      if (new URL(socket.url()).hostname === 'localhost') selectedRelaySockets.push(socket.url());
+    });
     await expect(chatPage.getByTestId('start-new-chat-button')).toBeVisible();
     await expect(chatPage.getByTestId('room-panel')).toHaveCount(0);
     await alice.page.getByTestId('room-create-audio').click();
     await expect(alice.page.getByTestId('room-status')).toHaveText('Call is open');
-    const link = await alice.page.getByTestId('room-link').inputValue();
+    await expect(alice.page.getByTestId('room-link')).toHaveCount(0);
+    await alice.page.getByTestId('room-invite').click();
+    await expect(alice.page.getByTestId('room-link-hidden')).toBeVisible();
+    await expect(alice.page.getByTestId('room-link')).toHaveCount(0);
+    await alice.page.evaluate(() => {
+      Object.defineProperty(navigator.clipboard, 'writeText', {
+        configurable: true,
+        value: async (text: string) => {
+          sessionStorage.setItem('e2e-copied-invite', text);
+        },
+      });
+    });
+    await alice.page.getByTestId('room-copy-link').click();
+    const link = await alice.page.evaluate(() => sessionStorage.getItem('e2e-copied-invite'));
+    expect(link).toContain('#/call/');
+    if (!link) throw new Error('Invite was not copied');
+    await expect(alice.page.getByTestId('room-link')).toHaveCount(0);
+    await alice.page.getByTestId('room-toggle-link').click();
+    await expect(alice.page.getByTestId('room-link')).toHaveValue(link);
+    await alice.page.getByTestId('room-invite-close').click();
+    await alice.page.getByTestId('room-invite').click();
+    await expect(alice.page.getByTestId('room-link-hidden')).toBeVisible();
+    await expect(alice.page.getByTestId('room-link')).toHaveCount(0);
+    await alice.page.getByTestId('room-invite-close').click();
     // Neither guest needs an existing accepted DM with the host or with each other.
     for (const guest of [bob, charlie]) {
       await guest.page.goto(link);
@@ -525,6 +599,17 @@ test('three users join a shared call link, exchange Iroh media, share screens an
           .evaluate((node) => (node as HTMLVideoElement).videoWidth)
       )
       .toBeGreaterThan(0);
+    const peerCamera = bob.page
+      .getByTestId(`room-peer-${alice.session.publicKey}`)
+      .locator('video');
+    const oldCameraUrl = await peerCamera.getAttribute('src');
+    await alice.page.getByTestId('room-camera-menu').click();
+    await alice.page.getByTestId('room-camera-source-0').click();
+    await expect(peerCamera).not.toHaveAttribute('src', oldCameraUrl!);
+    await expect
+      .poll(() => peerCamera.evaluate((node) => (node as HTMLVideoElement).videoWidth))
+      .toBeGreaterThan(0);
+    await expectAudible(bob.page, `[data-testid="room-audio-${alice.session.publicKey}"]`);
     await charlie.page.evaluate(() => {
       navigator.mediaDevices.getDisplayMedia = () =>
         navigator.mediaDevices.getUserMedia({ video: true, audio: false });
@@ -582,6 +667,7 @@ test('three users join a shared call link, exchange Iroh media, share screens an
     await charlie.page.getByTestId('room-leave').click();
     await expect(bob.page.getByTestId(`room-peer-${charlie.session.publicKey}`)).toHaveCount(0);
     await expectAudible(bob.page, `[data-testid="room-audio-${alice.session.publicKey}"]`);
+    expect(selectedRelaySockets.length).toBeGreaterThan(0);
     await alice.page.getByTestId('room-leave').click();
     await expect(bob.page.getByTestId('room-status')).toHaveText('Call ended');
     await expect(bob.page.locator('audio[src^="blob:"]')).toHaveCount(0);

@@ -40,7 +40,13 @@ export const useCallRoomStore = defineStore('callRooms', () =>
       getCamera: getCallCamera,
       getMicrophone: getCallMicrophone,
       getScreen: getCallScreen,
-      createEndpoint: createIrohCallEndpoint,
+      createEndpoint: () =>
+        createIrohCallEndpoint(
+          useNostrStore()
+            .getIrohRelays()
+            .filter((entry) => entry.enabled)
+            .map((entry) => entry.url)
+        ),
       createReceiver: createCallMediaReceiver,
       record: recordCallMedia,
       unlockPlayback: primeCallAudio,

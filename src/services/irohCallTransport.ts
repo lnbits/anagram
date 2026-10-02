@@ -1,10 +1,16 @@
 import type { CallEndpoint } from 'src/types/call';
+import { defaultIrohRelays, normalizeIrohRelayUrl } from 'src/utils/irohRelays';
 
 // Loaded from the same origin. This asset is built from iroh-calls/ and shipped on every target.
 let modulePromise: Promise<{
-  CallEndpoint: { create(relayUrl?: string): Promise<CallEndpoint> };
+  CallEndpoint: { create_with_relays(relayUrls: string[]): Promise<CallEndpoint> };
 }> | null = null;
-export async function createIrohCallEndpoint(): Promise<CallEndpoint> {
+export async function createIrohCallEndpoint(
+  relayUrls = defaultIrohRelays().map((entry) => entry.url)
+): Promise<CallEndpoint> {
+  const urls = relayUrls.map(normalizeIrohRelayUrl);
+  if (!urls.length || urls.length > 21 || urls.some((url) => !url))
+    throw new Error('Choose at least one valid HTTPS call relay');
   if (!modulePromise) {
     const url = new URL('iroh/anagram_iroh_calls.js', document.baseURI).href;
     modulePromise = import(/* @vite-ignore */ url)
@@ -17,8 +23,5 @@ export async function createIrohCallEndpoint(): Promise<CallEndpoint> {
         throw error;
       });
   }
-  const relayUrl = process.env.APP_IROH_RELAY_URL?.trim() || undefined;
-  if (relayUrl && new URL(relayUrl).protocol !== 'https:')
-    throw new Error('Iroh calls require an HTTPS relay');
-  return (await modulePromise).CallEndpoint.create(relayUrl);
+  return (await modulePromise).CallEndpoint.create_with_relays(urls as string[]);
 }

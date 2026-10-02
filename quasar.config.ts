@@ -313,7 +313,7 @@ export default configure((ctx) => {
 
     devServer: {
       open: false,
-      allowedHosts: ['.ngrok-free.app', '.ngrok.app'],
+      allowedHosts: ['.ngrok-free.app', '.ngrok.app', 'sunnycivet2334.lnpro.xyz'],
     },
 
     framework: {

@@ -188,6 +188,8 @@
           >
             <MessageBubble
               :message="item.message"
+              :can-redial="canCall && (!callStore.session || callStore.session.phase === 'ended')"
+              @call-again="mode => canCall && callStore.start(chat.publicKey, mode)"
               :contact-name="chat.name"
               :contact-relay-urls="contactRelayUrls"
               :desktop-message-layout="desktopMessageLayout"

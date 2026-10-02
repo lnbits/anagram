@@ -153,6 +153,37 @@ describe('messageStore send', () => {
     Reflect.deleteProperty(globalThis, 'window');
   });
 
+  it('persists a call summary and sends its private tag through the normal DM flow', async () => {
+    const history = {
+      id: '12345678-1234-1234-1234-123456789012',
+      mode: 'audio' as const,
+      reason: 'declined' as const,
+      duration: 0,
+      connected: false,
+    };
+    await useMessageStore().sendCallHistory(CHAT_ID, history);
+    expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'Audio call · Declined',
+        meta: expect.objectContaining({ call_history: history }),
+      })
+    );
+    expect(serviceMocks.nostrStore.sendDirectMessage).toHaveBeenCalledWith(
+      CHAT_ID,
+      'Audio call · Declined',
+      expect.any(Array),
+      expect.objectContaining({
+        publishSelfCopy: true,
+        additionalTags: [['anagram-call', '1', history.id, 'audio', 'declined', '0', '0']],
+      })
+    );
+    serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue(
+      makeChatRow({ type: 'group' })
+    );
+    expect(await useMessageStore().sendCallHistory(CHAT_ID, history)).toBeNull();
+    expect(serviceMocks.nostrStore.sendDirectMessage).toHaveBeenCalledOnce();
+  });
+
   it('adds a DM to thread state before persistence or publish start', () => {
     const createMessage = createDeferred<ReturnType<typeof makeMessageRow>>();
     serviceMocks.chatDataService.createMessage.mockReturnValue(createMessage.promise);

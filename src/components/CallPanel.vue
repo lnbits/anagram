@@ -62,9 +62,15 @@
               </q-menu>
             </q-btn>
           </div>
+          <div class="call-panel__device">
           <q-btn round :color="call.session?.cameraMuted ? 'grey-8' : 'primary'" :icon="call.session?.cameraMuted ? 'videocam_off' : 'videocam'" :disable="!canToggleCamera || call.changingMedia" :loading="call.changingMedia" :aria-label="$t(call.session?.cameraMuted ? 'call.enableCamera' : 'call.disableCamera')" :aria-pressed="!call.session?.cameraMuted" data-testid="call-camera" @click="call.toggleCamera">
             <q-tooltip v-if="!canToggleCamera">{{ $t('call.videoUnavailable') }}</q-tooltip>
           </q-btn>
+            <q-btn flat dense round icon="expand_more" :disable="!canToggleCamera || call.changingMedia || call.session?.mediaVersion !== 2" :aria-label="$t('call.chooseCamera')" data-testid="call-camera-menu"><q-menu @before-show="refreshDevices()"><q-list class="call-device-menu">
+              <q-item v-close-popup clickable data-testid="call-camera-default" @click="call.selectCamera('')"><q-item-section>{{ $t('call.systemDefault') }}</q-item-section></q-item>
+              <q-item v-for="(device, index) in cameras" :key="device.deviceId" v-close-popup clickable :active="call.cameraDeviceId === device.deviceId" :data-testid="`call-camera-source-${index}`" @click="call.selectCamera(device.deviceId)"><q-item-section>{{ device.label || `${$t('call.camera')} ${index + 1}` }}</q-item-section></q-item>
+            </q-list></q-menu></q-btn>
+          </div>
           <q-btn round :color="call.session?.screenSharing ? 'primary' : 'grey-8'" :icon="call.session?.screenSharing ? 'stop_screen_share' : 'screen_share'" :disable="call.session?.phase !== 'active' || !call.session.screenAvailable || !canShareScreen" :aria-label="$t(call.session?.screenSharing ? 'call.stopScreen' : 'call.shareScreen')" data-testid="call-share-screen" @click="toggleScreen">
             <q-tooltip>{{ $t(canShareScreen ? 'call.shareScreen' : 'call.screenUnavailable') }}</q-tooltip>
           </q-btn>
@@ -119,6 +125,7 @@ const outputError = ref('');
 const speakerMuted = ref(false);
 const speakerDeviceId = ref('');
 const microphones = ref<MediaDeviceInfo[]>([]);
+const cameras = ref<MediaDeviceInfo[]>([]);
 const speakers = ref<MediaDeviceInfo[]>([]);
 const canSelectSpeaker = computed(() => typeof remoteAudio.value?.setSinkId === 'function');
 const outputDevices = navigator.mediaDevices as MediaDevices & { selectAudioOutput?: () => Promise<MediaDeviceInfo> };
@@ -188,6 +195,7 @@ async function refreshDevices(recover = false) {
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
     if (disposed) return;
+    cameras.value = devices.filter((device) => device.kind === 'videoinput' && device.deviceId);
     microphones.value = devices.filter((device) => device.kind === 'audioinput' && device.deviceId);
     speakers.value = devices.filter((device) => device.kind === 'audiooutput' && device.deviceId && device.deviceId !== 'default');
     if (recover && speakerDeviceId.value && !speakers.value.some((device) => device.deviceId === speakerDeviceId.value)) await selectSpeaker('');

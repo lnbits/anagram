@@ -212,8 +212,19 @@
           </div>
         </button>
 
+        <div v-if="callHistory && !isDeletedMessage" class="bubble__call" data-testid="message-call-history">
+          <q-btn flat round icon="call" data-testid="message-call-again" :aria-label="$t('call.again')" :disable="!canRedial" @click.stop="emit('call-again', callHistory.mode)" />
+          <div>
+            <div>{{ $t(callHistory.mode === 'video' ? 'call.history.video' : 'call.history.audio') }}</div>
+            <div class="bubble__call-detail">
+              <q-icon :name="isMine ? 'call_made' : 'call_received'" />
+              {{ $t(isMine ? 'call.history.outgoing' : 'call.history.incoming') }} ·
+              {{ callHistory.connected ? callHistoryDuration(callHistory.duration) : $t(`call.history.${callHistory.reason}`) }}
+            </div>
+          </div>
+        </div>
         <p
-          v-if="shouldShowMessageText"
+          v-if="shouldShowMessageText && (!callHistory || isDeletedMessage)"
           class="bubble__text"
           :class="{
             'bubble__text--emoji': isSingleEmojiMessage,
@@ -745,7 +756,11 @@ import { isPackagedAppRuntime } from 'src/utils/runtimePlatform';
 import { formatCompactPublicKey } from 'src/utils/publicKeyText';
 import { getDateTimeLocale, t } from 'src/i18n';
 
+import { readCallHistory, callHistoryDuration } from 'src/utils/callHistory';
+import type { CallMode } from 'src/types/call';
+
 const props = defineProps<{
+  canRedial?: boolean;
   message: Message;
   authorAvatarFallback?: string;
   authorAvatarSrc?: string;
@@ -764,6 +779,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  (event: 'call-again', mode: CallMode): void;
   (event: 'reply', message: Message): void;
   (event: 'open-reply-target', messageId: string, referenceSentAt?: string): void;
   (event: 'open-profile', publicKey: string): void;
@@ -780,6 +796,7 @@ const emit = defineEmits<{
 const $q = useQuasar();
 const nostrStore = useNostrStore();
 const trustedMediaStore = useTrustedMediaStore();
+const callHistory = computed(() => props.mobileGroupLayout ? null : readCallHistory(props.message.meta.call_history));
 const isMine = computed(() => props.message.sender === 'me');
 const mobileGroupLayout = computed(() => props.mobileGroupLayout === true);
 const isPackagedRuntime = isPackagedAppRuntime();
@@ -1035,6 +1052,7 @@ const canEditMessage = computed(() => {
     : 14;
   return (
     isMine.value &&
+    !callHistory.value &&
     !isDeletedMessage.value &&
     messageKind === 14 &&
     Boolean(props.message.eventId) &&
@@ -2861,4 +2879,9 @@ onBeforeUnmount(() => {
       0 0 0 4px rgba(100, 116, 139, 0.18);
   }
 }
+</style>
+
+<style scoped>
+.bubble__call { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+.bubble__call-detail { font-size: 12px; color: var(--nc-text-secondary); }
 </style>

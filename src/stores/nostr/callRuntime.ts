@@ -16,6 +16,7 @@ import { CALL_MIME_TYPES, CALL_VIDEO_MIME_TYPE } from 'src/utils/callSignal';
 import { ref, shallowRef } from 'vue';
 
 export interface CallRuntimeDeps {
+  onEnded?(session: CallSession): Promise<void>;
   sendSignal(peer: string, signal: CallSignal): Promise<void>;
   getOwnPubkey(): string | null;
   resolvePeer(peer: string): Promise<{ name: string } | null>;
@@ -26,7 +27,7 @@ export interface CallRuntimeDeps {
   createEndpoint(): Promise<CallEndpoint>;
   getMedia(mode: CallMode, deviceId?: string): Promise<MediaStream>;
   getMicrophone?(deviceId: string): Promise<MediaStream>;
-  getCamera?(): Promise<MediaStream>;
+  getCamera?(deviceId?: string): Promise<MediaStream>;
   getScreen?(): Promise<MediaStream>;
   unlockPlayback?(): void;
   createReceiver(mime: string, onError: () => void): CallMediaReceiver;
@@ -77,6 +78,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
   const error = ref('');
   const deviceError = ref('');
   const microphoneDeviceId = ref('');
+  const cameraDeviceId = ref('');
   const changingMedia = ref(false);
   const failureDetail = ref('');
   let context: Context | null = null;
@@ -151,6 +153,11 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     remoteVideoUrl.value = '';
     changingMedia.value = false;
     patch({ phase: 'ended', endReason: reason });
+    if (ctx.inviteSent && session.value?.direction === 'outgoing' && deps.onEnded) {
+      void deps.onEnded({ ...session.value }).catch(() => {
+        if (session.value?.id === ctx.id) error.value = 'call.error.history';
+      });
+    }
     if (notify && (ctx.inviteSent || session.value?.direction === 'incoming'))
       void deps.sendSignal(ctx.peer, signal(ctx, 'end', reason)).catch(() => {});
   }
@@ -240,6 +247,8 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     ctx.stream = stream;
     localStream.value = stream;
     microphoneDeviceId.value = stream.getAudioTracks()[0]?.getSettings?.().deviceId ?? '';
+    if (stream.getVideoTracks().length)
+      cameraDeviceId.value = stream.getVideoTracks()[0]?.getSettings?.().deviceId ?? '';
     for (const track of stream.getTracks())
       track.onended = () =>
         captureFailed(ctx, new DOMException('Capture device disconnected', 'NotFoundError'));
@@ -606,7 +615,23 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       if (alive(ctx)) changingMedia.value = false;
     }
   }
+  async function selectCamera(deviceId: string) {
+    if (!context?.ready || !session.value || changingMedia.value) return;
+    if (!context.splitMedia || !session.value.videoAvailable) {
+      deviceError.value = 'call.error.peerUpgrade';
+      return;
+    }
+    // Choosing a source while muted must not turn the camera on.
+    if (session.value.cameraMuted) {
+      cameraDeviceId.value = deviceId;
+      return;
+    }
+    await updateCamera(deviceId);
+  }
   async function toggleCamera() {
+    await updateCamera();
+  }
+  async function updateCamera(deviceId?: string) {
     const ctx = context;
     if (!ctx?.stream || !session.value || ctx.changingMedia) return;
     if (!ctx.splitMedia) {
@@ -626,8 +651,9 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     ctx.changingMedia = changingMedia.value = true;
     deviceError.value = '';
     let camera: MediaStream | undefined;
+    let installed = false;
     try {
-      if (!session.value.cameraMuted) {
+      if (!session.value.cameraMuted && deviceId === undefined) {
         ctx.stopVideoRecording?.();
         ctx.stopVideoRecording = undefined;
         const tracks = ctx.stream.getVideoTracks();
@@ -640,7 +666,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         });
         await ctx.connection?.send(new Uint8Array([5, 0]));
       } else {
-        camera = await deps.getCamera();
+        camera = await deps.getCamera(deviceId ?? cameraDeviceId.value);
         if (!alive(ctx)) {
           camera.getTracks().forEach((track) => {
             track.stop();
@@ -649,7 +675,17 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         }
         if (!camera.getVideoTracks().length)
           throw new DOMException('No camera track', 'NotFoundError');
+        const previous = ctx.stream.getVideoTracks();
+        ctx.stopVideoRecording?.();
+        ctx.stopVideoRecording = undefined;
         ctx.stream = new MediaStream([...ctx.stream.getAudioTracks(), ...camera.getVideoTracks()]);
+        installed = true;
+        cameraDeviceId.value =
+          camera.getVideoTracks()[0]?.getSettings?.().deviceId ?? deviceId ?? cameraDeviceId.value;
+        previous.forEach((track) => {
+          track.onended = null;
+          track.stop();
+        });
         localStream.value = ctx.stream;
         camera.getVideoTracks().forEach((track) => {
           track.onended = () =>
@@ -660,7 +696,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       }
     } catch (cause) {
       if (alive(ctx)) {
-        if (camera && ctx.stream?.getVideoTracks().length) fail(ctx, cause);
+        if (installed) fail(ctx, cause);
         else deviceError.value = callCaptureErrorKey(cause);
       }
       camera?.getTracks().forEach((track) => {
@@ -778,6 +814,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     error,
     deviceError,
     microphoneDeviceId,
+    cameraDeviceId,
     changingMedia,
     failureDetail,
     start,
@@ -787,6 +824,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     toggleMicrophone,
     selectMicrophone,
     toggleCamera,
+    selectCamera,
     reset,
     dismiss,
   };

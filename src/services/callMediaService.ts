@@ -46,8 +46,11 @@ const videoConstraints: MediaTrackConstraints = {
 export function getCallMicrophone(deviceId?: string): Promise<MediaStream> {
   return navigator.mediaDevices.getUserMedia({ audio: audioConstraints(deviceId), video: false });
 }
-export function getCallCamera(): Promise<MediaStream> {
-  return navigator.mediaDevices.getUserMedia({ audio: false, video: videoConstraints });
+export function getCallCamera(deviceId?: string): Promise<MediaStream> {
+  return navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: { ...videoConstraints, ...(deviceId ? { deviceId: { exact: deviceId } } : {}) },
+  });
 }
 export function canShareCallScreen(): boolean {
   return (

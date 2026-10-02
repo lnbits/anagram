@@ -51,6 +51,7 @@ import { createGroupEpochStateRuntime } from 'src/stores/nostr/groupEpochStateRu
 import { createGroupInviteRuntime } from 'src/stores/nostr/groupInviteRuntime';
 import { createGroupRosterSubscriptionRuntime } from 'src/stores/nostr/groupRosterSubscriptionRuntime';
 import { createInboundPresentationRuntime } from 'src/stores/nostr/inboundPresentationRuntime';
+import { createIrohSettingsRuntime } from 'src/stores/nostr/irohSettingsRuntime';
 import { createMessageEventRuntime } from 'src/stores/nostr/messageEventRuntime';
 import { createMessageMutationRuntime } from 'src/stores/nostr/messageMutationRuntime';
 import { createMessageRelayRuntime } from 'src/stores/nostr/messageRelayRuntime';
@@ -1786,6 +1787,14 @@ export const useNostrStore = defineStore('nostrStore', () => {
   publishGroupMembershipFollowSetRuntime = publishGroupMembershipFollowSetImpl;
   publishGroupMembershipRosterFollowSetRuntime = publishGroupMembershipRosterFollowSetImpl;
 
+  const { getIrohRelays, getIrohRelaySettings, saveIrohRelaySettings } = createIrohSettingsRuntime({
+    ensurePrivatePreferences,
+    publishPrivatePreferences,
+    readPrivatePreferencesFromStorage,
+    writePrivatePreferencesToStorage,
+    getOwnPubkey: getLoggedInPublicKeyHex,
+  });
+
   const { getBlossomServerUrl, saveBlossomServerUrl } = createBlossomSettingsRuntime({
     ensurePrivatePreferences,
     publishPrivatePreferences,
@@ -2317,6 +2326,9 @@ export const useNostrStore = defineStore('nostrStore', () => {
     ensureBlossomUploadAuthentication,
     getBlossomServerUrl,
     saveBlossomServerUrl,
+    getIrohRelays,
+    getIrohRelaySettings,
+    saveIrohRelaySettings,
     signBlossomUploadAuthHeader,
     sendDirectMessageDeletion,
     sendDirectMessageReaction,

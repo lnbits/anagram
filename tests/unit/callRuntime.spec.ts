@@ -69,6 +69,7 @@ function harness() {
   const stopRecording = vi.fn();
   const receiver = { url: 'blob:remote', append: vi.fn(), close: vi.fn() };
   const deps = {
+    onEnded: vi.fn().mockResolvedValue(undefined),
     sendSignal: vi.fn().mockResolvedValue(undefined),
     getOwnPubkey: () => own,
     resolvePeer: vi.fn().mockResolvedValue({ name: 'Alice' }),
@@ -120,6 +121,26 @@ afterEach(() => {
 });
 
 describe('call negotiation and lifetime', () => {
+  it('records only the caller after an invitation, including declined calls', async () => {
+    const caller = setup();
+    await caller.runtime.start(peer, 'audio');
+    const offer = caller.deps.sendSignal.mock.calls[0]?.[1] as CallSignal;
+    await caller.runtime.receiveSignal(peer, { ...offer, action: 'end', reason: 'declined' });
+    await caller.runtime.receiveSignal(peer, { ...offer, action: 'end', reason: 'declined' });
+    expect(caller.deps.onEnded).toHaveBeenCalledOnce();
+    expect(caller.deps.onEnded).toHaveBeenCalledWith(
+      expect.objectContaining({ endReason: 'declined', startedAt: null })
+    );
+    const receiver = setup();
+    await receiver.runtime.receiveSignal(peer, invite());
+    receiver.runtime.end();
+    expect(receiver.deps.onEnded).not.toHaveBeenCalled();
+    const failed = setup();
+    failed.deps.getMedia.mockRejectedValueOnce(new Error('denied'));
+    await failed.runtime.start(peer, 'audio');
+    expect(failed.deps.onEnded).not.toHaveBeenCalled();
+  });
+
   it('reports busy during a room only to eligible contacts and deduplicates the invitation', async () => {
     const h = setup();
     h.deps.otherCallBusy.mockReturnValue(true);
@@ -177,6 +198,15 @@ describe('call negotiation and lifetime', () => {
     expect(h.receiver.close).toHaveBeenCalledOnce();
     expect(h.runtime.localStream.value).toBeNull();
     expect(h.runtime.session.value?.endReason).toBe('hangup');
+    expect(h.deps.onEnded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        direction: 'outgoing',
+        startedAt: expect.any(String),
+        endReason: 'hangup',
+      })
+    );
+    h.runtime.end();
+    expect(h.deps.onEnded).toHaveBeenCalledOnce();
   });
   it('declines incoming calls without opening devices, and ignores a replay', async () => {
     const h = setup();
@@ -428,6 +458,48 @@ describe('call negotiation and lifetime', () => {
     expect(audioStop).not.toHaveBeenCalled();
     expect(h.runtime.remoteMediaUrl.value).toBe(url);
     expect(h.runtime.session.value?.phase).toBe('active');
+  });
+  it('replaces an active webcam without restarting audio and keeps it on acquisition failure', async () => {
+    const h = setup();
+    const audioStop = vi.fn();
+    h.deps.record.mockReturnValueOnce(audioStop).mockReturnValue(vi.fn());
+    await h.runtime.start(peer, 'audio');
+    const offer = h.deps.sendSignal.mock.calls[0]?.[1] as CallSignal;
+    await h.runtime.receiveSignal(peer, { ...offer, action: 'accept' });
+    await vi.waitFor(() => expect(h.runtime.session.value?.phase).toBe('active'));
+    await h.runtime.toggleCamera();
+    const replacement = {
+      ...h.camera,
+      stop: vi.fn(),
+      getSettings: () => ({ deviceId: 'camera-2' }),
+    };
+    h.deps.getCamera.mockResolvedValueOnce(
+      new MediaStream([replacement] as unknown as MediaStreamTrack[])
+    );
+    await h.runtime.selectCamera('camera-2');
+    expect(h.deps.getCamera).toHaveBeenLastCalledWith('camera-2');
+    expect(h.runtime.cameraDeviceId.value).toBe('camera-2');
+    expect(h.runtime.localStream.value?.getVideoTracks()).toEqual([replacement]);
+    expect(h.camera.stop).toHaveBeenCalledOnce();
+    expect(audioStop).not.toHaveBeenCalled();
+    expect(h.microphone.stop).not.toHaveBeenCalled();
+    h.deps.getCamera.mockRejectedValueOnce(new DOMException('Busy', 'NotReadableError'));
+    await h.runtime.selectCamera('busy');
+    expect(h.runtime.deviceError.value).toBe('call.error.deviceBusy');
+    expect(replacement.stop).not.toHaveBeenCalled();
+    expect(h.runtime.session.value?.phase).toBe('active');
+  });
+  it('remembers a webcam selection while muted without opening it', async () => {
+    const h = setup();
+    await h.runtime.start(peer, 'audio');
+    const offer = h.deps.sendSignal.mock.calls[0]?.[1] as CallSignal;
+    await h.runtime.receiveSignal(peer, { ...offer, action: 'accept' });
+    await vi.waitFor(() => expect(h.runtime.session.value?.phase).toBe('active'));
+    await h.runtime.selectCamera('camera-2');
+    expect(h.deps.getCamera).not.toHaveBeenCalled();
+    expect(h.runtime.session.value?.cameraMuted).toBe(true);
+    await h.runtime.toggleCamera();
+    expect(h.deps.getCamera).toHaveBeenLastCalledWith('camera-2');
   });
   it('leaves audio working when camera permission is rejected', async () => {
     const h = setup();

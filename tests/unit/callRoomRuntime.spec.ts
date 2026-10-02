@@ -105,6 +105,29 @@ afterEach(() => {
 });
 
 describe('link-based Iroh call rooms', () => {
+  it('selects cameras without unmuting and replaces capture without stopping the microphone', async () => {
+    const h = setup();
+    await h.runtime.create();
+    await h.runtime.selectCamera('camera-2');
+    expect(h.deps.media.getCamera).not.toHaveBeenCalled();
+    expect(h.runtime.cameraMuted.value).toBe(true);
+    await h.runtime.toggleCamera();
+    expect(h.deps.media.getCamera).toHaveBeenLastCalledWith('camera-2');
+    const previous = h.runtime.localStream.value?.getVideoTracks()[0];
+    h.deps.media.getCamera.mockRejectedValueOnce(new DOMException('Busy', 'NotReadableError'));
+    await h.runtime.selectCamera('busy');
+    expect(previous?.stop).not.toHaveBeenCalled();
+    const camera = new Track('video');
+    camera.getSettings = () => ({ deviceId: 'camera-3' });
+    h.deps.media.getCamera.mockResolvedValueOnce(
+      new MediaStream([camera] as unknown as MediaStreamTrack[])
+    );
+    await h.runtime.selectCamera('camera-3');
+    expect(previous?.stop).toHaveBeenCalledOnce();
+    expect(h.runtime.cameraDeviceId.value).toBe('camera-3');
+    expect(h.microphone.stop).not.toHaveBeenCalled();
+    expect(h.runtime.busy.value).toBe(true);
+  });
   it('reserves one room and captures input only once, then closes all tracks', async () => {
     const h = setup();
     await Promise.all([h.runtime.create(), h.runtime.create()]);

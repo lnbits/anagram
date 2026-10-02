@@ -21,6 +21,7 @@
           class="relays-tab"
           data-testid="settings-relays-app-tab"
         />
+        <q-tab name="iroh" :label="$t('iroh.title')" class="relays-tab" data-testid="settings-relays-iroh-tab" />
       </q-tabs>
 
       <q-tab-panels v-model="activeTab" animated class="relays-panels">
@@ -84,6 +85,7 @@
           />
         </q-tab-panel>
 
+        <q-tab-panel name="iroh" class="relays-panel"><IrohRelaySettingsPanel /></q-tab-panel>
       </q-tab-panels>
     </div>
   </SettingsDetailLayout>
@@ -93,6 +95,7 @@
 import { computed, ref, watch } from 'vue';
 import { normalizeRelayUrl } from '@nostr-dev-kit/ndk';
 import { useRelayDecorations } from 'src/composables/useRelayDecorations';
+import IrohRelaySettingsPanel from 'src/components/IrohRelaySettingsPanel.vue';
 import RelayEditorPanel from 'src/components/RelayEditorPanel.vue';
 import SettingsDetailLayout from 'src/components/SettingsDetailLayout.vue';
 import { DEFAULT_RELAYS } from 'src/constants/relays';
@@ -103,7 +106,7 @@ import { uniqueRelayUrls } from 'src/utils/relayUrls';
 import { reportUiError } from 'src/utils/uiErrorHandler';
 import { t } from 'src/i18n';
 
-type RelayTab = 'my' | 'app';
+type RelayTab = 'my' | 'app' | 'iroh';
 interface RelayTogglePayload {
   index: number;
   value: boolean;
@@ -382,6 +385,8 @@ function queueMyRelaysSync(): void {
   max-width: none;
   min-width: 0;
 }
+
+.relays-tabs :deep(.q-tab__label) { white-space: normal; overflow-wrap: anywhere; }
 
 .relays-tab {
   text-transform: uppercase;

@@ -46,6 +46,7 @@ export function createCallRoomRuntime(deps: Deps) {
   const cameraMuted = ref(true);
   const changingMedia = ref(false);
   const microphoneDeviceId = ref('');
+  const cameraDeviceId = ref('');
   const error = ref('');
   const peers = shallowRef<Peer[]>([]);
   const busy = computed(() => Boolean(session.value && session.value.phase !== 'ended'));
@@ -301,6 +302,8 @@ export function createCallRoomRuntime(deps: Deps) {
       }
       localStream.value = media;
       microphoneDeviceId.value = media.getAudioTracks()[0]?.getSettings().deviceId ?? '';
+      if (media.getVideoTracks().length)
+        cameraDeviceId.value = media.getVideoTracks()[0]?.getSettings().deviceId ?? '';
       media.getTracks().forEach((track) => {
         track.onended = () => leave('call.error.deviceMissing');
       });
@@ -458,23 +461,44 @@ export function createCallRoomRuntime(deps: Deps) {
         runtime.toggleMicrophone();
     });
   }
+  async function selectCamera(deviceId: string) {
+    if (!busy.value || !localStream.value || changingMedia.value) return;
+    if (cameraMuted.value) {
+      cameraDeviceId.value = deviceId;
+      return;
+    }
+    await updateCamera(deviceId);
+  }
   async function toggleCamera() {
+    await updateCamera();
+  }
+  async function updateCamera(deviceId?: string) {
     const s = session.value;
     if (!s || !current(s) || !localStream.value || changingMedia.value) return;
     changingMedia.value = true;
     error.value = '';
+    let camera: MediaStream | undefined;
     try {
-      if (cameraMuted.value) {
-        const camera = await deps.media.getCamera?.();
+      if (cameraMuted.value || deviceId !== undefined) {
+        camera = await deps.media.getCamera?.(deviceId ?? cameraDeviceId.value);
         if (!current(s)) {
           stopStream(camera);
           return;
         }
+        if (!camera?.getVideoTracks().length)
+          throw new DOMException('No camera track', 'NotFoundError');
+        const previous = localStream.value.getVideoTracks();
         localStream.value = new MediaStream([
           ...localStream.value.getAudioTracks(),
           ...camera.getVideoTracks(),
         ]);
+        cameraDeviceId.value =
+          camera.getVideoTracks()[0]?.getSettings().deviceId ?? deviceId ?? cameraDeviceId.value;
         cameraMuted.value = false;
+        previous.forEach((track) => {
+          track.onended = null;
+          track.stop();
+        });
       } else {
         localStream.value.getVideoTracks().forEach((track) => {
           track.onended = null;
@@ -485,13 +509,19 @@ export function createCallRoomRuntime(deps: Deps) {
       }
       await Promise.all(
         peers.value.map(({ runtime }) =>
-          runtime.session.value?.phase === 'active' &&
-          runtime.session.value.cameraMuted !== cameraMuted.value
-            ? runtime.toggleCamera()
-            : undefined
+          runtime.session.value?.phase !== 'active'
+            ? undefined
+            : runtime.session.value.cameraMuted !== cameraMuted.value
+              ? runtime.toggleCamera()
+              : deviceId !== undefined && !cameraMuted.value
+                ? runtime.selectCamera(deviceId)
+                : undefined
         )
       );
     } catch (cause) {
+      camera?.getTracks().forEach((track) => {
+        if (!localStream.value?.getTracks().includes(track)) track.stop();
+      });
       if (current(s)) error.value = callCaptureErrorKey(cause);
     } finally {
       if (current(s)) changingMedia.value = false;
@@ -577,6 +607,7 @@ export function createCallRoomRuntime(deps: Deps) {
     microphoneMuted,
     cameraMuted,
     microphoneDeviceId,
+    cameraDeviceId,
     changingMedia,
     busy,
     shareLink,
@@ -590,6 +621,7 @@ export function createCallRoomRuntime(deps: Deps) {
     dismiss,
     toggleMicrophone,
     toggleCamera,
+    selectCamera,
     selectMicrophone,
     startScreenSharing,
     stopScreenSharing,

@@ -14,13 +14,18 @@ import { chatDataService } from 'src/services/chatDataService';
 import { contactsService } from 'src/services/contactsService';
 import { createIrohCallEndpoint } from 'src/services/irohCallTransport';
 import { useCallRoomStore } from 'src/stores/callRoomStore';
+import { useMessageStore } from 'src/stores/messageStore';
 import { createCallRuntime } from 'src/stores/nostr/callRuntime';
 import { resolveIncomingChatInboxStateValue } from 'src/stores/nostr/valueUtils';
 import { useNostrStore } from 'src/stores/nostrStore';
 import type { CallMode } from 'src/types/call';
+import { callHistoryFromSession } from 'src/utils/callHistory';
 
 export const useCallStore = defineStore('calls', () => {
   const runtime = createCallRuntime({
+    async onEnded(session) {
+      await useMessageStore().sendCallHistory(session.peerPubkey, callHistoryFromSession(session));
+    },
     sendSignal: (peer, signal) => useNostrStore().sendCallSignal(peer, signal),
     getOwnPubkey: () => useNostrStore().getLoggedInPublicKeyHex(),
     async resolvePeer(peer) {
@@ -54,7 +59,13 @@ export const useCallStore = defineStore('calls', () => {
       hasSeenCallControl(useNostrStore().getLoggedInPublicKeyHex() ?? '', peer, id),
     remember: (peer, id) =>
       rememberCallControl(useNostrStore().getLoggedInPublicKeyHex() ?? '', peer, id),
-    createEndpoint: createIrohCallEndpoint,
+    createEndpoint: () =>
+      createIrohCallEndpoint(
+        useNostrStore()
+          .getIrohRelays()
+          .filter((entry) => entry.enabled)
+          .map((entry) => entry.url)
+      ),
     getMedia: getCallMedia,
     getMicrophone: getCallMicrophone,
     getCamera: getCallCamera,

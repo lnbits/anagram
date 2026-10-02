@@ -22,15 +22,23 @@ pub struct CallEndpoint {
 #[wasm_bindgen]
 impl CallEndpoint {
     pub async fn create(relay_url: Option<String>) -> Result<CallEndpoint, JsError> {
-        // Avoid trailing-dot hostnames, which some browser WebSocket stacks reject.
-        let urls = relay_url.map(|url| vec![url]).unwrap_or_else(|| {
-            vec![
+        let urls = match relay_url {
+            Some(url) => vec![url],
+            None => vec![
+                "https://iroh.nostr.com/".into(),
                 "https://use1-1.relay.n0.iroh.link/".into(),
                 "https://usw1-1.relay.n0.iroh.link/".into(),
                 "https://euc1-1.relay.n0.iroh.link/".into(),
                 "https://aps1-1.relay.n0.iroh.link/".into(),
-            ]
-        });
+            ],
+        };
+        Self::create_with_relays(urls).await
+    }
+
+    pub async fn create_with_relays(urls: Vec<String>) -> Result<CallEndpoint, JsError> {
+        if urls.is_empty() || urls.len() > 21 {
+            return Err(JsError::new("Configure between 1 and 21 Iroh relays"));
+        }
         let relays = urls
             .iter()
             .map(|url| url.parse::<RelayUrl>())

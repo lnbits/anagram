@@ -77,12 +77,8 @@ function openWindow() {
   next.document.title = t('call.presentationWindow');
   for (const node of document.head.querySelectorAll('style, link[rel="stylesheet"]')) next.document.head.appendChild(node.cloneNode(true));
   const style = next.document.createElement('style');
-  style.textContent = 'html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;color:white;font-family:system-ui}body{box-sizing:border-box;padding:8px;display:flex;flex-direction:column}body>button{flex-shrink:0;align-self:flex-start;margin-bottom:8px;padding:8px 16px;cursor:pointer}main{flex:1;min-height:0;display:flex}';
+  style.textContent = 'html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;color:white;font-family:system-ui}body{box-sizing:border-box;padding:8px;display:flex;flex-direction:column}main{flex:1;min-height:0;display:flex}';
   next.document.head.appendChild(style);
-  const back = next.document.createElement('button');
-  back.textContent = t('call.returnPresentation');
-  back.onclick = closeWindow;
-  next.document.body.appendChild(back);
   const target = next.document.createElement('main');
   next.document.body.appendChild(target);
   const refresh = () => {

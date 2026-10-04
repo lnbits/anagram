@@ -540,6 +540,7 @@ test('video invitations can be answered with audio and screen sharing stays sepa
       .toBeGreaterThan(0);
     await expectAudible(bob.page);
     await expect(popup.getByTestId('call-screen-media')).toBeVisible();
+    await expect(popup.getByRole('button', { name: 'Return to main window' })).toHaveCount(0);
     for (const page of [alice.page, popup]) {
       const caption = page.locator('.call-stage__screen figcaption');
       await expect(caption).toHaveText('Your screen');

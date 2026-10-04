@@ -2,17 +2,16 @@
   <!-- Keep audio mounted and separate from the video/dialog lifecycle. -->
   <audio ref="remoteAudio" :src="audioUrl || undefined" :muted="speakerMuted" autoplay data-testid="call-remote-audio" @loadeddata="playAudio" @progress="followAudio" />
   <q-dialog :model-value="Boolean(call.session)" persistent :seamless="minimized" :maximized="!minimized" :class="{ 'call-dialog--minimized': minimized }">
-    <q-card class="call-panel" :class="{ 'call-panel--minimized': minimized }" data-testid="call-panel">
+    <q-card class="call-panel" :class="{ 'call-panel--minimized': minimized, 'call-panel--fill': maxFill }" data-testid="call-panel">
       <div class="call-panel__header">
         <span>{{ $t(hasVideo || call.session?.mode === 'video' ? 'call.video' : 'call.audio') }}</span>
-        <q-btn v-if="canMinimize" flat round icon="minimize" :aria-label="$t('call.minimize')" @click="minimized = true" />
       </div>
       <div class="call-panel__identity">
         <q-icon :name="hasVideo || call.session?.mode === 'video' ? 'videocam' : 'call'" size="40px" />
         <h2>{{ call.session?.peerName }}</h2>
         <div role="status" aria-live="polite" data-testid="call-status">{{ status }}</div>
       </div>
-      <CallStage ref="stage" :active="Boolean(call.session && call.session.phase !== 'ended')" :screens="screens" @blocked="outputError = 'call.error.popup'">
+      <CallStage ref="stage" :active="Boolean(call.session && call.session.phase !== 'ended')" :screens="screens" :max-fill="maxFill" @blocked="outputError = 'call.error.popup'">
       <div v-if="hasVideo" class="call-panel__media">
         <video v-if="videoUrl" ref="remoteVideo" :src="videoUrl" :muted="call.session?.mediaVersion === 2 || speakerMuted" autoplay playsinline class="call-panel__remote" data-testid="call-remote-media" @loadeddata="playVideo" @progress="followVideo" />
         <video v-if="call.localStream?.getVideoTracks().length" v-show="!call.session?.cameraMuted" ref="localVideo" autoplay playsinline muted class="call-panel__local" aria-hidden="true" />
@@ -21,7 +20,11 @@
       <q-btn v-if="screens.length || hasVideo" flat icon="open_in_new" :label="$t('call.presentationWindow')" data-testid="call-open-window" @click="stage?.openWindow()" />
       <q-btn v-if="playbackBlocked" flat icon="volume_up" :label="$t('call.playAudio')" data-testid="call-play-audio" @click="playAudio" />
       <div v-if="call.error || call.deviceError || outputError" class="call-panel__error" role="alert">{{ $t(call.error || call.deviceError || outputError) }}</div>
+      <CallControlsTray :enabled="call.session?.phase === 'active'" v-slot="{ autoHide, toggle }">
       <div class="call-panel__controls">
+        <q-btn v-if="hasVideo || screens.length" round :color="maxFill ? 'primary' : 'grey-8'" icon="aspect_ratio" :aria-label="$t('call.maxFill')" :aria-pressed="maxFill" data-testid="call-max-fill" @click="maxFill = !maxFill"><q-tooltip>{{ $t(maxFill ? 'call.fitMedia' : 'call.maxFill') }}</q-tooltip></q-btn>
+        <q-btn v-if="canMinimize" flat round icon="minimize" :aria-label="$t('call.minimize')" @click="minimized = true" />
+        <q-btn v-if="call.session?.phase === 'active'" round color="grey-8" :icon="autoHide ? 'visibility' : 'expand_more'" :aria-label="$t(autoHide ? 'call.keepControls' : 'call.hideControls')" data-testid="call-hide-controls" :aria-pressed="autoHide" @click="toggle"><q-tooltip>{{ $t(autoHide ? 'call.keepControls' : 'call.hideControls') }}</q-tooltip></q-btn>
         <template v-if="call.session?.phase === 'incoming'">
           <q-btn round color="negative" icon="call_end" data-testid="call-decline" :aria-label="$t('call.decline')" @click="call.end" />
           <q-btn color="positive" icon="call" no-caps data-testid="call-accept" :label="$t('call.answerAudio')" @click="call.accept('audio')" />
@@ -77,6 +80,7 @@
           <q-btn round color="negative" icon="call_end" :aria-label="$t('call.hangup')" data-testid="call-hangup" @click="call.end" />
         </template>
       </div>
+      </CallControlsTray>
     </q-card>
   </q-dialog>
   <div v-if="minimized && call.session" class="call-compact" role="status" data-testid="call-compact">
@@ -98,6 +102,7 @@ import { registerCallAudio, setCallSpeaker } from 'src/services/callPlaybackServ
 import { t } from 'src/i18n';
 import { canShareCallScreen } from 'src/services/callMediaService';
 import CallStage from './CallStage.vue';
+import CallControlsTray from './CallControlsTray.vue';
 
 const $q = useQuasar();
 const call = useCallStore();
@@ -117,6 +122,7 @@ async function toggleScreen() {
   stage.value?.focusWindow();
 }
 const minimized = ref(false);
+const maxFill = ref(false);
 const localVideo = ref<HTMLVideoElement | null>(null);
 const remoteVideo = ref<HTMLVideoElement | null>(null);
 const remoteAudio = ref<HTMLAudioElement | null>(null);
@@ -208,6 +214,7 @@ watch([() => call.localStream, localVideo], () => {
 }, { flush: 'post' });
 watch(() => call.session?.id, () => {
   minimized.value = false;
+  maxFill.value = false;
   playbackBlocked.value = false;
   outputError.value = '';
   speakerMuted.value = false;
@@ -241,12 +248,12 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .call-panel--minimized { visibility: hidden; pointer-events: none; }
-.call-panel { width: 100%; height: 100dvh; max-width: 100%; max-height: 100dvh; overflow: hidden; display: flex; flex-direction: column; background: var(--nc-panel-header-bg); color: var(--nc-text); border-radius: 0; padding: clamp(8px, 2vw, 20px); }
+.call-panel { width: 100%; height: 100dvh; max-width: 100%; max-height: 100dvh; overflow: hidden; display: flex; flex-direction: column; background: #000; color: #fff; border-radius: 0; padding: clamp(8px, 2vw, 20px); }
 .call-panel > :not(.call-stage) { flex-shrink: 0; }
 .call-panel__header { display: flex; justify-content: space-between; align-items: center; color: var(--nc-text-secondary); }
 .call-panel__identity { text-align: center; padding: 4px 0; }
 .call-panel__identity h2 { font-size: 1.5rem; line-height: 1.3; margin: 4px 0; overflow-wrap: anywhere; }
-.call-panel__media { position: relative; background: #101418; height: 100%; min-height: 0; border-radius: 12px; overflow: hidden; }
+.call-panel__media { position: relative; background: #000; height: 100%; min-height: 0; border-radius: 12px; overflow: hidden; }
 .call-panel__remote { width: 100%; height: 100%; object-fit: contain; }
 .call-panel__local { position: absolute; bottom: 12px; right: 12px; width: 28%; max-height: 35%; object-fit: contain; border-radius: 8px; transform: scaleX(-1); }
 .call-panel__controls { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; align-items: flex-start; padding: 8px 0 0; }
@@ -261,4 +268,5 @@ onBeforeUnmount(() => {
   .call-panel__controls { gap: 4px; }
   .call-panel__controls > .q-btn--round, .call-panel__device > .q-btn--round:first-child { width: 40px; height: 40px; }
 }
+.call-panel.call-panel--fill { padding-left: 0; padding-right: 0; }
 </style>

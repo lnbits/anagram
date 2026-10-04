@@ -24,7 +24,7 @@
               <div class="thread-header__time">{{ $t('common.lastActive', { time: headerTime }) }}</div>
             </div>
           </div>
-          <q-btn v-if="chat.type === 'group'" flat dense round icon="groups" :aria-label="$t('room.startOrJoin')" data-testid="thread-group-call" :to="{ name: 'join-call' }" :target="$q.platform.is.desktop ? '_blank' : undefined" />
+          <q-btn v-if="chat.type === 'group'" flat dense round icon="groups" :aria-label="$t('room.startOrJoin')" data-testid="thread-group-call" :to="{ name: 'join-call' }" />
           <q-btn v-if="canCall" flat dense round icon="call" data-testid="thread-audio-call" :aria-label="$t('call.startAudio')" :disable="callStore.session !== null && callStore.session.phase !== 'ended'" @click="callStore.start(chat.publicKey, 'audio')" />
           <q-btn v-if="canCall" flat dense round icon="videocam" data-testid="thread-video-call" :aria-label="$t('call.startVideo')" :disable="callStore.session !== null && callStore.session.phase !== 'ended'" @click="callStore.start(chat.publicKey, 'video')" />
           <q-btn

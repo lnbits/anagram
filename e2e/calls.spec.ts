@@ -32,6 +32,14 @@ const bobAccount = {
 
 // Check decoded, audible samples in both directions, rather than container time alone.
 async function expectAudible(page: Page, selector = '[data-testid="call-remote-audio"]') {
+  // Speaker monitoring may open another capture of this media element. Chromium
+  // can leave an older capture silent, so each assertion obtains a fresh sample.
+  await page.evaluate(async () => {
+    const scope = window as unknown as { callAudioTest?: { context: AudioContext } };
+    const previous = scope.callAudioTest;
+    scope.callAudioTest = undefined;
+    if (previous && previous.context.state !== 'closed') await previous.context.close();
+  });
   await expect
     .poll(
       () =>
@@ -68,6 +76,39 @@ async function expectAudible(page: Page, selector = '[data-testid="call-remote-a
           return samples.some((value) => Math.abs(value) > 0.003);
         }, selector),
       { timeout: 15_000 }
+    )
+    .toBe(true);
+}
+
+async function expectFilledStage(page: Page) {
+  await expect(page.getByTestId('call-stage')).toHaveCSS('background-color', 'rgb(0, 0, 0)');
+  await expect
+    .poll(() =>
+      page.getByTestId('call-stage').evaluate((stage) => {
+        const bounds = stage.getBoundingClientRect();
+        const tiles = Array.from(
+          stage.querySelectorAll('.room-tile, .call-stage__screen'),
+          (tile) => tile.getBoundingClientRect()
+        );
+        const area = tiles.reduce((sum, tile) => sum + tile.width * tile.height, 0);
+        return (
+          Math.abs(area - bounds.width * bounds.height) < bounds.width * bounds.height * 0.002 &&
+          tiles.every(
+            (tile) =>
+              tile.width > 0 &&
+              tile.height > 0 &&
+              tile.left >= bounds.left - 1 &&
+              tile.right <= bounds.right + 1 &&
+              tile.top >= bounds.top - 1 &&
+              tile.bottom <= bounds.bottom + 1
+          ) &&
+          Array.from(stage.querySelectorAll('video, canvas')).every(
+            (media) =>
+              getComputedStyle(media).objectFit ===
+              (media.closest('.call-stage__screen') ? 'contain' : 'cover')
+          )
+        );
+      })
     )
     .toBe(true);
 }
@@ -401,6 +442,19 @@ test('blocked audio playback has its own recovery action and works in the mobile
     await alice.page.evaluate(() => {
       const scope = window as unknown as { blockCallAudio: boolean };
       scope.blockCallAudio = true;
+      // Keep the simulated block until the recovery click reaches the handler;
+      // background playback retries must not dismiss the button before the click.
+      document.addEventListener(
+        'click',
+        (event) => {
+          if (
+            event.target instanceof Element &&
+            event.target.closest('[data-testid="call-play-audio"]')
+          )
+            scope.blockCallAudio = false;
+        },
+        { capture: true }
+      );
       const original = HTMLMediaElement.prototype.play;
       HTMLMediaElement.prototype.play = function () {
         if (this.tagName === 'AUDIO' && this.src.startsWith('blob:') && scope.blockCallAudio)
@@ -419,9 +473,6 @@ test('blocked audio playback has its own recovery action and works in the mobile
     expect(
       (await alice.page.evaluate(() => window.__appE2E__.getCallSnapshot())).hasLocalStream
     ).toBe(true);
-    await alice.page.evaluate(() => {
-      (window as unknown as { blockCallAudio: boolean }).blockCallAudio = false;
-    });
     await alice.page.getByTestId('call-play-audio').click();
     await expectAudible(alice.page);
     await expectAudible(bob.page);
@@ -489,6 +540,29 @@ test('video invitations can be answered with audio and screen sharing stays sepa
       .toBeGreaterThan(0);
     await expectAudible(bob.page);
     await expect(popup.getByTestId('call-screen-media')).toBeVisible();
+    for (const page of [alice.page, popup]) {
+      const caption = page.locator('.call-stage__screen figcaption');
+      await expect(caption).toHaveText('Your screen');
+      expect(
+        await caption.evaluate((node) => {
+          const label = node.getBoundingClientRect();
+          const screen = node.parentElement.getBoundingClientRect();
+          return (
+            label.width < screen.width / 2 &&
+            label.height < 40 &&
+            label.left >= screen.left &&
+            label.bottom <= screen.bottom &&
+            getComputedStyle(node).position === 'absolute'
+          );
+        })
+      ).toBe(true);
+    }
+    await bob.page.getByTestId('call-max-fill').click();
+    await expect(bob.page.getByTestId('call-max-fill')).toHaveAttribute('aria-pressed', 'true');
+    await expect(bob.page.getByTestId('call-screen-media')).toHaveCSS('object-fit', 'contain');
+    await expect(bob.page.getByTestId('call-remote-media')).toHaveCSS('object-fit', 'cover');
+    await bob.page.getByTestId('call-max-fill').click();
+    await expect(bob.page.getByTestId('call-screen-media')).toHaveCSS('object-fit', 'contain');
     const receiverWindowPromise = bob.page.waitForEvent('popup');
     await bob.page.getByTestId('call-open-window').click();
     const receiverWindow = await receiverWindowPromise;
@@ -540,21 +614,33 @@ test('three users join a shared call link, exchange Iroh media, share screens an
     { callMedia: true }
   );
   try {
+    await alice.page.goto('/#/settings/profile');
+    await alice.page.getByPlaceholder('name@example.com').fill('alice@example.com');
+    await alice.page.getByTestId('contact-profile-publish-button').click();
+    await expect(
+      alice.page.getByText('Profile metadata published.', { exact: true }).first()
+    ).toBeVisible();
     await chooseCustomCallRelay(alice.page);
     await alice.page.goto('/#/chats');
     await alice.page.getByTestId('start-new-chat-button').click();
     const chatPage = alice.page;
-    const callTabPromise = alice.context.waitForEvent('page');
+    const pageCount = alice.context.pages().length;
     await chatPage.getByTestId('start-call-room').click();
-    alice.page = await callTabPromise;
+    expect(alice.page).toBe(chatPage);
+    expect(alice.context.pages()).toHaveLength(pageCount);
     const selectedRelaySockets: string[] = [];
     alice.page.on('websocket', (socket) => {
       if (new URL(socket.url()).hostname === 'localhost') selectedRelaySockets.push(socket.url());
     });
-    await expect(chatPage.getByTestId('start-new-chat-button')).toBeVisible();
-    await expect(chatPage.getByTestId('room-panel')).toHaveCount(0);
+    await expect(chatPage.getByTestId('room-create-audio')).toBeVisible();
     await alice.page.getByTestId('room-create-audio').click();
     await expect(alice.page.getByTestId('room-status')).toHaveText('Call is open');
+    await alice.page.getByTestId('room-minimize').click();
+    await expect(alice.page.getByTestId('start-new-chat-button')).toBeVisible();
+    await expect(alice.page.getByTestId('room-restore')).toBeVisible();
+    expect(alice.context.pages()).toHaveLength(pageCount);
+    await alice.page.getByTestId('room-restore').click();
+    await expect(alice.page.getByTestId('room-minimize')).toBeVisible();
     await expect(alice.page.getByTestId('room-link')).toHaveCount(0);
     await alice.page.getByTestId('room-invite').click();
     await expect(alice.page.getByTestId('room-link-hidden')).toBeVisible();
@@ -590,6 +676,13 @@ test('three users join a shared call link, exchange Iroh media, share screens an
         await expectAudible(user.page, `[data-testid="room-audio-${other.session.publicKey}"]`);
       }
     }
+    await expect(
+      bob.page.getByTestId(`room-peer-${alice.session.publicKey}`).locator('.room-tile__name')
+    ).toHaveText('alice@example.com');
+    await expect(
+      bob.page.getByTestId(`room-peer-${charlie.session.publicKey}`).locator('.room-tile__name')
+    ).toHaveCount(0);
+    await expect(alice.page.locator('.room-tile__name')).toHaveText(['alice@example.com']);
     await alice.page.getByTestId('room-camera').click();
     await expect
       .poll(() =>
@@ -602,6 +695,17 @@ test('three users join a shared call link, exchange Iroh media, share screens an
     const peerCamera = bob.page
       .getByTestId(`room-peer-${alice.session.publicKey}`)
       .locator('video');
+    expect(
+      await peerCamera.evaluate((video) => {
+        const tile = video.closest('.room-tile');
+        const label = tile.querySelector('.room-tile__overlay');
+        return (
+          getComputedStyle(label).position === 'absolute' &&
+          video.getBoundingClientRect().height >= tile.getBoundingClientRect().height - 1 &&
+          getComputedStyle(tile).backgroundColor === 'rgba(0, 0, 0, 0)'
+        );
+      })
+    ).toBe(true);
     const oldCameraUrl = await peerCamera.getAttribute('src');
     await alice.page.getByTestId('room-camera-menu').click();
     await alice.page.getByTestId('room-camera-source-0').click();
@@ -609,6 +713,73 @@ test('three users join a shared call link, exchange Iroh media, share screens an
     await expect
       .poll(() => peerCamera.evaluate((node) => (node as HTMLVideoElement).videoWidth))
       .toBeGreaterThan(0);
+    await expectAudible(bob.page, `[data-testid="room-audio-${alice.session.publicKey}"]`);
+    await bob.page.getByTestId('room-max-fill').click();
+    await expectFilledStage(bob.page);
+    await bob.page.getByTestId('room-max-fill').click();
+    const stageHeight = await bob.page
+      .getByTestId('call-stage')
+      .evaluate((node) => node.getBoundingClientRect().height);
+    await bob.page.getByTestId('room-hide-controls').click();
+    await bob.page.mouse.move(200, 100);
+    await expect
+      .poll(() =>
+        bob.page
+          .getByTestId('call-controls-tray')
+          .evaluate((node) => node.getBoundingClientRect().height)
+      )
+      .toBeLessThan(1);
+    await expect
+      .poll(() =>
+        bob.page.getByTestId('call-stage').evaluate((node) => node.getBoundingClientRect().height)
+      )
+      .toBeGreaterThan(stageHeight + 20);
+    await bob.page.getByTestId('call-controls-edge').hover();
+    await expect(bob.page.getByTestId('call-controls-tray')).not.toHaveClass(/--hidden/);
+    await bob.page.getByTestId('room-hide-controls').hover();
+    await bob.page.mouse.move(200, 100);
+    await expect(bob.page.getByTestId('call-controls-tray')).toHaveClass(/--hidden/);
+    await bob.page.getByTestId('call-controls-edge').focus();
+    await expect(bob.page.getByTestId('call-controls-tray')).not.toHaveClass(/--hidden/);
+    await bob.page.getByTestId('room-hide-controls').click();
+    await expect(bob.page.getByTestId('call-controls-edge')).toHaveCount(0);
+    await bob.page.getByTestId('room-microphone').click();
+    await charlie.page.getByTestId('room-microphone').click();
+    await expect(bob.page.getByTestId('room-local-muted')).toBeVisible();
+    for (const observer of [alice, charlie]) {
+      await expect(
+        observer.page
+          .getByTestId(`room-peer-${bob.session.publicKey}`)
+          .getByTestId('room-peer-muted')
+      ).toBeVisible();
+    }
+    const bobTile = alice.page.getByTestId(`room-peer-${bob.session.publicKey}`);
+    await expect(bobTile.locator('.room-tile__overlay')).toHaveCount(0);
+    expect(
+      await bobTile.evaluate((tile) => {
+        const rect = tile.getBoundingClientRect();
+        const badge = tile.querySelector('[data-testid="room-peer-muted"]').getBoundingClientRect();
+        return badge.width < 32 && badge.left - rect.left < 10 && rect.bottom - badge.bottom < 10;
+      })
+    ).toBe(true);
+    await bob.page.getByTestId('room-view-toggle').click();
+    await expect(bob.page.locator('.room-grid')).toHaveClass(/room-grid--speaker/);
+    await bob.page.getByTestId('room-max-fill').click();
+    await expectFilledStage(bob.page);
+    await bob.page.getByTestId('room-max-fill').click();
+    await expect(bob.page.getByTestId(`room-peer-${alice.session.publicKey}`)).toHaveClass(
+      /room-tile--speaker/,
+      { timeout: 15000 }
+    );
+    await expect(bob.page.getByTestId('room-status')).toHaveClass(/room-status--hidden/);
+    await bob.page.getByTestId('room-view-toggle').click();
+    await expect(bob.page.locator('.room-grid')).not.toHaveClass(/room-grid--speaker/);
+    await bob.page.getByTestId('room-microphone').click();
+    await charlie.page.getByTestId('room-microphone').click();
+    await expect(bob.page.getByTestId('room-local-muted')).toHaveCount(0);
+    await expect(
+      alice.page.getByTestId(`room-peer-${bob.session.publicKey}`).getByTestId('room-peer-muted')
+    ).toHaveCount(0);
     await expectAudible(bob.page, `[data-testid="room-audio-${alice.session.publicKey}"]`);
     await charlie.page.evaluate(() => {
       navigator.mediaDevices.getDisplayMedia = () =>
@@ -636,7 +807,21 @@ test('three users join a shared call link, exchange Iroh media, share screens an
             const rect = node.getBoundingClientRect();
             const controls = node.querySelector('.room-controls')?.getBoundingClientRect();
             const media = node.querySelector('.call-stage')?.getBoundingClientRect();
+            const tiles = Array.from(node.querySelectorAll('.room-tile'), (tile) =>
+              tile.getBoundingClientRect()
+            );
+            const compactStack =
+              innerWidth < 600 ||
+              tiles.every(
+                (tile, index) =>
+                  tile.height <= (tile.width * 9) / 16 + 1 &&
+                  tile.bottom <= media.bottom + 1 &&
+                  (index === 0 ||
+                    (Math.abs(tile.left - tiles[index - 1].left) < 1 &&
+                      tile.top >= tiles[index - 1].bottom))
+              );
             return (
+              compactStack &&
               rect.width >= innerWidth - 2 &&
               rect.bottom <= innerHeight + 1 &&
               controls.bottom <= innerHeight + 1 &&
@@ -648,6 +833,16 @@ test('three users join a shared call link, exchange Iroh media, share screens an
         )
         .toBe(true);
     }
+    await bob.page.getByTestId('room-max-fill').click();
+    for (const size of [
+      { width: 1440, height: 900 },
+      { width: 390, height: 844 },
+      { width: 844, height: 390 },
+    ]) {
+      await bob.page.setViewportSize(size);
+      await expectFilledStage(bob.page);
+    }
+    await charlie.page.getByTestId('room-max-fill').click();
     await bob.page.setViewportSize({ width: 1440, height: 960 });
     const popupPromise = charlie.page.waitForEvent('popup');
     await charlie.page.getByTestId('room-open-window').click();
@@ -662,6 +857,7 @@ test('three users join a shared call link, exchange Iroh media, share screens an
         )
       )
       .toBe(true);
+    await expectFilledStage(popup);
     await popup.close();
     await charlie.page.getByTestId('room-share-screen').click();
     await charlie.page.getByTestId('room-leave').click();

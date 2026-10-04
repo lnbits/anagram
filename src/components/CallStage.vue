@@ -3,11 +3,11 @@
     <q-btn flat icon="open_in_new" :label="$t('call.presentationWindow')" @click="focusWindow" />
     <q-btn flat :label="$t('call.returnPresentation')" @click="closeWindow" />
   </div>
-  <section ref="stage" class="call-stage" :class="{ 'call-stage--sharing': screens.length }" data-testid="call-stage">
-    <div v-if="screens.length" class="call-stage__screens">
+  <section ref="stage" class="call-stage" :class="{ 'call-stage--sharing': screens.length, 'call-stage--fill': maxFill }" data-testid="call-stage">
+    <div v-if="screens.length" class="call-stage__screens" :style="{ '--screen-columns': Math.ceil(Math.sqrt(screens.length)), '--screen-rows': Math.ceil(screens.length / Math.ceil(Math.sqrt(screens.length))) }">
       <figure v-for="screen in screens" :key="screen.id" class="call-stage__screen">
         <CallVideo :url="screen.url" :stream="screen.stream" data-testid="call-screen-media" />
-        <figcaption>{{ screen.name }}</figcaption>
+        <figcaption v-if="screen.name">{{ screen.name }}</figcaption>
       </figure>
     </div>
     <div class="call-stage__cameras"><slot /></div>
@@ -17,7 +17,7 @@
 import { onBeforeUnmount, ref, watch } from 'vue';
 import CallVideo from './CallVideo.vue';
 import { t } from 'src/i18n';
-const props = defineProps<{ active: boolean; screens: Array<{ id: string; name: string; url?: string; stream?: MediaStream | null }> }>();
+const props = defineProps<{ active: boolean; maxFill?: boolean; screens: Array<{ id: string; name: string; url?: string; stream?: MediaStream | null }> }>();
 const emit = defineEmits<{ blocked: [] }>();
 const stage = ref<HTMLElement | null>(null);
 const windowOpen = ref(false);
@@ -77,7 +77,7 @@ function openWindow() {
   next.document.title = t('call.presentationWindow');
   for (const node of document.head.querySelectorAll('style, link[rel="stylesheet"]')) next.document.head.appendChild(node.cloneNode(true));
   const style = next.document.createElement('style');
-  style.textContent = 'html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#101418;color:white;font-family:system-ui}body{box-sizing:border-box;padding:8px;display:flex;flex-direction:column}body>button{flex-shrink:0;align-self:flex-start;margin-bottom:8px;padding:8px 16px;cursor:pointer}main{flex:1;min-height:0;display:flex}';
+  style.textContent = 'html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;color:white;font-family:system-ui}body{box-sizing:border-box;padding:8px;display:flex;flex-direction:column}body>button{flex-shrink:0;align-self:flex-start;margin-bottom:8px;padding:8px 16px;cursor:pointer}main{flex:1;min-height:0;display:flex}';
   next.document.head.appendChild(style);
   const back = next.document.createElement('button');
   back.textContent = t('call.returnPresentation');
@@ -104,14 +104,22 @@ defineExpose({ openWindow, focusWindow });
 </script>
 <style scoped>
  .call-stage-toolbar { flex-shrink: 0; }
-.call-stage { flex: 1; min-height: 0; min-width: 0; width: 100%; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 8px; overflow: hidden; }
+.call-stage { background: #000; flex: 1; min-height: 0; min-width: 0; width: 100%; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 8px; overflow: hidden; }
 .call-stage--sharing { grid-template-columns: minmax(0, 3fr) minmax(0, 1fr); }
 .call-stage__screens { min-height: 0; min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); grid-auto-rows: minmax(0, 1fr); gap: 8px; }
-.call-stage__screen { display: flex; flex-direction: column; margin: 0; min-height: 0; min-width: 0; background: #080b0e; border-radius: 12px; overflow: hidden; }
+.call-stage__screen { position: relative; display: flex; flex-direction: column; margin: 0; min-height: 0; min-width: 0; background: transparent; border-radius: 0; overflow: hidden; }
 .call-stage__screen video, .call-stage__screen canvas { flex: 1; min-height: 0; display: block; width: 100%; height: 100%; object-fit: contain; }
-.call-stage__screen figcaption { flex-shrink: 0; padding: 4px 8px; font-size: 0.85rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.call-stage__screen figcaption { position: absolute; bottom: 6px; left: 6px; max-width: calc(100% - 12px); padding: 4px 8px; border-radius: 4px; color: white; background: rgba(0, 0, 0, 0.65); pointer-events: none; font-size: 0.85rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .call-stage__cameras { min-height: 0; min-width: 0; overflow: hidden; }
 @media (max-width: 599px) {
   .call-stage--sharing { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 2fr) minmax(0, 1fr); }
 }
+.call-stage--fill { gap: 0; }
+.call-stage--fill :deep(.call-panel__media) { border-radius: 0; }
+.call-stage--fill :deep(.call-panel__local:only-child) { position: static; width: 100%; height: 100%; max-height: none; }
+.call-stage--fill .call-stage__cameras :deep(video), .call-stage--fill .call-stage__cameras :deep(canvas) { object-fit: cover !important; }
+.call-stage--fill .call-stage__screens { display: flex; flex-wrap: wrap; gap: 0; }
+.call-stage--fill .call-stage__screen { flex: 1 1 calc(100% / var(--screen-columns)); height: calc(100% / var(--screen-rows)); }
+.call-stage--fill.call-stage--sharing:has(.call-stage__cameras:empty) { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+.call-stage--fill .call-stage__cameras:empty { display: none; }
 </style>

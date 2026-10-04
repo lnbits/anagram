@@ -63,6 +63,7 @@ interface Context {
   peerConfirmed: boolean;
   splitMedia: boolean;
   peerVideoSupported: boolean;
+  peerMuteStateSupported: boolean;
   changingMedia: boolean;
   receivedMediaChanges: number[];
   inviteSent: boolean;
@@ -113,6 +114,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       mediaVersion: 2,
       videoSupported: deps.supported('video'),
       screenSupported: deps.supported('video'),
+      muteStateSupported: true,
       ...(action === 'end'
         ? { reason: reason ?? 'hangup' }
         : action === 'ringing'
@@ -182,6 +184,8 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     clearTimeout(ctx.supportTimeout);
     ctx.splitMedia = incoming.mediaVersion === 2;
     ctx.peerVideoSupported = incoming.videoSupported === true;
+    ctx.peerMuteStateSupported =
+      incoming.mediaVersion === 2 && incoming.muteStateSupported === true;
     patch({
       peerConfirmed: true,
       mediaVersion: ctx.splitMedia ? 2 : undefined,
@@ -207,6 +211,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       peerConfirmed: false,
       splitMedia: false,
       peerVideoSupported: false,
+      peerMuteStateSupported: false,
       changingMedia: false,
       receivedMediaChanges: [],
       inviteSent: false,
@@ -314,6 +319,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
           ctx.ready = true;
           clearTimeout(ctx.timeout);
           patch({ phase: 'active', startedAt: new Date().toISOString() });
+          sendMuteState(ctx);
           startAudioRecording(ctx);
           if (ctx.splitMedia && stream.getVideoTracks().length)
             void startVideoRecording(ctx).catch((cause) => fail(ctx, cause));
@@ -379,6 +385,14 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
             );
             remoteScreenUrl.value = ctx.screenReceiver.url;
           }
+        } else if (
+          data[0] === 8 &&
+          data.length === 2 &&
+          (data[1] === 0 || data[1] === 1) &&
+          ctx.ready &&
+          ctx.peerMuteStateSupported
+        ) {
+          patch({ remoteMicrophoneMuted: data[1] === 1 });
         } else if (data[0] !== 1 || data.length !== 1) {
           throw new Error('Unexpected call frame');
         }
@@ -544,6 +558,12 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         session.value?.phase === 'incoming' ? 'declined' : ctx.ready ? 'hangup' : 'cancelled'
       );
   }
+  function sendMuteState(ctx: Context) {
+    if (ctx.ready && ctx.peerMuteStateSupported)
+      void ctx.connection
+        ?.send(new Uint8Array([8, session.value?.microphoneMuted ? 1 : 0]))
+        .catch((cause) => fail(ctx, cause));
+  }
   function toggleMicrophone() {
     if (!context?.stream || !session.value) return;
     const muted = !session.value.microphoneMuted;
@@ -551,6 +571,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       track.enabled = !muted;
     });
     patch({ microphoneMuted: muted });
+    sendMuteState(context);
   }
   async function selectMicrophone(deviceId: string) {
     const ctx = context;

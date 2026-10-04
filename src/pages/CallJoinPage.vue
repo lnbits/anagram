@@ -22,14 +22,18 @@
 </template>
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useCallRoomStore } from 'src/stores/callRoomStore';
 import { parseRoomLink } from 'src/utils/callRoom';
 import { ROOM_MAX_MEMBERS } from 'src/types/callRoom';
 import type { CallMode } from 'src/types/call';
 const route = useRoute();
+const router = useRouter();
 const room = useCallRoomStore();
 const input = ref('');
+watch(() => room.session?.phase, (phase) => {
+  if (phase === 'active' && route.name === 'join-call') void router.replace({ name: 'chats' });
+});
 watch(() => route.params.invite, (value) => { input.value = typeof value === 'string' ? value : ''; }, { immediate: true });
 const link = computed(() => parseRoomLink(input.value.trim()));
 async function join(mode: CallMode) { const parsed = parseRoomLink(input.value.trim()); if (parsed) await room.join(parsed, mode); }

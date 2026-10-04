@@ -30,6 +30,7 @@ export interface CallSignal {
   mediaVersion?: 2;
   videoSupported?: boolean;
   screenSupported?: boolean;
+  muteStateSupported?: boolean;
 }
 export interface CallSession {
   id: string;
@@ -40,6 +41,7 @@ export interface CallSession {
   phase: CallPhase;
   startedAt: string | null;
   microphoneMuted: boolean;
+  remoteMicrophoneMuted?: boolean;
   cameraMuted: boolean;
   peerConfirmed?: boolean;
   mediaVersion?: 2;

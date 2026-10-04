@@ -183,6 +183,7 @@ describe('call negotiation and lifetime', () => {
     );
     expect(h.connection.send).toHaveBeenCalledWith(new Uint8Array([2]));
     expect(h.deps.record).toHaveBeenCalledOnce();
+    expect(vi.mocked(h.connection.send).mock.calls.some(([frame]) => frame[0] === 8)).toBe(false);
     h.runtime.toggleMicrophone();
     h.runtime.toggleCamera();
     expect(h.microphone.enabled).toBe(false);
@@ -421,6 +422,32 @@ describe('call negotiation and lifetime', () => {
     expect(h.runtime.microphoneDeviceId.value).toBe('mic-2');
     expect(h.connection.send).toHaveBeenCalledWith(new Uint8Array([4]));
     expect(h.runtime.session.value?.phase).toBe('active');
+  });
+  it('exchanges mute state only after ready and tracks remote mute changes', async () => {
+    const h = setup();
+    let deliver: ((frame: Uint8Array) => void) | undefined;
+    vi.mocked(h.connection.recv)
+      .mockReset()
+      .mockResolvedValueOnce(new Uint8Array([2]))
+      .mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            deliver = resolve;
+          })
+      );
+    await h.runtime.start(peer, 'audio');
+    h.runtime.toggleMicrophone();
+    expect(vi.mocked(h.connection.send).mock.calls.some(([frame]) => frame[0] === 8)).toBe(false);
+    const offer = h.deps.sendSignal.mock.calls[0]?.[1] as CallSignal;
+    expect(offer.muteStateSupported).toBe(true);
+    await h.runtime.receiveSignal(peer, { ...offer, action: 'accept' });
+    await vi.waitFor(() => expect(h.connection.send).toHaveBeenCalledWith(new Uint8Array([8, 1])));
+    h.runtime.toggleMicrophone();
+    expect(h.connection.send).toHaveBeenCalledWith(new Uint8Array([8, 0]));
+    deliver?.(new Uint8Array([8, 1]));
+    await vi.waitFor(() => expect(h.runtime.session.value?.remoteMicrophoneMuted).toBe(true));
+    deliver?.(new Uint8Array([8, 0]));
+    await vi.waitFor(() => expect(h.runtime.session.value?.remoteMicrophoneMuted).toBe(false));
   });
   it('keeps the original microphone when a new input cannot be opened', async () => {
     const h = setup();

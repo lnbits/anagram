@@ -57,6 +57,7 @@ export function createCallRoomRuntime(deps: Deps) {
     peers.value.map(({ member, runtime }) => ({
       ...member,
       phase: runtime.session.value?.phase ?? 'connecting',
+      microphoneMuted: runtime.session.value?.remoteMicrophoneMuted === true,
       error: runtime.error.value,
       audioUrl: runtime.remoteMediaUrl.value,
       videoUrl: runtime.remoteVideoUrl.value,

@@ -114,6 +114,39 @@ describe('call signaling publication', () => {
     );
   });
 
+  it.each([
+    'account',
+    'sender',
+    'blocked',
+  ])('rechecks %s when signing a delayed direct signal', async (change) => {
+    const original = 'b'.repeat(64);
+    let own = original;
+    let blocked = false;
+    const sendRumor = vi.fn().mockResolvedValue({});
+    const runtime = createCallSignalingRuntime({
+      ndk: new NDK(),
+      getOwnPubkey: () => own,
+      isBlocked: () => blocked,
+      refreshRelays: async () => {},
+      getAppRelays: () => [],
+      sendRumor,
+    });
+    await runtime.sendCallSignal('a'.repeat(64), {
+      protocol: CALL_PROTOCOL,
+      action: 'end',
+      reason: 'hangup',
+      callId: crypto.randomUUID(),
+      mode: 'audio',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    if (change === 'account') own = 'c'.repeat(64);
+    if (change === 'blocked') blocked = true;
+    const sender = change === 'sender' ? 'c'.repeat(64) : original;
+    expect(() => sendRumor.mock.calls[0]?.[3](sender, 'a'.repeat(64), 123)).toThrow(
+      'Call session changed'
+    );
+  });
+
   it('does not publish after an account switch during relay lookup', async () => {
     let own = 'b'.repeat(64);
     const sendRumor = vi.fn();

@@ -424,11 +424,11 @@ describe('privateStateRuntime', () => {
     await runtime.restorePrivatePreferences();
     await runtime.publishPrivatePreferences({
       contactSecret: 'a'.repeat(64),
-      irohRelays: [{ url: 'https://one.example.com/', enabled: true }],
+      irohRelaySettings: { mode: 'custom', customRelays: ['https://one.example.com/'] },
     });
     await runtime.publishPrivatePreferences({
       contactSecret: 'a'.repeat(64),
-      irohRelays: [{ url: 'https://two.example.com/', enabled: true }],
+      irohRelaySettings: { mode: 'custom', customRelays: ['https://two.example.com/'] },
     });
     expect(ndkMocks.publish.mock.calls.map((call) => (call[0] as NDKEvent).created_at)).toEqual([
       restoredAt + 1,

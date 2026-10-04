@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { observeCallActivity } from 'src/services/callActivityService';
-import { setCallSpeaker } from 'src/services/callPlaybackService';
+import { followCallLive, setCallSpeaker } from 'src/services/callPlaybackService';
 const props = defineProps<{ peer: string; name: string; url: string; muted: boolean; sink: string; activity?: boolean }>();
 const emit = defineEmits<{ outputError: []; level: [value: number] }>();
 let stopActivity: (() => void) | undefined;
@@ -27,12 +27,7 @@ async function play() {
   try { await audio.value.play(); if (current === attempt) { blocked.value = false; startActivity(); } }
   catch (cause) { if (current === attempt && !(cause instanceof DOMException && cause.name === 'AbortError')) blocked.value = true; }
 }
-function followLive() {
-  const element = audio.value;
-  if (!element?.buffered.length) return;
-  const end = element.buffered.end(element.buffered.length - 1);
-  if (end - element.currentTime > 1.5) element.currentTime = Math.max(element.buffered.start(0), end - 0.35);
-}
+const followLive = () => followCallLive(audio.value);
 watch(() => props.url, async () => { stopActivity?.(); stopActivity = undefined; attempt += 1; await nextTick(); await play(); });
 watch([audio, () => props.sink], async () => {
   if (!audio.value) return;

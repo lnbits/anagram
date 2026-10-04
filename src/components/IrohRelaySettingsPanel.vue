@@ -49,7 +49,7 @@ const nostr = useNostrStore();
 const settings = ref(nostr.getIrohRelaySettings());
 const modes: IrohRelayMode[] = ['pool', 'pool-custom', 'custom'];
 const entries = computed(() => [
-  ...(settings.value.mode === 'custom' ? [] : defaultIrohRelays().map(entry => ({ url: entry.url, shared: true }))),
+  ...(settings.value.mode === 'custom' ? [] : defaultIrohRelays().map(url => ({ url, shared: true }))),
   ...settings.value.customRelays.map(url => ({ url, shared: false })),
 ]);
 const newRelay = ref('');

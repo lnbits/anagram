@@ -6,7 +6,7 @@ let modulePromise: Promise<{
   CallEndpoint: { create_with_relays(relayUrls: string[]): Promise<CallEndpoint> };
 }> | null = null;
 export async function createIrohCallEndpoint(
-  relayUrls = defaultIrohRelays().map((entry) => entry.url)
+  relayUrls = defaultIrohRelays()
 ): Promise<CallEndpoint> {
   const urls = relayUrls.map(normalizeIrohRelayUrl);
   if (!urls.length || urls.length > 21 || urls.some((url) => !url))

@@ -631,6 +631,39 @@ describe('answer mode and independent screen sharing', () => {
     await h.runtime.startScreenSharing();
     expect(h.deps.getScreen).not.toHaveBeenCalled();
   });
+  it.each([
+    false,
+    true,
+  ])('ignores a cancelled picker after another share starts (reject: %s)', async (reject) => {
+    const h = setup();
+    let resolve!: (stream: MediaStream) => void;
+    let fail!: (error: Error) => void;
+    h.deps.getScreen.mockImplementationOnce(
+      () =>
+        new Promise((yes, no) => {
+          resolve = yes;
+          fail = no;
+        })
+    );
+    await h.runtime.receiveSignal(
+      peer,
+      invite({ mediaVersion: 2, videoSupported: true, screenSupported: true })
+    );
+    await h.runtime.accept('audio');
+    await vi.waitFor(() => expect(h.runtime.session.value?.phase).toBe('active'));
+    const pending = h.runtime.startScreenSharing();
+    await h.runtime.stopScreenSharing();
+    await h.runtime.startScreenSharing();
+    const current = h.runtime.localScreenStream.value;
+    const oldTrack = { ...h.camera, stop: vi.fn() };
+    if (reject) fail(new Error('Cancelled'));
+    else resolve(new MediaStream([oldTrack] as unknown as MediaStreamTrack[]));
+    await pending;
+    expect(h.runtime.localScreenStream.value).toBe(current);
+    expect(h.runtime.deviceError.value).toBe('');
+    expect(h.camera.stop).not.toHaveBeenCalled();
+    if (!reject) expect(oldTrack.stop).toHaveBeenCalledOnce();
+  });
   it('stops screen capture that resolves after a hangup', async () => {
     const h = setup();
     let finishCapture: (stream: MediaStream) => void = () => {};

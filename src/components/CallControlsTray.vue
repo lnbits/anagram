@@ -4,7 +4,7 @@
       <slot :auto-hide="autoHide" :toggle="toggle" />
     </div>
   </div>
-  <button v-if="autoHide" class="call-controls-edge" type="button" :aria-label="$t('call.showControls')" data-testid="call-controls-edge" @pointerenter="reveal" @focus="reveal" @click="reveal">
+  <button v-if="autoHide" class="call-controls-edge" type="button" :aria-label="$t('call.showControls')" data-testid="call-controls-edge" @pointerenter="reveal" @pointerleave="scheduleHide" @focus="reveal" @click="reveal">
     <span aria-hidden="true">⌃</span>
   </button>
 </template>
@@ -23,7 +23,10 @@ function enter() { hovered = true; cancelHide(); }
 function scheduleHide() {
   cancelHide();
   timer = setTimeout(() => {
-    if (!hovered && !document.activeElement?.closest('.call-controls-tray, .q-menu')) revealed.value = false;
+    const focused = document.activeElement;
+    const keyboardFocus = focused?.matches(':focus-visible') && focused.closest('.call-controls-tray, .call-controls-edge');
+    if (!hovered && !keyboardFocus && !document.querySelector('.q-menu')) revealed.value = false;
+    else if (!hovered) scheduleHide();
   }, 400);
 }
 function leave() { hovered = false; scheduleHide(); }

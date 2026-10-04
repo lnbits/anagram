@@ -737,7 +737,11 @@ test('three users join a shared call link, exchange Iroh media, share screens an
       .toBeGreaterThan(stageHeight + 20);
     await bob.page.getByTestId('call-controls-edge').hover();
     await expect(bob.page.getByTestId('call-controls-tray')).not.toHaveClass(/--hidden/);
-    await bob.page.getByTestId('room-hide-controls').hover();
+    await bob.page.mouse.move(200, 100);
+    await expect(bob.page.getByTestId('call-controls-tray')).toHaveClass(/--hidden/);
+    await bob.page.getByTestId('call-controls-edge').hover();
+    await bob.page.getByTestId('room-max-fill').click();
+    await bob.page.getByTestId('room-max-fill').click();
     await bob.page.mouse.move(200, 100);
     await expect(bob.page.getByTestId('call-controls-tray')).toHaveClass(/--hidden/);
     await bob.page.getByTestId('call-controls-edge').focus();

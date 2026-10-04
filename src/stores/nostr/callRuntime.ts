@@ -50,7 +50,7 @@ interface Context {
   screenReceiver?: CallMediaReceiver;
   screenStream?: MediaStream;
   stopScreenRecording?: () => void;
-  acquiringScreen?: boolean;
+  screenRequest?: object;
   stream?: MediaStream;
   stopRecording?: () => void;
   stopVideoRecording?: () => void;
@@ -731,7 +731,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
   async function stopScreenSharing() {
     const ctx = context;
     if (!ctx) return;
-    ctx.acquiringScreen = false;
+    ctx.screenRequest = undefined;
     ctx.stopScreenRecording?.();
     ctx.stopScreenRecording = undefined;
     ctx.screenStream?.getTracks().forEach((track) => {
@@ -756,16 +756,17 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       !session.value?.screenAvailable ||
       !deps.getScreen ||
       ctx.screenStream ||
-      ctx.acquiringScreen
+      ctx.screenRequest
     )
       return;
-    ctx.acquiringScreen = true;
+    const request = {};
+    ctx.screenRequest = request;
     deviceError.value = '';
     let screen: MediaStream | undefined;
     try {
       // Capture is invoked before any await so the browser sees the user's gesture.
       screen = await deps.getScreen();
-      if (!alive(ctx) || !ctx.acquiringScreen) {
+      if (!alive(ctx) || ctx.screenRequest !== request) {
         screen.getTracks().forEach((track) => {
           track.stop();
         });
@@ -796,7 +797,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         { videoBitsPerSecond: 1_500_000 }
       );
     } catch {
-      if (alive(ctx)) {
+      if (alive(ctx) && ctx.screenRequest === request) {
         deviceError.value = 'call.error.screen';
         if (ctx.screenStream) await stopScreenSharing();
       }
@@ -804,7 +805,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         track.stop();
       });
     } finally {
-      ctx.acquiringScreen = false;
+      if (ctx.screenRequest === request) ctx.screenRequest = undefined;
     }
   }
   function reset() {

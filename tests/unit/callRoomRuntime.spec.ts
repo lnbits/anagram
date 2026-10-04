@@ -52,6 +52,7 @@ function setup(own = 'a'.repeat(64)) {
     send: vi.fn().mockResolvedValue(undefined),
     media: {
       supported: () => true,
+      getScreen: vi.fn<() => Promise<MediaStream>>(),
       getMedia: vi.fn().mockResolvedValue(stream),
       getMicrophone: vi.fn().mockResolvedValue(stream),
       getCamera: vi
@@ -105,6 +106,35 @@ afterEach(() => {
 });
 
 describe('link-based Iroh call rooms', () => {
+  it.each([
+    'stop',
+    'leave',
+  ])('discards a pending screen picker after %s and allows another share', async (action) => {
+    const h = setup();
+    await h.runtime.create();
+    let resolve!: (stream: MediaStream) => void;
+    h.deps.media.getScreen.mockImplementationOnce(
+      () =>
+        new Promise((yes) => {
+          resolve = yes;
+        })
+    );
+    const pending = h.runtime.startScreenSharing();
+    if (action === 'leave') {
+      h.runtime.leave();
+      await h.runtime.create();
+    } else await h.runtime.stopScreenSharing();
+    const newTrack = new Track('video');
+    const current = new MediaStream([newTrack] as unknown as MediaStreamTrack[]);
+    h.deps.media.getScreen.mockResolvedValueOnce(current);
+    await h.runtime.startScreenSharing();
+    const oldTrack = new Track('video');
+    resolve(new MediaStream([oldTrack] as unknown as MediaStreamTrack[]));
+    await pending;
+    expect(h.runtime.localScreenStream.value).toBe(current);
+    expect(oldTrack.stop).toHaveBeenCalledOnce();
+    expect(newTrack.stop).not.toHaveBeenCalled();
+  });
   it('selects cameras without unmuting and replaces capture without stopping the microphone', async () => {
     const h = setup();
     await h.runtime.create();

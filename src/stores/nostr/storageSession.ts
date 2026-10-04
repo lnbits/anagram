@@ -21,7 +21,7 @@ import type {
   PrivatePreferences,
 } from 'src/stores/nostr/types';
 import { normalizeBlossomServerUrl } from 'src/utils/blossomServer';
-import { normalizeIrohRelaySettings, normalizeIrohRelays } from 'src/utils/irohRelays';
+import { normalizeIrohRelaySettings } from 'src/utils/irohRelays';
 import {
   DEFAULT_MESSAGE_HISTORY_RESTORE_DAYS,
   MESSAGE_HISTORY_RESTORE_DAYS,
@@ -397,9 +397,6 @@ export function createStorageSessionRuntime({
     const irohSettings = normalizeIrohRelaySettings(value.irohRelaySettings);
     if (irohSettings) preferences.irohRelaySettings = irohSettings;
     else delete preferences.irohRelaySettings;
-    const iroh = normalizeIrohRelays(value.irohRelays);
-    if (iroh) preferences.irohRelays = iroh;
-    else delete preferences.irohRelays;
     return preferences;
   }
 

@@ -111,6 +111,7 @@ export function createCallRoomRuntime(deps: Deps) {
     const s = session.value;
     if (!s || !busy.value) return;
     generation += 1;
+    screenRequest = undefined;
     update({ phase: 'ended' });
     error.value = reason;
     clearTimeout(deadline);
@@ -560,20 +561,22 @@ export function createCallRoomRuntime(deps: Deps) {
       if (current(s)) changingMedia.value = false;
     }
   }
+  let screenRequest: object | undefined;
   async function stopScreenSharing() {
+    screenRequest = undefined;
     stopStream(localScreenStream.value);
     localScreenStream.value = null;
     await Promise.all(peers.value.map(({ runtime }) => runtime.stopScreenSharing()));
   }
-  let acquiringScreen = false;
   async function startScreenSharing() {
     const s = session.value;
-    if (!s || !current(s) || localScreenStream.value || acquiringScreen || !deps.media.getScreen)
+    if (!s || !current(s) || localScreenStream.value || screenRequest || !deps.media.getScreen)
       return;
-    acquiringScreen = true;
+    const request = {};
+    screenRequest = request;
     try {
       const screen = await deps.media.getScreen();
-      if (!current(s)) {
+      if (!current(s) || screenRequest !== request) {
         stopStream(screen);
         return;
       }
@@ -585,9 +588,9 @@ export function createCallRoomRuntime(deps: Deps) {
       });
       await Promise.all(peers.value.map(({ runtime }) => runtime.startScreenSharing()));
     } catch {
-      if (current(s)) error.value = 'call.error.screen';
+      if (current(s) && screenRequest === request) error.value = 'call.error.screen';
     } finally {
-      acquiringScreen = false;
+      if (screenRequest === request) screenRequest = undefined;
     }
   }
   function reset() {

@@ -1,7 +1,6 @@
 import type { PrivatePreferences } from 'src/stores/nostr/types';
 import {
   type IrohRelaySettings,
-  migrateIrohRelaySettings,
   normalizeIrohRelaySettings,
   resolveIrohRelays,
 } from 'src/utils/irohRelays';
@@ -17,8 +16,10 @@ export function createIrohSettingsRuntime(deps: Deps) {
   function getIrohRelaySettings(): IrohRelaySettings {
     const preferences = deps.readPrivatePreferencesFromStorage();
     return (
-      normalizeIrohRelaySettings(preferences?.irohRelaySettings) ??
-      migrateIrohRelaySettings(preferences?.irohRelays)
+      normalizeIrohRelaySettings(preferences?.irohRelaySettings) ?? {
+        mode: 'pool',
+        customRelays: [],
+      }
     );
   }
   function getIrohRelays() {
@@ -30,18 +31,16 @@ export function createIrohSettingsRuntime(deps: Deps) {
       throw new Error(
         'Choose the shared pool or at least one custom HTTPS relay. Built-in relays cannot be selected individually.'
       );
-    const entries = resolveIrohRelays(settings);
     const own = deps.getOwnPubkey();
     if (!own) throw new Error('Sign in to save call relays.');
     const preferences = await deps.ensurePrivatePreferences();
     if (deps.getOwnPubkey() !== own) throw new Error('Session changed.');
-    const next = { ...preferences, irohRelays: entries, irohRelaySettings: settings };
+    const next = { ...preferences, irohRelaySettings: settings };
     await deps.publishPrivatePreferences(next);
     if (deps.getOwnPubkey() !== own) throw new Error('Session changed.');
     // Keep unrelated preferences that may have changed while publication was in flight.
     deps.writePrivatePreferencesToStorage({
       ...(deps.readPrivatePreferencesFromStorage() ?? preferences),
-      irohRelays: entries,
       irohRelaySettings: settings,
     });
     return settings;

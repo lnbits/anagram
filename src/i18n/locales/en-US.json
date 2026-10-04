@@ -778,7 +778,6 @@
   "room.joinVideo": "Join with video",
   "room.createAudio": "Start audio call",
   "room.createVideo": "Start video call",
-  "room.you": "You",
   "room.leave": "Leave call",
   "room.return": "Return to group call",
   "room.phase.preparing": "Preparing call…",

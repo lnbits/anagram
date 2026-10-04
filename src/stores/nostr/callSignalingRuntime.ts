@@ -17,6 +17,25 @@ export function createCallSignalingRuntime(deps: {
   getAppRelays(): string[];
   sendRumor: ReturnType<typeof createRelayPublishRuntime>['sendGiftWrappedRumor'];
 }) {
+  function publishSignal(own: string, peer: string, relays: string[], content: string) {
+    return deps.sendRumor(
+      peer,
+      relays,
+      CALL_SIGNAL_KIND,
+      (sender, recipient, createdAt) => {
+        if (sender !== own || deps.getOwnPubkey() !== own || deps.isBlocked(peer))
+          throw new Error('Call session changed');
+        return new NDKEvent(deps.ndk, {
+          kind: CALL_SIGNAL_KIND,
+          pubkey: sender,
+          created_at: createdAt,
+          tags: [['p', recipient]],
+          content,
+        });
+      },
+      { publishSelfCopy: false }
+    );
+  }
   async function sendCallSignal(peerInput: string, signal: CallSignal): Promise<void> {
     const peer = inputSanitizerService.normalizeHexKey(peerInput);
     const own = deps.getOwnPubkey();
@@ -48,20 +67,7 @@ export function createCallSignalingRuntime(deps: {
       ])
       .map((entry) => entry.url);
     if (!relays.length && refreshError) throw refreshError;
-    await deps.sendRumor(
-      peer,
-      relays,
-      CALL_SIGNAL_KIND,
-      (sender, recipient, createdAt) =>
-        new NDKEvent(deps.ndk, {
-          kind: CALL_SIGNAL_KIND,
-          pubkey: sender,
-          created_at: createdAt,
-          tags: [['p', recipient]],
-          content,
-        }),
-      { publishSelfCopy: false }
-    );
+    await publishSignal(own, peer, relays, content);
   }
   async function sendRoomSignal(
     peerInput: string,
@@ -81,23 +87,7 @@ export function createCallSignalingRuntime(deps: {
       !parseRoomSignal(content, Math.floor(Date.now() / 1000))
     )
       throw new Error('Invalid room control');
-    await deps.sendRumor(
-      peer,
-      relays,
-      CALL_SIGNAL_KIND,
-      (sender, recipient, createdAt) => {
-        if (sender !== own || deps.getOwnPubkey() !== own || deps.isBlocked(peer))
-          throw new Error('Call session changed');
-        return new NDKEvent(deps.ndk, {
-          kind: CALL_SIGNAL_KIND,
-          pubkey: sender,
-          created_at: createdAt,
-          tags: [['p', recipient]],
-          content,
-        });
-      },
-      { publishSelfCopy: false }
-    );
+    await publishSignal(own, peer, relays, content);
   }
   return { sendCallSignal, sendRoomSignal };
 }

@@ -19,3 +19,10 @@ export async function setCallSpeaker(element: HTMLMediaElement, deviceId: string
   }
   await element.setSinkId(deviceId);
 }
+
+export function followCallLive(element: HTMLMediaElement | null) {
+  if (!element?.buffered.length) return;
+  const end = element.buffered.end(element.buffered.length - 1);
+  if (end - element.currentTime > 1.5)
+    element.currentTime = Math.max(element.buffered.start(0), end - 0.35);
+}

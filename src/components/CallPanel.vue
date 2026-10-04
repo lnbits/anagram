@@ -98,7 +98,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar';
 import { useCallStore } from 'src/stores/callStore';
 import { createCallRingtone } from 'src/services/callRingtone';
-import { registerCallAudio, setCallSpeaker } from 'src/services/callPlaybackService';
+import { followCallLive as followLive, registerCallAudio, setCallSpeaker } from 'src/services/callPlaybackService';
 import { t } from 'src/i18n';
 import { canShareCallScreen } from 'src/services/callMediaService';
 import CallStage from './CallStage.vue';
@@ -171,11 +171,6 @@ async function playAudio() {
 async function playVideo() {
   if (call.session?.mediaVersion !== 2) { await playAudio(); return; }
   try { await remoteVideo.value?.play(); } catch { /* Muted video retries on loadeddata. */ }
-}
-function followLive(element: HTMLMediaElement | null) {
-  if (!element?.buffered.length) return;
-  const end = element.buffered.end(element.buffered.length - 1);
-  if (end - element.currentTime > 1.5) element.currentTime = Math.max(element.buffered.start(0), end - 0.35);
 }
 const followAudio = () => followLive(remoteAudio.value);
 const followVideo = () => followLive(remoteVideo.value);

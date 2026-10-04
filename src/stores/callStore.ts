@@ -59,13 +59,7 @@ export const useCallStore = defineStore('calls', () => {
       hasSeenCallControl(useNostrStore().getLoggedInPublicKeyHex() ?? '', peer, id),
     remember: (peer, id) =>
       rememberCallControl(useNostrStore().getLoggedInPublicKeyHex() ?? '', peer, id),
-    createEndpoint: () =>
-      createIrohCallEndpoint(
-        useNostrStore()
-          .getIrohRelays()
-          .filter((entry) => entry.enabled)
-          .map((entry) => entry.url)
-      ),
+    createEndpoint: () => createIrohCallEndpoint(useNostrStore().getIrohRelays()),
     getMedia: getCallMedia,
     getMicrophone: getCallMicrophone,
     getCamera: getCallCamera,

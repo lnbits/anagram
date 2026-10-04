@@ -1,5 +1,6 @@
 import type { CallEndpoint } from 'src/types/call';
 import { defaultIrohRelays, normalizeIrohRelayUrl } from 'src/utils/irohRelays';
+import { guardCallRelay } from './callRelayApproval';
 
 // Loaded from the same origin. This asset is built from iroh-calls/ and shipped on every target.
 let modulePromise: Promise<{
@@ -23,5 +24,6 @@ export async function createIrohCallEndpoint(
         throw error;
       });
   }
-  return (await modulePromise).CallEndpoint.create_with_relays(urls as string[]);
+  const endpoint = await (await modulePromise).CallEndpoint.create_with_relays(urls as string[]);
+  return guardCallRelay(endpoint, urls as string[]);
 }

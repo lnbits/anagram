@@ -670,6 +670,13 @@ test('three users join a shared call link, exchange Iroh media, share screens an
     for (const guest of [bob, charlie]) {
       await guest.page.goto(link);
       await guest.page.getByTestId('room-join-audio').click();
+      if (guest.session.publicKey < alice.session.publicKey) {
+        const approval = guest.page
+          .getByRole('dialog')
+          .filter({ hasText: 'Allow custom call relay?' });
+        await expect(approval).toContainText('https://localhost:7004/');
+        await approval.getByRole('button', { name: 'Allow once', exact: true }).click();
+      }
       await expect(guest.page.getByTestId('room-status')).toHaveText('Call is open');
     }
     for (const user of [alice, bob, charlie]) {
@@ -875,5 +882,55 @@ test('three users join a shared call link, exchange Iroh media, share screens an
     await expectNoUnexpectedBrowserErrors([alice, bob, charlie]);
   } finally {
     await disposeUsers(alice, bob, charlie);
+  }
+});
+
+test('unfamiliar peer relays require approval before a real call can connect', async ({
+  browser,
+}) => {
+  test.slow();
+  const alice = await bootstrapUser(
+    browser,
+    { ...aliceAccount, privateKey: '91'.repeat(32) },
+    { callMedia: true }
+  );
+  const bob = await bootstrapUser(
+    browser,
+    { ...bobAccount, privateKey: '92'.repeat(32) },
+    { callMedia: true }
+  );
+  const customSockets: string[] = [];
+  try {
+    await establishAcceptedDirectChat(alice, bob);
+    await chooseCustomCallRelay(bob.page);
+    await navigateToChat(alice.page, bob.session.publicKey);
+    await navigateToChat(bob.page, alice.session.publicKey);
+    alice.page.on('websocket', (socket) => {
+      if (new URL(socket.url()).hostname === 'localhost') customSockets.push(socket.url());
+    });
+    for (const allow of [false, true]) {
+      await alice.page.getByTestId('thread-audio-call').click();
+      await expect(bob.page.getByTestId('call-status')).toHaveText('Incoming call');
+      await bob.page.getByTestId('call-accept').click();
+      const approval = alice.page
+        .getByRole('dialog')
+        .filter({ hasText: 'Allow custom call relay?' });
+      await expect(approval).toBeVisible();
+      await expect(approval).toContainText('https://localhost:7004/');
+      expect(customSockets).toHaveLength(0);
+      await approval
+        .getByRole('button', { name: allow ? 'Allow once' : 'Decline', exact: true })
+        .click();
+      if (allow) {
+        await expectAudible(alice.page);
+        await expectAudible(bob.page);
+        expect(customSockets.length).toBeGreaterThan(0);
+        await alice.page.getByTestId('call-hangup').click();
+      }
+      await alice.page.getByTestId('call-dismiss').click();
+      await bob.page.getByTestId('call-dismiss').click();
+    }
+  } finally {
+    await disposeUsers(alice, bob);
   }
 });

@@ -1,4 +1,8 @@
 {
+  "call.relayApproval.title": "Allow custom call relay?",
+  "call.relayApproval.message": "This call uses a custom relay: {url}. Allow a connection to this server? Only approve servers you trust. To allow it automatically in future calls, add it to your Iroh relay settings.",
+  "call.relayApproval.allow": "Allow once",
+  "call.relayApproval.cancel": "Decline",
   "auth.bunkerConnectionString": "bunker:// connection string",
   "auth.bunkerUrl": "Bunker URL",
   "auth.chooseLoginMethod": "Choose a login method",

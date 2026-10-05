@@ -215,6 +215,7 @@ function createAuthSessionHarness() {
     relayConnectPromises: { clear: vi.fn() },
     relayStatusVersion: refs.relayStatusVersion,
     resetContactSubscriptionsRuntimeState: vi.fn(),
+    resetCalls: vi.fn(),
     resetEventSinceForFreshLogin: vi.fn(),
     resetGroupRosterSubscriptionRuntimeState: vi.fn(),
     resetMyRelayListRuntimeState: vi.fn(),
@@ -733,6 +734,7 @@ describe('nostr runtime messaging logic', () => {
     expect(ndk.signer).toBeTruthy();
 
     runtime.clearPrivateKey();
+    expect(deps.resetCalls).toHaveBeenCalled();
     expect(localStorage.store.get(AUTH_METHOD_STORAGE_KEY)).toBeUndefined();
     expect(localStorage.store.get(NIP46_SIGNER_PAYLOAD_STORAGE_KEY)).toBeUndefined();
     expect(localStorage.store.get(PRIVATE_KEY_STORAGE_KEY)).toBeUndefined();

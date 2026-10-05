@@ -229,6 +229,7 @@ export type SubscriptionLogName =
 export interface PrivatePreferences {
   contactSecret: string;
   blossomServerUrl?: string;
+  irohRelaySettings?: import('src/utils/irohRelays').IrohRelaySettings;
   [key: string]: unknown;
 }
 

@@ -18,6 +18,11 @@ const routes: RouteRecordRaw[] = [
     component: () => import('layouts/MainLayout.vue'),
     children: [
       {
+        path: 'call/:invite?',
+        name: 'join-call',
+        component: () => import('pages/CallJoinPage.vue'),
+      },
+      {
         path: '',
         redirect: { name: 'chats' },
       },

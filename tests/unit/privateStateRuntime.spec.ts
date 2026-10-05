@@ -7,6 +7,7 @@ import { ref } from 'vue';
 const ndkMocks = vi.hoisted(() => {
   const groupPubkey = 'a'.repeat(64);
   const publishReplaceable = vi.fn().mockResolvedValue(undefined);
+  const publish = vi.fn().mockResolvedValue(undefined);
   const relaySetFromRelayUrls = vi.fn((relayUrls: string[]) => ({
     relayUrls,
   }));
@@ -37,6 +38,10 @@ const ndkMocks = vi.hoisted(() => {
 
     async sign(_signer: unknown): Promise<void> {
       await signEvent(this, _signer);
+    }
+
+    async publish(relaySet: unknown): Promise<void> {
+      await publish(this, relaySet);
     }
 
     async publishReplaceable(relaySet: unknown): Promise<void> {
@@ -81,6 +86,7 @@ const ndkMocks = vi.hoisted(() => {
     },
     groupPubkey,
     publishReplaceable,
+    publish,
     relaySetFromRelayUrls,
     signEvent,
     signerDecrypt,
@@ -318,6 +324,7 @@ describe('privateStateRuntime', () => {
       reactionsMarkedCount: 0,
     });
     ndkMocks.publishReplaceable.mockClear();
+    ndkMocks.publish.mockClear();
     ndkMocks.relaySetFromRelayUrls.mockClear();
     ndkMocks.MockNDKPrivateKeySigner.generate.mockClear();
     ndkMocks.signEvent.mockClear();
@@ -403,6 +410,31 @@ describe('privateStateRuntime', () => {
       eventId: 'second-event',
     });
     expect(deps.pendingContactCursorPublishStates.has(contactPublicKey)).toBe(false);
+  });
+
+  it('publishes rapid private preference changes after the restored timestamp without collisions', async () => {
+    const deps = createDeps();
+    const runtime = createPrivateStateRuntime(deps);
+    const restoredAt = Math.floor(Date.now() / 1000) + 10;
+    (deps.ndk.fetchEvent as ReturnType<typeof vi.fn>).mockResolvedValue({
+      created_at: restoredAt,
+      content: 'encrypted',
+    });
+    deps.decryptPrivatePreferencesContent.mockResolvedValue({ contactSecret: 'a'.repeat(64) });
+    await runtime.restorePrivatePreferences();
+    await runtime.publishPrivatePreferences({
+      contactSecret: 'a'.repeat(64),
+      irohRelaySettings: { mode: 'custom', customRelays: ['https://one.example.com/'] },
+    });
+    await runtime.publishPrivatePreferences({
+      contactSecret: 'a'.repeat(64),
+      irohRelaySettings: { mode: 'custom', customRelays: ['https://two.example.com/'] },
+    });
+    expect(ndkMocks.publish.mock.calls.map((call) => (call[0] as NDKEvent).created_at)).toEqual([
+      restoredAt + 1,
+      restoredAt + 2,
+    ]);
+    expect(ndkMocks.publishReplaceable).not.toHaveBeenCalled();
   });
 
   it('restores and persists decrypted private preferences from relays', async () => {

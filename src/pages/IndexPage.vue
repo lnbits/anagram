@@ -48,6 +48,7 @@
               >
                 <q-menu anchor="bottom right" self="top right" class="nc-pop-menu">
                   <q-list dense class="nc-pop-menu__list">
+                    <q-item clickable v-close-popup data-testid="start-call-room" :to="{ name: 'join-call' }"><q-item-section avatar><q-icon name="groups" /></q-item-section><q-item-section>{{ $t('room.startOrJoin') }}</q-item-section></q-item>
                     <q-item
                       clickable
                       v-close-popup

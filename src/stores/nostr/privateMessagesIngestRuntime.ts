@@ -10,8 +10,12 @@ import type {
 } from 'src/stores/nostr/privateMessagesIngestTypes';
 import { isPlainRecord } from 'src/stores/nostr/shared';
 import { resolveLatestReadBoundaryAtValue } from 'src/stores/nostr/valueUtils';
+import { CALL_SIGNAL_KIND } from 'src/types/call';
 import type { NostrEventDirection } from 'src/types/chat';
 import type { ContactRecord } from 'src/types/contact';
+import { callHistoryFromTags } from 'src/utils/callHistory';
+import { parseRoomSignal } from 'src/utils/callRoom';
+import { parseCallSignal } from 'src/utils/callSignal';
 import {
   buildImageAttachmentPreviewText,
   extractMediaAttachmentsFromTags,
@@ -53,6 +57,8 @@ export function createPrivateMessagesIngestRuntime({
   normalizeThrottleMs,
   normalizeTimestamp,
   persistIncomingGroupEpochTicket,
+  processIncomingCallSignal,
+  processIncomingRoomSignal,
   processIncomingDeletionRumorEvent,
   processIncomingReactionRumorEvent,
   queueBackgroundGroupContactRefresh,
@@ -346,6 +352,27 @@ export function createPrivateMessagesIngestRuntime({
           recipients,
         }),
       });
+      return;
+    }
+
+    // Call controls never enter chat, contact, message, unread, or notification persistence.
+    // Only one-to-one rumors addressed to the active account can negotiate a call.
+    if (rumorEvent.kind === CALL_SIGNAL_KIND) {
+      if (
+        !isSelfSentMessage &&
+        !recipientContext.groupChatPublicKey &&
+        recipientContext.recipientPubkey === loggedInPubkeyHex &&
+        recipients.length === 1 &&
+        recipients[0] === loggedInPubkeyHex &&
+        !isPubkeyBlocked(senderPubkeyHex)
+      ) {
+        const signal = parseCallSignal(rumorEvent.content, rumorEvent.created_at);
+        if (signal) await processIncomingCallSignal?.(senderPubkeyHex, signal);
+        else {
+          const roomSignal = parseRoomSignal(rumorEvent.content, rumorEvent.created_at);
+          if (roomSignal) await processIncomingRoomSignal?.(senderPubkeyHex, roomSignal);
+        }
+      }
       return;
     }
 
@@ -970,8 +997,10 @@ export function createPrivateMessagesIngestRuntime({
       : null;
     const attachments = extractMediaAttachmentsFromTags(rumorEvent.tags);
     const editTargetEventId = readMessageEditTargetEventId(rumorEvent.tags);
+    const callHistory = !resolvedGroupChatPublicKey ? callHistoryFromTags(rumorEvent.tags) : null;
     let messageMeta: Record<string, unknown> = {
       source: 'nostr',
+      ...(callHistory ? { call_history: callHistory } : {}),
       kind: NDKKind.PrivateDirectMessage,
       wrapper_event_id: wrappedEvent.id ?? '',
       ...buildMentionMetadata(messageText, loggedInPubkeyHex),

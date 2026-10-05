@@ -303,6 +303,7 @@ export default configure((ctx) => {
         APP_BUNDLE_ID: buildInfo.bundleId,
         APP_ENABLE_APP_SHELL: enableAppShell,
         APP_E2E_DISABLE_NDK_OUTBOX: process.env.APP_E2E_DISABLE_NDK_OUTBOX === 'true',
+        APP_IROH_RELAY_URL: process.env.APP_IROH_RELAY_URL || '',
       },
       vitePlugins: [
         createResponsiveMediaQueryPlugin(),
@@ -333,6 +334,11 @@ export default configure((ctx) => {
           ? path.join(projectRoot, '.github/scripts/macos-release.cjs')
           : undefined,
         mac: {
+          extendInfo: {
+            NSMicrophoneUsageDescription:
+              'Anagram uses your microphone for private audio and video calls.',
+            NSCameraUsageDescription: 'Anagram uses your camera for private video calls.',
+          },
           category: 'public.app-category.social-networking',
           target: ['zip'],
           identity: macRelease ? process.env.CSC_NAME : null,

@@ -57,6 +57,8 @@
     "test:e2e:local:auth-smoke": "node ./scripts/run-e2e-local.cjs e2e/auth.spec.ts",
     "test:e2e:local:contacts-smoke": "node ./scripts/run-e2e-local.cjs e2e/contacts.spec.ts",
     "test:e2e:local:dm-smoke": "node ./scripts/run-e2e-local.cjs e2e/dm",
+    "test:e2e:local:calls-smoke": "node ./scripts/run-e2e-local.cjs e2e/calls.spec.ts",
+    "build:iroh": "node ./scripts/build-iroh.cjs",
     "test:e2e:local:groups-smoke": "node ./scripts/run-e2e-local.cjs e2e/groups",
     "test:e2e:local:relays-smoke": "node ./scripts/run-e2e-local.cjs e2e/relays.spec.ts",
     "test:e2e:local:session-smoke": "node ./scripts/run-e2e-local.cjs e2e/session.spec.ts"

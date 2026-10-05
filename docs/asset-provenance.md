@@ -8,7 +8,8 @@ The upstream LNbits project maintainer has confirmed that LNbits owns or has per
 
 | Assets | Source and rights |
 | --- | --- |
-| `public/nostr_chat.png`, `public/nostr_chat.svg`, `public/favicon.ico`, `public/loading.svg` | First-party Anagram application graphics, distributed under the repository's MIT license. |
+| `public/nostr_chat.png`, `public/nostr_chat.svg`, `public/favicon.ico`, `public/loading.svg`, `public/pwa/*.png`, `src-electron/icons/*` | Anagram artwork supplied by the maintainer and preserved in `public/nostr_chat.png`. Web and native icon sizes are derived from that source; the SVG files embed resized PNGs to preserve the artwork. |
+| Android launcher, splash, and notification images under `src-capacitor/android/app/src/main/res/` | Derived from `public/nostr_chat.png`; adaptive launchers include safe padding and notification icons use the source alpha silhouette in white. |
 | `fastlane/metadata/android/en-US/images/icon.png` | Store copy of `public/nostr_chat.png`; both files are byte-identical and use the same MIT permission. |
 | `public/lnbits.svg` | LNbits brand asset included with authorization from LNbits and distributed with this repository. |
 

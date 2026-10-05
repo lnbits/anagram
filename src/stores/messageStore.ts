@@ -21,6 +21,12 @@ import type {
   NostrEventEntry,
 } from 'src/types/chat';
 import { yieldToNextPaint } from 'src/utils/backgroundTasks';
+import {
+  type CallHistory,
+  callHistoryTag,
+  callHistoryText,
+  readCallHistory,
+} from 'src/utils/callHistory';
 import { resolvePreferredContactRelayUrls } from 'src/utils/contactRelayUrls';
 import { isIncomingUnreadMessageActivity } from 'src/utils/messageActivity';
 import {
@@ -1792,6 +1798,22 @@ export const useMessageStore = defineStore('messageStore', () => {
     }
   }
 
+  async function sendCallHistory(chatId: string, history: CallHistory): Promise<Message | null> {
+    const normalized = normalizeChatIdentifier(chatId);
+    const valid = readCallHistory(history);
+    const chat = normalized ? await chatDataService.getChatByPublicKey(normalized) : null;
+    if (!valid || !chat || chat.type === 'group') return null;
+    return sendOutboundChatMessage({
+      chatId: normalized,
+      text: callHistoryText(valid),
+      meta: { call_history: valid },
+      replyTo: null,
+      additionalTags: [callHistoryTag(valid)],
+      options: {},
+      shouldSyncLiveMessage: true,
+    });
+  }
+
   async function sendMessage(
     chatId: string,
     text: string,
@@ -2655,6 +2677,7 @@ export const useMessageStore = defineStore('messageStore', () => {
     getMessages,
     getPaginationState,
     sendMessage,
+    sendCallHistory,
     editMessage,
     sendMediaAttachment,
     forwardMessage,

@@ -15,12 +15,15 @@ import {
   type NsecValidationResult,
   type PrivateKeyValidationResult,
 } from 'src/services/inputSanitizerService';
+import { useCallRoomStore } from 'src/stores/callRoomStore';
+import { useCallStore } from 'src/stores/callStore';
 import { useChatStore } from 'src/stores/chatStore';
 import { useNip65RelayStore } from 'src/stores/nip65RelayStore';
 import { createAppLifecycleRuntime } from 'src/stores/nostr/appLifecycleRuntime';
 import { createAuthIdentityRuntime } from 'src/stores/nostr/authIdentityRuntime';
 import { createAuthSessionRuntime } from 'src/stores/nostr/authSessionRuntime';
 import { createBlossomSettingsRuntime } from 'src/stores/nostr/blossomSettingsRuntime';
+import { createCallSignalingRuntime } from 'src/stores/nostr/callSignalingRuntime';
 import {
   DEFAULT_EVENT_SINCE_LOOKBACK_SECONDS,
   DEVELOPER_DIAGNOSTICS_STORAGE_KEY,
@@ -48,6 +51,7 @@ import { createGroupEpochStateRuntime } from 'src/stores/nostr/groupEpochStateRu
 import { createGroupInviteRuntime } from 'src/stores/nostr/groupInviteRuntime';
 import { createGroupRosterSubscriptionRuntime } from 'src/stores/nostr/groupRosterSubscriptionRuntime';
 import { createInboundPresentationRuntime } from 'src/stores/nostr/inboundPresentationRuntime';
+import { createIrohSettingsRuntime } from 'src/stores/nostr/irohSettingsRuntime';
 import { createMessageEventRuntime } from 'src/stores/nostr/messageEventRuntime';
 import { createMessageMutationRuntime } from 'src/stores/nostr/messageMutationRuntime';
 import { createMessageRelayRuntime } from 'src/stores/nostr/messageRelayRuntime';
@@ -1322,6 +1326,8 @@ export const useNostrStore = defineStore('nostrStore', () => {
     normalizeThrottleMs,
     normalizeTimestamp,
     persistIncomingGroupEpochTicket,
+    processIncomingCallSignal: (peer, signal) => useCallStore().receiveSignal(peer, signal),
+    processIncomingRoomSignal: (peer, signal) => useCallRoomStore().receive(peer, signal),
     processIncomingDeletionRumorEvent,
     processIncomingReactionRumorEvent,
     queueBackgroundGroupContactRefresh: (groupPublicKey, fallbackName, seedRelayUrls) => {
@@ -1781,6 +1787,14 @@ export const useNostrStore = defineStore('nostrStore', () => {
   publishGroupMembershipFollowSetRuntime = publishGroupMembershipFollowSetImpl;
   publishGroupMembershipRosterFollowSetRuntime = publishGroupMembershipRosterFollowSetImpl;
 
+  const { getIrohRelays, getIrohRelaySettings, saveIrohRelaySettings } = createIrohSettingsRuntime({
+    ensurePrivatePreferences,
+    publishPrivatePreferences,
+    readPrivatePreferencesFromStorage,
+    writePrivatePreferencesToStorage,
+    getOwnPubkey: getLoggedInPublicKeyHex,
+  });
+
   const { getBlossomServerUrl, saveBlossomServerUrl } = createBlossomSettingsRuntime({
     ensurePrivatePreferences,
     publishPrivatePreferences,
@@ -1968,6 +1982,10 @@ export const useNostrStore = defineStore('nostrStore', () => {
     relayStatusVersion,
     resetContactSubscriptionsRuntimeState,
     resetEventSinceForFreshLogin,
+    resetCalls: () => {
+      useCallStore().reset();
+      useCallRoomStore().reset();
+    },
     resetGroupRosterSubscriptionRuntimeState,
     resetMyRelayListRuntimeState,
     resetMuteListRuntimeState: () => {
@@ -2201,7 +2219,18 @@ export const useNostrStore = defineStore('nostrStore', () => {
   });
   refreshDeveloperPendingQueuesRuntime = refreshDeveloperPendingQueues;
 
+  const { sendCallSignal, sendRoomSignal } = createCallSignalingRuntime({
+    ndk,
+    getOwnPubkey: getLoggedInPublicKeyHex,
+    isBlocked: (peer) => isPubkeyBlockedRuntime(peer),
+    refreshRelays: refreshContactRelayList,
+    getAppRelays: getAppRelayUrls,
+    sendRumor: sendGiftWrappedRumor,
+  });
+
   return {
+    sendCallSignal,
+    sendRoomSignal,
     clearPrivateKey: clearPrivateKeyImpl,
     createRemoteSignerNostrConnectLogin: createRemoteSignerNostrConnectLoginImpl,
     createGroupChat,
@@ -2297,6 +2326,9 @@ export const useNostrStore = defineStore('nostrStore', () => {
     ensureBlossomUploadAuthentication,
     getBlossomServerUrl,
     saveBlossomServerUrl,
+    getIrohRelays,
+    getIrohRelaySettings,
+    saveIrohRelaySettings,
     signBlossomUploadAuthHeader,
     sendDirectMessageDeletion,
     sendDirectMessageReaction,

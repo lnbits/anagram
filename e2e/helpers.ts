@@ -46,6 +46,7 @@ export interface SeededMessageSnapshot {
 }
 
 export interface BootstrapUserOptions {
+  callMedia?: boolean;
   passiveRestore?: boolean;
   historyRestoreDays?: number;
   relayUrls?: string[];
@@ -799,7 +800,14 @@ export async function bootstrapUser(
   account: TestAccount,
   options: BootstrapUserOptions = {}
 ): Promise<BootstrappedUser> {
-  const context = await browser.newContext();
+  const context = await browser.newContext(
+    options.callMedia
+      ? {
+          ignoreHTTPSErrors: true,
+          permissions: ['microphone', 'camera'],
+        }
+      : {}
+  );
   const page = await context.newPage();
   const browserErrors = attachBrowserErrorTracking(page);
   const session = await bootstrapSessionOnPage(page, account, options);

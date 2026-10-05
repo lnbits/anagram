@@ -10,7 +10,15 @@
     <meta name="description" content="Anagram" />
     <link rel="icon" type="image/png" href="/nostr_chat.png" />
     <link rel="shortcut icon" href="/favicon.ico" />
+    <% if (ctx.mode.spa && ctx.prod) { %>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <meta name="theme-color" content="#27272a" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Anagram" />
+    <link rel="apple-touch-icon" href="pwa/icon-192.png" />
+    <% } else { %>
     <link rel="apple-touch-icon" href="/nostr_chat.png" />
+    <% } %>
   </head>
   <body>
     <!-- quasar:entry-point -->

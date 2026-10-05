@@ -2,6 +2,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const net = require('net');
 const path = require('path');
+const { startIrohTestProxy } = require('./iroh-test-proxy.cjs');
 
 const composeArgs = ['compose', '-f', 'docker-compose.e2e.yml'];
 const dockerCommand = process.platform === 'win32' ? 'docker.exe' : 'docker';
@@ -25,6 +26,7 @@ function buildCommandEnv() {
   return {
     ...process.env,
     APP_E2E_DISABLE_NDK_OUTBOX: 'true',
+    APP_IROH_RELAY_URL: 'https://127.0.0.1:7004/',
     PATH: nextPath.join(path.delimiter)
   };
 }
@@ -94,7 +96,11 @@ async function main() {
   try {
     await waitForTcpPort('127.0.0.1', 7000, 30_000);
     await waitForTcpPort('127.0.0.1', 7001, 30_000);
-    await runCommand(process.execPath, [playwrightCli, 'test', ...playwrightArgs]);
+    await waitForTcpPort('127.0.0.1', 7003, 30_000);
+    const stopProxy = await startIrohTestProxy();
+    try {
+      await runCommand(process.execPath, [playwrightCli, 'test', ...playwrightArgs]);
+    } finally { await stopProxy(); }
   } finally {
     await runCommand(dockerCommand, [...composeArgs, 'down', '-v', '--remove-orphans'], {
       allowFailure: true

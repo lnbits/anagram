@@ -229,13 +229,13 @@ export function createPrivateStateRuntime({
   updateStoredEventSinceFromCreatedAt,
   writePrivatePreferencesToStorage,
 }: PrivateStateRuntimeDeps) {
-  const lastReplaceableFollowSetCreatedAtByStream = new Map<string, number>();
+  const lastReplaceableCreatedAtByStream = new Map<string, number>();
 
-  function allocateReplaceableFollowSetCreatedAt(streamKey: string): number {
+  function allocateReplaceableCreatedAt(streamKey: string): number {
     const nowInSeconds = Math.floor(Date.now() / 1000);
-    const lastCreatedAt = lastReplaceableFollowSetCreatedAtByStream.get(streamKey) ?? 0;
+    const lastCreatedAt = lastReplaceableCreatedAtByStream.get(streamKey) ?? 0;
     const nextCreatedAt = Math.max(nowInSeconds, lastCreatedAt + 1);
-    lastReplaceableFollowSetCreatedAtByStream.set(streamKey, nextCreatedAt);
+    lastReplaceableCreatedAtByStream.set(streamKey, nextCreatedAt);
     return nextCreatedAt;
   }
 
@@ -327,14 +327,15 @@ export function createPrivateStateRuntime({
 
     const preferencesEvent = new NDKEvent(ndk, {
       kind: PRIVATE_PREFERENCES_KIND,
-      created_at: Math.floor(Date.now() / 1000),
+      created_at: allocateReplaceableCreatedAt(`preferences:${user.pubkey}`),
       pubkey: user.pubkey,
       content: await encryptPrivatePreferencesContent(preferences),
       tags: [['d', PRIVATE_PREFERENCES_D_TAG]],
     });
 
     const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
-    await preferencesEvent.publishReplaceable(relaySet);
+    // publishReplaceable resets created_at to the current second, losing rapid edits.
+    await preferencesEvent.publish(relaySet);
     updateStoredEventSinceFromCreatedAt(preferencesEvent.created_at);
   }
 
@@ -393,6 +394,14 @@ export function createPrivateStateRuntime({
           return;
         }
 
+        const streamKey = `preferences:${loggedInPubkeyHex}`;
+        lastReplaceableCreatedAtByStream.set(
+          streamKey,
+          Math.max(
+            lastReplaceableCreatedAtByStream.get(streamKey) ?? 0,
+            preferencesEvent.created_at ?? 0
+          )
+        );
         writePrivatePreferencesToStorage(decryptedPreferences);
         completeStartupStep('private-preferences');
       } catch (error) {
@@ -940,7 +949,7 @@ export function createPrivateStateRuntime({
 
     await ensureRelayConnections(relayUrls);
 
-    const createdAt = allocateReplaceableFollowSetCreatedAt(
+    const createdAt = allocateReplaceableCreatedAt(
       `${normalizedGroupPublicKey}:${GROUP_MEMBERS_FOLLOW_SET_D_TAG}`
     );
     const listEvent = new NDKEvent(ndk, {
@@ -1044,7 +1053,7 @@ export function createPrivateStateRuntime({
     await ensureRelayConnections(relayUrls);
 
     const rosterPubkeys = Array.from(new Set([normalizedOwnerPublicKey, ...memberPublicKeys]));
-    const createdAt = allocateReplaceableFollowSetCreatedAt(
+    const createdAt = allocateReplaceableCreatedAt(
       `${normalizedGroupPublicKey}:${GROUP_SHARED_ROSTER_FOLLOW_SET_D_TAG}`
     );
     const listEvent = new NDKEvent(ndk, {

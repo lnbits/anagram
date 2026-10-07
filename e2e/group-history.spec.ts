@@ -169,6 +169,8 @@ test('original-format groups recover all epochs and both authors across discover
         sender,
       ),
     );
+  let holdHistory = true;
+  const heldHistory: Array<() => void> = [];
   const published: Array<{ relay: number; event: Event }> = [];
   const queries: Array<{ relay: number; filters: Filter[] }> = [];
   servers.forEach((server, relay) =>
@@ -182,16 +184,26 @@ test('original-format groups recover all epochs and both authors across discover
         }
         if (verb !== 'REQ') return;
         queries.push({ relay, filters });
-        for (const filter of filters)
-          for (const event of events[relay]
-            .filter((event) => matchFilters([filter], event))
-            .sort((a, b) => b.created_at - a.created_at)
-            .slice(
-              0,
-              Math.min(filter.limit ?? Infinity, filter.kinds?.includes(1059) ? 2 : Infinity),
-            ))
-            socket.send(JSON.stringify(['EVENT', id, event]));
-        socket.send(JSON.stringify(['EOSE', id]));
+        const respond = () => {
+          if (socket.readyState !== 1) return;
+          for (const filter of filters)
+            for (const event of events[relay]
+              .filter((event) => matchFilters([filter], event))
+              .sort((a, b) => b.created_at - a.created_at)
+              .slice(
+                0,
+                Math.min(filter.limit ?? Infinity, filter.kinds?.includes(1059) ? 2 : Infinity),
+              ))
+              socket.send(JSON.stringify(['EVENT', id, event]));
+          socket.send(JSON.stringify(['EOSE', id]));
+        };
+        if (
+          holdHistory &&
+          relay === 3 &&
+          filters.some((filter: Filter) => filter.kinds?.includes(1059))
+        )
+          heldHistory.push(respond);
+        else respond();
       }),
     ),
   );
@@ -223,6 +235,50 @@ test('original-format groups recover all epochs and both authors across discover
       await expect(item).toBeVisible({ timeout: 30000 });
       await expect(item.locator('img')).toHaveAttribute('src', 'https://profiles.test/group.png');
       await item.click();
+      if (holdHistory) {
+        // Keep the same frontend open as the delayed relay starts delivering history.
+        // No route reload or manual refresh may be needed to render these arrivals.
+        await expect.poll(() => heldHistory.length).toBeGreaterThan(0);
+        const delayedText = group.messages[4].text;
+        await page.evaluate(async (text) => {
+          const { chatDataService } = await import('/src/services/chatDataService.ts');
+          const original = chatDataService.createMessage;
+          let release!: () => void;
+          const barrier = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          (window as unknown as { releaseHistoryWrite: () => void }).releaseHistoryWrite = () => {
+            chatDataService.createMessage = original;
+            release();
+          };
+          chatDataService.createMessage = async function (input) {
+            if (input.message === text) await barrier;
+            return original.call(this, input);
+          };
+        }, delayedText);
+        holdHistory = false;
+        heldHistory.splice(0).forEach((respond) => respond());
+        // Verified content must render even while its durable write is held open.
+        await expect(
+          page.getByTestId('message-bubble').filter({ hasText: delayedText }),
+        ).toBeVisible();
+        expect(
+          await page.evaluate(
+            async ({ publicKey, text }) => {
+              const { chatDataService } = await import('/src/services/chatDataService.ts');
+              return (await chatDataService.listLatestMessages(publicKey, 50)).rows.some(
+                (row) => row.message === text,
+              );
+            },
+            { publicKey: group.publicKey, text: delayedText },
+          ),
+        ).toBe(false);
+        await page.evaluate(() => {
+          const fixture = window as unknown as { releaseHistoryWrite?: () => void };
+          fixture.releaseHistoryWrite!();
+          delete fixture.releaseHistoryWrite;
+        });
+      }
       await expect(page.locator('.thread-header .avatar img')).toHaveAttribute(
         'src',
         'https://profiles.test/group.png',

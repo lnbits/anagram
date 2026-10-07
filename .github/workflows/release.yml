@@ -2,6 +2,13 @@ name: Release
 on:
   push:
     tags: ['v*', '[0-9]*']
+    branches: ['build-validation/**']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to validate (for example v0.9.0-rc1); never publishes'
+        required: false
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -11,6 +18,7 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     outputs:
+      tag: ${{ steps.version.outputs.tag }}
       draft: ${{ steps.policy.outputs.draft }}
       prerelease: ${{ steps.policy.outputs.prerelease }}
     steps:
@@ -20,15 +28,19 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
-      - name: Set version from tag
-        run: npm run release:version
+      - name: Set build version
+        id: version
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          REQUESTED_VERSION: ${{ inputs.version || (github.ref_type == 'tag' && github.ref_name) || '' }}
+        run: |
+          export RELEASE_TAG="${REQUESTED_VERSION:-v$(node -p 'require("./package.json").version')}"
+          npm run release:version
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
       - name: Determine release visibility
         id: policy
         run: node scripts/release-policy.mjs
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
       - run: npm audit --audit-level=high
       - run: npm run verify:iroh
       - run: npm run quality:all
@@ -83,7 +95,7 @@ jobs:
       - name: Set version from tag
         run: npm run release:version
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
       - run: npm run verify:iroh
       - name: Configure optional Apple signing
         if: runner.os == 'macOS'
@@ -110,16 +122,10 @@ jobs:
     needs: verify
     uses: ./.github/workflows/android.yml
     with:
-      release_tag: ${{ github.ref_name }}
-    secrets: inherit
-  ios:
-    needs: verify
-    uses: ./.github/workflows/ios.yml
-    with:
-      release_tag: ${{ github.ref_name }}
+      release_tag: ${{ needs.verify.outputs.tag }}
     secrets: inherit
   publish:
-    needs: [verify, desktop, android, ios]
+    needs: [verify, desktop, android]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -146,17 +152,23 @@ jobs:
           dmgs=(release-assets/*.dmg)
           appimages=(release-assets/*.AppImage)
           apks=(release-assets/*.apk)
-          ipas=(release-assets/*.ipa)
-          [[ ${#exes[@]} -eq 1 && ${#dmgs[@]} -eq 2 && ${#appimages[@]} -eq 1 && ${#apks[@]} -eq 1 && ${#ipas[@]} -eq 1 ]]
+          [[ ${#exes[@]} -eq 1 && ${#dmgs[@]} -eq 2 && ${#appimages[@]} -eq 1 && ${#apks[@]} -eq 1 ]]
           cd web-app
           zip -qr ../release-assets/anagram-web.zip .
           cd ../release-assets
           sha256sum ./* > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-release
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 14
       - name: Publish complete release
+        if: github.event_name == 'push' && github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
           RELEASE_DRAFT: ${{ needs.verify.outputs.draft }}
           RELEASE_PRERELEASE: ${{ needs.verify.outputs.prerelease }}
         run: bash scripts/publish-release.sh

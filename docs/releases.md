@@ -8,7 +8,7 @@ Push a version tag to run [release.yml](../.github/workflows/release.yml). Versi
 | `v0.9.1-beta.1` | Published prerelease |
 | `v0.9.1-rc1` or `v0.9.1-rc.1` | Draft prerelease, including reruns |
 
-The release waits for all builds and checks, then attaches Windows `.exe`, Intel/Apple Silicon `.dmg`, Linux `.AppImage`, Android `.apk`, iPhone `.ipa`, `anagram-web.zip`, and `SHA256SUMS.txt`. Failed builds leave workflow artifacts. No automatic desktop updater is configured.
+The release waits for all builds and checks, then attaches Windows `.exe`, Intel/Apple Silicon `.dmg`, Linux `.AppImage`, Android `.apk`, `anagram-web.zip`, and `SHA256SUMS.txt`. Failed builds leave workflow artifacts. No automatic desktop updater is configured.
 
 ## Signing
 
@@ -22,7 +22,7 @@ Configure repository **Actions secrets**. Never commit signing keys or certifica
 
 **Android:** encode the existing keystore as base64 and keep the same key for updates. Tagged releases require signing. Manual builds without secrets produce an unsigned APK. Signatures and 16 KB alignment are checked before upload.
 
-**iPhone:** use a base64 Apple Distribution `.p12` and provisioning profile for `com.nostr.anagram`. Without signing credentials, the asset is explicitly named `-ios-unsigned.ipa` and needs signing before installation. Partial signing configuration fails the build.
+**iPhone builds are paused** and are not required for releases. To resume, configure signing and set the `IOS_BUILDS_ENABLED` repository variable to `true`. Use a base64 Apple Distribution `.p12` and provisioning profile for `com.nostr.anagram`. Without signing credentials, the asset is explicitly named `-ios-unsigned.ipa` and needs signing before installation. Partial signing configuration fails the build.
 
 The `IOS_EXPORT_METHOD` repository variable defaults to `app-store-connect` for App Store/TestFlight. Use `release-testing` for an ad hoc profile covering registered devices, or `debugging` with development credentials. The workflow builds the IPA; it does not submit it to Apple.
 
@@ -32,6 +32,8 @@ See Tauri’s [Android](https://v2.tauri.app/distribute/sign/android/), [iOS](ht
 
 ## Manual builds
 
-Run **Android APK** or **iPhone app** from the Actions tab. Native projects are generated from committed sources. Mobile versions omit RC suffixes, retain the full tag in asset names, and use the workflow run number as the build number. Reruns reuse that number.
+Run **Release** from the Actions tab to validate all active platforms without publishing. Pushes to `build-validation/**` branches also validate using the package version. Only version-tag pushes can publish a release. Download the `complete-release` artifact to inspect the installers before tagging.
+
+Run **Android APK** for an Android-only build. Native projects are generated from committed sources. Mobile versions omit RC suffixes, retain the full tag in asset names, and use the workflow run number as the build number. Reruns reuse that number.
 
 Windows/macOS/iOS installers and real-device behavior require checks on their respective platforms. Local web tests do not validate them.

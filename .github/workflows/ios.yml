@@ -1,4 +1,4 @@
-name: iPhone app
+name: iPhone app (paused)
 on:
   workflow_call:
     inputs:
@@ -11,6 +11,8 @@ permissions:
   contents: read
 jobs:
   ios:
+    # Paused until iOS distribution signing is configured and verified.
+    if: vars.IOS_BUILDS_ENABLED == 'true'
     runs-on: macos-15
     timeout-minutes: 60
     env:
@@ -39,7 +41,9 @@ jobs:
       - name: Install Xcode tooling
         run: |
           command -v xcodegen >/dev/null || brew install xcodegen
-          xcodebuild -downloadPlatform iOS
+          xcodebuild -version
+          # Device builds use the installed SDK; no simulator runtime is needed.
+          xcrun --sdk iphoneos --show-sdk-path
       - name: Generate iPhone project
         run: |
           if [[ -z "${APPLE_DEVELOPMENT_TEAM:-}" ]]; then unset APPLE_DEVELOPMENT_TEAM; fi

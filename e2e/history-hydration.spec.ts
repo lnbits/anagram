@@ -477,7 +477,17 @@ test('healthy history survives AUTH rejection and recovered history survives a d
     await expect(
       page.getByTestId('chat-item').filter({ hasText: 'Older message after dropped page arrived' }),
     ).toBeVisible({ timeout: 45000 });
-    await expect(page.getByTestId('history-sync-status')).toBeHidden();
+    // Completed startup details intentionally remain available in the sidebar.
+    // Check actual history completion rather than expecting that control to disappear.
+    await expect
+      .poll(() =>
+        page.evaluate(async () => {
+          const { useNostrStore } = await import('/src/stores/nostrStore.ts');
+          return useNostrStore().startupSteps.find((step) => step.id === 'message-history-restore')
+            ?.status;
+        }),
+      )
+      .toBe('success');
     expect(droppedPage).toBe(true);
     expect(accepted).toBeGreaterThan(1);
     expect(pageErrors).toEqual([]);

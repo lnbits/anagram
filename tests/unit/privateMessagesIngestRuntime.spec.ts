@@ -284,6 +284,48 @@ describe('privateMessagesIngestRuntime', () => {
     runtime.resetPrivateMessagesIngestRuntimeState();
   });
 
+  it('drains arrivals queued while the last inbox read is returning empty', async () => {
+    const { MessageInbox } = await import('#src/lib/nostr/inbox.ts');
+    const { ClientEvent: Event } = await import('#src/lib/nostr/client.ts');
+    const account = crypto.randomUUID();
+    const deps = createDeps();
+    deps.resolveIncomingPrivateMessageRecipientContext.mockResolvedValue(null);
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+    let release!: () => void;
+    const emptyRead = new Promise<never[]>((resolve) => {
+      release = () => resolve([]);
+    });
+    const next = vi.spyOn(MessageInbox.prototype, 'next').mockReturnValueOnce(emptyRead);
+    const wrap = (id: string) =>
+      new Event(undefined, {
+        id,
+        kind: 1059,
+        pubkey: 'a'.repeat(64),
+        tags: [],
+        content: 'ciphertext',
+        created_at: 1,
+      });
+    try {
+      await runtime.queuePrivateMessageIngestion(wrap('first'), account);
+      await vi.waitFor(() => expect(next).toHaveBeenCalled());
+      const late = runtime.queuePrivateMessageIngestion(wrap('late'), account);
+      // The worker's empty snapshot predates this new arrival and its journal commit.
+      await vi.waitFor(async () =>
+        expect(await new MessageInbox().hasPending(account, 'late')).toBe(true),
+      );
+      release();
+      await late;
+      await runtime.getPrivateMessagesIngestQueue();
+      expect(
+        deps.resolveIncomingPrivateMessageRecipientContext.mock.calls.map(([event]) => event.id),
+      ).toEqual(['first', 'late']);
+    } finally {
+      release();
+      next.mockRestore();
+      runtime.resetPrivateMessagesIngestRuntimeState();
+    }
+  });
+
   it('resolves recipient context while journal persistence is still pending', async () => {
     const { MessageInbox } = await import('#src/lib/nostr/inbox.ts');
     const { ClientEvent: Event } = await import('#src/lib/nostr/client.ts');

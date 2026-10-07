@@ -805,11 +805,15 @@ test('concurrent DM hydration stays in the authenticated sender thread while swi
       await page.locator(`[data-testid="chat-item"][data-chat-public-key="${pubkey}"]`).click();
       await expect(page.getByTestId('message-bubble')).toHaveCount(48);
       await expect(page.getByTestId('chat-thread')).toHaveAttribute('data-chat-public-key', pubkey);
-      expect(
-        await page
-          .getByTestId('message-bubble')
-          .evaluateAll((rows) => rows.map((row) => row.getAttribute('data-chat-public-key'))),
-      ).toEqual(Array(48).fill(pubkey));
+      // A chat switch can replace the previous 48 rows after the count check.
+      // Wait for the expected thread's complete render, not a transient snapshot.
+      await expect
+        .poll(() =>
+          page
+            .getByTestId('message-bubble')
+            .evaluateAll((rows) => rows.map((row) => row.getAttribute('data-chat-public-key'))),
+        )
+        .toEqual(Array(48).fill(pubkey));
       await expect(
         page
           .getByTestId('message-bubble')

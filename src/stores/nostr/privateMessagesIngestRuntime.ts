@@ -269,6 +269,7 @@ export function createPrivateMessagesIngestRuntime({
   // Only the next small page stays in memory. Overflow drains from the journal.
   const hotInbox = new Map<string, { record: InboxRecord; durable: Promise<boolean> }>();
   const spoolWaiters = new Map<string, Array<(value: boolean) => void>>();
+  let spoolArrivalVersion = 0;
   async function queuePrivateMessageIngestion(
     wrappedEvent: ClientEvent,
     loggedInPubkeyHex: string,
@@ -338,6 +339,7 @@ export function createPrivateMessagesIngestRuntime({
       ...(options.reprocess ? { reprocess: true } : {}),
       relayUrls: wrappedEvent.onRelays.map((r) => r.url),
     };
+    spoolArrivalVersion++;
     spoolWrites++;
     // Start the journal concurrently. Immediate processing does not wait for its
     // write/read round trip; acknowledgement still requires durable success.
@@ -375,6 +377,7 @@ export function createPrivateMessagesIngestRuntime({
             const awakened = new Promise<void>((resolve) => {
               wakeSpool = resolve;
             });
+            const arrivalVersion = spoolArrivalVersion;
             const batchArrivalVersion = foregroundArrivalVersion;
             const hot = [...hotInbox.values()]
               .filter(
@@ -387,6 +390,9 @@ export function createPrivateMessagesIngestRuntime({
                   (record) => !activeIds.has(record.id),
                 );
             if (!batch.length) {
+              // A new envelope may have arrived after this disk snapshot began.
+              // Re-read the hot queue/journal before declaring the worker idle.
+              if (arrivalVersion !== spoolArrivalVersion) continue;
               if (pending.size) {
                 await Promise.race([...pending, awakened]);
                 continue;
@@ -459,7 +465,9 @@ export function createPrivateMessagesIngestRuntime({
         } catch (error) {
           console.error('Message inbox failed');
         } finally {
-          await Promise.all(pending);
+          // Do not yield between detecting an idle queue and releasing its worker:
+          // an arrival in that gap would otherwise join a worker that is exiting.
+          if (pending.size) await Promise.all(pending);
           if (generation !== ingestQueueGeneration) return;
           spoolRunning = false;
           hotInbox.clear();

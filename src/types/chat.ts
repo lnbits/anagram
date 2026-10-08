@@ -101,15 +101,27 @@ export interface MessageMentionMetadata {
   nprofile?: string;
 }
 
+// NIP-17 kind 15 decryption data. Only ever transported inside the gift-wrapped rumor.
+export interface MessageAttachmentEncryption {
+  algorithm: 'aes-gcm';
+  key: string;
+  nonce: string;
+  originalSha256?: string;
+}
+
 export interface MessageAttachmentMetadata {
   type: 'media';
   url: string;
+  // For encrypted attachments: the MIME type of the plaintext file, not of the stored blob.
   mimeType: string;
-  size: number;
+  // For encrypted attachments: size and sha256 describe the ciphertext stored on the server.
+  // size is always present for imeta media and optional for NIP-17 kind 15 files.
+  size?: number;
   sha256?: string;
   name?: string;
   uploadedAt?: string;
   service?: string;
+  encryption?: MessageAttachmentEncryption;
 }
 
 export interface MessageMetadata {

@@ -1723,4 +1723,320 @@ describe('privateMessagesIngestRuntime', () => {
     );
     expect(deps.showIncomingMessageBrowserNotification).not.toHaveBeenCalled();
   });
+
+  describe('NIP-17 kind 15 file messages', () => {
+    const chatPublicKey = 'a'.repeat(64);
+    const loggedInPubkey = 'b'.repeat(64);
+    const createdAt = '2023-11-14T22:13:20.000Z';
+    const blobUrl = `https://blossom.example.com/${'c3'.repeat(32)}`;
+    const fileTags = [
+      ['file-type', 'image/jpeg'],
+      ['encryption-algorithm', 'aes-gcm'],
+      ['decryption-key', 'a1'.repeat(32)],
+      ['decryption-nonce', 'b2'.repeat(12)],
+      ['x', 'c3'.repeat(32)],
+      ['ox', 'd4'.repeat(32)],
+      ['size', '2048'],
+    ];
+
+    function arrangeAcceptedChat() {
+      serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue({
+        id: chatPublicKey,
+        public_key: chatPublicKey,
+        type: 'user',
+        name: 'Alice',
+        last_message: 'Older preview',
+        last_message_at: '2023-11-14T22:00:00.000Z',
+        unread_count: 0,
+        meta: { inbox_state: 'accepted', accepted_at: '2023-11-14T22:00:00.000Z' },
+      });
+      serviceMocks.chatDataService.createMessage.mockResolvedValue({
+        id: 88,
+        chat_public_key: chatPublicKey,
+        author_public_key: chatPublicKey,
+        created_at: createdAt,
+        event_id: 'file-rumor',
+        meta: {},
+      });
+    }
+
+    async function ingest(rumorEvent: ClientEvent, deps: ReturnType<typeof createDeps>) {
+      const runtime = createPrivateMessagesIngestRuntime(deps);
+      ndkMocks.giftUnwrap.mockResolvedValue(rumorEvent);
+      runtime.queuePrivateMessageIngestion(makeWrappedEvent(), loggedInPubkey, {
+        uiThrottleMs: 25,
+      });
+      await runtime.getPrivateMessagesIngestQueue();
+    }
+
+    it('accepts a valid kind 15 rumor and stores its encrypted attachment', async () => {
+      const deps = createDeps();
+      deps.resolveIncomingChatInboxStateValue.mockReturnValue('accepted');
+      deps.shouldNotifyForAcceptedChatOnly.mockResolvedValue(true);
+      arrangeAcceptedChat();
+
+      await ingest(
+        makeRumorEvent({
+          recipientPubkey: loggedInPubkey,
+          senderPubkey: chatPublicKey,
+          eventId: 'file-rumor',
+          kind: 15,
+          content: blobUrl,
+          tags: [['p', loggedInPubkey], ...fileTags],
+        }),
+        deps,
+      );
+
+      expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: blobUrl,
+          meta: expect.objectContaining({
+            kind: 15,
+            attachments: [
+              {
+                type: 'media',
+                url: blobUrl,
+                mimeType: 'image/jpeg',
+                size: 2048,
+                sha256: 'c3'.repeat(32),
+                encryption: {
+                  algorithm: 'aes-gcm',
+                  key: 'a1'.repeat(32),
+                  nonce: 'b2'.repeat(12),
+                  originalSha256: 'd4'.repeat(32),
+                },
+              },
+            ],
+          }),
+        }),
+      );
+      // Neither the blob URL nor any decryption material reaches previews or notifications.
+      expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          chat_activity: expect.objectContaining({
+            unreadCount: 1,
+            preview: { text: 'Picture', at: createdAt },
+          }),
+        }),
+      );
+      expect(deps.showIncomingMessageBrowserNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ messageText: 'Picture' }),
+      );
+      expect(serviceMocks.nostrEventDataService.upsertEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: expect.objectContaining({ id: 'file-rumor', kind: 15 }),
+          direction: 'in',
+        }),
+      );
+      expect(deps.logInboundEvent.mock.calls.some(([stage]) => stage === 'drop')).toBe(false);
+    });
+
+    it('uses Video and Audio previews for encrypted video and audio', async () => {
+      for (const [mimeType, preview] of [
+        ['video/mp4', 'Video'],
+        ['audio/mpeg', 'Audio'],
+      ]) {
+        vi.clearAllMocks();
+        serviceMocks.chatDataService.getIncomingMessageContext.mockImplementation(
+          async (chat, id) => ({
+            chat: await serviceMocks.chatDataService.getChatByPublicKey(chat),
+            existingMessage: await serviceMocks.chatDataService.getMessageByEventIdOrEditReference(
+              id,
+            ),
+          }),
+        );
+        const deps = createDeps();
+        deps.resolveIncomingChatInboxStateValue.mockReturnValue('accepted');
+        deps.shouldNotifyForAcceptedChatOnly.mockResolvedValue(true);
+        arrangeAcceptedChat();
+
+        await ingest(
+          makeRumorEvent({
+            recipientPubkey: loggedInPubkey,
+            senderPubkey: chatPublicKey,
+            eventId: `file-${preview}`,
+            kind: 15,
+            content: blobUrl,
+            tags: [
+              ['p', loggedInPubkey],
+              ...fileTags.map((tag) => (tag[0] === 'file-type' ? [tag[0], mimeType] : tag)),
+            ],
+          }),
+          deps,
+        );
+
+        expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            chat_activity: expect.objectContaining({ preview: { text: preview, at: createdAt } }),
+          }),
+        );
+        expect(deps.showIncomingMessageBrowserNotification).toHaveBeenCalledWith(
+          expect.objectContaining({ messageText: preview }),
+        );
+      }
+    });
+
+    it('stores self-sent kind 15 copies as outbound messages', async () => {
+      const deps = createDeps();
+      const otherParticipantPubkey = 'c'.repeat(64);
+      const rumorEvent = makeRumorEvent({
+        recipientPubkey: loggedInPubkey,
+        senderPubkey: loggedInPubkey,
+        eventId: 'self-file',
+        kind: 15,
+        content: blobUrl,
+        tags: [['p', loggedInPubkey], ['p', otherParticipantPubkey], ...fileTags],
+      });
+      serviceMocks.chatDataService.createChat.mockResolvedValue({
+        id: otherParticipantPubkey,
+        public_key: otherParticipantPubkey,
+        type: 'user',
+        name: 'Other',
+        last_message: '',
+        last_message_at: createdAt,
+        unread_count: 0,
+        meta: {},
+      });
+      serviceMocks.chatDataService.createMessage.mockResolvedValue({
+        id: 89,
+        chat_public_key: otherParticipantPubkey,
+        author_public_key: loggedInPubkey,
+        created_at: createdAt,
+        event_id: 'self-file',
+        meta: {},
+      });
+
+      await ingest(rumorEvent, deps);
+
+      expect(serviceMocks.nostrEventDataService.upsertEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: expect.objectContaining({ id: 'self-file', kind: 15 }),
+          direction: 'out',
+        }),
+      );
+      expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          chat_public_key: otherParticipantPubkey,
+          meta: expect.objectContaining({ kind: 15 }),
+          chat_activity: expect.objectContaining({
+            unreadCount: 0,
+            preview: { text: 'Picture', at: createdAt },
+          }),
+        }),
+      );
+      expect(deps.showIncomingMessageBrowserNotification).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [
+        'missing the decryption key',
+        fileTags.filter((tag) => tag[0] !== 'decryption-key'),
+        blobUrl,
+      ],
+      [
+        'missing the decryption nonce',
+        fileTags.filter((tag) => tag[0] !== 'decryption-nonce'),
+        blobUrl,
+      ],
+      ['missing the x hash', fileTags.filter((tag) => tag[0] !== 'x'), blobUrl],
+      ['missing the file type', fileTags.filter((tag) => tag[0] !== 'file-type'), blobUrl],
+      [
+        'using an unsupported algorithm',
+        fileTags.map((tag) => (tag[0] === 'encryption-algorithm' ? [tag[0], 'none'] : tag)),
+        blobUrl,
+      ],
+      [
+        'using a short key',
+        fileTags.map((tag) => (tag[0] === 'decryption-key' ? [tag[0], 'a1'.repeat(16)] : tag)),
+        blobUrl,
+      ],
+      ['pointing at a non-HTTPS URL', fileTags, 'http://blossom.example.com/blob'],
+    ])(
+      'drops a kind 15 rumor %s instead of showing a plaintext link',
+      async (_label, tags, content) => {
+        const deps = createDeps();
+        deps.shouldNotifyForAcceptedChatOnly.mockResolvedValue(true);
+        arrangeAcceptedChat();
+
+        await ingest(
+          makeRumorEvent({
+            recipientPubkey: loggedInPubkey,
+            senderPubkey: chatPublicKey,
+            kind: 15,
+            content,
+            tags: [['p', loggedInPubkey], ...tags],
+          }),
+          deps,
+        );
+
+        expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
+        expect(deps.showIncomingMessageBrowserNotification).not.toHaveBeenCalled();
+        expect(deps.logInboundEvent).toHaveBeenCalledWith(
+          'drop',
+          expect.objectContaining({ reason: 'invalid-file-message' }),
+        );
+      },
+    );
+
+    it('never treats a kind 15 rumor as an edit replacement', async () => {
+      const deps = createDeps();
+      arrangeAcceptedChat();
+      const deletedMessage = {
+        id: 70,
+        chat_public_key: chatPublicKey,
+        author_public_key: chatPublicKey,
+        message: 'Deleted text',
+        created_at: createdAt,
+        event_id: 'f'.repeat(64),
+        meta: { deleted: { deletedAt: createdAt } },
+      };
+      serviceMocks.chatDataService.getMessageByEventId.mockImplementation(async (eventId) =>
+        eventId === deletedMessage.event_id ? deletedMessage : null,
+      );
+      serviceMocks.chatDataService.findDeletedMessageInSecond.mockResolvedValue(deletedMessage);
+
+      await ingest(
+        makeRumorEvent({
+          recipientPubkey: loggedInPubkey,
+          senderPubkey: chatPublicKey,
+          eventId: 'file-rumor',
+          kind: 15,
+          content: blobUrl,
+          tags: [['p', loggedInPubkey], ['e', 'f'.repeat(64), '', 'edit'], ...fileTags],
+        }),
+        deps,
+      );
+
+      expect(serviceMocks.chatDataService.findDeletedMessageInSecond).not.toHaveBeenCalled();
+      expect(serviceMocks.chatDataService.applyMessageEdit).not.toHaveBeenCalled();
+      expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          meta: expect.not.objectContaining({ edited: expect.anything() }),
+        }),
+      );
+      serviceMocks.chatDataService.findDeletedMessageInSecond.mockResolvedValue(null);
+    });
+
+    it('still drops rumor kinds other than 14 and 15', async () => {
+      const deps = createDeps();
+      arrangeAcceptedChat();
+
+      await ingest(
+        makeRumorEvent({
+          recipientPubkey: loggedInPubkey,
+          senderPubkey: chatPublicKey,
+          kind: 16,
+          content: blobUrl,
+          tags: [['p', loggedInPubkey], ...fileTags],
+        }),
+        deps,
+      );
+
+      expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
+      expect(deps.logInboundEvent).toHaveBeenCalledWith(
+        'drop',
+        expect.objectContaining({ reason: 'unsupported-rumor-kind' }),
+      );
+    });
+  });
 });

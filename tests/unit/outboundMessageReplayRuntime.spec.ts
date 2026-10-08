@@ -59,6 +59,36 @@ describe('outboundMessageReplayRuntime', () => {
     vi.useRealTimers();
   });
 
+  it('replays pending kind 15 file messages like kind 14 messages', async () => {
+    const retryDirectMessageRelay = vi.fn().mockResolvedValue(undefined);
+    serviceMocks.nostrEventDataService.listEventsByDirection.mockResolvedValue([
+      {
+        direction: 'out',
+        event: { id: 'file-event', kind: 15 },
+        relay_statuses: [
+          makeRelayStatus({
+            relay_url: 'wss://relay-pending',
+            status: 'pending',
+            scope: 'recipient',
+          }),
+        ],
+      },
+    ]);
+
+    const runtime = createOutboundMessageReplayRuntime({
+      getLoggedInPublicKeyHex: () => 'f'.repeat(64),
+      logMessageRelayDiagnostics: vi.fn(),
+      retryDirectMessageRelay,
+    });
+
+    await runtime.runOutboundMessageReplay('startup');
+    runtime.resetOutboundMessageReplayRuntimeState();
+
+    expect(retryDirectMessageRelay).toHaveBeenCalledWith(7, 'wss://relay-pending', 'recipient', {
+      trigger: 'outbox:startup',
+    });
+  });
+
   it('retries persisted pending and failed DM relay targets', async () => {
     const retryDirectMessageRelay = vi.fn().mockResolvedValue(undefined);
     const logMessageRelayDiagnostics = vi.fn();

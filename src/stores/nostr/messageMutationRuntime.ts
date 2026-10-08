@@ -18,7 +18,11 @@ import type {
   NostrEventDirection,
 } from '#src/types/chat.ts';
 import type { ContactRecord } from '#src/types/contact.ts';
-import { buildMessageReplyPreviewContent } from '#src/utils/messageAttachments.ts';
+import {
+  buildMessageReplyPreviewContent,
+  isChatMessageRumorKind,
+  resolveChatMessageRumorKind,
+} from '#src/utils/messageAttachments.ts';
 import {
   areMessageEditTimestampsEqual,
   messageEditReferencesEventId,
@@ -589,8 +593,7 @@ export function createMessageMutationRuntime({
     for (const { entry: pendingDeletion, targetEventId } of pendingDeletions) {
       if (
         pendingDeletion.deletionAuthorPublicKey !== normalizedMessageAuthorPublicKey ||
-        (pendingDeletion.targetKind !== null &&
-          pendingDeletion.targetKind !== NostrKind.PrivateDirectMessage)
+        (pendingDeletion.targetKind !== null && !isChatMessageRumorKind(pendingDeletion.targetKind))
       ) {
         continue;
       }
@@ -606,7 +609,7 @@ export function createMessageMutationRuntime({
         pendingDeletion.deletionAuthorPublicKey,
         pendingDeletion.deleteEventId,
         pendingDeletion.deletedAt,
-        NostrKind.PrivateDirectMessage,
+        resolveChatMessageRumorKind(pendingDeletion.targetKind),
         options,
       );
       if (updatedRow) {
@@ -1043,13 +1046,13 @@ export function createMessageMutationRuntime({
 
       if (targetKind === NostrKind.Reaction) {
         handled = await processIncomingReactionDeletion(target.eventId, senderPubkeyHex, options);
-      } else if (targetKind === NostrKind.PrivateDirectMessage) {
+      } else if (isChatMessageRumorKind(targetKind)) {
         handled = await processIncomingMessageDeletion(
           target.eventId,
           senderPubkeyHex,
           deleteEventId,
           deletedAt,
-          NostrKind.PrivateDirectMessage,
+          targetKind,
           options,
         );
       } else {

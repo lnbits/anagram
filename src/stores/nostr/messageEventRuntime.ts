@@ -54,7 +54,8 @@ export function createMessageEventRuntime({
     message: string,
     createdAt: number,
     replyToEventId?: string | null,
-    additionalTags: string[][] = []
+    additionalTags: string[][] = [],
+    kind: 14 | 15 = NostrKind.PrivateDirectMessage
   ): ClientEvent {
     const tags: string[][] = [['p', recipientPubkey]];
     const normalizedReplyTargetEventId = normalizeEventId(replyToEventId);
@@ -74,7 +75,7 @@ export function createMessageEventRuntime({
     }
 
     return new ClientEvent(ndk, {
-      kind: NostrKind.PrivateDirectMessage,
+      kind,
       created_at: createdAt,
       pubkey: senderPubkey,
       content: message,

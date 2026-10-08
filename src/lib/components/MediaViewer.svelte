@@ -5,8 +5,18 @@
   import { openExternalHttpUrl } from '#src/utils/externalLinks.ts';
   export let url: string;
   export let name = 'attachment';
+  // Decrypted media: url is a local object URL, so there is no original to open and nothing to
+  // fetch; the verified plaintext is saved directly.
+  export let encrypted = false;
   let downloadError = '';
   async function download() {
+    if (encrypted) {
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = name;
+      link.click();
+      return;
+    }
     try {
       const response = await fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer' });
       if (!response.ok) throw new Error();
@@ -110,9 +120,9 @@
       class="icon-button"
       aria-label="Zoom in"
       onclick={() => (scale = Math.min(5, scale + 0.25))}>+</button
-    ><button onclick={reset}>Reset zoom</button><button onclick={() => openExternalHttpUrl(url)}
-      >Open original</button
-    ><button onclick={download}>Download image</button><button
+    ><button onclick={reset}>Reset zoom</button>{#if !encrypted}<button
+        onclick={() => openExternalHttpUrl(url)}>Open original</button
+      >{/if}<button onclick={download}>Download image</button><button
       class="icon-button"
       aria-label="Close image"
       onclick={onclose}><Icon name="close" /></button

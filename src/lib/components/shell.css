@@ -611,6 +611,16 @@ p {
   display: block;
   margin: 16px auto;
 }
+.modal .media-notice-dismiss {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.modal .media-notice-dismiss input {
+  display: inline-block;
+  width: auto;
+  margin: 0;
+}
 .notices {
   position: fixed;
   bottom: 24px;

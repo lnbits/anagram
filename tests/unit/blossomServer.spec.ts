@@ -49,4 +49,18 @@ describe('Blossom server helpers', () => {
       ],
     });
   });
+
+  it('builds a delete authorization scoped to the server and blob', () => {
+    expect(
+      buildBlossomUploadAuthorization('https://media.example.com', 'b'.repeat(64), 1_000, 'delete')
+    ).toEqual({
+      content: 'Authorize media delete from media.example.com',
+      tags: [
+        ['t', 'delete'],
+        ['expiration', '1900'],
+        ['server', 'media.example.com'],
+        ['x', 'b'.repeat(64)],
+      ],
+    });
+  });
 });

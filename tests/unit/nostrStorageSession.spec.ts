@@ -252,6 +252,29 @@ describe('storageSession runtime', () => {
       contactSecret: groupPrivateKey,
     });
 
+    localStorage.store.set(
+      PRIVATE_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        contactSecret: groupPrivateKey,
+        privateMediaBlossomServerUrl: 'https://Private.Example.com/',
+      }),
+    );
+    expect(runtime.readPrivatePreferencesFromStorage()).toEqual({
+      contactSecret: groupPrivateKey,
+      privateMediaBlossomServerUrl: 'https://private.example.com',
+    });
+
+    localStorage.store.set(
+      PRIVATE_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        contactSecret: groupPrivateKey,
+        privateMediaBlossomServerUrl: 'http://insecure.example.com',
+      }),
+    );
+    expect(runtime.readPrivatePreferencesFromStorage()).toEqual({
+      contactSecret: groupPrivateKey,
+    });
+
     const cursor = {
       at: '2026-01-02T00:00:00.000Z',
       eventId: EVENT_ID_A,

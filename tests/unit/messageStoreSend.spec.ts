@@ -1,5 +1,6 @@
 import { createPinia, setActivePinia } from '#src/lib/state/store.ts';
 import { MissingContactRelaysError, useMessageStore } from '#src/stores/messageStore.ts';
+import type { MessageAttachmentMetadata } from '#src/types/chat.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const CHAT_ID = 'c'.repeat(64);
@@ -349,5 +350,178 @@ describe('messageStore send', () => {
     ).rejects.toThrow('Cannot continue an outbound message from a different chat.');
 
     expect(serviceMocks.nostrStore.sendDirectMessage).not.toHaveBeenCalled();
+  });
+
+  describe('media attachments', () => {
+    const blobUrl = `https://blossom.example.com/${'c3'.repeat(32)}`;
+    const encryptedAttachment: MessageAttachmentMetadata = {
+      type: 'media',
+      url: blobUrl,
+      mimeType: 'image/jpeg',
+      size: 2048,
+      sha256: 'c3'.repeat(32),
+      name: 'holiday.jpg',
+      service: 'blossom.example.com',
+      encryption: {
+        algorithm: 'aes-gcm',
+        key: 'a1'.repeat(32),
+        nonce: 'b2'.repeat(12),
+        originalSha256: 'd4'.repeat(32),
+      },
+    };
+    const expectedFileTags = [
+      ['file-type', 'image/jpeg'],
+      ['encryption-algorithm', 'aes-gcm'],
+      ['decryption-key', 'a1'.repeat(32)],
+      ['decryption-nonce', 'b2'.repeat(12)],
+      ['x', 'c3'.repeat(32)],
+      ['ox', 'd4'.repeat(32)],
+      ['size', '2048'],
+    ];
+
+    it('sends encrypted images as kind 15 with file-message tags', async () => {
+      const store = useMessageStore();
+
+      const created = await store.sendMediaAttachment(CHAT_ID, encryptedAttachment);
+
+      expect(serviceMocks.nostrStore.sendDirectMessage).toHaveBeenCalledWith(
+        CHAT_ID,
+        blobUrl,
+        ['wss://contact.example'],
+        expect.objectContaining({
+          rumorKind: 15,
+          additionalTags: expectedFileTags,
+          publishSelfCopy: true,
+        })
+      );
+      const options = serviceMocks.nostrStore.sendDirectMessage.mock.calls[0][3];
+      expect(JSON.stringify(options.additionalTags)).not.toContain('imeta');
+      expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: blobUrl,
+          meta: expect.objectContaining({ kind: 15, attachments: [encryptedAttachment] }),
+        })
+      );
+      expect(created?.meta.kind).toBe(15);
+    });
+
+    it.each([
+      ['video/mp4'],
+      ['video/webm'],
+      ['audio/mpeg'],
+    ])('sends and forwards encrypted %s as kind 15 with its MIME type', async (mimeType) => {
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+      const media = { ...encryptedAttachment, mimeType };
+      const store = useMessageStore();
+
+      await store.sendMediaAttachment(CHAT_ID, media);
+      await store.forwardMessage('e'.repeat(64), {
+        text: blobUrl,
+        meta: { kind: 15, attachments: [media], reactions: [] },
+      });
+
+      for (const call of serviceMocks.nostrStore.sendDirectMessage.mock.calls) {
+        expect(call[3]).toEqual(
+          expect.objectContaining({
+            rumorKind: 15,
+            additionalTags: expectedFileTags.map((tag) =>
+              tag[0] === 'file-type' ? ['file-type', mimeType] : tag
+            ),
+          })
+        );
+        expect(JSON.stringify(call[3].additionalTags)).not.toContain('imeta');
+      }
+      expect(serviceMocks.nostrStore.sendDirectMessage).toHaveBeenCalledTimes(2);
+      // Forwarding is by reference: nothing is downloaded, decrypted or re-uploaded.
+      expect(fetchSpy).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
+
+    it('sends encrypted images to the current group epoch key', async () => {
+      serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue(
+        makeChatRow({ type: 'group', meta: { current_epoch_public_key: EPOCH_PUBLIC_KEY } })
+      );
+      const store = useMessageStore();
+
+      await store.sendMediaAttachment(CHAT_ID, encryptedAttachment);
+
+      expect(serviceMocks.nostrStore.sendDirectMessage).toHaveBeenCalledWith(
+        EPOCH_PUBLIC_KEY,
+        blobUrl,
+        expect.any(Array),
+        expect.objectContaining({ rumorKind: 15, additionalTags: expectedFileTags })
+      );
+    });
+
+    it('keeps legacy plaintext media on kind 14 with an imeta tag', async () => {
+      const store = useMessageStore();
+      const legacyAttachment: MessageAttachmentMetadata = {
+        type: 'media',
+        url: 'https://nostr.build/v/clip.mp4',
+        mimeType: 'video/mp4',
+        size: 99,
+        sha256: 'e5'.repeat(32),
+      };
+
+      await store.sendMediaAttachment(CHAT_ID, legacyAttachment);
+
+      const options = serviceMocks.nostrStore.sendDirectMessage.mock.calls[0][3];
+      expect(options.rumorKind).toBeUndefined();
+      expect(options.additionalTags).toEqual([
+        [
+          'imeta',
+          'url https://nostr.build/v/clip.mp4',
+          'm video/mp4',
+          'size 99',
+          `x ${'e5'.repeat(32)}`,
+        ],
+      ]);
+    });
+
+    it('forwards an encrypted image by reference as a new kind 15 rumor', async () => {
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+      const store = useMessageStore();
+
+      await store.forwardMessage('e'.repeat(64), {
+        text: blobUrl,
+        meta: { kind: 15, attachments: [encryptedAttachment], reactions: [] },
+      });
+
+      expect(serviceMocks.nostrStore.sendDirectMessage).toHaveBeenCalledWith(
+        CHAT_ID,
+        blobUrl,
+        expect.any(Array),
+        expect.objectContaining({ rumorKind: 15, additionalTags: expectedFileTags })
+      );
+      // Forwarding never downloads, decrypts, or re-uploads the blob.
+      expect(fetchSpy).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
+
+    it('forwards legacy media as kind 14 with imeta', async () => {
+      const store = useMessageStore();
+
+      await store.forwardMessage(CHAT_ID, {
+        text: 'https://nostr.build/i/old.png',
+        meta: {
+          attachments: [
+            {
+              type: 'media',
+              url: 'https://nostr.build/i/old.png',
+              mimeType: 'image/png',
+              size: 10,
+            },
+          ],
+        },
+      });
+
+      const options = serviceMocks.nostrStore.sendDirectMessage.mock.calls[0][3];
+      expect(options.rumorKind).toBeUndefined();
+      expect(options.additionalTags).toEqual([
+        ['imeta', 'url https://nostr.build/i/old.png', 'm image/png', 'size 10'],
+      ]);
+    });
   });
 });

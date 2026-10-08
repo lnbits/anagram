@@ -282,7 +282,8 @@ describe('userActions runtime', () => {
       'hello there',
       123456,
       'reply-id',
-      undefined
+      undefined,
+      NostrKind.PrivateDirectMessage
     );
     expect(deps.sendGiftWrappedRumor).toHaveBeenCalledWith(
       'r'.repeat(64),
@@ -298,6 +299,104 @@ describe('userActions runtime', () => {
     expect(giftWrapEvent).toMatchObject({
       id: 'gift-wrap-event',
     });
+  });
+
+  it('sends encrypted file messages as kind 15 rumors with their file tags', async () => {
+    const deps = createDeps();
+    const actions = createUserActions(deps);
+    const fileTags = [
+      ['file-type', 'image/png'],
+      ['encryption-algorithm', 'aes-gcm'],
+      ['decryption-key', 'a'.repeat(64)],
+      ['decryption-nonce', 'b'.repeat(24)],
+      ['x', 'c'.repeat(64)],
+    ];
+
+    await actions.sendDirectMessage(
+      'r'.repeat(64),
+      'https://blossom.example/blob',
+      ['wss://relay.example'],
+      {
+        additionalTags: fileTags,
+        rumorKind: 15,
+      }
+    );
+
+    // The rumor kind and the gift-wrap rumorKind must agree: giftWrap overwrites the former.
+    expect(deps.sendGiftWrappedRumor).toHaveBeenCalledWith(
+      'r'.repeat(64),
+      ['wss://relay.example'],
+      15,
+      expect.any(Function),
+      expect.objectContaining({ rumorKind: 15 })
+    );
+    expect(deps.createDirectMessageRumorEvent).toHaveBeenCalledWith(
+      's'.repeat(64),
+      'r'.repeat(64),
+      'https://blossom.example/blob',
+      123456,
+      null,
+      fileTags,
+      15
+    );
+  });
+
+  it('falls back to kind 14 for unknown rumor kinds', async () => {
+    const deps = createDeps();
+    const actions = createUserActions(deps);
+
+    await actions.sendDirectMessage('r'.repeat(64), 'hello', ['wss://relay.example'], {
+      rumorKind: 7 as never,
+    });
+
+    expect(deps.sendGiftWrappedRumor).toHaveBeenCalledWith(
+      'r'.repeat(64),
+      ['wss://relay.example'],
+      NostrKind.PrivateDirectMessage,
+      expect.any(Function),
+      expect.anything()
+    );
+  });
+
+  it.each([
+    [NostrKind.PrivateDirectMessage, NostrKind.PrivateDirectMessage],
+    [15, 15],
+  ])('re-wraps a stored kind %s rumor as kind %s on relay retry', async (storedKind, wrappedKind) => {
+    const deps = createDeps();
+    const actions = createUserActions(deps);
+    serviceMocks.chatDataService.getMessageById.mockResolvedValue({ id: 7, event_id: 'event-1' });
+    serviceMocks.nostrEventDataService.getEventById.mockResolvedValue({
+      direction: 'out',
+      event: {
+        id: 'event-1',
+        kind: storedKind,
+        created_at: 1700000000,
+        pubkey: 's'.repeat(64),
+        tags: [['p', 'r'.repeat(64)]],
+      },
+    });
+    ndkMocks.giftWrap.mockResolvedValue({
+      kind: NostrKind.GiftWrap,
+      toNostrEvent: async () => ({
+        kind: NostrKind.GiftWrap,
+        id: 'a'.repeat(64),
+        sig: 'b'.repeat(128),
+        tags: [],
+        content: '',
+        pubkey: 'c'.repeat(64),
+        created_at: 1700000000,
+      }),
+    });
+    serviceMocks.nostrEventDataService.upsertEvent.mockImplementation(async (input) => input);
+
+    await actions.retryDirectMessageRelay(7, 'wss://relay.example', 'recipient');
+
+    expect(ndkMocks.giftWrap).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      { rumorKind: wrappedKind }
+    );
   });
 
   it('stores reaction rumor events with relay statuses after successful publish', async () => {

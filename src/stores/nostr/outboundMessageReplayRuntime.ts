@@ -1,4 +1,3 @@
-import { NostrKind } from '#src/lib/nostr/client.ts';
 import { chatDataService } from '#src/services/chatDataService.ts';
 import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
 import { nostrEventDataService } from '#src/services/nostrEventDataService.ts';
@@ -11,6 +10,7 @@ import {
   OUTBOUND_MESSAGE_REPLAY_SWEEP_INTERVAL_MS,
 } from '#src/stores/nostr/constants.ts';
 import type { MessageRelayStatus } from '#src/types/chat.ts';
+import { isChatMessageRumorKind } from '#src/utils/messageAttachments.ts';
 
 interface RetryDirectMessageRelayOptions {
   trigger?: string;
@@ -232,7 +232,7 @@ export function createOutboundMessageReplayRuntime({
       outer: for (const outboundEvent of outboundEvents) {
         if (
           outboundEvent.direction !== 'out' ||
-          outboundEvent.event.kind !== NostrKind.PrivateDirectMessage
+          !isChatMessageRumorKind(outboundEvent.event.kind)
         ) {
           continue;
         }

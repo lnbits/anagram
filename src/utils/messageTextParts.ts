@@ -125,14 +125,22 @@ export function withoutPreviewMediaUrls(
   text: string,
   attachments: ReadonlyArray<{ url: string; mimeType: string }>,
 ): string {
-  const previewUrls = new Set(
+  return withoutMessageUrls(
+    text,
     attachments
       .filter(
         (attachment) =>
           /^https:\/\//.test(attachment.url) && /^(image|video)\//.test(attachment.mimeType),
       )
-      .map((attachment) => buildHttpHref(attachment.url))
-      .filter((href): href is string => Boolean(href)),
+      .map((attachment) => attachment.url),
+  );
+}
+
+// Remove the given links from message text, e.g. encrypted blob URLs that are meaningless
+// without the key and are always rendered as decrypted media instead.
+export function withoutMessageUrls(text: string, urls: ReadonlyArray<string>): string {
+  const previewUrls = new Set(
+    urls.map((url) => buildHttpHref(url)).filter((href): href is string => Boolean(href)),
   );
   if (!previewUrls.size) return text;
   let cursor = 0;

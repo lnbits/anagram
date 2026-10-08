@@ -1,4 +1,7 @@
 export const DEFAULT_BLOSSOM_SERVER_URL = 'https://blossom.nostr.build';
+// Default for end-to-end encrypted private media. The server must store the uploaded
+// ciphertext (application/octet-stream) byte-for-byte; verified against Ditto's Blossom server.
+export const DEFAULT_PRIVATE_MEDIA_BLOSSOM_SERVER_URL = 'https://blossom.ditto.pub';
 
 export function normalizeBlossomServerUrl(value: unknown): string | null {
   if (typeof value !== 'string') {
@@ -47,10 +50,13 @@ export function getBlossomServerHost(serverUrl: string): string {
   return new URL(requireBlossomServerUrl(serverUrl)).host;
 }
 
+export type BlossomAuthAction = 'upload' | 'delete';
+
 export function buildBlossomUploadAuthorization(
   serverUrl: string,
   sha256: string,
-  createdAt: number
+  createdAt: number,
+  action: BlossomAuthAction = 'upload'
 ): { content: string; tags: string[][] } {
   const serverHost = getBlossomServerHost(serverUrl);
   const normalizedSha256 = sha256.trim().toLowerCase();
@@ -59,9 +65,12 @@ export function buildBlossomUploadAuthorization(
   }
 
   return {
-    content: `Authorize media upload to ${serverHost}`,
+    content:
+      action === 'delete'
+        ? `Authorize media delete from ${serverHost}`
+        : `Authorize media upload to ${serverHost}`,
     tags: [
-      ['t', 'upload'],
+      ['t', action],
       ['expiration', String(createdAt + 15 * 60)],
       ['server', serverHost],
       ['x', normalizedSha256],

@@ -32,7 +32,10 @@ import { isIncomingUnreadMessageActivity } from '#src/utils/messageActivity.ts';
 import {
   buildAttachmentMessageMeta,
   buildAttachmentMessageText,
+  buildNip17FileMessageTags,
   buildNip92ImetaTag,
+  FILE_MESSAGE_KIND,
+  isEncryptedAttachment,
   normalizeMessageAttachment,
 } from '#src/utils/messageAttachments.ts';
 import { buildMessageEditTag } from '#src/utils/messageEdits.ts';
@@ -80,6 +83,7 @@ interface ForwardedMessagePayload {
   text: string;
   meta: MessageMetadata;
   additionalTags: string[][];
+  rumorKind?: 14 | 15;
 }
 
 type NostrStoreModule = typeof import('#src/stores/nostrStore.ts');
@@ -231,6 +235,27 @@ function buildForwardedMessagePayload(
   }
 
   const attachments = readForwardableAttachments(message.meta);
+  // Encrypted attachments are forwarded by reference as a new kind 15 rumor: same blob, same
+  // key and nonce. Nothing is decrypted or uploaded again.
+  const encryptedAttachment = attachments.find((attachment) => isEncryptedAttachment(attachment));
+  if (encryptedAttachment) {
+    const fileMessageTags = buildNip17FileMessageTags(encryptedAttachment);
+    const fileMessageText = buildAttachmentMessageText(encryptedAttachment);
+    if (fileMessageTags.length === 0 || !fileMessageText) {
+      return null;
+    }
+
+    return {
+      text: fileMessageText,
+      meta: {
+        kind: FILE_MESSAGE_KIND,
+        attachments: [encryptedAttachment],
+      },
+      additionalTags: fileMessageTags,
+      rumorKind: FILE_MESSAGE_KIND,
+    };
+  }
+
   const additionalTags = attachments
     .map((attachment) => buildNip92ImetaTag(attachment))
     .filter((tag) => tag.length > 0);
@@ -1167,6 +1192,7 @@ export const useMessageStore = defineStore('messageStore', () => {
     meta: MessageMetadata;
     replyTo: MessageReplyPreview | null;
     additionalTags?: string[][];
+    rumorKind?: 14 | 15;
     options: RelaySendOptions;
     shouldSyncLiveMessage: boolean;
   }): Promise<Message | null> {
@@ -1300,6 +1326,7 @@ export const useMessageStore = defineStore('messageStore', () => {
         ...(input.additionalTags && input.additionalTags.length > 0
           ? { additionalTags: input.additionalTags }
           : {}),
+        ...(input.rumorKind ? { rumorKind: input.rumorKind } : {}),
       });
     } catch (error) {
       sendError = error;
@@ -2091,9 +2118,13 @@ export const useMessageStore = defineStore('messageStore', () => {
   ): Promise<Message | null> {
     const messageText = buildAttachmentMessageText(attachment);
     const attachmentMeta = buildAttachmentMessageMeta(attachment);
-    const imetaTag = buildNip92ImetaTag(attachment);
+    // Encrypted attachments are sent as NIP-17 kind 15; imeta media stays kind 14 + imeta.
+    const isEncrypted = isEncryptedAttachment(attachment);
+    const attachmentTags = isEncrypted
+      ? buildNip17FileMessageTags(attachment)
+      : [buildNip92ImetaTag(attachment)].filter((tag) => tag.length > 0);
 
-    if (!messageText || imetaTag.length === 0 || !('attachments' in attachmentMeta)) {
+    if (!messageText || attachmentTags.length === 0 || !('attachments' in attachmentMeta)) {
       return null;
     }
 
@@ -2103,6 +2134,7 @@ export const useMessageStore = defineStore('messageStore', () => {
     }
 
     const meta = {
+      ...(isEncrypted ? { kind: FILE_MESSAGE_KIND } : {}),
       ...attachmentMeta,
       ...(replyTo ? { reply: replyTo } : {}),
     };
@@ -2112,7 +2144,8 @@ export const useMessageStore = defineStore('messageStore', () => {
       text: messageText,
       meta,
       replyTo,
-      additionalTags: [imetaTag],
+      additionalTags: attachmentTags,
+      ...(isEncrypted ? { rumorKind: FILE_MESSAGE_KIND } : {}),
       options,
       shouldSyncLiveMessage: true,
     });
@@ -2144,6 +2177,7 @@ export const useMessageStore = defineStore('messageStore', () => {
       meta: forwardedPayload.meta,
       replyTo: null,
       additionalTags: forwardedPayload.additionalTags,
+      ...(forwardedPayload.rumorKind ? { rumorKind: forwardedPayload.rumorKind } : {}),
       options,
       shouldSyncLiveMessage,
     });

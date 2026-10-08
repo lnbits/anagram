@@ -19,7 +19,25 @@
   import { useCallStore } from '#src/stores/callStore.ts';
   import { useCallRoomStore } from '#src/stores/callRoomStore.ts';
   import { contactsService } from '#src/services/contactsService.ts';
-  import { uploadBlossomMedia } from '#src/services/blossomUploadService.ts';
+  import {
+    prepareEncryptedMedia,
+    uploadPreparedEncryptedMedia,
+    validateEncryptedMediaFile,
+  } from '#src/services/blossomUploadService.ts';
+  import {
+    createPrivateMediaUploadSession,
+    type PrivateMediaUploadOutcome,
+  } from '#src/services/privateMediaUploadSession.ts';
+  import { sendMediaThenPersistServer } from '#src/utils/sendMediaThenPersistServer.ts';
+  import {
+    isPrivateMediaNoticeDismissed,
+    setPrivateMediaNoticeDismissed,
+  } from '#src/utils/privateMediaNoticePreference.ts';
+  import { normalizeBlossomServerUrl } from '#src/utils/blossomServer.ts';
+  import {
+    buildImageAttachmentPreviewText,
+    redactFileMessageSecretTags,
+  } from '#src/utils/messageAttachments.ts';
   import { getPublicProfile, type PublicProfile } from '#src/lib/state/publicProfiles.ts';
   import { observe } from '#src/lib/state/store.ts';
   import {
@@ -171,6 +189,33 @@
   let composerInput: HTMLTextAreaElement;
   let attachmentMenu = false;
   let pendingFile: File | null = null;
+  // Private media is always encrypted locally and sent as NIP-17 kind 15. A failed upload keeps
+  // the prepared ciphertext, key and nonce in the session so Retry never encrypts again, and there
+  // is no plaintext path to fall back to.
+  let mediaPhase: 'notice' | 'uploading' | 'sending' | 'failed' = 'notice';
+  let mediaError = '';
+  let mediaCanRetry = false;
+  let mediaServer = '';
+  let mediaServerDraft = '';
+  let changingMediaServer = false;
+  let dismissMediaNotice = false;
+  let mediaChatId = '';
+  let mediaReply: MessageReplyPreview | null = null;
+  let mediaRun = 0;
+  let mediaAbort: AbortController | null = null;
+  const privateMediaUpload = createPrivateMediaUploadSession<File>({
+    prepare: prepareEncryptedMedia,
+    upload: (prepared, serverUrl) =>
+      uploadPreparedEncryptedMedia(prepared, {
+        serverUrl,
+        signUploadAuthHeader: nostr.signBlossomUploadAuthHeader,
+        ...(mediaAbort ? { signal: mediaAbort.signal } : {}),
+      }),
+    getPersistedServerUrl: () => nostr.getPrivateMediaBlossomServerUrl(),
+  });
+  $: normalizedMediaServerDraft = normalizeBlossomServerUrl(mediaServerDraft);
+  // Closing the upload dialog by any route cancels the encrypted upload and drops its key.
+  $: if (modal !== 'upload' && pendingFile) cancelMediaUpload();
   let inspectedMessage: Message | null = null;
   let contextMessage = '';
   let contextPosition = { x: 0, y: 0 };
@@ -651,7 +696,10 @@
   function setReply(message: Message) {
     reply = {
       messageId: message.id,
-      text: message.text,
+      // An encrypted attachment's text is its ciphertext URL; reply with its preview label instead.
+      text: (message.meta.attachments ?? []).some((attachment) => attachment.encryption)
+        ? buildImageAttachmentPreviewText(message.text, message.meta)
+        : message.text,
       sender: message.sender,
       authorName: messageAuthor(
         message,
@@ -858,33 +906,119 @@
     fileInput.click();
   }
   function prepareUpload(file?: File) {
-    if (!file || !$state.selected || busy) return;
+    // An upload that is waiting, running or offering Retry is never replaced by another file.
+    if (!file || !$state.selected || busy || pendingFile) return;
+    const validationError = validateEncryptedMediaFile(file);
+    if (validationError) {
+      Notify.create({ type: 'warning', message: validationError });
+      if (fileInput) fileInput.value = '';
+      return;
+    }
+    privateMediaUpload.reset();
     pendingFile = file;
+    mediaChatId = $state.selected.id;
+    mediaReply = reply;
+    mediaPhase = 'notice';
+    mediaError = '';
+    mediaCanRetry = false;
+    changingMediaServer = false;
+    dismissMediaNotice = false;
+    mediaServer = nostr.getPrivateMediaBlossomServerUrl();
     modal = 'upload';
+    // The notice is informational only: skipping it goes through the same encrypted upload with
+    // the same validation, errors, Retry, Change server and Cancel.
+    if (isPrivateMediaNoticeDismissed()) void commitUpload();
   }
   function upload(event: Event) {
     prepareUpload((event.target as HTMLInputElement).files?.[0]);
   }
-  async function commitUpload() {
-    const file = pendingFile,
-      chat = $state.selected;
-    if (!file || !chat) return;
+  function commitUpload() {
+    const file = pendingFile;
+    if (!file || mediaPhase !== 'notice') return;
+    if (dismissMediaNotice) setPrivateMediaNoticeDismissed(true);
+    void runMediaUpload(() => {
+      mediaServer = privateMediaUpload.refreshActiveServerUrl();
+      return privateMediaUpload.start(file);
+    });
+  }
+  function retryMediaUpload() {
+    if (!mediaCanRetry || mediaPhase !== 'failed') return;
+    void runMediaUpload(() => privateMediaUpload.retry());
+  }
+  // Retries the same ciphertext, key and nonce on the entered server. The saved server only
+  // changes after the kind 15 message has actually been sent.
+  function retryMediaUploadOnServer() {
+    const serverUrl = normalizedMediaServerDraft;
+    if (!serverUrl || !mediaCanRetry || mediaPhase !== 'failed') return;
+    mediaServer = serverUrl;
+    changingMediaServer = false;
+    void runMediaUpload(() => privateMediaUpload.retryWithServer(serverUrl));
+  }
+  async function runMediaUpload(start: () => Promise<PrivateMediaUploadOutcome>) {
+    const run = ++mediaRun;
+    const chatId = mediaChatId,
+      replyTo = mediaReply;
     busy = true;
+    mediaPhase = 'uploading';
+    mediaError = '';
+    mediaAbort = new AbortController();
+    let outcome: PrivateMediaUploadOutcome;
     try {
-      const result = await uploadBlossomMedia(file, {
-        serverUrl: nostr.getBlossomServerUrl(),
-        signUploadAuthHeader: nostr.signBlossomUploadAuthHeader,
-      });
-      await messages.sendMediaAttachment(chat.id, result.attachment, reply);
-      reply = null;
-      modal = '';
-      pendingFile = null;
-    } catch (e) {
-      fail(e);
-    } finally {
+      // The signer is checked before every attempt, including retries.
+      await nostr.ensureBlossomUploadAuthentication();
+      if (run !== mediaRun) return;
+      outcome = await start();
+    } catch (error) {
+      if (run !== mediaRun) return;
+      mediaPhase = 'failed';
+      mediaCanRetry = privateMediaUpload.hasPreparedUpload();
+      mediaError =
+        error instanceof Error && error.message.trim() ? error.message.trim() : String(error);
       busy = false;
-      fileInput.value = '';
+      return;
+    } finally {
+      if (run === mediaRun) mediaAbort = null;
     }
+    // Cancelled while the upload was finishing: nothing is sent.
+    if (run !== mediaRun) return;
+    mediaPhase = 'sending';
+    try {
+      await sendMediaThenPersistServer({
+        send: () => messages.sendMediaAttachment(chatId, outcome.result.attachment, replyTo),
+        serverToPersist: outcome.serverToPersist,
+        persistServer: (serverUrl) => nostr.savePrivateMediaBlossomServerUrl(serverUrl),
+        onPersistError: () =>
+          Notify.create({
+            type: 'warning',
+            message: $translate('message.mediaUpload.serverNotSaved'),
+          }),
+      });
+      if (reply === replyTo) reply = null;
+    } catch (error) {
+      fail(error);
+    } finally {
+      if (run === mediaRun) {
+        busy = false;
+        pendingFile = null;
+        if (modal === 'upload') modal = '';
+      }
+      if (fileInput) fileInput.value = '';
+    }
+  }
+  function cancelMediaUpload() {
+    const wasRunning = mediaPhase === 'uploading' || mediaPhase === 'sending';
+    mediaRun += 1;
+    mediaAbort?.abort();
+    mediaAbort = null;
+    privateMediaUpload.reset();
+    pendingFile = null;
+    mediaPhase = 'notice';
+    mediaError = '';
+    mediaCanRetry = false;
+    changingMediaServer = false;
+    if (wasRunning) busy = false;
+    if (fileInput) fileInput.value = '';
+    if (modal === 'upload') modal = '';
   }
   function insertEmoji(value: string) {
     const start = composerInput?.selectionStart ?? draft.length,
@@ -1744,28 +1878,86 @@
             </p>{/each}{#if inspectedMessage.nostrEvent?.event}<details>
               <summary>Event JSON</summary>
               <pre class="event-json">{JSON.stringify(
-                  inspectedMessage.nostrEvent.event,
+                  {
+                    ...inspectedMessage.nostrEvent.event,
+                    // Kind 15 decryption material is not shown in the copyable event view.
+                    tags: redactFileMessageSecretTags(inspectedMessage.nostrEvent.event.tags ?? []),
+                  },
                   null,
                   2,
                 )}</pre>
             </details>{/if}
-        {:else if modal === 'upload'}<p>{$translate('message.mediaUrlWarning')}</p>
-          <p>
-            {$translate('message.mediaUpload.usingBlossomServer', {
-              server: nostr.getBlossomServerUrl(),
-            })}
-          </p>
-          <p>{pendingFile?.name}</p>
-          <button
-            class="outline"
-            disabled={busy}
-            onclick={() => {
-              pendingFile = null;
-              modal = '';
-            }}>{$translate('common.cancel')}</button
-          ><button class="primary" disabled={busy} onclick={commitUpload}
-            >{$translate(busy ? 'Uploading…' : 'common.ok')}</button
-          >
+        {:else if modal === 'upload'}{#if mediaPhase === 'notice'}<p>
+              {$translate('message.mediaEncryptionNotice')}
+            </p>
+            <p>
+              {$translate('message.mediaUpload.usingPrivateMediaServer', { server: mediaServer })}
+            </p>
+            <p>{pendingFile?.name}</p>
+            <label class="media-notice-dismiss"
+              ><input
+                type="checkbox"
+                data-testid="composer-media-notice-dont-show"
+                bind:checked={dismissMediaNotice}
+              />{$translate('message.mediaNoticeDontShowAgain')}</label
+            >
+            <button class="outline" onclick={cancelMediaUpload}
+              >{$translate('common.cancel')}</button
+            ><button class="primary" data-testid="composer-media-upload-confirm" onclick={commitUpload}
+              >{$translate('common.ok')}</button
+            >
+          {:else if mediaPhase === 'failed'}<p class="error" role="alert">{mediaError}</p>
+            <p>{pendingFile?.name}</p>
+            {#if changingMediaServer}<label
+                >{$translate('mediaDataStorage.serverUrl')}<input
+                  type="url"
+                  inputmode="url"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  data-testid="composer-media-upload-server-input"
+                  bind:value={mediaServerDraft}
+                /></label
+              ><small>{$translate('message.mediaUpload.changeServerHint')}</small>
+              {#if mediaServerDraft.trim() && !normalizedMediaServerDraft}<p class="error">
+                  {$translate('mediaDataStorage.serverUrlInvalid')}
+                </p>{/if}
+            {/if}
+            <div>
+              <button
+                class="outline"
+                data-testid="composer-media-upload-cancel"
+                onclick={cancelMediaUpload}>{$translate('common.cancel')}</button
+              >{#if mediaCanRetry && !changingMediaServer}<button
+                  class="outline"
+                  data-testid="composer-media-upload-change-server"
+                  onclick={() => {
+                    mediaServerDraft = mediaServer;
+                    changingMediaServer = true;
+                  }}>{$translate('message.mediaUpload.changeServer')}</button
+                ><button
+                  class="primary"
+                  data-testid="composer-media-upload-retry"
+                  onclick={retryMediaUpload}>{$translate('message.mediaUpload.retry')}</button
+                >{:else if mediaCanRetry}<button
+                  class="primary"
+                  data-testid="composer-media-upload-use-server"
+                  disabled={!normalizedMediaServerDraft}
+                  onclick={retryMediaUploadOnServer}
+                  >{$translate('message.mediaUpload.useServerAndRetry')}</button
+                >{/if}
+            </div>
+          {:else}<p role="status" data-testid="composer-media-upload-status">
+              {mediaPhase === 'sending'
+                ? $translate('message.mediaUpload.sending')
+                : $translate('message.mediaUpload.uploadingToServer', { server: mediaServer })}
+            </p>
+            <p>{pendingFile?.name}</p>
+            {#if mediaPhase === 'uploading'}<button
+                class="outline"
+                data-testid="composer-media-upload-cancel"
+                onclick={cancelMediaUpload}>{$translate('common.cancel')}</button
+              >{/if}
+          {/if}
         {:else if modal === 'contact'}<label
             >Public key or NIP-05 address<input
               bind:value={identifier}

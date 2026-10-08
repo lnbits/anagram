@@ -1,6 +1,17 @@
 <script lang="ts">
-  import type { Message } from '#src/types/chat.ts';
-  import { buildMessageTextParts, withoutPreviewMediaUrls } from '#src/utils/messageTextParts.ts';
+  import { onDestroy } from 'svelte';
+  import type { Message, MessageAttachmentMetadata } from '#src/types/chat.ts';
+  import {
+    buildMessageTextParts,
+    withoutMessageUrls,
+    withoutPreviewMediaUrls,
+  } from '#src/utils/messageTextParts.ts';
+  import {
+    isImageAttachment,
+    isPlayableEncryptedAttachment,
+    normalizeMessageAttachment,
+  } from '#src/utils/messageAttachments.ts';
+  import { encryptedMediaService } from '#src/services/encryptedMediaService.ts';
   import { openExternalHttpUrl } from '#src/utils/externalLinks.ts';
   import { parseRoomLink } from '#src/utils/callRoom.ts';
   import { readCallHistory, callHistoryDuration } from '#src/utils/callHistory.ts';
@@ -13,6 +24,8 @@
   import Icon from './Icon.svelte';
   import { isSingleEmoji } from '#src/utils/singleEmoji.ts';
   import MediaViewer from './MediaViewer.svelte';
+  import EncryptedImage from './EncryptedImage.svelte';
+  import EncryptedMedia from './EncryptedMedia.svelte';
   import LinkPreview from './LinkPreview.svelte';
   import { previewUrl } from '#src/utils/linkPreview.ts';
   import {
@@ -31,13 +44,23 @@
   const trust = observe(() => trusted.trustedImageSenderPublicKeys);
   let imageUrl = '';
   let imageName = '';
+  // Reference held on a decrypted object URL while it is shown in the viewer.
+  let viewerHold: MessageAttachmentMetadata | null = null;
+  let viewerRequest = 0;
   let revealDeleted = false;
   let expanded = false,
     showMedia = false;
   $: history = readCallHistory(message.meta.call_history);
-  $: caption = mediaAllowed
-    ? withoutPreviewMediaUrls(message.text, message.meta.attachments ?? [])
-    : message.text;
+  // Encrypted blob URLs point at ciphertext and are never shown as text, even before media loads.
+  $: encryptedUrls = (message.meta.attachments ?? [])
+    .filter((attachment) => attachment.encryption !== undefined)
+    .map((attachment) => attachment.url);
+  $: caption = withoutMessageUrls(
+    mediaAllowed
+      ? withoutPreviewMediaUrls(message.text, message.meta.attachments ?? [])
+      : message.text,
+    encryptedUrls,
+  );
   $: text = expanded ? caption : truncateCollapsedMessageText(caption);
   $: parts = buildMessageTextParts(text, mentionProfiles).map((part) => ({
     ...part,
@@ -58,6 +81,42 @@
   ].slice(0, 2);
   $: mediaAllowed =
     showMedia || message.sender === 'me' || $trust.includes(message.authorPublicKey);
+  // Only attachments whose encryption metadata is complete and valid are ever decrypted.
+  function readEncryptedAttachment(attachment: MessageAttachmentMetadata) {
+    const normalized = normalizeMessageAttachment(attachment);
+    return normalized?.encryption ? normalized : null;
+  }
+  // A different blob or key re-creates the media component instead of reusing its decrypted URL.
+  function encryptedIdentity(attachment: MessageAttachmentMetadata) {
+    return `${attachment.sha256}:${attachment.encryption?.key}:${attachment.encryption?.nonce}`;
+  }
+  function closeViewer() {
+    viewerRequest += 1;
+    imageUrl = '';
+    if (viewerHold) {
+      encryptedMediaService.releaseDecryptedObjectUrl(viewerHold);
+      viewerHold = null;
+    }
+  }
+  async function openEncryptedImage(attachment: MessageAttachmentMetadata) {
+    closeViewer();
+    const request = viewerRequest;
+    try {
+      const objectUrl = await encryptedMediaService.acquireDecryptedObjectUrl(attachment);
+      if (request !== viewerRequest) {
+        encryptedMediaService.releaseDecryptedObjectUrl(attachment);
+        return;
+      }
+      viewerHold = attachment;
+      imageUrl = objectUrl;
+      imageName =
+        attachment.name ?? `image.${attachment.mimeType.split('/')[1]?.trim() || 'img'}`;
+    } catch {
+      if (request === viewerRequest)
+        Notify.create({ message: $translate('message.encryptedMedia.failed'), type: 'negative' });
+    }
+  }
+  onDestroy(closeViewer);
   async function open(url: string) {
     if (parseRoomLink(url)) {
       onroom(url);
@@ -224,7 +283,21 @@
       </div>{/if}
     {#if mediaAllowed}
       {#each message.meta.attachments ?? [] as attachment}
-        {#if /^https:\/\//.test(attachment.url)}
+        {#if attachment.encryption !== undefined}
+          {@const encrypted = readEncryptedAttachment(attachment)}
+          {#if encrypted && isImageAttachment(encrypted)}{#key encryptedIdentity(encrypted)}<EncryptedImage
+                attachment={encrypted}
+                alt={encrypted.name ?? 'Attachment'}
+                onopen={() => void openEncryptedImage(encrypted)}
+              />{/key}{:else if encrypted && isPlayableEncryptedAttachment(encrypted)}{#key encryptedIdentity(encrypted)}<EncryptedMedia
+                attachment={encrypted}
+                autoLoad
+              />{/key}{:else}<p class="encrypted-unsupported" data-testid="message-encrypted-file-unsupported">
+              <Icon name="lock" />{$translate('message.encryptedAttachmentUnsupported', {
+                type: attachment.mimeType,
+              })}
+            </p>{/if}
+        {:else if /^https:\/\//.test(attachment.url)}
           {#if /^(image|video)\//.test(attachment.mimeType)}
             <div class="media-attachment">
               {#if attachment.mimeType.startsWith('image/')}<a
@@ -233,6 +306,7 @@
                   rel="noopener noreferrer"
                   onclick={(e) => {
                     e.preventDefault();
+                    closeViewer();
                     imageUrl = attachment.url;
                     imageName = attachment.name ?? 'attachment';
                   }}
@@ -281,7 +355,12 @@
   </div>
 {/if}
 
-{#if imageUrl}<MediaViewer url={imageUrl} name={imageName} onclose={() => (imageUrl = '')} />{/if}
+{#if imageUrl}<MediaViewer
+    url={imageUrl}
+    name={imageName}
+    encrypted={Boolean(viewerHold)}
+    onclose={closeViewer}
+  />{/if}
 
 <style>
   .message-body {
@@ -373,6 +452,13 @@
   .media-options {
     width: 28px;
     height: 28px;
+  }
+  .encrypted-unsupported {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin: 10px 0;
+    color: var(--nc-text-secondary);
   }
   .media-prompt {
     display: flex;

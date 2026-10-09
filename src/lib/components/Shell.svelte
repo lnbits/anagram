@@ -191,6 +191,8 @@
   let groupMembers = '';
   let groupAbout = '';
   let modalError = '';
+  // Errors belong to the dialog that raised them; never carry them into the next one.
+  $: if (!modal) modalError = '';
   let contacts: ContactRecord[] = [];
   // Profile hydration may cache a contact before its request is accepted.
   // Use the inbox classification so acceptance/replies update this list live.
@@ -839,10 +841,15 @@
         await goto(`/contacts/${found.normalizedPubkey}`);
       } else if (chat) await open(chat);
     } catch (e) {
-      modalError = String(e);
+      modalError = e instanceof Error ? e.message : String(e);
     } finally {
       busy = false;
     }
+  }
+  function addContactOnEnter(event: KeyboardEvent) {
+    if (event.key !== 'Enter' || event.isComposing || busy || !identifier) return;
+    event.preventDefault();
+    void addContact();
   }
   function openProfile() {
     groupMembers = ($state.selected?.meta.group_members ?? [])
@@ -904,7 +911,7 @@
       const chat = chats.chats.find((c) => c.publicKey === result.groupPublicKey);
       if (chat) await open(chat);
     } catch (e) {
-      modalError = String(e);
+      modalError = e instanceof Error ? e.message : String(e);
     } finally {
       busy = false;
     }
@@ -1546,6 +1553,7 @@
                   ? 'Group call'
                   : $state.selected?.name}
       label={modal}
+      {busy}
       onclose={() => (modal === 'upload' ? cancelUpload() : (modal = ''))}
     >
       {#if modal === 'info' && inspectedMessage}<MessageInfo
@@ -1575,11 +1583,15 @@
             bind:value={identifier}
             placeholder="npub… or name@example.com"
             data-testid="contact-identifier-input"
+            onkeydown={addContactOnEnter}
           /></label
-        ><label>{$translate('Name (optional)')}<input bind:value={contactName} /></label><button
-          class="primary"
-          disabled={busy || !identifier}
-          onclick={addContact}>Add contact</button
+        ><label
+          >{$translate('Name (optional)')}<input
+            bind:value={contactName}
+            onkeydown={addContactOnEnter}
+          /></label
+        ><button class="primary" disabled={busy || !identifier} onclick={addContact}
+          >Add contact</button
         ><button
           class="link"
           onclick={() => {

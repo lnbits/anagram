@@ -13,7 +13,7 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 
-OUTPUT = Path(sys.argv[1])
+OUTPUT = Path("android-startup-results")
 PACKAGE = 'com.nostr.anagram'
 
 
@@ -46,64 +46,112 @@ def find(label, root):
                  (node.get('text', '').casefold(), node.get('content-desc', '').casefold()) and node.get('enabled') == 'true'), None)
 
 
-def wait(label, seconds=45):
+def bounds(node):
+    values = tuple(map(int, re.findall(r'-?\d+', node.get('bounds', ''))))
+    if len(values) != 4:
+        raise RuntimeError('Missing accessibility bounds')
+    return values
+
+
+def visible(node, root):
+    left, top, right, bottom = bounds(node)
+    if right <= left or bottom <= top:
+        return False
+    webview = next((n for n in root.iter('node')
+                    if n.get('class') == 'android.webkit.WebView'), None)
+    if webview is None:
+        return False
+    vl, vt, vr, vb = bounds(webview)
+    return vl <= left < right <= vr and vt <= top < bottom <= vb
+
+
+def scroll_page(root, node=None):
+    webview = next((n for n in root.iter('node')
+                    if n.get('class') == 'android.webkit.WebView'), None)
+    if webview is None:
+        return
+    left, top, right, bottom = bounds(webview)
+    if right <= left or bottom <= top:
+        return
+    # Swipe in the page gutter, outside the nested relay list, so the whole
+    # onboarding page scrolls. WebView may omit off-screen nodes entirely.
+    x = left + max(1, (right - left) // 40)
+    low = top + (bottom - top) * 4 // 5
+    high = top + (bottom - top) // 5
+    upwards = node is None or bounds(node)[1] >= top
+    start, end = (low, high) if upwards else (high, low)
+    adb('shell', 'input', 'swipe', str(x), str(start), str(x), str(end), '350')
+
+
+def wait(label, seconds=45, scroll=False):
     end = time.monotonic() + seconds
     while time.monotonic() < end:
-        node = find(label, tree())
-        if node is not None:
+        root = tree()
+        node = find(label, root)
+        if node is not None and visible(node, root):
             return node
+        if scroll:
+            scroll_page(root, node)
         time.sleep(0.5)
     raise RuntimeError(f'Did not render enabled control: {label}')
 
 
 def tap(node):
-    left, top, right, bottom = map(int, re.findall(r'\d+', node.get('bounds', '')))
+    left, top, right, bottom = bounds(node)
+    if left < 0 or top < 0 or right <= left or bottom <= top:
+        raise RuntimeError('Refusing to tap off-screen accessibility bounds')
     adb('shell', 'input', 'tap', str((left+right)//2), str((top+bottom)//2))
 
 
 def click(label):
-    tap(wait(label))
+    tap(wait(label, scroll=True))
 
 
-if not os.environ.get('ANDROID_SERIAL', '').startswith('emulator-') or adb('shell', 'getprop', 'ro.kernel.qemu') != '1':
-    raise RuntimeError('Requires a disposable emulator')
-click('Create Account')
-click('Login Now')
-wait('Connected', 60)
-click('Next')
-# A random identity has no existing profile. Empty profile + disabled relay-list
-# publication completes onboarding without posting anything on public relays.
-wait('Save and start using app')
-root = tree()
-checkboxes = [n for n in root.iter('node') if n.get('class') == 'android.widget.CheckBox' and n.get('text') == 'Use selected relays for my profile']
-if len(checkboxes) != 1:
-    raise RuntimeError('Expected the publish-relays checkbox; refusing to publish test data')
-# WebView exposes this HTML checkbox as CheckBox but omits its checked state.
-# The onboarding form starts with publishing enabled; toggle it off once.
-tap(checkboxes[0])
-click('Save and start using app')
-end = time.monotonic() + 45
-while time.monotonic() < end:
-    root = tree()
-    if find('settings', root) is not None:
-        break
-    skip = find('Not now', root)
-    if skip is not None:
-        tap(skip)
-        break
-    time.sleep(0.5)
-wait('settings')
-adb('shell', 'am', 'force-stop', PACKAGE)
-adb('shell', 'am', 'start', '-W', '-n', f'{PACKAGE}/.MainActivity')
-wait('settings')  # Native keystore identity restored after a real process restart.
-click('settings')
-click('Relays')
-click('App Relays')
-wait('Connected', 60)
-running()
-OUTPUT.joinpath('result.json').write_text(json.dumps({
-    'passed': True,
-    'checks': ['rendered-login', 'native-key-login', 'first-login-wss', 'cold-restart', 'wss-after-restart'],
-    'relay_requirement': 'at least one default public WSS relay; read-only',
-}, indent=2))
-print('Release APK passed first-login WSS connectivity and native identity restoration.')
+def main():
+    global OUTPUT
+    OUTPUT = Path(sys.argv[1])
+    if not os.environ.get('ANDROID_SERIAL', '').startswith('emulator-') or adb('shell', 'getprop', 'ro.kernel.qemu') != '1':
+        raise RuntimeError('Requires a disposable emulator')
+    click('Create Account')
+    click('Login Now')
+    wait('Connected', 60)
+    click('Next')
+    # A random identity has no existing profile. Empty profile + disabled relay-list
+    # publication completes onboarding without posting anything on public relays.
+    wait('Save and start using app', scroll=True)
+    checkbox = wait('Use selected relays for my profile', scroll=True)
+    if checkbox.get('class') != 'android.widget.CheckBox':
+        raise RuntimeError('Expected the publish-relays checkbox; refusing to publish test data')
+    # WebView exposes this HTML checkbox as CheckBox but omits its checked state.
+    # The onboarding form starts with publishing enabled; toggle it off once.
+    tap(checkbox)
+    click('Save and start using app')
+    end = time.monotonic() + 45
+    while time.monotonic() < end:
+        root = tree()
+        if find('settings', root) is not None:
+            break
+        skip = find('Not now', root)
+        if skip is not None:
+            click('Not now')
+            break
+        time.sleep(0.5)
+    wait('settings')
+    adb('shell', 'am', 'force-stop', PACKAGE)
+    adb('shell', 'am', 'start', '-W', '-n', f'{PACKAGE}/.MainActivity')
+    wait('settings')  # Native keystore identity restored after a real process restart.
+    click('settings')
+    click('Relays')
+    click('App Relays')
+    wait('Connected', 60)
+    running()
+    OUTPUT.joinpath('result.json').write_text(json.dumps({
+        'passed': True,
+        'checks': ['rendered-login', 'native-key-login', 'first-login-wss', 'cold-restart', 'wss-after-restart'],
+        'relay_requirement': 'at least one default public WSS relay; read-only',
+    }, indent=2))
+    print('Release APK passed first-login WSS connectivity and native identity restoration.')
+
+
+if __name__ == '__main__':
+    main()

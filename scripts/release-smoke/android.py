@@ -83,10 +83,34 @@ def scroll_page(root, node=None):
     adb('shell', 'input', 'swipe', str(x), str(start), str(x), str(end), '350')
 
 
+def allow_notification_prompt(root):
+    # A native Android 13+ prompt obscures WebView accessibility. Match this
+    # app's notification request explicitly; never accept unrelated permissions.
+    controllers = {'com.android.permissioncontroller', 'com.google.android.permissioncontroller'}
+    message = next((node for node in root.iter('node')
+                    if node.get('package') in controllers
+                    and node.get('resource-id') == 'com.android.permissioncontroller:id/permission_message'
+                    and node.get('text') == 'Allow Anagram to send you notifications?'), None)
+    if message is None:
+        return False
+    button = next((node for node in root.iter('node')
+                   if node.get('package') == message.get('package')
+                   and node.get('resource-id') == 'com.android.permissioncontroller:id/permission_allow_button'
+                   and node.get('enabled') == 'true'), None)
+    if button is None:
+        return False
+    tap(button)
+    print('Accepted the Android notification permission prompt.')
+    return True
+
+
 def wait(label, seconds=45, scroll=False):
     end = time.monotonic() + seconds
     while time.monotonic() < end:
         root = tree()
+        if allow_notification_prompt(root):
+            time.sleep(0.5)
+            continue
         node = find(label, root)
         if node is not None and visible(node, root):
             return node
@@ -129,6 +153,9 @@ def main():
     end = time.monotonic() + 45
     while time.monotonic() < end:
         root = tree()
+        if allow_notification_prompt(root):
+            time.sleep(0.5)
+            continue
         if find('settings', root) is not None:
             break
         skip = find('Not now', root)

@@ -65,5 +65,56 @@ class AndroidSmokeNavigation(unittest.TestCase):
         adb.assert_called_once_with('shell', 'input', 'swipe', '8', '142', '8', '497', '350')
 
 
+class AndroidNotificationPrompt(unittest.TestCase):
+    def prompt(self, message='Allow Anagram to send you notifications?', package='com.google.android.permissioncontroller'):
+        root = ET.Element('hierarchy')
+        ET.SubElement(root, 'node', {
+            'package': package, 'text': message,
+            'resource-id': 'com.android.permissioncontroller:id/permission_message',
+        })
+        ET.SubElement(root, 'node', {
+            'package': package, 'text': 'Allow', 'enabled': 'true',
+            'resource-id': 'com.android.permissioncontroller:id/permission_allow_button',
+            'bounds': '[48,323][272,379]',
+        })
+        return root
+
+    def test_first_login_and_restart_accept_prompt_then_still_require_home(self):
+        # Actual failing API 35 accessibility tree: native permissioncontroller,
+        # no WebView node until the user answers the notification prompt.
+        for package in ('com.google.android.permissioncontroller', 'com.android.permissioncontroller'):
+            with self.subTest(package=package), \
+                    patch.object(android, 'tree', side_effect=[self.prompt(package=package), screen('[0,550][48,598]', 'settings')]), \
+                    patch.object(android, 'adb') as adb, patch.object(android.time, 'sleep'):
+                node = android.wait('settings')
+                self.assertEqual(node.get('text'), 'settings')
+                adb.assert_called_once_with('shell', 'input', 'tap', '160', '351')
+
+    def test_does_not_accept_other_permissions_apps_or_web_buttons(self):
+        for root in (
+            self.prompt('Allow Anagram to record audio?'),
+            self.prompt('Allow Other App to send you notifications?'),
+            self.prompt(package='com.nostr.anagram'),
+            screen('[48,323][272,379]', 'Allow'),
+        ):
+            with self.subTest(root=ET.tostring(root)), patch.object(android, 'adb') as adb:
+                self.assertFalse(android.allow_notification_prompt(root))
+                adb.assert_not_called()
+
+    def test_accepting_notification_permission_does_not_pass_failed_restore(self):
+        with patch.object(android, 'tree', side_effect=[self.prompt(), screen('[0,50][100,90]', 'Login')]), \
+                patch.object(android.time, 'monotonic', side_effect=[0, 0, 1, 46]), \
+                patch.object(android.time, 'sleep'), patch.object(android, 'adb'):
+            with self.assertRaisesRegex(RuntimeError, 'Did not render enabled control: settings'):
+                android.wait('settings')
+
+    def test_disabled_permission_button_is_not_tapped(self):
+        root = self.prompt()
+        root[1].set('enabled', 'false')
+        with patch.object(android, 'adb') as adb:
+            self.assertFalse(android.allow_notification_prompt(root))
+            adb.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

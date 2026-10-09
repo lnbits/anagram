@@ -25,4 +25,5 @@ fi
 count=$(find src-tauri/gen/apple/build -type f -name '*.ipa' | wc -l | tr -d ' ')
 [[ "$count" == 1 ]] || { echo 'Expected one IPA'; exit 1; }
 ipa=$(find src-tauri/gen/apple/build -type f -name '*.ipa')
+python3 scripts/release-smoke/ios_permissions.py "$ipa"
 cp "$ipa" "mobile-assets/anagram-${version}-ios${suffix}.ipa"

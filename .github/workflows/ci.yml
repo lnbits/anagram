@@ -22,6 +22,8 @@ jobs:
       - run: npm run verify:iroh
       - run: npm run quality:all
       - run: npm run test:unit
+      - name: Check iOS permission packaging guard
+        run: python3 -B -m unittest discover -s scripts/release-smoke -p 'test_ios_permissions.py'
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e:pwa

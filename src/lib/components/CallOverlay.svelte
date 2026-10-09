@@ -92,6 +92,9 @@
   $: prefix = room ? 'room' : 'call';
   $: phase = $state.room?.phase ?? $state.session?.phase;
   $: active = phase === 'active';
+  $: hangupLabel = $translate(
+    !room && $state.session?.direction === 'outgoing' && !active ? 'common.cancel' : 'call.hangup',
+  );
   $: ended = phase === 'ended';
   $: runtime = room ? rooms : calls;
   $: audioUrl =
@@ -613,9 +616,10 @@
               class="call-round danger"
               class:call-hangup={!room}
               data-testid={room ? 'room-leave' : 'call-hangup'}
-              aria-label={$translate(room ? 'room.leave' : 'call.hangup')}
+              aria-label={room ? $translate('room.leave') : hangupLabel}
               onclick={() => act(() => (room ? rooms.leave() : calls.end()))}
-              ><Icon name="hangup" /></button
+              ><Icon name="hangup" />{#if !room}<span class="call-action-label">{hangupLabel}</span
+                >{/if}</button
             >
           {/if}
         </div>
@@ -643,7 +647,7 @@
           : `${$state.session?.peerName} · ${status}`}</button
       ><button
         class="danger-text"
-        aria-label={$translate(room ? 'room.leave' : 'call.hangup')}
+        aria-label={room ? $translate('room.leave') : hangupLabel}
         onclick={() => act(() => (room ? rooms.leave() : calls.end()))}
         ><Icon name="hangup" /></button
       >
@@ -704,11 +708,7 @@
 <CallRelayPrompt />
 
 <style>
-  .call-backdrop,
-  .call-peer-avatar,
-  .call-peer-npub,
-  .call-action-label,
-  .call-close-icon {
+  .call-action-label {
     display: none;
   }
 
@@ -1206,122 +1206,247 @@
     }
   }
 
-  @media (max-width: 599px) {
+  /* Shared caller identity and phone actions across mobile and desktop. */
+  .call-panel__identity > :global(svg) {
+    display: none;
+  }
+  .call-panel:not(.room-panel) {
+    isolation: isolate;
+    --call-stage-background: transparent;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+    background: #101820;
+    overflow-y: auto;
+  }
+  .call-backdrop {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    overflow: hidden;
+    background: radial-gradient(ellipse at 50% 25%, var(--call-peer-color), #101820 85%);
+  }
+  .call-backdrop img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    filter: blur(28px);
+    transform: scale(1.15);
+  }
+  .call-backdrop::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(#10182099, #101820dd);
+  }
+  .call-peer-avatar {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 20px;
+  }
+  .call-panel:not(.call-panel--voice) .call-peer-avatar {
+    display: none;
+  }
+  .call-panel__identity {
+    padding: 20px 0;
+  }
+  .call-panel__identity h2 {
+    font-size: 26px;
+    color: color-mix(in srgb, var(--call-peer-color) 30%, white);
+    max-height: 3.9em;
+    overflow: auto;
+  }
+  .call-peer-npub {
+    display: block;
+    color: color-mix(in srgb, var(--call-peer-color) 30%, white);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+    max-width: 320px;
+    margin: 8px auto 16px;
+    user-select: text;
+  }
+  .call-panel--voice .call-panel__identity {
+    margin-top: auto;
+  }
+  .call-panel--voice :global(.call-stage) {
+    flex: 0 0 24px;
+    margin-bottom: auto;
+  }
+  .call-panel:not(.room-panel) .call-panel__controls {
+    gap: 12px;
+    padding-bottom: 12px;
+    align-items: center;
+  }
+  .call-panel:not(.room-panel) .call-round {
+    width: 44px;
+    height: 44px;
+  }
+  .call-panel:not(.room-panel) .call-primary-action {
+    position: relative;
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    flex-shrink: 0;
+    width: 64px;
+    height: 64px;
+    min-height: 64px;
+    border-radius: 50%;
+    padding: 0;
+    margin: 12px 8px 52px;
+  }
+  .call-primary-action > span:not(.call-close-icon) {
+    display: block;
+    position: absolute;
+    top: calc(100% + 10px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 80px;
+    color: white;
+    font-size: 13px;
+    line-height: 1.3;
+    text-align: center;
+  }
+  .call-panel .call-primary-action :global(svg),
+  .call-hangup :global(svg) {
+    width: 28px;
+    height: 28px;
+  }
+  .call-panel .call-primary-action.audio {
+    background: #198348;
+  }
+  .call-panel .call-primary-action.danger,
+  .call-panel .call-primary-action.dismiss,
+  .call-panel .call-hangup {
+    background: #d9364f;
+  }
+  .call-panel:not(.room-panel) .call-hangup {
+    width: 60px;
+    height: 60px;
+  }
+  .call-close-icon {
+    display: flex;
+  }
+  @media (min-width: 600px) {
     .call-panel:not(.room-panel) {
-      isolation: isolate;
-      --call-stage-background: transparent;
-      padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
-      background: #101820;
-      overflow-y: auto;
+      padding: 24px 32px 28px;
     }
-    .call-backdrop {
-      display: block;
-      position: absolute;
-      inset: 0;
-      z-index: -1;
-      pointer-events: none;
-      overflow: hidden;
-      background: radial-gradient(ellipse at 50% 25%, var(--call-peer-color), #101820 85%);
-    }
-    .call-backdrop img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      filter: blur(28px);
-      transform: scale(1.15);
-    }
-    .call-backdrop::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(#10182099, #101820dd);
-    }
-    .call-peer-avatar {
-      display: flex;
-      justify-content: center;
-      margin-bottom: 20px;
-    }
-    .call-panel:not(.call-panel--voice) .call-peer-avatar {
-      display: none;
-    }
-    .call-panel__identity {
-      padding: 20px 0;
-    }
-    .call-panel__identity h2 {
-      font-size: 26px;
-      color: color-mix(in srgb, var(--call-peer-color) 30%, white);
-      max-height: 3.9em;
-      overflow: auto;
-    }
-    .call-peer-npub {
-      display: block;
-      color: color-mix(in srgb, var(--call-peer-color) 30%, white);
-      font-size: 12px;
-      overflow-wrap: anywhere;
-      max-width: 320px;
-      margin: 8px auto 16px;
-      user-select: text;
+    .call-panel__header {
+      color: #ffffffb3;
     }
     .call-panel--voice .call-panel__identity {
-      margin-top: auto;
+      width: min(100%, 640px);
+      align-self: center;
+      padding: 32px 0;
     }
-    .call-panel--voice :global(.call-stage) {
-      flex: 0 0 24px;
-      margin-bottom: auto;
+    .call-panel--voice .call-panel__identity h2 {
+      font-size: clamp(28px, 3vw, 40px);
+      letter-spacing: -0.025em;
+    }
+    .call-peer-avatar {
+      margin-bottom: 28px;
+    }
+    .call-peer-avatar :global(.avatar) {
+      box-shadow:
+        0 0 0 6px #ffffff0d,
+        0 16px 48px #0004;
+    }
+    .call-peer-npub {
+      max-width: 480px;
+      opacity: 0.8;
+      margin-bottom: 20px;
+    }
+    .call-panel:not(.call-panel--voice) .call-panel__identity {
+      padding: 4px 0 12px;
+    }
+    .call-panel:not(.call-panel--voice) .call-panel__identity h2 {
+      font-size: 20px;
+    }
+    .call-panel:not(.call-panel--voice) .call-peer-npub {
+      margin: 4px auto 8px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .call-panel:not(.room-panel) .call-panel__controls {
-      gap: 12px;
-      padding-bottom: 12px;
-      align-items: center;
+      gap: 16px;
+      padding-top: 20px;
+      align-items: flex-start;
     }
     .call-panel:not(.room-panel) .call-round {
-      width: 44px;
-      height: 44px;
+      width: 52px;
+      height: 52px;
     }
     .call-panel:not(.room-panel) .call-primary-action {
-      position: relative;
-      display: inline-flex;
-      justify-content: center;
-      align-items: center;
-      flex-shrink: 0;
-      width: 64px;
-      height: 64px;
-      min-height: 64px;
-      border-radius: 50%;
-      padding: 0;
-      margin: 12px 8px 52px;
+      width: 72px;
+      height: 72px;
+      min-height: 72px;
+      margin: 0 18px 48px;
+      box-shadow: 0 8px 24px #0003;
     }
     .call-primary-action > span:not(.call-close-icon) {
+      width: 100px;
+      font-size: 14px;
+    }
+    .call-panel:not(.room-panel) .call-hangup {
+      position: relative;
+      width: 64px;
+      height: 64px;
+      margin: 0 8px 36px;
+      box-shadow: 0 8px 24px #0003;
+    }
+    .call-hangup .call-action-label {
       display: block;
       position: absolute;
-      top: calc(100% + 10px);
+      top: calc(100% + 8px);
       left: 50%;
       transform: translateX(-50%);
-      width: 80px;
-      color: white;
+      width: 100px;
       font-size: 13px;
       line-height: 1.3;
       text-align: center;
     }
-    .call-panel .call-primary-action :global(svg),
-    .call-hangup :global(svg) {
-      width: 28px;
-      height: 28px;
+    .call-panel:not(.room-panel) .call-round,
+    .call-primary-action {
+      transition:
+        background 150ms ease,
+        box-shadow 150ms ease,
+        transform 150ms ease;
     }
-    .call-panel .call-primary-action.audio {
-      background: #198348;
+    .call-panel:not(.room-panel) .call-round:not(:disabled):hover,
+    .call-primary-action:hover {
+      filter: brightness(1.12);
+      transform: translateY(-2px);
     }
-    .call-panel .call-primary-action.danger,
-    .call-panel .call-primary-action.dismiss,
-    .call-panel .call-hangup {
-      background: #d9364f;
+    .call-panel:not(.room-panel) .call-round:not(:disabled):active,
+    .call-primary-action:active {
+      transform: translateY(0);
     }
-    .call-panel:not(.room-panel) .call-hangup {
-      width: 60px;
-      height: 60px;
+    .call-panel:not(.room-panel) button:focus-visible {
+      outline: 3px solid white;
+      outline-offset: 5px;
     }
-    .call-close-icon {
-      display: flex;
+  }
+  @media (min-width: 600px) and (max-height: 650px) {
+    .call-panel:not(.room-panel) {
+      padding: 12px 20px;
+    }
+    .call-peer-avatar {
+      display: none;
+    }
+    .call-panel--voice .call-panel__identity {
+      padding: 12px 0;
+    }
+    .call-panel--voice .call-panel__identity h2 {
+      font-size: 24px;
+    }
+    .call-peer-npub {
+      margin-bottom: 8px;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .call-panel:not(.room-panel) .call-round,
+    .call-primary-action {
+      transition: none;
     }
   }
   @media (max-width: 599px) and (max-height: 600px) {

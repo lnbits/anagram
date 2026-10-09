@@ -249,70 +249,92 @@ test('custom call relay approval stays in the app and cancels when its endpoint 
   expect(await page.evaluate(() => (window as any).__approvedConnections())).toBe(1);
 });
 
-test('mobile caller identity, photo fallback and phone controls survive peer changes', async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.route('https://call-profile.example/**', (route) =>
-    route.fulfill({
-      contentType: 'image/svg+xml',
-      body: '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300"><rect width="300" height="300" fill="#326a99"/><circle cx="150" cy="110" r="55" fill="#c9dce5"/><path d="M50 300Q50 170 150 170Q250 170 250 300" fill="#c9dce5"/></svg>',
-    }),
-  );
-  await setup(page);
-  await page.evaluate(async () => {
-    const url = performance
-      .getEntriesByType('resource')
-      .map((entry) => entry.name)
-      .find((url) => /\/src\/lib\/state\/publicProfiles\.ts(?:\?|$)/.test(url));
-    const { rememberPublicProfile } = await import(url!);
-    rememberPublicProfile(
-      'a'.repeat(64),
-      { name: 'Test contact', picture: 'https://call-profile.example/avatar.svg' },
-      1,
+for (const width of [390, 1280]) {
+  test(`caller identity, photo fallback and phone controls survive peer changes at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.route('https://call-profile.example/**', (route) =>
+      route.fulfill({
+        contentType: 'image/svg+xml',
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300"><rect width="300" height="300" fill="#326a99"/><circle cx="150" cy="110" r="55" fill="#c9dce5"/><path d="M50 300Q50 170 150 170Q250 170 250 300" fill="#c9dce5"/></svg>',
+      }),
     );
+    await setup(page);
+    await page.evaluate(async () => {
+      const url = performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .find((url) => /\/src\/lib\/state\/publicProfiles\.ts(?:\?|$)/.test(url));
+      const { rememberPublicProfile } = await import(url!);
+      rememberPublicProfile(
+        'a'.repeat(64),
+        { name: 'Test contact', picture: 'https://call-profile.example/avatar.svg' },
+        1,
+      );
+    });
+    await expect(page.getByTestId('call-peer-npub')).toHaveText(nip19.npubEncode('a'.repeat(64)));
+    await expect(page.locator('.call-backdrop img')).toBeVisible();
+    await expect
+      .poll(() =>
+        page.locator('.call-backdrop img').evaluate((img: HTMLImageElement) => img.naturalWidth),
+      )
+      .toBeGreaterThan(0);
+    for (const id of ['call-accept', 'call-accept-video', 'call-decline']) {
+      const box = await page.getByTestId(id).boundingBox();
+      expect(box!.width).toBeGreaterThanOrEqual(60);
+      expect(box!.height).toBeGreaterThanOrEqual(60);
+      expect(box!.y + box!.height).toBeLessThan(844);
+    }
+    await page.screenshot({ path: `test-results/call-${width}-incoming.png` });
+    await page.getByTestId('call-accept').click();
+    expect(await page.evaluate(() => (window as any).__answerMode)).toBe('audio');
+    await page.getByTestId('call-hangup').click();
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
+    await page.evaluate(() => {
+      (window as any).__testCall.session = {
+        id: 'outgoing-peer',
+        peerPubkey: 'a'.repeat(64),
+        peerName: 'Test contact',
+        direction: 'outgoing',
+        mode: 'audio',
+        phase: 'outgoing',
+        cameraMuted: true,
+        peerConfirmed: true,
+      };
+    });
+    await expect(page.locator('.call-peer-avatar')).toBeVisible();
+    await expect(page.getByTestId('call-hangup')).toHaveAccessibleName('Cancel');
+    await page.screenshot({ path: `test-results/call-${width}-outgoing.png` });
+    await page.getByTestId('call-hangup').click();
+    await expect(page.getByTestId('call-status')).toHaveText('Call ended');
+    await page.getByTestId('call-dismiss').click();
+    await page.evaluate(() => {
+      const call = (window as any).__testCall;
+      call.session = {
+        id: 'another-peer',
+        peerPubkey: 'b'.repeat(64),
+        peerName: 'A very long caller name '.repeat(10),
+        direction: 'incoming',
+        mode: 'video',
+        phase: 'incoming',
+        cameraMuted: true,
+      };
+    });
+    await page.setViewportSize(
+      width < 600 ? { width: 320, height: 568 } : { width: 640, height: 480 },
+    );
+    await expect(page.locator('.call-backdrop img')).toHaveCount(0);
+    await expect(page.getByTestId('call-peer-npub')).toHaveText(nip19.npubEncode('b'.repeat(64)));
+    expect(
+      await page
+        .getByTestId('call-panel')
+        .evaluate((panel) => panel.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await page.getByTestId('call-accept-video').click();
+    expect(await page.evaluate(() => (window as any).__answerMode)).toBe('video');
+    await expect(page.locator('video[aria-label="Your camera"]')).toBeVisible();
+    await page.getByTestId('call-hangup').click();
+    await page.getByTestId('call-dismiss').click();
   });
-  await expect(page.getByTestId('call-peer-npub')).toHaveText(nip19.npubEncode('a'.repeat(64)));
-  await expect(page.locator('.call-backdrop img')).toBeVisible();
-  await expect
-    .poll(() =>
-      page.locator('.call-backdrop img').evaluate((img: HTMLImageElement) => img.naturalWidth),
-    )
-    .toBeGreaterThan(0);
-  for (const id of ['call-accept', 'call-accept-video', 'call-decline']) {
-    const box = await page.getByTestId(id).boundingBox();
-    expect(box!.width).toBeGreaterThanOrEqual(60);
-    expect(box!.height).toBeGreaterThanOrEqual(60);
-    expect(box!.y + box!.height).toBeLessThan(844);
-  }
-  await page.screenshot({ path: 'test-results/call-mobile-incoming.png' });
-  await page.getByTestId('call-accept').click();
-  expect(await page.evaluate(() => (window as any).__answerMode)).toBe('audio');
-  await page.getByTestId('call-hangup').click();
-  await page.getByRole('button', { name: 'Close', exact: true }).click();
-  await page.evaluate(() => {
-    const call = (window as any).__testCall;
-    call.session = {
-      id: 'another-mobile-peer',
-      peerPubkey: 'b'.repeat(64),
-      peerName: 'A very long caller name '.repeat(10),
-      direction: 'incoming',
-      mode: 'video',
-      phase: 'incoming',
-      cameraMuted: true,
-    };
-  });
-  await page.setViewportSize({ width: 320, height: 568 });
-  await expect(page.locator('.call-backdrop img')).toHaveCount(0);
-  await expect(page.getByTestId('call-peer-npub')).toHaveText(nip19.npubEncode('b'.repeat(64)));
-  expect(
-    await page
-      .getByTestId('call-panel')
-      .evaluate((panel) => panel.scrollWidth <= window.innerWidth),
-  ).toBe(true);
-  await page.getByTestId('call-accept-video').click();
-  expect(await page.evaluate(() => (window as any).__answerMode)).toBe('video');
-  await expect(page.locator('video[aria-label="Your camera"]')).toBeVisible();
-  await page.getByTestId('call-hangup').click();
-  await page.getByTestId('call-dismiss').click();
-});
+}

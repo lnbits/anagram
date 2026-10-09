@@ -863,6 +863,6 @@
   "message.uploading": "আপলোড হচ্ছে…",
   "message.upload": "আপলোড করুন",
   "contacts.addContactAction": "যোগাযোগ যোগ করুন",
-  "chat.dadBotIntro": "উদাহরণ Dad Bot-কে যেকোনো কথা বলুন, সে একটি কৌতুক দিয়ে উত্তর দেবে।",
+  "chat.dadBotIntro": "Dad Bot-কে যেকোনো কথা বলুন, সে একটি কৌতুক দিয়ে উত্তর দেবে।",
   "chat.dadBotExamples": "Nostr ও Anagram-এর জন্য উপকারী বট তৈরি করা সহজ এবং এর সম্ভাবনা অসাধারণ। এখানে কিছু উদাহরণ দেখুন:"
 }

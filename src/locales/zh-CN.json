@@ -863,6 +863,6 @@
   "message.uploading": "正在上传…",
   "message.upload": "上传",
   "contacts.addContactAction": "添加联系人",
-  "chat.dadBotIntro": "给示例 Dad Bot 发任意消息，它就会回复一个笑话。",
+  "chat.dadBotIntro": "给Dad Bot 发任意消息，它就会回复一个笑话。",
   "chat.dadBotExamples": "为 Nostr 和 Anagram 构建实用机器人很简单，而且能发挥强大作用。在这里查看一些示例："
 }

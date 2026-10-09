@@ -863,6 +863,6 @@
   "message.uploading": "جارٍ الرفع…",
   "message.upload": "رفع",
   "contacts.addContactAction": "إضافة جهة اتصال",
-  "chat.dadBotIntro": "قل أي شيء لبوت Dad Bot التجريبي وسيرد عليك بنكتة.",
+  "chat.dadBotIntro": "قل أي شيء لبوت Dad Bot وسيرد عليك بنكتة.",
   "chat.dadBotExamples": "إنشاء بوتات مفيدة لـ Nostr وAnagram سهل ويتيح إمكانات هائلة. اطّلع على بعض الأمثلة هنا:"
 }

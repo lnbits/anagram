@@ -863,6 +863,6 @@
   "message.uploading": "Subiendo…",
   "message.upload": "Subir",
   "contacts.addContactAction": "Agregar contacto",
-  "chat.dadBotIntro": "Dile cualquier cosa al Dad Bot de ejemplo y te responderá con un chiste.",
+  "chat.dadBotIntro": "Dile cualquier cosa al Dad Bot y te responderá con un chiste.",
   "chat.dadBotExamples": "Crear bots útiles para Nostr y Anagram es fácil y ofrece posibilidades increíbles. Mira algunos ejemplos aquí:"
 }

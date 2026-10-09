@@ -863,6 +863,6 @@
   "message.uploading": "Yükleniyor…",
   "message.upload": "Yükle",
   "contacts.addContactAction": "Kişi Ekle",
-  "chat.dadBotIntro": "Örnek Dad Bot’a bir şey yazın, size bir şakayla yanıt versin.",
+  "chat.dadBotIntro": "Dad Bot’a bir şey yazın, size bir şakayla yanıt versin.",
   "chat.dadBotExamples": "Nostr ve Anagram için yararlı botlar geliştirmek kolaydır ve inanılmaz olanaklar sunar. Bazı örneklere buradan bakabilirsiniz:"
 }

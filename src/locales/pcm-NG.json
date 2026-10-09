@@ -863,6 +863,6 @@
   "message.uploading": "E dey upload…",
   "message.upload": "Upload",
   "contacts.addContactAction": "Add contact",
-  "chat.dadBotIntro": "Tell the example Dad Bot anything and e go reply with joke.",
+  "chat.dadBotIntro": "Tell the Dad Bot anything and e go reply with joke.",
   "chat.dadBotExamples": "To build useful bots for Nostr and Anagram dey easy, and dem fit do plenty powerful things. Check some examples here:"
 }

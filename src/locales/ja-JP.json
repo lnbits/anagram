@@ -863,6 +863,6 @@
   "message.uploading": "アップロード中…",
   "message.upload": "アップロード",
   "contacts.addContactAction": "連絡先を追加",
-  "chat.dadBotIntro": "サンプルの Dad Bot に何か話しかけると、ジョークを返してくれます。",
+  "chat.dadBotIntro": "Dad Bot に何か話しかけると、ジョークを返してくれます。",
   "chat.dadBotExamples": "Nostr や Anagram 向けの便利なボットは簡単に作れ、大きな可能性があります。こちらのサンプルをご覧ください："
 }

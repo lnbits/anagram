@@ -2,6 +2,9 @@
   import { materialIcons } from './materialIcons';
   export let name = 'chat';
   const paths: Record<string, string> = {
+    'qr-scan':
+      'M3 7V3h4m10 0h4v4m0 10v4h-4M7 21H3v-4M7 7h3v3H7zm7 0h3v3h-3zM7 14h3v3H7zm7 0h1v1h2v2h-3z',
+
     pin: 'M9 3h6M9 3v6l-3 4v2h12v-2l-3-4V3M12 15v7',
     reply: 'm9 5-6 6 6 6M3 11h10a7 7 0 0 1 7 7',
     forward: 'm15 5 6 6-6 6M21 11H11a7 7 0 0 0-7 7',

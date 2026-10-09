@@ -38,8 +38,7 @@ for (const kind of ['private', 'public'] as const) {
       await expect(a.getByRole('dialog')).toBeHidden();
       await send('A useful group announcement');
       if (kind === 'private') {
-        await b.getByRole('button', { name: 'Chat options' }).click();
-        await b.getByRole('button', { name: /Message requests/ }).click();
+        await b.getByTestId('requests-row').click();
         await b.getByTestId('chat-item').filter({ hasText: 'Pinned private group' }).click();
         await b.getByRole('button', { name: 'Accept', exact: true }).click();
       } else await b.goto(a.url());

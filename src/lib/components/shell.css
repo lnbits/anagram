@@ -669,6 +669,10 @@ p {
   text-align: center;
   line-height: 1.6;
 }
+.bot-examples-link {
+  color: inherit;
+  overflow-wrap: anywhere;
+}
 .thread-more {
   position: absolute;
   left: 16px;

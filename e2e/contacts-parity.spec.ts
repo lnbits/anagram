@@ -220,8 +220,7 @@ test('cached request profiles stay out of contacts until acceptance or a reply',
   await page.getByTestId('contact-list-search').fill('');
 
   await page.getByRole('button', { name: 'chats', exact: true }).click();
-  await page.getByRole('button', { name: 'Chat options' }).click();
-  await page.getByRole('button', { name: /Message requests/ }).click();
+  await page.getByTestId('requests-row').click();
   const request = (name: string) => page.locator('.request-list article').filter({ hasText: name });
   for (const entry of pending) await expect(request(entry.name)).toBeVisible();
   await request('Pending group').getByRole('button', { name: 'Accept', exact: true }).click();
@@ -232,8 +231,7 @@ test('cached request profiles stay out of contacts until acceptance or a reply',
   await expect(contact('Reply person')).toHaveCount(0);
 
   await page.getByRole('button', { name: 'chats', exact: true }).click();
-  await page.getByRole('button', { name: 'Chat options' }).click();
-  await page.getByRole('button', { name: /Message requests/ }).click();
+  await page.getByTestId('requests-row').click();
   await request('Reply person').getByRole('button', { name: 'Open', exact: true }).click();
   await page.getByTestId('message-composer-input').fill('Accept through a reply');
   await page.getByTestId('message-send-button').click();

@@ -251,8 +251,7 @@ test('ticketed groups recover all epochs and both authors across discovered and 
     await page.getByTestId('auth-private-key-input').fill(nip19.nsecEncode(key));
     await page.getByTestId('auth-login-button').click();
     await finishOnboarding(page);
-    await page.getByRole('button', { name: 'Chat options' }).click();
-    await page.getByRole('button', { name: /Message requests/ }).click();
+    await page.getByTestId('requests-row').click();
     for (const group of groups) {
       const item = page.getByTestId('chat-item').filter({ hasText: group.name });
       await expect(item).toBeVisible({ timeout: 30000 });

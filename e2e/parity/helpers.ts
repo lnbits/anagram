@@ -195,8 +195,7 @@ export async function waitForThreadMessageCount(
   await expect(page.getByTestId('message-bubble').filter({ hasText: text })).toHaveCount(count);
 }
 export async function openRequests(page: Page, _match?: unknown) {
-  await page.getByRole('button', { name: 'Chat options' }).click();
-  await page.getByRole('button', { name: /Message requests/ }).click();
+  await page.getByTestId('requests-row').click();
 }
 function request(page: Page, match?: string | RegExp | { publicKey: string }) {
   const items = page.getByTestId('chat-request-item');

@@ -1,10 +1,13 @@
 <script lang="ts">
+  import { STARTER_BOT } from '#src/constants/starterBot.ts';
+  import { openExternalHttpUrl } from '#src/utils/externalLinks.ts';
   import {
     handleAndroidCallAction,
     type AndroidCallAction,
   } from '#src/services/androidCallNotificationService.ts';
   import { orderThreadMessages } from '#src/utils/threadMessageOrder.ts';
   import ModalFrame from './ModalFrame.svelte';
+  import ContactIdentifierInput from './ContactIdentifierInput.svelte';
   import GroupProfileFields from './GroupProfileFields.svelte';
   import MessageInfo from './MessageInfo.svelte';
   import ThreadHeader from './ThreadHeader.svelte';
@@ -135,9 +138,7 @@
       ].map((key) => [key, getPublicProfile(key)]),
     ),
     thread: {
-      items: chats.selectedChatId
-        ? messages.getMessages(chats.selectedChatId)
-        : [],
+      items: chats.selectedChatId ? messages.getMessages(chats.selectedChatId) : [],
       pagination: chats.selectedChatId ? messages.getPaginationState(chats.selectedChatId) : null,
     },
     unread: chats.unreadChatCount,
@@ -197,6 +198,7 @@
   let groupAbout = '';
   let modalError = '';
   let contacts: ContactRecord[] = [];
+  let contactsLoaded = false;
   // Profile hydration may cache a contact before its request is accepted.
   // Use the inbox classification so acceptance/replies update this list live.
   $: requestContactKeys = new Set($state.requests.flatMap((chat) => [chat.id, chat.publicKey]));
@@ -452,7 +454,8 @@
     section === 'contacts' && /^[a-f0-9]{64}$/.test($page.url.pathname.split('/')[2] ?? '')
       ? $page.url.pathname.split('/')[2]
       : '';
-  $: if (section === 'contacts' && $state.contactVersion >= 0) void loadContacts();
+  $: if ((section === 'contacts' || modal === 'contact') && $state.contactVersion >= 0)
+    void loadContacts();
   $: showRequests = $page.url.pathname === '/chats/requests';
   $: publicLink = $page.url.pathname.startsWith('/public/') ? $page.url.pathname.slice(8) : '';
   $: routedChatId = section === 'chats' ? $page.url.pathname.split('/')[2] : undefined;
@@ -551,7 +554,10 @@
     const revision = ++contactLoadRevision;
     try {
       const next = await contactsService.listContacts();
-      if (revision === contactLoadRevision) contacts = next;
+      if (revision === contactLoadRevision) {
+        contacts = next;
+        contactsLoaded = true;
+      }
     } catch (error) {
       fail(error);
     }
@@ -692,10 +698,7 @@
       // window, not a fixed number of frames: busy/backgrounded tabs can take
       // longer. Follow the latest first row if ingestion/deletion changes it,
       // and stop waiting if the user navigates away.
-      while (
-        current() &&
-        $state.thread.items[0]?.id !== messages.getMessages(chatId)[0]?.id
-      )
+      while (current() && $state.thread.items[0]?.id !== messages.getMessages(chatId)[0]?.id)
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       await tick();
       if (!current()) return;
@@ -1145,10 +1148,6 @@
           >
           <button
             onclick={() => {
-              openRequests();
-            }}>Message requests ({$state.requests.length})</button
-          ><button
-            onclick={() => {
               modal = 'group';
               groupFlow = 'choose';
               contactName = '';
@@ -1430,6 +1429,23 @@
                 others.</small
               >
             </blockquote>
+          {:else if $state.selected.type === 'user' && $state.selected.publicKey === STARTER_BOT.publicKey && !$state.thread.pagination?.hasOlder && !loadingOlder}
+            <blockquote class="self-chat-quote" data-testid="dad-bot-intro">
+              <i>{$translate('chat.dadBotIntro')}</i>
+              <br /><br /><small>
+                {$translate('chat.dadBotExamples')}
+                <a
+                  class="bot-examples-link"
+                  href="https://github.com/lnbits/anagram/bot-example"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onclick={(event) => {
+                    event.preventDefault();
+                    void act(() => openExternalHttpUrl(event.currentTarget.href));
+                  }}>https://github.com/lnbits/anagram/bot-example</a
+                >
+              </small>
+            </blockquote>
           {/if}
           {#each displayedMessages as message, index (message.id)}
             {@const author = messageAuthor(
@@ -1551,7 +1567,7 @@
         : modal === 'upload'
           ? $translate('message.photoOrVideo')
           : modal === 'contact'
-            ? 'New conversation'
+            ? $translate('contacts.newConversation')
             : modal === 'group'
               ? groupFlow === 'choose'
                 ? 'Private group'
@@ -1588,25 +1604,20 @@
           oncancel={cancelUpload}
           onconfirm={() => void uploader.upload()}
         />
-      {:else if modal === 'contact'}<label
-          >Public key or NIP-05 address<input
-            bind:value={identifier}
-            placeholder="npub… or name@example.com"
-            data-testid="contact-identifier-input"
-          /></label
-        ><label>{$translate('Name (optional)')}<input bind:value={contactName} /></label><button
-          class="primary"
-          disabled={busy || !identifier}
-          onclick={addContact}>Add contact</button
-        ><button
-          class="link"
-          onclick={() => {
-            modal = 'group';
-            groupFlow = 'choose';
-            contactName = '';
-            groupMembers = '';
-            groupAbout = '';
-          }}>Create a private group</button
+      {:else if modal === 'contact'}
+        <ContactIdentifierInput
+          bind:value={identifier}
+          disabled={busy}
+          searchReady={contactsLoaded}
+          existingKeys={visibleContacts.map((contact) => contact.public_key)}
+          onselect={(profile) => {
+            if (!contactName.trim()) contactName = profile.name;
+            modalError = '';
+          }}
+        />
+        <label>{$translate('Name (optional)')}<input bind:value={contactName} /></label>
+        <button class="primary" disabled={busy || !identifier} onclick={addContact}
+          >{$translate('contacts.addContactAction')}</button
         >
       {:else if modal === 'group'}
         {#if groupFlow === 'choose'}

@@ -180,8 +180,7 @@ test('encrypted DM, reaction, edit, reload and private group', async ({ browser 
   await expect(a.getByRole('dialog')).toBeHidden();
   await a.getByTestId('message-composer-input').fill('Hello encrypted group');
   await a.getByTestId('message-send-button').click();
-  await b.getByRole('button', { name: 'Chat options' }).click();
-  await b.getByRole('button', { name: /Message requests/ }).click();
+  await b.getByTestId('requests-row').click();
   await expect(b.getByTestId('chat-item').filter({ hasText: 'Private test group' })).toBeVisible();
   await b.getByTestId('chat-item').filter({ hasText: 'Private test group' }).click();
   await b.getByRole('button', { name: 'Accept', exact: true }).click();
@@ -624,8 +623,7 @@ test('fresh login restores historical DMs from the advertised inbox relay withou
     socket.on('framesent', ({ payload }) => wire.push(String(payload))),
   );
   await login(page, key);
-  await page.getByRole('button', { name: 'Chat options' }).click();
-  await page.getByRole('button', { name: /Message requests/ }).click();
+  await page.getByTestId('requests-row').click();
   await expect(page.getByTestId('chat-item')).toHaveCount(3, { timeout: 60000 });
   await page.goto(`/chats/${sender}`);
   await expect(

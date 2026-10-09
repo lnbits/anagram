@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, tick } from 'svelte';
+  import { translate } from '#src/i18n.ts';
   import { useNostrStore } from '#src/stores/nostrStore.ts';
   import {
     profileSearchAllowed,
@@ -19,7 +20,7 @@
   let groupStatus = '';
   $: visibleGroups = groups.filter((room) => !joinedAddresses.includes(room.address));
   export let existingKeys: string[] = [];
-  export let excludedMessage = 'Matching profiles are already in your chats.';
+  export let excludedMessage = 'search.existingChats';
   export let onselect: (profile: ProfileSearchResult) => void;
   const nostr = useNostrStore();
   let results: ProfileSearchResult[] = [];
@@ -106,10 +107,10 @@
 </script>
 
 {#if profileSearchAllowed(query) && !dismissed}
-  <div bind:this={container} role="group" aria-label="Relay search results">
+  <div bind:this={container} role="group" aria-label={$translate('search.relayResults')}>
     {#if includePublicGroups}
-      <section class="profile-search-results" aria-label="Public groups on relays">
-        <h2>Public groups on relays</h2>
+      <section class="profile-search-results" aria-label={$translate('search.publicGroups')}>
+        <h2>{$translate('search.publicGroups')}</h2>
         {#each visibleGroups as room (room.address)}
           <PublicGroupRow
             {room}
@@ -119,17 +120,16 @@
           />
         {/each}
         <p role="status" aria-live="polite">
-          {#if groupLoading}Searching public groups…
-          {:else if groupStatus === 'unavailable'}Public group search is unavailable. Try again
-            shortly.
+          {#if groupLoading}{$translate('search.searchingGroups')}
+          {:else if groupStatus === 'unavailable'}{$translate('search.groupsUnavailable')}
           {:else if !visibleGroups.length}{groups.length
-              ? 'Matching public groups are already in your chats.'
-              : 'No public groups found on your relays.'}{/if}
+              ? $translate('search.existingGroups')
+              : $translate('search.noGroups')}{/if}
         </p>
       </section>
     {/if}
-    <section class="profile-search-results" aria-label="People on relays">
-      <h2>People on relays</h2>
+    <section class="profile-search-results" aria-label={$translate('search.people')}>
+      <h2>{$translate('search.people')}</h2>
       {#each visible as profile (profile.publicKey)}
         <button
           class="profile-result"
@@ -153,11 +153,11 @@
         </button>
       {/each}
       <p role="status" aria-live="polite">
-        {#if loading}Searching profiles…
-        {:else if status === 'unavailable'}Profile search is unavailable. Try again shortly.
+        {#if loading}{$translate('search.searchingProfiles')}
+        {:else if status === 'unavailable'}{$translate('search.profilesUnavailable')}
         {:else if !visible.length}{results.length
-            ? excludedMessage
-            : 'No profiles found on your relays.'}{/if}
+            ? $translate(excludedMessage)
+            : $translate('search.noProfiles')}{/if}
       </p>
     </section>
   </div>

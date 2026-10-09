@@ -17,15 +17,24 @@ const relay = await startRelay();
 let session;
 const endpoint = process.env.TAURI_DRIVER_URL || 'http://127.0.0.1:4444';
 async function request(path, data, method = 'POST') {
+  // First WebView2 startup can outlast an ordinary WebDriver command. Let the
+  // driver return its own startup error instead of cancelling it after 45s.
+  const timeout = path === '/session' && method === 'POST' ? 180000 : 45000;
   const response = await fetch(`${endpoint}${path}`, {
     method,
     headers: { 'Content-Type': 'application/json' },
     ...(data === undefined ? {} : { body: JSON.stringify(data) }),
-    signal: AbortSignal.timeout(45000),
+    signal: AbortSignal.timeout(timeout),
+  }).catch((error) => {
+    throw new Error(`WebDriver ${method} ${path} failed (timeout ${timeout}ms): ${error.message}`, {
+      cause: error,
+    });
   });
   const result = await response.json();
   if (!response.ok || result.value?.error)
-    throw new Error(`WebDriver ${path}: ${result.value?.error || response.status}`);
+    throw new Error(
+      `WebDriver ${path}: ${result.value?.error || response.status}: ${result.value?.message || response.statusText}`,
+    );
   return result.value;
 }
 const execute = (script, ...args) => request(`/session/${session}/execute/sync`, { script, args });
@@ -107,8 +116,13 @@ async function secureRelayRead() {
   console.log('Passed: secure WebView relay read');
 }
 async function open() {
+  console.log('Starting packaged app WebDriver session');
+  const capabilities =
+    process.env.ANAGRAM_WEBDRIVER_KIND === 'webview2'
+      ? { browserName: 'webview2', 'ms:edgeOptions': { binary } }
+      : { 'tauri:options': { application: binary } };
   const result = await request('/session', {
-    capabilities: { alwaysMatch: { 'tauri:options': { application: binary } } },
+    capabilities: { alwaysMatch: capabilities },
   });
   session = result.sessionId;
   assert.ok(session, 'native WebDriver session');

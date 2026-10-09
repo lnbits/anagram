@@ -45,3 +45,9 @@ Release publication waits for these checks on the actual packages:
 - **macOS:** verify and mount each architecture's DMG, copy the app, verify its signature, and require a surviving process and rendered Login/Create Account controls, recognized from the native window screenshot. This does not validate relay traffic on macOS.
 
 Failed checks block publication. Logs, screenshots and result files are retained as `smoke-*` / `android-startup-diagnostics` workflow artifacts. Tests use disposable accounts and never require a developer's saved keys. iOS remains paused; physical-device, call and notification behavior still need platform testing. Local web tests alone do not validate installers.
+
+Use a fresh RC tag for each candidate. A failed release run does not replace existing assets, even if the same tag was moved to a newer commit. Check the successful release run before downloading again.
+
+## Running on NixOS
+
+Use `appimage-run ./Anagram_<version>_amd64.AppImage`. It supplies the Linux library environment expected by the AppImage; launching it directly can fail with missing libraries such as `libfontconfig.so.1`.

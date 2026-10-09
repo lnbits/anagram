@@ -72,17 +72,27 @@ jobs:
       - name: Test release APK startup and relay connectivity
         env:
           ANDROID_SERIAL: emulator-5554
+          # Recent avdmanager and emulator versions choose different default
+          # user directories. Give both tools the same explicit AVD location.
+          ANDROID_AVD_HOME: ${{ runner.temp }}/anagram-avds
+          ANDROID_USER_HOME: ${{ runner.temp }}/anagram-android-user
         run: |
           ./src-tauri/gen/android/gradlew --stop
           sudo chmod 666 /dev/kvm
           sdkmanager "emulator" "system-images;android-35;google_apis;x86_64"
-          echo no | avdmanager create avd --name anagram-startup --package "system-images;android-35;google_apis;x86_64"
+          mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_USER_HOME"
+          echo no | avdmanager create avd --name anagram-startup --path "$ANDROID_AVD_HOME/anagram-startup.avd" --package "system-images;android-35;google_apis;x86_64"
+          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -Fx anagram-startup
           "$ANDROID_HOME/emulator/emulator" -avd anagram-startup -port 5554 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swangle -feature -Vulkan -memory 3072 -cores 2 > emulator.log 2>&1 &
           emulator_pid=$!
           trap 'kill "$emulator_pid" || true' EXIT
-          timeout 180 adb wait-for-device
-          for attempt in $(seq 1 90); do
-            [[ "$(adb shell getprop sys.boot_completed | tr -d '\r')" == 1 ]] && break
+          for _attempt in $(seq 1 150); do
+            if ! kill -0 "$emulator_pid" 2>/dev/null; then
+              cat emulator.log
+              echo 'Android emulator exited before booting.' >&2
+              exit 1
+            fi
+            [[ "$(timeout 5 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == 1 ]] && break
             sleep 2
           done
           [[ "$(adb shell getprop sys.boot_completed | tr -d '\r')" == 1 ]]

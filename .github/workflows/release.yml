@@ -120,7 +120,7 @@ jobs:
           uploadWorkflowArtifacts: true
           workflowArtifactNamePattern: desktop-[platform]-[arch]-[bundle]
       - name: Install native test driver
-        if: runner.os != 'macOS'
+        if: runner.os == 'Linux'
         run: cargo install tauri-driver --version 2.1.0 --locked
       - name: Test packaged Linux app
         if: runner.os == 'Linux'
@@ -140,7 +140,8 @@ jobs:
       - name: Test installed macOS app
         if: runner.os == 'macOS'
         run: |
-          packages=($(find src-tauri/target -name '*.dmg' -type f))
+          packages=()
+          while IFS= read -r -d '' package; do packages+=("$package"); done < <(find src-tauri/target -name '*.dmg' -type f -print0)
           [[ ${#packages[@]} -eq 1 ]]
           bash scripts/release-smoke/macos.sh "${packages[0]}"
       - name: Upload packaged-app diagnostics

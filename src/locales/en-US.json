@@ -499,7 +499,7 @@
   "notifications.android.showConversationDetailsCaption": "Show the eligible person or group icon, name, and new-message count. When off, sender checks still run and alerts stay generic.",
   "notifications.android.startOnBoot": "Start after device restart",
   "notifications.android.startOnBootCaption": "Recommended. Restarts the listener automatically after Android boots.",
-  "notifications.android.toggleCaption": "Off by default. Choose at least one notification relay before turning this on.",
+  "notifications.android.toggleCaption": "Anagram asks for notification permission after login. Alerts are generic by default; you can change your notification relays below.",
   "notifications.android.toggleLabel": "Listen directly on your relays and show an alert when a new message arrives in the background.",
   "notifications.browser.blockedEnableInstructions": "Browser notifications were blocked. Allow them in browser settings to enable this.",
   "notifications.browser.blockedInstructions": "Browser notifications are blocked. Allow them in browser settings, then toggle this back on.",

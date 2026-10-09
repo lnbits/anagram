@@ -1,5 +1,9 @@
 #[cfg(desktop)]
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 #[cfg(target_os = "android")]
 mod android_notifications;
 mod secure_storage;
@@ -106,16 +110,34 @@ pub fn run() {
                 None
             };
             let navigation_origin = dev_origin.clone();
+            let capture_origin_trusted = Arc::new(AtomicBool::new(false));
+            let navigation_capture_trusted = capture_origin_trusted.clone();
+            let loaded_capture_trusted = capture_origin_trusted.clone();
             let builder =
                 tauri::WebviewWindowBuilder::from_config(app, &app.config().app.windows[0])?
-                    .on_navigation(move |url| trusted_app_url(url, navigation_origin.as_ref()))
-                    .on_permission_request(move |webview, kind| {
+                    .on_navigation(move |url| {
+                        let allowed = trusted_app_url(url, navigation_origin.as_ref());
+                        if allowed {
+                            // A new document must finish loading before it can capture.
+                            navigation_capture_trusted.store(false, Ordering::Relaxed);
+                        }
+                        allowed
+                    })
+                    .on_page_load(move |_, payload| {
+                        loaded_capture_trusted.store(
+                            matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
+                                && trusted_app_url(payload.url(), dev_origin.as_ref()),
+                            Ordering::Relaxed,
+                        );
+                    })
+                    .on_permission_request(move |_, kind| {
                         use tauri::webview::{PermissionKind, PermissionResponse};
-                        let trusted = webview
-                            .url()
-                            .map(|url| trusted_app_url(&url, dev_origin.as_ref()))
-                            .unwrap_or(false);
-                        if !trusted {
+                        // Android invokes this on its UI thread. Querying webview.url()
+                        // here waits for that same thread and panics when the delayed
+                        // reply reaches a dropped receiver. Track the loaded origin from
+                        // navigation/page-load events instead; deny until a trusted
+                        // document finishes loading. The navigation guard stays in force.
+                        if !capture_origin_trusted.load(Ordering::Relaxed) {
                             return PermissionResponse::Deny;
                         }
                         // Capture is requested by the call's user-gesture controls. OS

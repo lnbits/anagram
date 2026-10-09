@@ -128,7 +128,7 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
 
         boolean startOnBoot = Boolean.TRUE.equals(call.getArgs().optBoolean("startOnBoot", true));
         boolean showConversationDetails = Boolean.TRUE.equals(
-            call.getArgs().optBoolean("showConversationDetails", true)
+            call.getArgs().optBoolean("showConversationDetails", false)
         );
         boolean didChangeConversationDetails =
             RelayNotificationPreferences.shouldShowConversationDetails(getContext()) !=

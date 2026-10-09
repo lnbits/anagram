@@ -154,7 +154,7 @@
     flex-shrink: 0;
   }
   .call-stage {
-    background: #000;
+    background: var(--call-stage-background, #000);
     flex: 1;
     min-height: 0;
     min-width: 0;

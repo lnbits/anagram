@@ -1,6 +1,6 @@
 <script lang="ts">
   import { observePublicProfile } from '#src/lib/state/publicProfiles.ts';
-  import { buildAvatarText } from '#src/utils/avatarText.ts';
+  import { buildAvatarText, avatarColor } from '#src/utils/avatarText.ts';
   export let name = '';
   export let picture = '';
   export let publicKey = '';
@@ -14,25 +14,7 @@
   export let size = 48;
   export let fontSize: number | undefined = undefined;
   $: initials = buildAvatarText(name);
-  function avatarHash(value: string) {
-    let hash = 0;
-    for (const ch of value.toLowerCase()) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
-    return hash;
-  }
-  $: color = [
-    '#d65563',
-    '#d97706',
-    '#7c3aed',
-    '#2563eb',
-    '#0f766e',
-    '#4f46e5',
-    '#db2777',
-    '#059669',
-    '#0284c7',
-    '#c2410c',
-    '#475569',
-    '#b45309',
-  ][avatarHash(name || initials) % 12];
+  $: color = avatarColor(name || initials);
 </script>
 
 <span

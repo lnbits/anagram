@@ -14,6 +14,9 @@
   import { Notify } from '#src/lib/platform/ui.ts';
   import CallRelayPrompt from './CallRelayPrompt.svelte';
   import Icon from './Icon.svelte';
+  import Avatar from './Avatar.svelte';
+  import { observePublicProfile } from '#src/lib/state/publicProfiles.ts';
+  import { avatarColor } from '#src/utils/avatarText.ts';
   import { callDialogFocus } from '#src/lib/platform/callDialogFocus.ts';
   import CallAudio from './CallAudio.svelte';
   import CallVideo from './CallVideo.svelte';
@@ -73,6 +76,13 @@
     selectAudioOutput?: () => Promise<MediaDeviceInfo>;
   };
   $: room = Boolean($state.room);
+  $: peerKey = $state.session?.peerPubkey ?? '';
+  $: peerProfile = observePublicProfile(peerKey);
+  $: peerNpub = peerKey ? useNostrStore().encodeNpub(peerKey) : '';
+  $: peerName = $state.session?.peerName || $peerProfile?.name || peerNpub;
+  $: peerColor = avatarColor(peerName);
+  let failedPicture = '';
+  $: peerPicture = $peerProfile?.picture ?? '';
   $: prefix = room ? 'room' : 'call';
   $: phase = $state.room?.phase ?? $state.session?.phase;
   $: active = phase === 'active';
@@ -313,17 +323,31 @@
     class:call-panel--minimized={minimized}
     class:call-panel--fill={maxFill}
     class:room-panel={room}
+    class:call-panel--voice={!room && !hasVideo && !screens.length}
+    style:--call-peer-color={peerColor}
     role="dialog"
     aria-modal={!minimized}
     aria-label={room ? $translate('room.title') : $state.session?.peerName}
     data-testid={room ? 'room-panel' : 'call-panel'}
   >
-    {#if !room}<header class="call-panel__header">
+    {#if !room}<div class="call-backdrop" aria-hidden="true">
+        {#if peerPicture && peerPicture !== failedPicture}<img
+            src={peerPicture}
+            alt=""
+            referrerpolicy="no-referrer"
+            onerror={(event) => (failedPicture = event.currentTarget.getAttribute('src') ?? '')}
+          />{/if}
+      </div>
+      <header class="call-panel__header">
         {$translate(hasVideo || $state.session?.mode === 'video' ? 'call.video' : 'call.audio')}
       </header>
       <div class="call-panel__identity">
         <Icon name={hasVideo || $state.session?.mode === 'video' ? 'video' : 'phone'} />
-        <h2>{$state.session?.peerName}</h2>
+        <div class="call-peer-avatar">
+          <Avatar name={peerName} publicKey={peerKey} size={104} eager />
+        </div>
+        <h2>{peerName}</h2>
+        <div class="call-peer-npub" title={peerNpub} data-testid="call-peer-npub">{peerNpub}</div>
         <div role="status" aria-live="polite" data-testid="call-status">{status}</div>
       </div>{:else}<div role="status" class:room-status--hidden={active} data-testid="room-status">
         {status}
@@ -465,22 +489,25 @@
             >{/if}
           {#if phase === 'incoming'}
             <button
-              class="call-round danger"
+              class="call-round danger call-primary-action"
               data-testid="call-decline"
               aria-label={$translate('call.decline')}
-              onclick={() => act(() => calls.end())}><Icon name="hangup" /></button
+              onclick={() => act(() => calls.end())}
+              ><Icon name="hangup" /><span class="call-action-label"
+                >{$translate('call.decline')}</span
+              ></button
             >
             <button
-              class="call-answer audio"
+              class="call-answer audio call-primary-action"
               data-testid="call-accept"
               onclick={() => act(() => calls.accept('audio'))}
-              ><Icon name="phone" />{$translate('call.answerAudio')}</button
+              ><Icon name="phone" /><span>{$translate('call.answerAudio')}</span></button
             >
             {#if $state.session?.mode === 'video'}<button
-                class="call-answer"
+                class="call-answer call-primary-action"
                 data-testid="call-accept-video"
                 onclick={() => act(() => calls.accept('video'))}
-                ><Icon name="video" />{$translate('call.answerVideo')}</button
+                ><Icon name="video" /><span>{$translate('call.answerVideo')}</span></button
               >{/if}
           {:else}
             <div class="call-panel__device">
@@ -578,6 +605,7 @@
                 >{/if}{/if}
             <button
               class="call-round danger"
+              class:call-hangup={!room}
               data-testid={room ? 'room-leave' : 'call-hangup'}
               aria-label={$translate(room ? 'room.leave' : 'call.hangup')}
               onclick={() => act(() => (room ? rooms.leave() : calls.end()))}
@@ -586,8 +614,14 @@
           {/if}
         </div>
       </CallControlsTray>
-    {:else}<button class="call-answer dismiss" data-testid={`${prefix}-dismiss`} onclick={dismiss}
-        >{$translate('common.close')}</button
+    {:else}<button
+        class="call-answer dismiss"
+        class:call-primary-action={!room}
+        data-testid={`${prefix}-dismiss`}
+        onclick={dismiss}
+        >{#if !room}<span class="call-close-icon"><Icon name="hangup" /></span>{/if}<span
+          >{$translate('common.close')}</span
+        ></button
       >{/if}
   </div>
   {#if minimized && !ended}<div
@@ -619,7 +653,10 @@
       >{$translate('common.close')}</button
     >
   </div>{/if}
-{#if invite && $state.busy}<div class="call-invite-backdrop" use:dismissOnBackdrop={() => (invite = false)}>
+{#if invite && $state.busy}<div
+    class="call-invite-backdrop"
+    use:dismissOnBackdrop={() => (invite = false)}
+  >
     <div
       tabindex="-1"
       use:callDialogFocus
@@ -661,6 +698,14 @@
 <CallRelayPrompt />
 
 <style>
+  .call-backdrop,
+  .call-peer-avatar,
+  .call-peer-npub,
+  .call-action-label,
+  .call-close-icon {
+    display: none;
+  }
+
   .call-panel--minimized {
     visibility: hidden;
     pointer-events: none;
@@ -1152,6 +1197,139 @@
     }
     .call-panel__controls {
       gap: 4px;
+    }
+  }
+
+  @media (max-width: 599px) {
+    .call-panel:not(.room-panel) {
+      isolation: isolate;
+      --call-stage-background: transparent;
+      padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+      background: #101820;
+      overflow-y: auto;
+    }
+    .call-backdrop {
+      display: block;
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      overflow: hidden;
+      background: radial-gradient(ellipse at 50% 25%, var(--call-peer-color), #101820 85%);
+    }
+    .call-backdrop img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      filter: blur(28px);
+      transform: scale(1.15);
+    }
+    .call-backdrop::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(#10182099, #101820dd);
+    }
+    .call-peer-avatar {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 20px;
+    }
+    .call-panel:not(.call-panel--voice) .call-peer-avatar {
+      display: none;
+    }
+    .call-panel__identity {
+      padding: 20px 0;
+    }
+    .call-panel__identity h2 {
+      font-size: 26px;
+      color: color-mix(in srgb, var(--call-peer-color) 30%, white);
+      max-height: 3.9em;
+      overflow: auto;
+    }
+    .call-peer-npub {
+      display: block;
+      color: color-mix(in srgb, var(--call-peer-color) 30%, white);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+      max-width: 320px;
+      margin: 8px auto 16px;
+      user-select: text;
+    }
+    .call-panel--voice .call-panel__identity {
+      margin-top: auto;
+    }
+    .call-panel--voice :global(.call-stage) {
+      flex: 0 0 24px;
+      margin-bottom: auto;
+    }
+    .call-panel:not(.room-panel) .call-panel__controls {
+      gap: 12px;
+      padding-bottom: 12px;
+      align-items: center;
+    }
+    .call-panel:not(.room-panel) .call-round {
+      width: 44px;
+      height: 44px;
+    }
+    .call-panel:not(.room-panel) .call-primary-action {
+      position: relative;
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      flex-shrink: 0;
+      width: 64px;
+      height: 64px;
+      min-height: 64px;
+      border-radius: 50%;
+      padding: 0;
+      margin: 12px 8px 52px;
+    }
+    .call-primary-action > span:not(.call-close-icon) {
+      display: block;
+      position: absolute;
+      top: calc(100% + 10px);
+      left: 50%;
+      transform: translateX(-50%);
+      width: 80px;
+      color: white;
+      font-size: 13px;
+      line-height: 1.3;
+      text-align: center;
+    }
+    .call-panel .call-primary-action :global(svg),
+    .call-hangup :global(svg) {
+      width: 28px;
+      height: 28px;
+    }
+    .call-panel .call-primary-action.audio {
+      background: #198348;
+    }
+    .call-panel .call-primary-action.danger,
+    .call-panel .call-primary-action.dismiss,
+    .call-panel .call-hangup {
+      background: #d9364f;
+    }
+    .call-panel:not(.room-panel) .call-hangup {
+      width: 60px;
+      height: 60px;
+    }
+    .call-close-icon {
+      display: flex;
+    }
+  }
+  @media (max-width: 599px) and (max-height: 600px) {
+    .call-peer-avatar {
+      display: none;
+    }
+    .call-panel__identity {
+      padding: 8px 0;
+    }
+    .call-panel__identity h2 {
+      font-size: 20px;
+    }
+    .call-peer-npub {
+      margin-bottom: 8px;
     }
   }
 </style>

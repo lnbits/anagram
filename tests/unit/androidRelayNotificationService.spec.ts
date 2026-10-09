@@ -8,6 +8,8 @@ import {
   createAndroidNotificationConversationSignature,
   createAndroidNotificationWatchPlan,
   ingestPendingAndroidRelayNotificationEvents,
+  initializeAndroidRelayNotificationsAfterLogin,
+  getAndroidRelayNotificationState,
   isAndroidDirectNotificationContactEligible,
   isAndroidDirectNotificationConversationEnabled,
   isAndroidDirectNotificationConversationPolicyEligible,
@@ -54,7 +56,7 @@ const moduleMocks = vi.hoisted(() => ({
     getState: vi.fn(async () => ({
       enabled: true,
       startOnBoot: true,
-      showConversationDetails: true,
+      showConversationDetails: false,
       permission: 'granted',
     })),
     getPendingEvents: vi.fn(async () => ({ events: [...moduleMocks.pendingEvents] })),
@@ -75,7 +77,7 @@ const moduleMocks = vi.hoisted(() => ({
     stop: vi.fn(async () => ({
       enabled: false,
       startOnBoot: true,
-      showConversationDetails: true,
+      showConversationDetails: false,
       permission: 'granted',
     })),
   },
@@ -134,6 +136,10 @@ const localStorageValues = new Map<string, string>();
 describe('androidRelayNotificationService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    moduleMocks.plugin.getState.mockResolvedValue({
+      enabled: true, startOnBoot: true, showConversationDetails: false, permission: 'granted',
+    });
+    moduleMocks.plugin.requestPermissions.mockResolvedValue({ receive: 'granted' });
     __androidRelayNotificationServiceTestUtils.resetRefreshState();
     moduleMocks.chats.length = 0;
     moduleMocks.contacts.length = 0;
@@ -167,6 +173,65 @@ describe('androidRelayNotificationService', () => {
     vi.unstubAllGlobals();
   });
 
+  function unconfiguredListener() {
+    moduleMocks.plugin.getState.mockResolvedValue({
+      enabled: false, startOnBoot: true, showConversationDetails: false, permission: 'prompt',
+    });
+    localStorageValues.delete('ui-android-relay-notifications-selected-relays');
+  }
+
+  it('requests permission once after login and configures generic alerts on default relays', async () => {
+    unconfiguredListener();
+    // Settings/state reads must not turn an unconfigured installation into an opt-out.
+    await getAndroidRelayNotificationState();
+    await initializeAndroidRelayNotificationsAfterLogin();
+    expect(moduleMocks.plugin.requestPermissions).toHaveBeenCalledOnce();
+    expect(moduleMocks.plugin.configure).toHaveBeenCalledWith(expect.objectContaining({
+      showConversationDetails: false,
+      relays: ['wss://relay.example/'],
+    }));
+    expect(localStorageValues.get('ui-android-relay-notifications')).toBe('1');
+    await initializeAndroidRelayNotificationsAfterLogin();
+    expect(moduleMocks.plugin.requestPermissions).toHaveBeenCalledOnce();
+  });
+
+  it('respects a declined permission without configuring keys or repeatedly prompting', async () => {
+    unconfiguredListener();
+    moduleMocks.plugin.requestPermissions.mockResolvedValue({ receive: 'denied' });
+    await initializeAndroidRelayNotificationsAfterLogin();
+    await initializeAndroidRelayNotificationsAfterLogin();
+    expect(moduleMocks.plugin.requestPermissions).toHaveBeenCalledOnce();
+    expect(moduleMocks.plugin.configure).not.toHaveBeenCalled();
+    expect(localStorageValues.get('ui-android-relay-notifications')).toBe('0');
+  });
+
+  it('preserves an explicit notification opt-out', async () => {
+    unconfiguredListener();
+    localStorageValues.set('ui-android-relay-notifications', '0');
+    await initializeAndroidRelayNotificationsAfterLogin();
+    expect(moduleMocks.plugin.requestPermissions).not.toHaveBeenCalled();
+    expect(moduleMocks.plugin.configure).not.toHaveBeenCalled();
+  });
+
+  it('keeps existing enabled notifications and conversation detail choices', async () => {
+    moduleMocks.plugin.getState.mockResolvedValue({
+      enabled: true, startOnBoot: true, showConversationDetails: true, permission: 'granted',
+    });
+    await initializeAndroidRelayNotificationsAfterLogin();
+    expect(moduleMocks.plugin.requestPermissions).not.toHaveBeenCalled();
+    expect(readAndroidRelayConversationDetailsPreference()).toBe(true);
+  });
+
+  it('does not replace an explicitly empty relay selection with defaults', async () => {
+    unconfiguredListener();
+    localStorageValues.set('ui-android-relay-notifications-selected-relays', JSON.stringify({
+      [new NostrPrivateKeySigner(moduleMocks.privateKey).pubkey]: [],
+    }));
+    await initializeAndroidRelayNotificationsAfterLogin();
+    expect(moduleMocks.plugin.requestPermissions).not.toHaveBeenCalled();
+    expect(moduleMocks.plugin.configure).not.toHaveBeenCalled();
+  });
+
   it('does not re-enable or retain keys when disabled during an in-flight configuration', async () => {
     let finish!: (value: {
       enabled: boolean;
@@ -187,7 +252,7 @@ describe('androidRelayNotificationService', () => {
     finish({
       enabled: true,
       startOnBoot: true,
-      showConversationDetails: true,
+      showConversationDetails: false,
       permission: 'granted',
     });
     await cancelled;
@@ -314,8 +379,8 @@ describe('androidRelayNotificationService', () => {
     ).toEqual(['wss://app.example/']);
   });
 
-  it('enables per-conversation details by default', () => {
-    expect(readAndroidRelayConversationDetailsPreference()).toBe(true);
+  it('hides per-conversation details by default', () => {
+    expect(readAndroidRelayConversationDetailsPreference()).toBe(false);
   });
 
   it('ingests and acknowledges encrypted events from the native Android inbox', async () => {

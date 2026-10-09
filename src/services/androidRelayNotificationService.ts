@@ -11,6 +11,8 @@ import {
 } from '#src/lib/nostr/client.ts';
 import {
   AndroidNotificationRelaySelectionError,
+  loadAndroidNotificationRelayChoices,
+  saveAndroidNotificationRelaySelection,
   resolveSelectedAndroidNotificationRelayUrls,
 } from '#src/services/androidNotificationRelaySelectionService.ts';
 import { readNativeKey } from '#src/lib/platform/secureKeys.ts';
@@ -234,9 +236,9 @@ export function readAndroidRelayStartOnBootPreference(): boolean {
 
 export function readAndroidRelayConversationDetailsPreference(): boolean {
   if (!canUseStorage()) {
-    return true;
+    return false;
   }
-  return window.localStorage.getItem(ANDROID_RELAY_CONVERSATION_DETAILS_STORAGE_KEY) !== '0';
+  return window.localStorage.getItem(ANDROID_RELAY_CONVERSATION_DETAILS_STORAGE_KEY) === '1';
 }
 
 function saveAndroidRelayStartOnBootPreference(enabled: boolean): void {
@@ -715,10 +717,37 @@ export async function getAndroidRelayNotificationState(): Promise<AndroidRelayNo
     ...state,
     permission: normalizePermission(state.permission),
   };
-  saveAndroidRelayNotificationsPreference(normalizedState.enabled);
+  // Reading an unconfigured listener must not record an explicit opt-out.
+  if (
+    normalizedState.enabled ||
+    (canUseStorage() && window.localStorage.getItem(ANDROID_RELAY_NOTIFICATIONS_STORAGE_KEY) !== null)
+  ) {
+    saveAndroidRelayNotificationsPreference(normalizedState.enabled);
+  }
   saveAndroidRelayStartOnBootPreference(normalizedState.startOnBoot);
   saveAndroidRelayConversationDetailsPreference(normalizedState.showConversationDetails);
   return normalizedState;
+}
+
+export async function initializeAndroidRelayNotificationsAfterLogin(): Promise<void> {
+  if (!isAndroidRelayNotificationSupported() || !canUseStorage()) return;
+  const revision = configurationRevision;
+  const state = await getAndroidRelayNotificationState();
+  if (
+    revision !== configurationRevision ||
+    state.enabled ||
+    window.localStorage.getItem(ANDROID_RELAY_NOTIFICATIONS_STORAGE_KEY) !== null
+  ) return;
+
+  // Record the attempt before requesting permission so denial or a failed setup
+  // does not prompt again on every visit. Settings can explicitly enable it later.
+  saveAndroidRelayNotificationsPreference(false);
+  const choices = await loadAndroidNotificationRelayChoices();
+  if (revision !== configurationRevision || choices.selectedRelayUrls.length === 0) return;
+  if (!choices.hasSavedSelection) {
+    saveAndroidNotificationRelaySelection(choices.selectedRelayUrls);
+  }
+  await requestAndroidRelayNotificationsAfterLogin();
 }
 
 export async function requestAndroidRelayNotificationsAfterLogin(): Promise<AndroidRelayNotificationPermissionState> {

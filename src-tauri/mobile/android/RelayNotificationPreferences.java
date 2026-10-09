@@ -119,7 +119,7 @@ final class RelayNotificationPreferences {
     }
 
     static boolean shouldShowConversationDetails(Context context) {
-        return preferences(context).getBoolean(KEY_SHOW_CONVERSATION_DETAILS, true);
+        return preferences(context).getBoolean(KEY_SHOW_CONVERSATION_DETAILS, false);
     }
 
     static boolean isRelayInitialized(Context context, String relayUrl) {

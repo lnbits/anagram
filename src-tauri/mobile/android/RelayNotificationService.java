@@ -91,7 +91,7 @@ public final class RelayNotificationService extends Service {
     private volatile Map<String, String> recipientPrivateKeys = new LinkedHashMap<>();
     private volatile Set<String> seenEventIds = new LinkedHashSet<>();
     private volatile String ownerPubkey = "";
-    private volatile boolean showConversationDetails = true;
+    private volatile boolean showConversationDetails = false;
     private volatile boolean isStopping;
     private volatile long connectionGeneration;
     private OkHttpClient httpClient;

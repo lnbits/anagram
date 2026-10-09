@@ -22,6 +22,7 @@
     isAndroidRelayNotificationSupported,
     createAndroidNotificationConversationSignature,
     refreshAndroidRelayNotificationListener,
+    initializeAndroidRelayNotificationsAfterLogin,
     startAndroidRelayNotificationListeners,
     ingestPendingAndroidRelayNotificationEvents,
     clearAndroidRelayNotificationForChat,
@@ -987,7 +988,9 @@
     );
     void nostr
       .initializeSessionState()
-      .then(() => {
+      .then(async () => {
+        if (disposed) return;
+        await initializeAndroidRelayNotificationsAfterLogin().catch(fail);
         if (disposed) return;
         notificationsReady = androidNotifications;
         if (pendingNotificationChat !== undefined) openNotification(pendingNotificationChat);

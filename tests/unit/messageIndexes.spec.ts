@@ -168,3 +168,43 @@ it.each(['author', 'chat', 'createdAt'])(
     expect(await chatDataService.getMessageByEventIdOrEditReference(first)).toBeNull();
   },
 );
+
+it('does not rebind an edited message when an old relay acknowledgement arrives', async () => {
+  vi.stubGlobal('window', { indexedDB: new IDBFactory() });
+  const chat = 'a'.repeat(64),
+    originalId = 'b'.repeat(64),
+    replacementId = 'c'.repeat(64);
+  const at = '2026-01-01T00:00:00.000Z';
+  await chatDataService.createChat({ public_key: chat, type: 'user', name: 'Test' });
+  const original = await chatDataService.createMessage({
+    chat_public_key: chat,
+    author_public_key: chat,
+    message: 'Original',
+    created_at: at,
+    meta: {},
+  });
+  // Initial publish still binds the locally created message to its event.
+  expect((await chatDataService.updateMessageEventId(original!.id, originalId))?.event_id).toBe(
+    originalId,
+  );
+  await chatDataService.applyMessageEdit(original!.id, {
+    message: 'Edited',
+    created_at: at,
+    event_id: replacementId,
+    previous_event_id: originalId,
+    edited_at: at,
+    meta: {},
+  });
+  // A delayed relay status for the original must not make a NIP-09 deletion
+  // of that original target the edited replacement.
+  await chatDataService.updateMessageEventId(original!.id, originalId);
+  expect(await chatDataService.getMessageByEventId(originalId)).toBeNull();
+  expect(await chatDataService.getMessageById(original!.id)).toMatchObject({
+    event_id: replacementId,
+    message: 'Edited',
+    meta: { edited: { previousEventIds: [originalId] } },
+  });
+  expect((await chatDataService.getMessageByEventIdOrEditReference(originalId))?.id).toBe(
+    original!.id,
+  );
+});

@@ -7,6 +7,7 @@ $Output = (Resolve-Path $Output).Path
 Get-FileHash $Installer -Algorithm SHA256 | Format-List | Out-File "$Output\artifact.sha256"
 $installDir = Join-Path $env:RUNNER_TEMP 'anagram-installed'
 $driver = $null
+$policies = @()
 try {
   $install = Start-Process $Installer -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
   if ($install.ExitCode -ne 0) { throw "Installer failed: $($install.ExitCode)" }
@@ -38,10 +39,39 @@ try {
     Start-Sleep 1
   }
   if (!$ready) { throw 'Microsoft Edge WebDriver did not become ready' }
+  # Hosted Windows jobs run elevated. WebView2 150+ ignores WEBVIEW2_*
+  # environment overrides at high integrity, including the driver's port=0.
+  # Configure only this app on the disposable runner and attach on a known port.
+  # https://github.com/MicrosoftEdge/WebView2Feedback/issues/5645
+  $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+  $listener.Start()
+  $debugPort = $listener.LocalEndpoint.Port
+  $listener.Stop()
+  $settings = @{
+    AdditionalBrowserArguments = "--remote-debugging-port=$debugPort --remote-debugging-address=127.0.0.1"
+    UserDataFolder = (Join-Path $env:RUNNER_TEMP 'anagram-webview-smoke')
+    BrowserExecutableFolder = (Split-Path $runtime.FullName)
+  }
+  foreach ($setting in $settings.GetEnumerator()) {
+    $path = "HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2\$($setting.Key)"
+    if (!(Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+    $key = Get-Item $path
+    $existed = $key.GetValueNames() -contains 'anagram.exe'
+    $policies += @{ Path = $path; Existed = $existed; Value = $key.GetValue('anagram.exe') }
+    New-ItemProperty -Path $path -Name 'anagram.exe' -Value $setting.Value -PropertyType String -Force | Out-Null
+  }
+  $env:ANAGRAM_WEBVIEW2_DEBUG_PORT = "$debugPort"
   $env:ANAGRAM_WEBDRIVER_KIND = 'webview2'
   $env:ANAGRAM_DISPOSABLE_TEST = '1'
   node scripts/release-smoke/desktop.mjs $binary $Output
   if ($LASTEXITCODE -ne 0) { throw 'Installed Windows app failed smoke checks' }
 } finally {
   if ($driver -and !$driver.HasExited) { taskkill /PID $driver.Id /T /F | Out-Null }
+  foreach ($policy in $policies) {
+    if ($policy.Existed) {
+      Set-ItemProperty -Path $policy.Path -Name 'anagram.exe' -Value $policy.Value
+    } else {
+      Remove-ItemProperty -Path $policy.Path -Name 'anagram.exe' -ErrorAction SilentlyContinue
+    }
+  }
 }

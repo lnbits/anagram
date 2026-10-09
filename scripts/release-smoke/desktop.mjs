@@ -1,6 +1,8 @@
 // Drive the actual installed/extracted release app through Tauri's native WebDriver.
 // Uses the release frontend and real signer; CSP and TLS checks stay enabled.
 import assert from 'node:assert/strict';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { startRelay } from './relay.mjs';
@@ -15,6 +17,11 @@ await mkdir(output, { recursive: true });
 await rm(`${output}/result.json`, { force: true });
 const relay = await startRelay();
 let session;
+let appProcess;
+const webview2 = process.env.ANAGRAM_WEBDRIVER_KIND === 'webview2';
+const debugPort = Number(process.env.ANAGRAM_WEBVIEW2_DEBUG_PORT);
+if (webview2 && (!Number.isInteger(debugPort) || debugPort < 1 || debugPort > 65535))
+  throw new Error('Windows smoke tests require a dedicated WebView2 debugging port.');
 const endpoint = process.env.TAURI_DRIVER_URL || 'http://127.0.0.1:4444';
 async function request(path, data, method = 'POST') {
   // First WebView2 startup can outlast an ordinary WebDriver command. Let the
@@ -117,20 +124,59 @@ async function secureRelayRead() {
 }
 async function open() {
   console.log('Starting packaged app WebDriver session');
-  const capabilities =
-    process.env.ANAGRAM_WEBDRIVER_KIND === 'webview2'
-      ? { browserName: 'webview2', 'ms:edgeOptions': { binary } }
-      : { 'tauri:options': { application: binary } };
+  if (webview2) {
+    appProcess = spawn(binary, [], { stdio: 'inherit' });
+    await new Promise((resolve, reject) => {
+      appProcess.once('spawn', resolve);
+      appProcess.once('error', reject);
+    });
+    await until(
+      async () => {
+        if (appProcess.exitCode !== null || appProcess.signalCode !== null)
+          throw new Error(
+            `Installed app exited before WebView2 became ready: ${appProcess.exitCode}`,
+          );
+        return fetch(`http://127.0.0.1:${debugPort}/json/version`, {
+          signal: AbortSignal.timeout(2000),
+        })
+          .then(
+            async (response) =>
+              response.ok && Boolean((await response.json()).webSocketDebuggerUrl),
+          )
+          .catch(() => false);
+      },
+      'installed app WebView2 debugging endpoint',
+      60000,
+    );
+  }
+  const capabilities = webview2
+    ? { browserName: 'webview2', 'ms:edgeOptions': { debuggerAddress: `127.0.0.1:${debugPort}` } }
+    : { 'tauri:options': { application: binary } };
   const result = await request('/session', {
     capabilities: { alwaysMatch: capabilities },
   });
   session = result.sessionId;
   assert.ok(session, 'native WebDriver session');
-  await request(`/session/${session}/window/rect`, { x: 0, y: 0, width: 1100, height: 800 });
+  // Attached WebView2 sessions cannot resize the native host window. Use the
+  // packaged app's default size there; Linux's driver owns its native window.
+  if (!webview2)
+    await request(`/session/${session}/window/rect`, { x: 0, y: 0, width: 1100, height: 800 });
 }
 async function quit() {
-  if (session) await request(`/session/${session}`, undefined, 'DELETE');
-  session = undefined;
+  try {
+    if (session) await request(`/session/${session}`, undefined, 'DELETE');
+  } finally {
+    session = undefined;
+    // Attached WebDriver sessions do not own the application process. Stop it
+    // explicitly so the next open really checks a cold start and saved identity.
+    const child = appProcess;
+    appProcess = undefined;
+    if (child && child.exitCode === null && child.signalCode === null) {
+      await promisify(execFile)('taskkill', ['/PID', String(child.pid), '/T', '/F']);
+      if (child.exitCode === null && child.signalCode === null)
+        await new Promise((resolve) => child.once('exit', resolve));
+    }
+  }
 }
 async function selfChat() {
   await click(`[data-testid="chat-item"][data-chat-public-key="${relay.pubkey}"]`);

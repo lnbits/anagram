@@ -2,7 +2,11 @@ import { mergeGroupEpochMetadata } from '#src/utils/groupEpochMetadata.ts';
 import type { ChatType } from '#src/types/chat.ts';
 import { closeIndexedDbConnection, deleteIndexedDbDatabase } from '#src/utils/indexedDbStorage.ts';
 import { isIncomingUnreadMessageActivity } from '#src/utils/messageActivity.ts';
-import { areMessageEditTimestampsEqual, buildEditedMessageMeta } from '#src/utils/messageEdits.ts';
+import {
+  areMessageEditTimestampsEqual,
+  buildEditedMessageMeta,
+  messageEditReferencesEventId,
+} from '#src/utils/messageEdits.ts';
 import {
   isDeletedMessageMeta,
   messageRecordMatchesSearchQuery,
@@ -1416,6 +1420,14 @@ class ChatDataService {
     if (!record) {
       await waitForTransaction(transaction);
       return null;
+    }
+
+    // Relay acknowledgements may finish after an edit has replaced this row.
+    // Check inside the write transaction so an old publish cannot rebind the
+    // replacement to a deleted predecessor (including during a retry).
+    if (messageEditReferencesEventId(record.meta, normalizedEventId)) {
+      await waitForTransaction(transaction);
+      return toMessageRow(record);
     }
 
     const nextRecord: MessageRecord = {

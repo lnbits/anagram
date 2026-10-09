@@ -680,10 +680,15 @@
       chats.selectedChatId === chatId && scrollArea === node && node.isConnected;
     try {
       await messages.loadOlderMessages(chatId);
-      const firstId = messages.getMessages(chatId).find((message) => !message.meta.deleted)?.id;
-      // The Vue-to-Svelte bridge batches notifications. tick() alone can run
-      // before the new window reaches the DOM, especially while hydrating.
-      for (let frame = 0; current() && $state.thread.items[0]?.id !== firstId && frame < 4; frame++)
+      // The Vue-to-Svelte bridge batches notifications. Wait for the actual
+      // window, not a fixed number of frames: busy/backgrounded tabs can take
+      // longer. Follow the latest first row if ingestion/deletion changes it,
+      // and stop waiting if the user navigates away.
+      while (
+        current() &&
+        $state.thread.items[0]?.id !==
+          messages.getMessages(chatId).find((message) => !message.meta.deleted)?.id
+      )
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       await tick();
       if (!current()) return;

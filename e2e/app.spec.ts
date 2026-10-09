@@ -415,6 +415,15 @@ test('a 20,000-message account opens a bounded cached window', async ({ page }) 
     { peer, own: account.pubkey },
   );
   await page.addInitScript(() => {
+    // Model a busy/backgrounded tab: reactive notifications may arrive well
+    // after a handful of animation frames. Paging must wait for the actual DOM.
+    const schedule = window.setTimeout.bind(window);
+    window.setTimeout = ((handler, delay, ...args) =>
+      schedule(
+        handler,
+        (window as any).__delayHistoryUi && delay === 16 ? 250 : delay,
+        ...args,
+      )) as typeof window.setTimeout;
     const original = IDBObjectStore.prototype.getAll;
     (window as any).__fullHistoryReads = 0;
     IDBObjectStore.prototype.getAll = function (...args) {
@@ -464,7 +473,13 @@ test('a 20,000-message account opens a bounded cached window', async ({ page }) 
       .poll(async () => Math.abs((await page.locator(`#${id}`).boundingBox())!.y - before))
       .toBeLessThan(3);
   }
+  await page.evaluate(() => {
+    (window as any).__delayHistoryUi = true;
+  });
   for (let n = 0; n < 6; n++) await loadKeepingAnchor(() => more.click());
+  await page.evaluate(() => {
+    (window as any).__delayHistoryUi = false;
+  });
 
   // Scrolling to the top is not a pull: wheel momentum must not load a page.
   const beforeMomentum = await page.getByTestId('message-bubble').first().getAttribute('id');

@@ -26,3 +26,10 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e:pwa
       - run: npm run test:e2e:local -- e2e/app.spec.ts e2e/dm-relay-discovery.spec.ts e2e/group-history.spec.ts e2e/public-groups.spec.ts e2e/message-formatting.spec.ts e2e/parity/dm/link-preview.spec.ts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: web-browser-failures
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7

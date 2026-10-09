@@ -1219,10 +1219,11 @@ export const useMessageStore = defineStore('messageStore', () => {
       return null;
     }
 
+    // Match the wire timestamp precision before the optimistic row is inserted.
     const createdAt =
       typeof input.options.createdAt === 'string' && input.options.createdAt.trim()
         ? input.options.createdAt.trim()
-        : new Date().toISOString();
+        : new Date(Math.floor(Date.now() / 1000) * 1000).toISOString();
     const continueFromMessageId = input.options.continueFromMessageId;
     const persistedContinueId =
       typeof continueFromMessageId === 'number' &&

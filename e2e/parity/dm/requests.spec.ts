@@ -92,7 +92,7 @@ test('deleting a first-contact DM request keeps later messages in requests inste
     await openRequests(bob.page);
     await expect(bob.page.getByTestId('chat-request-item')).toContainText(followupMessage);
     await bob.page.goto('/chats');
-    await expect(bob.page.getByTestId('chat-item')).toHaveCount(1);
+    await expect(bob.page.getByTestId('chat-item')).toHaveCount(2);
 
     await bob.context.close();
     bob = await bootstrapUser(browser, TEST_ACCOUNTS.blockBob);

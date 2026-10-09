@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { orderThreadMessages } from '#src/utils/threadMessageOrder.ts';
   import ModalFrame from './ModalFrame.svelte';
   import GroupProfileFields from './GroupProfileFields.svelte';
   import MessageInfo from './MessageInfo.svelte';
@@ -241,6 +242,7 @@
     modal = '';
     if (fileInput) fileInput.value = '';
   }
+  $: displayedMessages = orderThreadMessages($state.thread.items, (message) => message);
   let inspectedMessage: Message | null = null;
   let contextMessage = '';
   let contextPosition = { x: 0, y: 0 };
@@ -1411,7 +1413,7 @@
               >
             </blockquote>
           {/if}
-          {#each $state.thread.items as message, index (message.id)}
+          {#each displayedMessages as message, index (message.id)}
             {@const author = messageAuthor(
               message,
               $state.selected,
@@ -1421,8 +1423,8 @@
             )}
             {@const presentation = messagePresentation(
               message,
-              $state.thread.items[index - 1],
-              $state.thread.items[index + 1],
+              displayedMessages[index - 1],
+              displayedMessages[index + 1],
               $locale,
             )}
             {#if presentation.startsDay}<DateDivider label={presentation.dayLabel} />{/if}

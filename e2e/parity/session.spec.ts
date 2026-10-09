@@ -26,7 +26,7 @@ test('logout and logging in as another user does not leak prior chat state', asy
     const bobChat = alice.page.locator(
       `[data-testid="chat-item"][data-chat-public-key="${bob.session.publicKey}"]`,
     );
-    await expect(alice.page.getByTestId('chat-item')).toHaveCount(2);
+    await expect(alice.page.getByTestId('chat-item')).toHaveCount(3);
     await expect(bobChat).toHaveCount(1);
 
     await logoutFromSettings(alice.page);
@@ -34,7 +34,7 @@ test('logout and logging in as another user does not leak prior chat state', asy
     await bootstrapSessionOnPage(alice.page, TEST_ACCOUNTS.isolationCharlie);
 
     await alice.page.goto('/chats');
-    await expect(alice.page.getByTestId('chat-item')).toHaveCount(1);
+    await expect(alice.page.getByTestId('chat-item')).toHaveCount(2);
     await expect(bobChat).toHaveCount(0);
     await expect(alice.page.getByTestId('requests-row')).toHaveCount(0);
     await expectNoUnexpectedBrowserErrors([alice, bob]);

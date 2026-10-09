@@ -148,7 +148,7 @@ for (const rejectSearch of [false, true])
       await page.reload();
       const search = page.getByRole('textbox', { name: 'Search chats' });
       const results = page.getByTestId('profile-search-result');
-      await expect(page.getByTestId('chat-item')).toHaveCount(2);
+      await expect(page.getByTestId('chat-item')).toHaveCount(3);
       await search.fill('old');
       await expect.poll(() => queries.some((filter) => filter.search === 'old')).toBe(true);
       await search.fill('fiat');
@@ -188,13 +188,13 @@ for (const rejectSearch of [false, true])
       await page.keyboard.press('Enter');
       await expect(page).toHaveURL(new RegExp(`/chats/${remote}$`));
       await expect(search).toHaveValue('');
-      await expect(page.getByTestId('chat-item')).toHaveCount(3);
+      await expect(page.getByTestId('chat-item')).toHaveCount(4);
       await search.fill('local');
       await expect(page.getByTestId('chat-item')).toHaveCount(1);
       await page.getByTestId('chat-item').click();
       await expect(page).toHaveURL(new RegExp(`/chats/${local}$`));
       await page.getByRole('button', { name: 'Clear search', exact: true }).click();
-      await expect(page.getByTestId('chat-item')).toHaveCount(3);
+      await expect(page.getByTestId('chat-item')).toHaveCount(4);
       await search.fill(nip19.nsecEncode(ownKey));
       await page.waitForTimeout(400);
       expect(sent.some((frame) => frame.includes(nip19.nsecEncode(ownKey)))).toBe(false);

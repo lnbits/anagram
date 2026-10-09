@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { orderThreadMessages } from '#src/utils/threadMessageOrder.ts';
   import MessageActions from '../MessageActions.svelte';
   import ComposerContext from '../ComposerContext.svelte';
   import MessageReply from '../MessageReply.svelte';
@@ -274,11 +275,14 @@
       };
     });
   }
-  $: entries = room
-    ? $state.messages
-        .filter((event) => roomPolicy(room!, event.pubkey) !== 'blocked')
-        .map((event) => ({ event, message: publicMessageState(event, room!, own) }))
-    : [];
+  $: entries = orderThreadMessages(
+    room
+      ? $state.messages
+          .filter((event) => roomPolicy(room!, event.pubkey) !== 'blocked')
+          .map((event) => ({ event, message: publicMessageState(event, room!, own) }))
+      : [],
+    ({ message }) => message,
+  );
   $: visible = entries.map(({ event }) => event);
   $: displayed = entries.map(({ message }) => message);
   function date(value: string) {

@@ -152,7 +152,7 @@ test('anonymous indexers discover an unknown account inbox and stream all peer p
   await page.getByTestId('auth-private-key-input').fill(nip19.nsecEncode(ownKey));
   await page.getByTestId('auth-login-button').click();
   await finishOnboarding(page);
-  await expect(page.getByTestId('chat-item')).toHaveCount(13, { timeout: 45000 });
+  await expect(page.getByTestId('chat-item')).toHaveCount(14, { timeout: 45000 });
   await expect
     .poll(
       () =>

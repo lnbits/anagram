@@ -35,11 +35,30 @@ test('Anagram UI can DM the bot and add it to private and public groups', async 
     user = await bootstrapUser(browser, TEST_ACCOUNTS.botOwner, { relayUrls: [local.url] });
     const page = user.page;
     const npub = nip19.npubEncode(bot.pubkey);
+    async function expectPromptBeforeReply(testId, prompt) {
+      const rows = page.getByTestId(testId);
+      await expect(rows.filter({ hasText: joke })).toBeVisible();
+      await expect
+        .poll(async () => {
+          const texts = await rows.locator('.message-text').allTextContents();
+          const promptIndex = texts.findIndex((text) => text.includes(prompt));
+          return promptIndex >= 0 && promptIndex < texts.findIndex((text) => text.includes(joke));
+        })
+        .toBe(true);
+      await page.reload();
+      await expect(rows.filter({ hasText: joke })).toBeVisible();
+      const texts = await rows.locator('.message-text').allTextContents();
+      expect(texts.findIndex((text) => text.includes(prompt))).toBeGreaterThanOrEqual(0);
+      expect(texts.findIndex((text) => text.includes(prompt))).toBeLessThan(
+        texts.findIndex((text) => text.includes(joke)),
+      );
+    }
+
     await openDirectChatFromIdentifier(page, npub, 'Dad Jokes');
     await navigateToChat(page, bot.pubkey);
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Tell me a joke');
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
-    await expect(page.getByTestId('message-bubble').filter({ hasText: joke })).toBeVisible();
+    await expectPromptBeforeReply('message-bubble', 'Tell me a joke');
 
     await page.getByRole('button', { name: 'Chat options' }).click();
     await page.getByRole('button', { name: 'New private group', exact: true }).click();
@@ -55,7 +74,7 @@ test('Anagram UI can DM the bot and add it to private and public groups', async 
       .getByRole('textbox', { name: 'Message', exact: true })
       .fill(`Private joke please nostr:${npub}`);
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
-    await expect(page.getByTestId('message-bubble').filter({ hasText: joke })).toBeVisible();
+    await expectPromptBeforeReply('message-bubble', 'Private joke please');
 
     await page.getByRole('button', { name: 'Chat options' }).click();
     await page.getByRole('button', { name: 'New public group', exact: true }).click();
@@ -78,7 +97,7 @@ test('Anagram UI can DM the bot and add it to private and public groups', async 
       .getByRole('textbox', { name: 'Public message', exact: true })
       .fill(`Public joke please nostr:${npub}`);
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
-    await expect(page.getByTestId('public-message').filter({ hasText: joke })).toBeVisible();
+    await expectPromptBeforeReply('public-message', 'Public joke please');
     expect(user.browserErrors).toEqual([]);
   } finally {
     if (user) await disposeUsers(user);

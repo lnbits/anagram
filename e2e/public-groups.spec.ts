@@ -1654,3 +1654,58 @@ test('an old pin with many edits loads from a relay that never completes its loo
   await expect(card).toContainText('Available announcement', { timeout: 5000 });
   await expect(page.getByText(/Public group relay checks did not complete/)).toHaveCount(0);
 });
+
+test('same-second public replies follow their parent despite reverse event-id order after reload', async ({
+  page,
+}) => {
+  const owner = await login(page);
+  const room = await create(page, 'Same second replies');
+  const created_at = Math.floor(Date.now() / 1000);
+  // Generate a high-sorting parent and a lower-sorting reply, so timestamp/id
+  // sorting alone deterministically reproduces the inverted conversation.
+  let parent = finalizeEvent(
+    { kind: 9, created_at, tags: [['a', room.address]], content: 'Prompt 0' },
+    owner.key,
+  );
+  for (let i = 1; !parent.id.startsWith('f'); i++)
+    parent = finalizeEvent(
+      { kind: 9, created_at, tags: [['a', room.address]], content: `Prompt ${i}` },
+      owner.key,
+    );
+  const peer = generateSecretKey();
+  let reply = finalizeEvent(
+    {
+      kind: 9,
+      created_at,
+      tags: [
+        ['a', room.address],
+        ['q', parent.id, relay, owner.pubkey],
+      ],
+      content: 'Fast reply 0',
+    },
+    peer,
+  );
+  for (let i = 1; reply.id >= parent.id; i++)
+    reply = finalizeEvent(
+      {
+        kind: 9,
+        created_at,
+        tags: [
+          ['a', room.address],
+          ['q', parent.id, relay, owner.pubkey],
+        ],
+        content: `Fast reply ${i}`,
+      },
+      peer,
+    );
+  await publish(parent);
+  await publish(reply);
+  const rows = page.getByTestId('public-message');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first().locator('.message-text')).toHaveText(parent.content);
+  await expect(rows.last().locator('.message-text')).toHaveText(reply.content);
+  await page.reload();
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first().locator('.message-text')).toHaveText(parent.content);
+  await expect(rows.last().locator('.message-text')).toHaveText(reply.content);
+});

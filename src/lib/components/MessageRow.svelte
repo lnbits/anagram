@@ -43,7 +43,7 @@
   data-chat-public-key={message.chatId}
   data-author-public-key={message.authorPublicKey}
   data-day-label={dayLabel}
-  oncontextmenu={onactions}
+  oncontextmenu={message.meta.deleted ? undefined : onactions}
   use:messagePress={Boolean(onactions) && !message.meta.deleted}
 >
   {#if bubbleLayout}
@@ -86,24 +86,27 @@
       >{/if}
     {@render children()}
     <div
-      class:bubble-footer={bubbleLayout && Boolean(message.meta.reactions?.length)}
-      class:bubble-time-only={bubbleLayout && !message.meta.reactions?.length}
+      class:bubble-footer={bubbleLayout &&
+        !message.meta.deleted &&
+        Boolean(message.meta.reactions?.length)}
+      class:bubble-time-only={bubbleLayout &&
+        (message.meta.deleted || !message.meta.reactions?.length)}
     >
       <span class="message-time"
-        >{#if message.meta.edited}<span data-testid="message-edited-label"
+        >{#if message.meta.edited && !message.meta.deleted}<span data-testid="message-edited-label"
             >edited ·
           </span>{/if}{new Date(message.sentAt).toLocaleTimeString($locale, {
           hour: '2-digit',
           minute: '2-digit',
-        })}<MessageRelayStatus
-          {message}
-          {contactName}
-          {contactRelayUrls}
-          {publicGroup}
-          {onretry}
-        /></span
+        })}{#if !message.meta.deleted}<MessageRelayStatus
+            {message}
+            {contactName}
+            {contactRelayUrls}
+            {publicGroup}
+            {onretry}
+          />{/if}</span
       >
-      {#if message.meta.reactions?.length}<MessageReactions
+      {#if message.meta.reactions?.length && !message.meta.deleted}<MessageReactions
           {message}
           ontoggle={onreaction}
           readonly={reactionsReadonly}

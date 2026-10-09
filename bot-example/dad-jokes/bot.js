@@ -37,13 +37,13 @@ export class DadBot {
     net,
     jokes,
     cooldown = 5,
-    name = 'Dad Jokes',
+    name = 'Dad Jokes (Example Anagram Bot)',
     log = console.log,
     onFatal = (error) => {
       throw error;
     },
   }) {
-    this.name = name.trim() || 'Dad Jokes';
+    this.name = name.trim() || 'Dad Jokes (Example Anagram Bot)';
     this.store = store;
     this.state = store.data;
     this.key = store.key;

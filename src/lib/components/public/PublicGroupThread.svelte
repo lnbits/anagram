@@ -133,8 +133,13 @@
   let inspectedId = '';
   let contextPosition = { x: 0, y: 0 };
   let contextTrigger: HTMLElement | null = null;
-  $: inspectedMessage = displayed.find((message) => message.id === inspectedId);
-  $: if (actionMessage && !displayed.some((message) => message.id === actionMessage?.id))
+  $: inspectedMessage = displayed.find(
+    (message) => message.id === inspectedId && !message.meta.deleted,
+  );
+  $: if (
+    actionMessage &&
+    !displayed.some((message) => message.id === actionMessage?.id && !message.meta.deleted)
+  )
     actionMessage = undefined;
   function showActions(message: Message, event: MouseEvent) {
     if (message.meta.deleted) return;
@@ -273,7 +278,6 @@
     ? $state.messages
         .filter((event) => roomPolicy(room!, event.pubkey) !== 'blocked')
         .map((event) => ({ event, message: publicMessageState(event, room!, own) }))
-        .filter(({ message }) => !message.meta.deleted)
     : [];
   $: visible = entries.map(({ event }) => event);
   $: displayed = entries.map(({ message }) => message);

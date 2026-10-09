@@ -377,7 +377,7 @@ test('profile publishes the hosted default picture and accepts an explicit overr
   bot.state.picture = 'https://example.org/old-avatar.png';
   await publishProfile(bot);
   assert.equal(sent[0].kind, 10050);
-  assert.equal(JSON.parse(sent[1].content).name, 'Dad Jokes');
+  assert.equal(JSON.parse(sent[1].content).name, 'Dad Jokes (Example Anagram Bot)');
   assert.equal(JSON.parse(sent[1].content).bot, true);
   assert.equal(JSON.parse(sent[1].content).picture, DEFAULT_PICTURE_URL);
   assert.equal(JSON.parse(sent[1].content).nip05, undefined);

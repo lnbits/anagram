@@ -177,9 +177,7 @@ test('duplicate delivery across multiple relays does not duplicate messages, rea
     await waitForDeletedMessageState(bob.page, targetMessage, {
       chatId: alice.session.publicKey,
     });
-    await waitForThreadMessageCount(bob.page, targetMessage, 1, {
-      chatId: alice.session.publicKey,
-    });
+    await expect(bob.page.getByTestId('message-deleted')).toHaveCount(1);
     await expectNoUnexpectedBrowserErrors([alice, bob]);
   } finally {
     await disposeUsers(alice, bob);

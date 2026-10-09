@@ -303,7 +303,7 @@ export async function waitForReactionCount(page: Page, label: RegExp, count: num
 export async function waitForDeletedMessageState(page: Page, text: string, _options = {}) {
   await expect(threadMessage(page, text)).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'View Deleted Message' })).toHaveCount(0);
-  await expect(page.getByTestId('message-bubble').filter({ hasText: 'Message deleted' })).toHaveCount(0);
+  await expect(page.getByTestId('message-deleted').first()).toHaveText('Message deleted');
 }
 export async function createGroup(page: Page, options: { name: string; about: string }) {
   await page.getByRole('button', { name: 'Chat options' }).click();

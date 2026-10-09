@@ -132,7 +132,7 @@
     if (event.key === 'Escape' && linkMenu) closeLinkMenu(true);
   }}
 />
-{#if linkMenu}<div
+{#if linkMenu && !message.meta.deleted}<div
     use:portal
     use:focusMenu
     class="link-menu"
@@ -152,7 +152,8 @@
       >{/if}
   </div>{/if}
 
-{#if message.meta.deleted}<!-- Deleted records must never render their old content. -->
+{#if message.meta.deleted}<em class="message-text" data-testid="message-deleted">Message deleted</em
+  >
 {:else if history}<div class="call-history" data-testid="message-call-history">
     <button
       class="icon-button"
@@ -278,7 +279,11 @@
   </div>
 {/if}
 
-{#if imageUrl}<MediaViewer url={imageUrl} name={imageName} onclose={() => (imageUrl = '')} />{/if}
+{#if imageUrl && !message.meta.deleted}<MediaViewer
+    url={imageUrl}
+    name={imageName}
+    onclose={() => (imageUrl = '')}
+  />{/if}
 
 <style>
   .message-body {

@@ -12,11 +12,11 @@ npm ci
 npm start
 ```
 
-On first start it saves a new identity, prints its **npub**, publishes a **Dad Jokes** bot profile using the [hosted profile picture](https://npub1c878wu04lfqcl5avfy3p5x83ndpvedaxv0dg7pxthakq3jqdyzcs2n8avm.blossom.band/2b21dde65f33c3a05e5ef9147db2463cdac8698aad29a106770eab044dbe33db.png) and advertises its DM inbox relays. No image upload is needed; `PICTURE_URL` can override the default. Later starts reuse the same identity and picture URL. Publication retries automatically if the network is unavailable.
+On first start it saves a new identity, prints its **npub**, publishes a **Dad Jokes (Example Anagram Bot)** profile using the [hosted profile picture](https://npub1c878wu04lfqcl5avfy3p5x83ndpvedaxv0dg7pxthakq3jqdyzcs2n8avm.blossom.band/2b21dde65f33c3a05e5ef9147db2463cdac8698aad29a106770eab044dbe33db.png) and advertises its DM inbox relays. No image upload is needed; `PICTURE_URL` can override the default. Later starts reuse the same identity and picture URL. Publication retries automatically if the network is unavailable.
 
 For configuration, copy `.env.example` to `.env` and uncomment the settings you need. `RELAYS` should overlap the Anagram users' app relays. The default relay list matches Anagram; room and inbox relay hints are also used.
 
-Set `NSEC=nsec1...` to use your own private key and `NAME="Your Bot Name"` to change the profile name. Without `NSEC`, the bot reuses its saved identity or generates one on first start. Without `NAME`, it uses **Dad Jokes**. A configured key must match the saved identity; use a different `DATA_DIR` to switch accounts without mixing group state. Keep `.env` private (`chmod 600 .env`). Restart to apply changes.
+Set `NSEC=nsec1...` to use your own private key and `NAME="Your Bot Name"` to change the profile name. Without `NSEC`, the bot reuses its saved identity or generates one on first start. Without `NAME`, it uses **Dad Jokes (Example Anagram Bot)**. A configured key must match the saved identity; use a different `DATA_DIR` to switch accounts without mixing group state. Keep `.env` private (`chmod 600 .env`). Restart to apply changes.
 
 Set `NIP05=dad@your-domain.example` in `.env` to include that identifier in the bot profile. The domain must serve `/.well-known/nostr.json` mapping `dad` to the bot’s hex public key; setting the variable alone does not verify the identifier. Restart the bot to publish profile changes.
 

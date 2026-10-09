@@ -130,7 +130,7 @@
     ),
     thread: {
       items: chats.selectedChatId
-        ? messages.getMessages(chats.selectedChatId).filter((message) => !message.meta.deleted)
+        ? messages.getMessages(chats.selectedChatId)
         : [],
       pagination: chats.selectedChatId ? messages.getPaginationState(chats.selectedChatId) : null,
     },
@@ -555,7 +555,6 @@
   async function openContactChat(contact: ContactRecord) {
     if (contact.meta.blocked) return;
     await nostr.ensureRespondedPubkeyIsContact(contact.public_key, contact.given_name ?? '');
-    await nostr.publishPrivateContactList();
     const chat = await chats.addContact(contact.name || contact.public_key, contact.public_key);
     if (chat) await open(chat);
   }
@@ -579,7 +578,9 @@
         if (contactSelectedKey === contact.public_key)
           await goto('/contacts', { replaceState: true });
         await loadContacts();
-        await nostr.publishPrivateContactList(relays.relays);
+        await nostr.publishPrivateContactList(relays.relays).catch((error) => {
+          console.warn('Could not sync the updated contact list to relays', error);
+        });
       }
       await loadContacts();
     });
@@ -686,8 +687,7 @@
       // and stop waiting if the user navigates away.
       while (
         current() &&
-        $state.thread.items[0]?.id !==
-          messages.getMessages(chatId).find((message) => !message.meta.deleted)?.id
+        $state.thread.items[0]?.id !== messages.getMessages(chatId)[0]?.id
       )
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       await tick();
@@ -831,7 +831,6 @@
             found.normalizedPubkey,
           );
       await nostr.ensureRespondedPubkeyIsContact(found.normalizedPubkey, contactName);
-      await nostr.publishPrivateContactList();
       modal = '';
       if (addingInContacts) {
         await loadContacts();
@@ -1450,7 +1449,7 @@
                   ? closeMessageActions()
                   : showMessageActions(message, event)}
             >
-              {#if message.meta.reply}<MessageReply
+              {#if message.meta.reply && !message.meta.deleted}<MessageReply
                   reply={message.meta.reply}
                   onclick={() => act(() => openReplyTarget(message))}
                 />{/if}

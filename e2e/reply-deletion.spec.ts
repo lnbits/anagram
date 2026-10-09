@@ -24,9 +24,18 @@ test('private deletion replaces existing reply text on both clients and after re
         .filter({ hasText: 'A reply that should remain' })
         .locator('.reply-preview');
     await expect(quotes(alice.page)).toContainText('Original confidential content');
+    const deletedRows = (page: typeof alice.page) =>
+      page.getByTestId('message-bubble').filter({ has: page.getByTestId('message-deleted') });
     await deleteMessage(alice.page, 'Original confidential content');
     for (const user of [alice, bob]) {
       await expect(quotes(user.page)).toContainText('Message deleted');
+      await expect(deletedRows(user.page)).toHaveCount(1);
+      await expect(deletedRows(user.page).getByTestId('message-deleted')).toHaveText(
+        'Message deleted',
+      );
+      await expect(
+        deletedRows(user.page).getByRole('button', { name: 'Message actions' }),
+      ).toHaveCount(0);
       await expect(user.page.getByRole('log', { name: 'Messages' })).not.toContainText(
         'Original confidential content',
       );
@@ -36,6 +45,13 @@ test('private deletion replaces existing reply text on both clients and after re
         user === alice ? bob.session.publicKey : alice.session.publicKey,
       );
       await expect(quotes(user.page)).toContainText('Message deleted');
+      await expect(deletedRows(user.page)).toHaveCount(1);
+      await expect(deletedRows(user.page).getByTestId('message-deleted')).toHaveText(
+        'Message deleted',
+      );
+      await expect(
+        deletedRows(user.page).getByRole('button', { name: 'Message actions' }),
+      ).toHaveCount(0);
     }
   } finally {
     await disposeUsers(alice, bob);

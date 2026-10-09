@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { finalizeEvent, generateSecretKey, getPublicKey, nip44 } from 'nostr-tools';
+import { finalizeEvent, generateSecretKey, getPublicKey, nip19, nip44 } from 'nostr-tools';
 import { WebSocket } from 'ws';
 import {
   bootstrapUser,
@@ -102,3 +102,62 @@ test('opening an unknown public profile can create its chat and save the contact
     await disposeUsers(alice, bob);
   }
 });
+
+for (const section of ['chats', 'contacts'])
+  test(`contact actions stay successful when relay sync fails (${section})`, async ({
+    browser,
+  }) => {
+    const user = await bootstrapUser(browser, TEST_ACCOUNTS[`offlineContacts${section}`]);
+    const peer = getPublicKey(generateSecretKey());
+    let rejected = 0;
+    try {
+      await user.page.routeWebSocket(E2E_RELAY_URL, (socket) => {
+        const server = socket.connectToServer();
+        socket.onMessage((raw) => {
+          const [verb, event] = JSON.parse(String(raw));
+          if (
+            verb === 'EVENT' &&
+            event.kind === 30000 &&
+            event.tags.some(
+              (tag: string[]) => tag[0] === 'd' && tag[1] === PRIVATE_CONTACT_LIST_D_TAG,
+            )
+          ) {
+            rejected++;
+            socket.send(JSON.stringify(['OK', event.id, false, 'error: temporarily unavailable']));
+          } else server.send(raw);
+        });
+      });
+      await user.page.goto(`/${section}`);
+      if (section === 'chats') {
+        await user.page.getByRole('button', { name: 'Chat options' }).click();
+        await user.page.getByTestId('new-chat-button').click();
+      } else await user.page.getByRole('button', { name: 'Add Contact', exact: true }).click();
+      const dialog = user.page.getByRole('dialog');
+      await dialog.getByTestId('contact-identifier-input').fill(nip19.npubEncode(peer));
+      await dialog.getByLabel('Name (optional)').fill('Saved contact');
+      await dialog.getByRole('button', { name: 'Add contact', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expectPrivateContactListMember(user.page, peer);
+      expect(rejected).toBe(1);
+      await expect(user.page).toHaveURL(new RegExp(`/${section}/${peer}$`));
+      if (section === 'contacts') {
+        await user.page.getByRole('button', { name: 'Open Chat', exact: true }).click();
+        await expect(user.page).toHaveURL(new RegExp(`/chats/${peer}$`));
+        expect(rejected).toBe(1);
+      }
+      await user.page.goto('/contacts');
+      const row = user.page.locator('.contact-row').filter({
+        has: user.page.locator(`[data-public-key="${peer}"]`),
+      });
+      await row.getByRole('button', { name: 'Contact actions' }).click();
+      await row.getByRole('menuitem', { name: 'Delete Contact', exact: true }).click();
+      await expect(row).toHaveCount(0);
+      await expect.poll(() => rejected).toBe(2);
+      await expect(
+        user.page.getByText('No relay acknowledged the event', { exact: false }),
+      ).toHaveCount(0);
+      expect(user.browserErrors).toEqual([]);
+    } finally {
+      await disposeUsers(user);
+    }
+  });

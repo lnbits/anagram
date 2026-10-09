@@ -1107,8 +1107,10 @@ test('public message actions reuse private controls and synchronize replies, edi
     await navigateInApp(bob, `/public/${source.naddr}`);
 
     await action(alice, ownMessage, 'Delete');
-    await expect(ownMessage).toHaveCount(0);
-    await expect(received).toHaveCount(0);
+    for (const row of [ownMessage, received]) {
+      await expect(row.getByTestId('message-deleted')).toHaveText('Message deleted');
+      await expect(row).not.toContainText('Action edited twice');
+    }
     await expect(
       received.getByRole('button', { name: 'Message actions', exact: true }),
     ).toHaveCount(0);
@@ -1120,8 +1122,24 @@ test('public message actions reuse private controls and synchronize replies, edi
     await expect(
       bob.getByTestId('public-message').filter({ hasText: 'A public reply' }),
     ).toBeVisible();
-    await expect(alice.locator(`[id="message-${id}"]`)).toHaveCount(0);
-    await expect(bob.locator(`[id="message-${id}"]`)).toHaveCount(0);
+    for (const page of [alice, bob]) {
+      const deleted = page.locator(`[id="message-${id}"]`);
+      await expect(deleted.getByTestId('message-deleted')).toHaveText('Message deleted');
+      await expect(
+        deleted.getByRole('button', { name: 'Message actions', exact: true }),
+      ).toHaveCount(0);
+      await expect(
+        deleted.locator(
+          '.reactions, .reply-preview, [data-testid=message-edited-label], [data-testid=message-relay-status]',
+        ),
+      ).toHaveCount(0);
+      await expect(
+        page
+          .getByTestId('public-message')
+          .filter({ hasText: 'A public reply' })
+          .locator('.reply-preview'),
+      ).toContainText('Message deleted');
+    }
   } finally {
     await a.close();
     await b.close();

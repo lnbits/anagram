@@ -47,6 +47,9 @@ it('regenerates Android notification sources, permissions and tests without dupl
       expect(manifest).toContain(`android.permission.${name}`);
     expect(manifest).toContain('android:name=".RelayNotificationService" android:exported="false"');
     expect(manifest).toContain('android:allowBackup="false"');
+    expect(
+      readFileSync(join(gen, 'app/src/main/java/com/nostr/anagram/MainActivity.kt'), 'utf8'),
+    ).toBe(readFileSync(resolve('src-tauri/mobile/android/MainActivity.kt'), 'utf8'));
     expect(gradle).toContain('com.squareup.okhttp3:okhttp:4.12.0');
     expect(gradle).toContain('isMinifyEnabled = true');
     expect(gradle).toContain('getDefaultProguardFile("proguard-android-optimize.txt")');

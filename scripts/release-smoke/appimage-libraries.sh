@@ -26,8 +26,19 @@ done
 # The C/C++ runtime and graphics driver stack must match the host system.
 while IFS= read -r -d '' binary; do
   readelf -h "$binary" >/dev/null 2>&1 || continue
-  dependencies=$(LD_LIBRARY_PATH="$libdir" ldd "$binary")
-  printf '\n%s\n%s\n' "$binary" "$dependencies"
+  printf '\n%s\n' "$binary"
+  # readelf also accepts static archives such as gdk-pixbuf's io-wmf.a.
+  # Only files with DT_NEEDED entries have shared dependencies to resolve.
+  dynamic=$(LC_ALL=C readelf --wide --dynamic "$binary")
+  if [[ "$dynamic" != *"(NEEDED)"* ]]; then
+    printf '%s\n' 'No shared-library dependencies.'
+    continue
+  fi
+  if ! dependencies=$(LD_LIBRARY_PATH="$libdir" ldd "$binary" 2>&1); then
+    printf 'Could not inspect AppImage dependencies for %s:\n%s\n' "$binary" "$dependencies" >&2
+    exit 1
+  fi
+  printf '%s\n' "$dependencies"
   while read -r library arrow resolved rest; do
     [[ "$arrow" == '=>' ]] || continue
     if [[ "$resolved" == not ]]; then

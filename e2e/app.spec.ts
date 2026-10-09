@@ -74,6 +74,33 @@ async function groupTicketState(page: Page, clearProof = false) {
     clearProof,
   );
 }
+test('mobile account creation keeps wrapped guidance above its buttons', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Create Account', exact: true }).click();
+  const download = page.getByRole('button', { name: 'Download Account Secret', exact: true });
+  await expect(download).toBeVisible();
+  for (const viewport of [
+    { width: 320, height: 640 },
+    { width: 390, height: 844 },
+    { width: 640, height: 320 },
+  ]) {
+    await page.setViewportSize(viewport);
+    for (const size of ['14px', '22px']) {
+      await page.evaluate((size) => (document.body.style.fontSize = size), size);
+      const paragraph = (await page.locator('.auth-header p').boundingBox())!;
+      const header = (await page.locator('.auth-header').boundingBox())!;
+      const button = (await download.boundingBox())!;
+      expect(paragraph.y + paragraph.height).toBeLessThanOrEqual(header.y + header.height);
+      expect(header.y + header.height).toBeLessThanOrEqual(button.y);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        viewport.width,
+      );
+      await page.getByRole('button', { name: 'Login Now', exact: true }).scrollIntoViewIfNeeded();
+      await expect(page.getByRole('button', { name: 'Login Now', exact: true })).toBeInViewport();
+    }
+  }
+});
 test('invalid key remains on login', async ({ page }) => {
   await page.goto('/');
   await page.getByTestId('auth-open-login-button').click();

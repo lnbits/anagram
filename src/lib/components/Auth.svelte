@@ -429,12 +429,16 @@
     backdrop-filter: blur(18px);
   }
   .auth-header {
-    height: 128px;
+    min-height: 128px;
     padding: 22px 22px 10px;
     display: flex;
     gap: 10px;
     background: rgba(255, 255, 255, 0.82);
     border-bottom: 1px solid rgba(208, 220, 235, 0.82);
+  }
+  .auth-header > div {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   h1 {
     font-size: 28px;

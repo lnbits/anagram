@@ -15,6 +15,7 @@ final class NotificationConversation {
     private static final int MAX_NAME_LENGTH = 120;
     private static final int MAX_AVATAR_TEXT_LENGTH = 4;
 
+    final java.util.List<String> replyRelays = new java.util.ArrayList<>();
     final String chatPubkey;
     @Nullable
     final String recipientPubkey;
@@ -52,6 +53,7 @@ final class NotificationConversation {
         }
         result.put("epochNumber", epochNumber);
         result.put("knownEpochPubkeys", new JSONArray(knownEpochPubkeys));
+        result.put("replyRelays", new JSONArray(replyRelays));
         result.put("name", name);
         result.put("avatarUrl", avatarUrl);
         result.put("avatarText", avatarText);
@@ -78,6 +80,15 @@ final class NotificationConversation {
             value.optBoolean("policyEligible", false),
             value.optBoolean("notificationsEnabled", false)
         );
+        JSONArray routes = value.optJSONArray("replyRelays");
+        if (routes != null) for (int i = 0; i < Math.min(routes.length(), 8); i++) {
+            String route = routes.optString(i, "");
+            try {
+                java.net.URI uri = java.net.URI.create(route);
+                if ("wss".equalsIgnoreCase(uri.getScheme()) && uri.getHost() != null && uri.getUserInfo() == null)
+                    conversation.replyRelays.add(route);
+            } catch (IllegalArgumentException ignored) { }
+        }
         conversation.epochNumber = value.optLong("epochNumber", -1L);
         JSONArray epochs = value.optJSONArray("knownEpochPubkeys");
         if (epochs != null) for (int i = 0; i < epochs.length(); i++) {

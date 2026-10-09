@@ -8,7 +8,9 @@ state=$(mktemp -d)
 trap 'rm -rf "$state"' EXIT
 export GST_REGISTRY_1_0="$state/registry.bin"
 source "$APPDIR/apprun-hooks/linuxdeploy-plugin-gstreamer.sh"
-for element in playbin decodebin vp8dec vorbisdec opusdec qtdemux avdec_h264 avdec_aac; do
+# WebKit's recorder deliberately rejects WebM on older runtimes.
+gst-inspect-1.0 --version | grep -F 'GStreamer 1.26.11'
+for element in playbin decodebin vp8enc vp8dec vorbisdec opusenc opusdec opusparse webmmux matroskademux uritranscodebin autovideoflip pulsesrc pulsesink v4l2src qtdemux avdec_h264 avdec_aac; do
   gst-inspect-1.0 --exists "$element"
 done
 

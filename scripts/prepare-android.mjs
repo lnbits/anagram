@@ -8,6 +8,14 @@ export function prepareAndroid(root = new URL('../', import.meta.url)) {
   writeFileSync(
     gradle,
     readFileSync(gradle, 'utf8')
+      .replace(
+        /(testImplementation\("junit:junit:4.13.2"\))(?!\n    testImplementation\("org.json)/,
+        '$1\n    testImplementation("org.json:json:20240303")',
+      )
+      .replace(
+        /(defaultConfig \{\n)(?!        testInstrumentationRunner)/,
+        '$1        testInstrumentationRunner = \"androidx.test.runner.AndroidJUnitRunner\"\n',
+      )
       .replace(/compileSdk = \d+/, 'compileSdk = 36')
       .replace(/targetSdk = \d+/, 'targetSdk = 36')
       .replace(/optimization\s*\{\s*enable = true\s*\}/, 'isMinifyEnabled = true')
@@ -40,7 +48,7 @@ export function prepareAndroid(root = new URL('../', import.meta.url)) {
   );
   writeFileSync(
     new URL('src-tauri/gen/android/app/secure-keys.pro', root),
-    '-keep class com.nostr.anagram.SecureKeysPlugin { *; }\n-keep class com.nostr.anagram.PrivateKeyArgs { *; }\n-keep class com.nostr.anagram.AndroidRelayNotificationsPlugin { *; }\n',
+    '-keep class com.nostr.anagram.SecureKeysPlugin { *; }\n-keep class com.nostr.anagram.PrivateKeyArgs { *; }\n-keep class com.nostr.anagram.AndroidRelayNotificationsPlugin { *; }\n-keep class com.nostr.anagram.CallSignalNative { *; }\n',
   );
   const wrapper = new URL('src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties', root);
   writeFileSync(
@@ -91,6 +99,11 @@ export function prepareAndroid(root = new URL('../', import.meta.url)) {
     <receiver android:name=".NotificationDismissReceiver" android:exported="false" />
     </application>`,
     );
+  if (!xml.includes('android:name=".CallNotificationReceiver"'))
+    xml = xml.replace(
+      '</application>',
+      '<receiver android:name=".CallNotificationReceiver" android:exported="false" />\n    </application>',
+    );
   writeFileSync(manifest, xml);
   const java = new URL('src-tauri/gen/android/app/src/main/java/com/nostr/anagram/', root);
   mkdirSync(java, { recursive: true });
@@ -100,6 +113,11 @@ export function prepareAndroid(root = new URL('../', import.meta.url)) {
   cpSync(new URL('res/', native), new URL('src-tauri/gen/android/app/src/main/res/', root), {
     recursive: true,
   });
+  cpSync(
+    new URL('instrumentation/', native),
+    new URL('src-tauri/gen/android/app/src/androidTest/java/com/nostr/anagram/', root),
+    { recursive: true },
+  );
   cpSync(
     new URL('tests/', native),
     new URL('src-tauri/gen/android/app/src/test/java/com/nostr/anagram/', root),

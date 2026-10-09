@@ -1,3 +1,5 @@
+import { syncClosedAndroidCalls } from '#src/services/androidCallNotificationService.ts';
+import type { CallSignal } from '#src/types/call.ts';
 import { defineStore } from '#src/lib/state/store.ts';
 import {
   callMediaSupported,
@@ -70,6 +72,10 @@ export const useCallStore = defineStore('calls', () => {
   });
   return {
     ...runtime,
+    async receiveSignal(peer: string, signal: CallSignal) {
+      if (signal.action === 'invite') await syncClosedAndroidCalls();
+      return runtime.receiveSignal(peer, signal);
+    },
     async start(peer: string, mode: CallMode) {
       if (useCallRoomStore().busy) {
         runtime.error.value = 'room.error.busy';

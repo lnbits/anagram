@@ -1,11 +1,13 @@
 // Drive the actual installed/extracted release app through Tauri's native WebDriver.
 // Uses the release frontend and real signer; CSP and TLS checks stay enabled.
 import assert from 'node:assert/strict';
+import { PNG } from 'pngjs';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { startRelay } from './relay.mjs';
+import { probeCallMedia } from './call-media.mjs';
 import { DEFAULT_RELAYS } from '../../src/constants/relays.ts';
 
 const binary = resolve(process.argv[2] || '');
@@ -216,6 +218,64 @@ try {
   );
   await request(`/session/${session}/refresh`, {});
   await click(testid('auth-open-login-button'));
+  await execute(`
+    window.__callMediaSmoke = {result: null, video: null};
+    (${probeCallMedia.toString()})(player => new Promise(resolve => {
+      const rect = player.getBoundingClientRect();
+      window.__callMediaSmoke.video = {x: rect.x + rect.width / 2, y: rect.y + rect.height / 2,
+        width: innerWidth, height: innerHeight};
+      window.__callMediaSmoke.acceptVideo = resolve;
+    })).then(result => window.__callMediaSmoke.result = result,
+      error => window.__callMediaSmoke.result = {failure: String(error)});
+  `);
+  let media;
+  let videoVerified = false;
+  await until(
+    async () => {
+      const state = await execute(
+        'return {result: window.__callMediaSmoke.result, video: window.__callMediaSmoke.video}',
+      );
+      if (state.video && !videoVerified && !state.result) {
+        const screenshot = Buffer.from(
+          await request(`/session/${session}/screenshot`, undefined, 'GET'),
+          'base64',
+        );
+        await writeFile(`${output}/call-video.png`, screenshot);
+        const png = PNG.sync.read(screenshot);
+        const x = Math.floor((state.video.x * png.width) / state.video.width);
+        const y = Math.floor((state.video.y * png.height) / state.video.height);
+        const offset = (y * png.width + x) * 4;
+        const [r, g, b, a] = png.data.subarray(offset, offset + 4);
+        // Verify the actual decoded green test frame. WebKit's videoWidth and
+        // frame counters can report zero even while the native sink displays it.
+        if (
+          a === 255 &&
+          Math.abs(r - 36) < 20 &&
+          Math.abs(g - 200) < 20 &&
+          Math.abs(b - 106) < 20
+        ) {
+          videoVerified = true;
+          await execute('window.__callMediaSmoke.acceptVideo()');
+        }
+      }
+      media = state.result;
+      return !!media;
+    },
+    'packaged call media probe',
+    30000,
+  );
+  await writeFile(`${output}/call-media.json`, JSON.stringify(media, null, 2));
+  assert.equal(media.failure, undefined, `packaged call media: ${media.failure}`);
+  assert.equal(media.secure, true, 'packaged WebView must be a secure context');
+  assert.equal(media.capture, true, 'packaged WebView must support microphone/camera capture');
+  assert.equal(videoVerified, true, 'packaged WebView must display a decoded video frame');
+  assert.deepEqual(
+    media.decoded,
+    ['audio/webm;codecs=opus', 'video/webm;codecs=vp8,opus'],
+    `packaged WebView must record and stream call media: ${JSON.stringify(media)}`,
+  );
+  await execute('delete window.__callMediaSmoke');
+  console.log('Passed: packaged call audio/video recording and streaming decode');
   await click(testid('auth-open-key-button'));
   await fill(testid('auth-private-key-input'), relay.nsec);
   await click(testid('auth-login-button'));
@@ -273,6 +333,7 @@ try {
         loginReadyMs,
         checks: [
           'login',
+          'call-audio-video-recording-and-playback',
           'first-relay',
           'profile-read',
           'signed-DM-publish',
@@ -287,7 +348,9 @@ try {
       2,
     ),
   );
-  console.log('Packaged release passed login, relay read/write, reconnect and restart checks.');
+  console.log(
+    'Packaged release passed call media, login, relay read/write, reconnect and restart checks.',
+  );
 } finally {
   await writeFile(
     `${output}/relay.json`,

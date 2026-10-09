@@ -7,13 +7,17 @@ import { prepareAndroid } from '../../scripts/prepare-android.mjs';
 it('regenerates Android notification sources, permissions and tests without duplicate declarations', () => {
   const dir = mkdtempSync(join(tmpdir(), 'anagram-android-scaffold-'));
   const fixtures = {
-    'app/build.gradle.kts': `compileSdk = 37
+    'app/build.gradle.kts': `defaultConfig {
+        applicationId = "com.nostr.anagram"
+      }
+      compileSdk = 37
       targetSdk = 37
       optimization { enable = true }
       proguardFiles(
         *fileTree(".") { include("**/*.pro") }.files.toTypedArray()
       )
       dependencies {
+        testImplementation("junit:junit:4.13.2")
       }
       `,
     'build.gradle.kts': 'com.android.tools.build:gradle:8.13.2',
@@ -46,6 +50,12 @@ it('regenerates Android notification sources, permissions and tests without dupl
     ])
       expect(manifest).toContain(`android.permission.${name}`);
     expect(manifest).toContain('android:name=".RelayNotificationService" android:exported="false"');
+    expect(manifest).toContain('android:name=".CallNotificationReceiver" android:exported="false"');
+    expect(gradle).toContain(
+      'testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"',
+    );
+    expect(gradle).toContain('org.json:json:20240303');
+    expect(readFileSync(join(gen, 'app/secure-keys.pro'), 'utf8')).toContain('CallSignalNative');
     expect(manifest).toContain('android:allowBackup="false"');
     expect(
       readFileSync(join(gen, 'app/src/main/java/com/nostr/anagram/MainActivity.kt'), 'utf8'),

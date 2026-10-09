@@ -6,6 +6,8 @@ use std::sync::{
 };
 #[cfg(target_os = "android")]
 mod android_notifications;
+#[cfg(any(target_os = "android", test))]
+mod call_notifications;
 mod secure_storage;
 use tauri::Manager;
 #[cfg(desktop)]

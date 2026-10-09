@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { syncAndroidCallActivity } from '#src/services/androidCallNotificationService.ts';
   import { dismissOnBackdrop } from '#src/lib/actions/dismissOnBackdrop.ts';
   import { onMount, onDestroy } from 'svelte';
   import { useCallStore } from '#src/stores/callStore.ts';
@@ -44,6 +45,11 @@
     camera: rooms.session ? rooms.cameraDeviceId : calls.cameraDeviceId,
     changing: rooms.session ? rooms.changingMedia : calls.changingMedia,
   }));
+  $: syncAndroidCallActivity(
+    useNostrStore().getLoggedInPublicKeyHex(),
+    $state.session,
+    $state.busy,
+  );
   let stage: CallStage;
   let remoteVideo: CallVideo;
   let minimized = false,

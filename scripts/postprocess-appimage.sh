@@ -43,6 +43,10 @@ find "$app_dir/usr/lib" -maxdepth 1 \
      -o -name 'libXau.so.*' -o -name 'libXdmcp.so.*' \) -delete
 
 install -m 0755 "$script_dir/appimage/AppRun" "$app_dir/AppRun"
+if [[ -n "${ANAGRAM_GSTREAMER_PREFIX:-}" ]]; then
+  mkdir -p "$app_dir/usr/share/licenses"
+  cp -a "$ANAGRAM_GSTREAMER_PREFIX/share/licenses/." "$app_dir/usr/share/licenses/"
+fi
 
 repacked="$work_dir/$(basename "$output")"
 architecture="${ARCH:-$(uname -m)}"

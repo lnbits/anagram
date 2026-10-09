@@ -730,7 +730,7 @@
   "call.ended.failed": "Call failed",
   "call.ended.cancelled": "Call cancelled",
   "call.error.failed": "The call connection or media stream failed. Please try again.",
-  "call.error.unsupported": "This browser cannot run Iroh calls with the required media features. Try a current Chrome, Edge, or Firefox browser, or the Anagram desktop app. Use HTTPS or localhost.",
+  "call.error.unsupported": "This app or browser is missing media support required for Iroh calls. Update Anagram or use a current Chrome, Edge, or Firefox browser over HTTPS or localhost.",
   "call.error.unavailable": "Calls are available with accepted contacts. This contact is unavailable.",
   "call.phase.checkingSupport": "Checking call support…",
   "call.ended.unsupported": "No call response. Their client may not support calls, or they may be offline.",

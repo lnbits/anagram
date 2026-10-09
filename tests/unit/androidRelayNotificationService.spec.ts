@@ -35,6 +35,7 @@ const moduleMocks = vi.hoisted(() => ({
   pendingEvents: [] as unknown[],
   ingestAndroidRelayNotificationEvent: vi.fn(async () => true),
   plugin: {
+    getCallNotificationState: vi.fn(async () => ({ closed: [] })),
     requestPermissions: vi.fn(async () => ({ receive: 'granted' })),
     configure: vi.fn(
       async (options: {

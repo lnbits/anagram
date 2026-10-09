@@ -94,7 +94,29 @@ jobs:
             libx11-6 libx11-xcb1 libxcb1 libwayland-client0 libgpg-error0 libcom-err2 \
             libgmp10 libasound2 libjack-jackd2-0 \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav gstreamer1.0-tools \
+            build-essential ninja-build pkg-config bison flex python3-venv \
+            libopus-dev libvpx-dev libogg-dev libvorbis-dev libpulse-dev libasound2-dev \
+            libavcodec-dev libavformat-dev libavfilter-dev libswresample-dev libswscale-dev \
+            libjpeg-dev libpng-dev libtheora-dev libgudev-1.0-dev liborc-0.4-dev \
             xdg-utils webkit2gtk-driver xvfb dbus-x11 gnome-keyring
+      - name: Cache portable media runtime
+        if: runner.os == 'Linux'
+        id: media-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/anagram-gstreamer
+          key: gstreamer-ubuntu22-amd64-${{ hashFiles('scripts/appimage/build-gstreamer.sh', 'scripts/appimage/gstreamer.sha256') }}
+      - name: Build portable media runtime
+        if: runner.os == 'Linux' && steps.media-cache.outputs.cache-hit != 'true'
+        run: bash scripts/appimage/build-gstreamer.sh "$RUNNER_TEMP/anagram-gstreamer" "$RUNNER_TEMP/anagram-gstreamer-build"
+      - name: Use portable media runtime for bundling
+        if: runner.os == 'Linux'
+        run: |
+          echo "ANAGRAM_GSTREAMER_PREFIX=$RUNNER_TEMP/anagram-gstreamer" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/anagram-gstreamer/lib" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$RUNNER_TEMP/anagram-gstreamer/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "GSTREAMER_PLUGINS_DIR=$RUNNER_TEMP/anagram-gstreamer/lib/gstreamer-1.0" >> "$GITHUB_ENV"
+          echo "GSTREAMER_HELPERS_DIR=$RUNNER_TEMP/anagram-gstreamer/libexec/gstreamer-1.0" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target

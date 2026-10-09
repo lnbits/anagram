@@ -1,3 +1,8 @@
+import {
+  syncClosedAndroidCalls,
+  type AndroidCallAction,
+} from '#src/services/androidCallNotificationService.ts';
+import { resolvePreferredContactRelayUrls } from '#src/utils/contactRelayUrls.ts';
 import { resolveGroupChatEpochEntriesValue } from '#src/stores/nostr/valueUtils.ts';
 import {
   isAndroidNative,
@@ -49,6 +54,7 @@ export interface AndroidNotificationWatchPlan {
 
 interface AndroidNotificationConversation {
   chatPubkey: string;
+  replyRelays?: string[];
   recipientPubkey?: string;
   epochNumber?: number;
   knownEpochPubkeys?: string[];
@@ -86,7 +92,13 @@ interface AndroidRelayNotificationsPlugin {
   clearDeliveredNotifications(options?: { chatPubkey?: string }): Promise<void>;
   addListener(
     eventName: 'notificationActionPerformed',
-    listener: (event: { chatPubkey?: string; openChats?: boolean; ownerPubkey?: string }) => void,
+    listener: (
+      event: {
+        chatPubkey?: string;
+        openChats?: boolean;
+        ownerPubkey?: string;
+      } & Partial<AndroidCallAction>,
+    ) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
     eventName: 'pendingEventsAvailable',
@@ -365,7 +377,9 @@ export function createAndroidNotificationConversationSignature(
         blocked: chat.meta.blocked === true,
         blockedAt: readMetaString(chat.meta, 'blocked_at'),
         epochPublicKey: chat.epochPublicKey ?? '',
-        knownEpochPubkeys: resolveGroupChatEpochEntriesValue(chat).map((entry) => entry.epoch_public_key),
+        knownEpochPubkeys: resolveGroupChatEpochEntriesValue(chat).map(
+          (entry) => entry.epoch_public_key,
+        ),
         inboxState: readMetaString(chat.meta, 'inbox_state'),
         lastOutgoingMessageAt: readMetaString(chat.meta, 'last_outgoing_message_at'),
         muted: chat.meta.muted === true,
@@ -501,6 +515,7 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
       });
     const baseConversation = {
       chatPubkey,
+      replyRelays: resolvePreferredContactRelayUrls(contact?.relays),
       name,
       avatarUrl,
       avatarText: readMetaString(chat.meta, 'avatar') || buildAvatarText(name),
@@ -529,7 +544,9 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
       ...baseConversation,
       recipientPubkey: epochPubkey,
       epochNumber: epochEntry?.epoch_number,
-      knownEpochPubkeys: resolveGroupChatEpochEntriesValue(chat).map((entry) => entry.epoch_public_key),
+      knownEpochPubkeys: resolveGroupChatEpochEntriesValue(chat).map(
+        (entry) => entry.epoch_public_key,
+      ),
     });
     if (!identityPrivateKey || !epochEntry?.epoch_private_key_encrypted) {
       continue;
@@ -561,6 +578,7 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
       contactPubkey;
     conversations.push({
       chatPubkey: contactPubkey,
+      replyRelays: resolvePreferredContactRelayUrls(contact.relays),
       name,
       avatarUrl: contact.meta.picture?.trim() || '',
       avatarText: buildAvatarText(name),
@@ -856,6 +874,7 @@ export async function disableAndroidRelayNotifications(): Promise<void> {
 }
 
 async function performAndroidRelayPendingEventDrain(): Promise<void> {
+  await syncClosedAndroidCalls();
   const nostrStore = useNostrStore();
   const ownerPubkey = inputSanitizerService.normalizeHexKey(
     nostrStore.getLoggedInPublicKeyHex() ?? '',
@@ -982,6 +1001,7 @@ export const __androidRelayNotificationServiceTestUtils = {
 export function startAndroidRelayNotificationListeners(
   onNotificationAction: (chatPubkey: string | null) => void,
   onPendingEventsAvailable: () => void,
+  onCallAction?: (action: AndroidCallAction) => void,
 ): () => void {
   if (!isAndroidRelayNotificationSupported() || didInstallNotificationListeners) return () => {};
   didInstallNotificationListeners = true;
@@ -998,8 +1018,12 @@ export function startAndroidRelayNotificationListeners(
   }
   void keep(
     AndroidRelayNotifications.addListener('notificationActionPerformed', (event) => {
-      if (!stopped && event.ownerPubkey === useNostrStore().getLoggedInPublicKeyHex())
+      if (stopped) return;
+      if (event.token && event.event && onCallAction) {
+        onCallAction(event as AndroidCallAction);
+      } else if (event.ownerPubkey === useNostrStore().getLoggedInPublicKeyHex()) {
         onNotificationAction(inputSanitizerService.normalizeHexKey(String(event.chatPubkey ?? '')));
+      }
     }),
   );
   void keep(

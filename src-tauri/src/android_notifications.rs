@@ -87,6 +87,9 @@ pub fn call(
             | "acknowledgePendingEvents"
             | "clearDeliveredNotifications"
             | "takeNotificationAction"
+            | "getCallNotificationState"
+            | "claimCallAnswer"
+            | "syncCallState"
     ) {
         return Err("Unknown notification operation".into());
     }

@@ -153,6 +153,7 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
         }
         if (!previousOwnerPubkey.isEmpty() && !previousOwnerPubkey.equals(ownerPubkey)) {
             RelayNotificationEventInbox.clear(getContext());
+            CallNotifications.clear(getContext());
         }
         validatedRecipientKeys.clear();
         validatedRecipientKeys.putAll(recipientKeys);
@@ -170,6 +171,7 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
         if (didChangeConversationDetails) {
             RelayNotificationService.clearMessageNotifications(getContext());
         }
+        CallNotifications.refresh(getContext());
         NotificationAvatarCache.refreshAsync(getContext(), conversations);
         boolean shouldReconnect =
             !wasEnabled ||
@@ -314,6 +316,7 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
 
     @Override
     public void onDestroy() {
+        CallNotifications.releaseForegroundCall();
         worker.shutdown();
         if (pendingEventsReceiver != null) {
             getContext().unregisterReceiver(pendingEventsReceiver);
@@ -332,6 +335,35 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
     public void onPause() {
         RelayNotificationPreferences.setAppForeground(activity, false);
     }
+    private static JSObject toJSObject(JSONObject source) {
+        JSObject result = new JSObject();
+        java.util.Iterator<String> keys = source.keys();
+        while (keys.hasNext()) { String key = keys.next(); result.put(key, source.opt(key)); }
+        return result;
+    }
+
+    @Command
+    public void getCallNotificationState(Invoke call) {
+        background(call, () -> call.resolve(toJSObject(CallNotifications.closed(getContext(), call.getArgs().optString("ownerPubkey")))));
+    }
+
+    @Command
+    public void claimCallAnswer(Invoke call) {
+        background(call, () -> {
+            JSONObject action = CallNotifications.action(getContext(), call.getArgs().optString("token"), true);
+            JSObject result = new JSObject(); result.put("valid", action != null); call.resolve(result);
+        });
+    }
+
+    @Command
+    public void syncCallState(Invoke call) {
+        background(call, () -> {
+            JSONObject a = call.getArgs();
+            CallNotifications.sync(getContext(), a.optString("ownerPubkey"), a.optString("peer"), a.optString("callId"), a.optString("phase"), a.optBoolean("roomBusy"));
+            call.resolve();
+        });
+    }
+
     @Command
     public void takeNotificationAction(Invoke invoke) {
         JSObject action = pendingAction;
@@ -360,6 +392,22 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
 
     private void dispatchNotificationIntent(@Nullable Intent intent) {
         if (intent == null) {
+            return;
+        }
+
+        String token = intent.getStringExtra(CallNotifications.EXTRA_TOKEN);
+        if (token != null) {
+            boolean answer = intent.getBooleanExtra(CallNotifications.EXTRA_ANSWER, false);
+            intent.removeExtra(CallNotifications.EXTRA_TOKEN);
+            intent.removeExtra(CallNotifications.EXTRA_ANSWER);
+            JSONObject action = CallNotifications.action(getContext(), token, false);
+            if (action != null) {
+                JSObject event = toJSObject(action);
+                event.put("answer", answer);
+                event.put("chatPubkey", action.optString("peer"));
+                pendingAction = event;
+                trigger(ACTION_EVENT, new JSObject());
+            }
             return;
         }
 

@@ -19,7 +19,7 @@ required=(
   gio/modules/libgiognutls.so
   gstreamer1.0/gstreamer-1.0/gst-plugin-scanner
 )
-for plugin in playback opus vorbis vpx matroska isomp4 libav; do
+for plugin in playback opus opusparse transcode autoconvert vorbis vpx matroska isomp4 libav; do
   required+=("gstreamer-1.0/libgst$plugin.so")
 done
 for library in "${required[@]}"; do

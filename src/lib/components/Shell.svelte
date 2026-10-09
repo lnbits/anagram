@@ -1,4 +1,8 @@
 <script lang="ts">
+  import {
+    handleAndroidCallAction,
+    type AndroidCallAction,
+  } from '#src/services/androidCallNotificationService.ts';
   import { orderThreadMessages } from '#src/utils/threadMessageOrder.ts';
   import ModalFrame from './ModalFrame.svelte';
   import GroupProfileFields from './GroupProfileFields.svelte';
@@ -970,6 +974,15 @@
     void publicGroups.init().catch((error) => {
       if (!disposed) fail(error);
     });
+    let pendingCallAction: AndroidCallAction | undefined;
+    const openCallNotification = (action: AndroidCallAction) => {
+      if (!notificationsReady) {
+        pendingCallAction = action;
+        return;
+      }
+      if (!disposed && action.ownerPubkey === nostr.getLoggedInPublicKeyHex())
+        void handleAndroidCallAction(action).catch(fail);
+    };
     let pendingNotificationChat: string | null | undefined;
     const drainNotifications = () => {
       if (notificationsReady) void ingestPendingAndroidRelayNotificationEvents().catch(fail);
@@ -985,6 +998,7 @@
     const stopNotifications = startAndroidRelayNotificationListeners(
       openNotification,
       drainNotifications,
+      openCallNotification,
     );
     void nostr
       .initializeSessionState()
@@ -993,6 +1007,7 @@
         await initializeAndroidRelayNotificationsAfterLogin().catch(fail);
         if (disposed) return;
         notificationsReady = androidNotifications;
+        if (pendingCallAction) openCallNotification(pendingCallAction);
         if (pendingNotificationChat !== undefined) openNotification(pendingNotificationChat);
         drainNotifications();
       })

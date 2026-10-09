@@ -198,6 +198,7 @@ public final class RelayNotificationService extends Service {
     }
 
     static void requestStop(Context context, boolean disablePreference) {
+        CallNotifications.clear(context);
         if (disablePreference) {
             RelayNotificationPreferences.setEnabled(context, false);
         }
@@ -261,6 +262,7 @@ public final class RelayNotificationService extends Service {
     }
 
     private void stopListener(boolean disablePreference) {
+        CallNotifications.clear(this);
         logDebug("listener-stop disablePreference=" + disablePreference);
         isStopping = true;
         if (disablePreference) {
@@ -320,6 +322,7 @@ public final class RelayNotificationService extends Service {
             return;
         }
 
+        CallNotifications.refresh(this);
         isStopping = false;
         if (!shouldReconnect && (!sockets.isEmpty() || !reconnectTasks.isEmpty())) {
             updateServiceNotification();
@@ -560,9 +563,6 @@ public final class RelayNotificationService extends Service {
                     exceptionSummary(exception)
                 );
             }
-            if (addedToPendingInbox) {
-                notifyPendingEventsAvailable();
-            }
 
             if (!RelayNotificationPreferences.markEventSeen(this, eventId)) {
                 seenEventIds.add(eventId);
@@ -571,12 +571,13 @@ public final class RelayNotificationService extends Service {
             }
             seenEventIds.add(eventId);
 
+            NotificationTarget target = resolveNotificationTarget(event, recipientPubkey, source.relayUrl);
+            if (addedToPendingInbox) notifyPendingEventsAvailable();
             if (RelayNotificationPreferences.isAppForeground(this)) {
                 logDebug("gift-wrap-accepted event=" + eventLabel + " action=foreground-handoff");
                 return;
             }
 
-            NotificationTarget target = resolveNotificationTarget(event, recipientPubkey);
             long messageCreatedAt = target == null ? 0L : target.messageCreatedAt;
             boolean shouldNotifyEvent = source.shouldNotifyEvent(messageCreatedAt, now);
             if (!shouldNotifyEvent) {
@@ -646,7 +647,7 @@ public final class RelayNotificationService extends Service {
     }
 
     @Nullable
-    private NotificationTarget resolveNotificationTarget(JSONObject wrappedEvent, String recipientPubkey) {
+    private NotificationTarget resolveNotificationTarget(JSONObject wrappedEvent, String recipientPubkey, String relayUrl) {
         String recipientPrivateKey = recipientPrivateKeys.get(recipientPubkey);
         if (recipientPrivateKey == null) {
             return null;
@@ -672,7 +673,7 @@ public final class RelayNotificationService extends Service {
             JSONObject rumor = new JSONObject(rumorPlaintext);
             long messageCreatedAt = rumor.optLong("created_at", 0L);
             if (
-                rumor.optInt("kind", -1) != 14 ||
+                (rumor.optInt("kind", -1) != 14 && rumor.optInt("kind", -1) != 21117) ||
                 !senderPubkey.equals(rumor.optString("pubkey", "").toLowerCase(Locale.ROOT)) ||
                 !isValidRumor(rumor) ||
                 senderPubkey.equals(ownerPubkey) ||
@@ -684,6 +685,13 @@ public final class RelayNotificationService extends Service {
 
             for (NotificationConversation knownGroup : groupConversations.values()) {
                 if (senderPubkey.equals(knownGroup.recipientPubkey) || knownGroup.knownEpochPubkeys.contains(senderPubkey)) return null;
+            }
+            if (rumor.optInt("kind", -1) == 21117) {
+                if (recipientPubkey.equals(ownerPubkey)) {
+                    IncomingCallSignal signal = IncomingCallSignal.parse(rumor.optString("content"), messageCreatedAt, System.currentTimeMillis());
+                    if (signal != null) CallNotifications.receive(this, recipientPubkey, senderPubkey, signal, wrappedEvent, relayUrl);
+                }
+                return null;
             }
             NotificationConversation groupConversation = groupConversations.get(recipientPubkey);
             if (groupConversation != null) {

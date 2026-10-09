@@ -45,6 +45,8 @@ npm run tauri -- icon src-tauri/icons/icon.png --output src-tauri/icons
 npm run tauri -- android build --ci --apk --target aarch64 armv7 --config src-tauri/mobile-version.json -- --locked
 ```
 
+With Android notifications enabled and a local signing key, the relay listener can show incoming direct calls while the UI is closed. Answer opens the app and answers with audio; Decline sends an encrypted response in the background. Caller identity follows “Show who messaged” and is hidden by default. The listener must remain running and connected; force-stopping the app prevents delivery.
+
 APKs appear under `src-tauri/gen/android/app/build/outputs/apk/`. The preparation script configures permissions, Android Keystore storage, and compatible build tooling.
 
 For an unsigned iPhone build on macOS with Xcode:
@@ -83,3 +85,5 @@ Commit source, tests, configuration, workflows, assets, and npm/Cargo lockfiles.
 Keep the generated `static/iroh/` bindings and hash manifest committed alongside their Rust source so web development only needs Node. Update both when changing the transport.
 
 Protocol code lives in `src/stores/nostr/`; the nostr-tools adapter is `src/lib/nostr/client.ts`. Hydration must retain account isolation, UI-before-message-storage updates, bounded database reads, and history coverage based on real relay EOSE.
+
+The Linux AppImage builds a pinned GStreamer runtime on Ubuntu 22.04 (`scripts/appimage/build-gstreamer.sh`). WebKitGTK requires GStreamer 1.24.9 or newer for WebM recording, plus the Opus parser, transcoder and automatic video conversion plugins. Release checks record synthetic audio/video and decode the chunks through MediaSource inside the packaged WebView; file playback alone does not verify call support.

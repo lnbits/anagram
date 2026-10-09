@@ -26,6 +26,15 @@ trap finish EXIT
 printf '%s' release-smoke | gnome-keyring-daemon --unlock --components=secrets --control-directory "$state/keyring" > "$output/keyring.log" 2>&1
 (cd "$state" && "$image" --appimage-extract > "$output/extract.log")
 [[ -x "$state/squashfs-root/AppRun" ]]
+bash "$root/scripts/release-smoke/appimage-libraries.sh" "$state/squashfs-root" > "$output/libraries.log"
+timeout 90s bash "$root/scripts/release-smoke/appimage-media.sh" "$state/squashfs-root" > "$output/media.log" 2>&1
+# Reproduce a desktop exporting an incompatible GIO TLS module. GLib discovers
+# this filename first and otherwise shadows the working bundled module. The
+# AppImage startup must isolate it; desktop.mjs then verifies real WSS relay EOSE.
+mkdir "$state/host-gio"
+printf '%s\n' 'Incompatible host TLS module (release smoke fixture)' > "$state/host-gio/libgiognutls.so"
+printf '%s\n' 'libgiognutls.so: gio-tls-backend' > "$state/host-gio/giomodule.cache"
+export GIO_EXTRA_MODULES="$state/host-gio"
 tauri-driver > "$output/driver.log" 2>&1 &
 driver_pid=$!
 for attempt in $(seq 1 30); do

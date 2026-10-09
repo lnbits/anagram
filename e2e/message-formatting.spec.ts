@@ -199,3 +199,55 @@ test('chat spoilers and code do not leak through media attachments or collapsed 
     await disposeUsers(alice, bob);
   }
 });
+
+test('editing a DM preserves other messages sent by the same author in the same second', async ({
+  browser,
+}) => {
+  const {
+    bootstrapUser,
+    disposeUsers,
+    editMessage,
+    establishAcceptedDirectChat,
+    expectNoUnexpectedBrowserErrors,
+    navigateToChat,
+    reloadAndWaitForApp,
+    sendMessage,
+    TEST_ACCOUNTS,
+    threadMessage,
+    waitForThreadMessage,
+  } = await import('./parity/helpers');
+  const alice = await bootstrapUser(browser, TEST_ACCOUNTS.sameSecondEditAlice);
+  const bob = await bootstrapUser(browser, TEST_ACCOUNTS.sameSecondEditBob);
+
+  try {
+    await establishAcceptedDirectChat(alice, bob);
+    const now = new Date();
+    await alice.page.clock.setFixedTime(now);
+    await bob.page.clock.setFixedTime(now);
+    await sendMessage(alice.page, 'Same-second neighbour', { chatId: bob.session.publicKey });
+    await waitForThreadMessage(bob.page, 'Same-second neighbour', {
+      chatId: alice.session.publicKey,
+    });
+    await sendMessage(alice.page, 'Same-second original', { chatId: bob.session.publicKey });
+    await waitForThreadMessage(bob.page, 'Same-second original', {
+      chatId: alice.session.publicKey,
+    });
+    await editMessage(alice.page, 'Same-second original', 'Same-second edited', {
+      chatId: bob.session.publicKey,
+    });
+
+    for (const user of [alice, bob]) {
+      await expect(threadMessage(user.page, 'Same-second edited')).toHaveCount(1);
+      await expect(threadMessage(user.page, 'Same-second neighbour')).toHaveCount(1);
+      await expect(threadMessage(user.page, 'Accepted conversation')).toHaveCount(1);
+    }
+    await reloadAndWaitForApp(bob.page);
+    await navigateToChat(bob.page, alice.session.publicKey);
+    await expect(threadMessage(bob.page, 'Same-second edited')).toHaveCount(1);
+    await expect(threadMessage(bob.page, 'Same-second neighbour')).toHaveCount(1);
+    await expect(threadMessage(bob.page, 'Same-second original')).toHaveCount(0);
+    await expectNoUnexpectedBrowserErrors([alice, bob]);
+  } finally {
+    await disposeUsers(alice, bob);
+  }
+});

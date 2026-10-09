@@ -304,6 +304,48 @@ describe('messageMutationRuntime', () => {
     expect(deps.refreshMessageInLiveState).toHaveBeenCalledWith(12);
   });
 
+  it('does not treat an unrelated same-second message as the replacement for a deletion', async () => {
+    const deps = createDeps();
+    deps.readDeletionTargetEntries.mockReturnValue([
+      { eventId: TARGET_EVENT_ID, kind: NostrKind.PrivateDirectMessage },
+    ]);
+    const runtime = createMessageMutationRuntime(deps);
+    const original = {
+      id: 3,
+      chat_public_key: CHAT_PUBLIC_KEY,
+      author_public_key: LOGGED_IN_PUBLIC_KEY,
+      message: 'Before edit',
+      created_at: '2026-01-01T00:00:00.000Z',
+      event_id: TARGET_EVENT_ID,
+      meta: {},
+    };
+    serviceMocks.chatDataService.getMessageByEventId.mockResolvedValue(original);
+    serviceMocks.chatDataService.listMessagesInSecond.mockResolvedValue([
+      { ...original, id: 1, event_id: 'e'.repeat(64), message: 'Keep earlier message' },
+      original,
+      { ...original, id: 4, event_id: 'a'.repeat(64), message: 'Keep later message' },
+    ]);
+
+    await runtime.processIncomingDeletionRumorEvent(
+      {
+        id: 'f'.repeat(64),
+        kind: NostrKind.EventDeletion,
+        created_at: 1767225660,
+        pubkey: LOGGED_IN_PUBLIC_KEY,
+        content: '',
+        tags: [],
+      } as unknown as ClientEvent,
+      CHAT_PUBLIC_KEY,
+      LOGGED_IN_PUBLIC_KEY,
+    );
+
+    expect(serviceMocks.chatDataService.applyMessageEdit).not.toHaveBeenCalled();
+    expect(serviceMocks.chatDataService.updateMessageMeta).toHaveBeenCalledWith(
+      original.id,
+      expect.objectContaining({ deleted: expect.any(Object) }),
+    );
+  });
+
   it('collapses a same-timestamp replacement when the predecessor deletion arrives last', async () => {
     const deps = createDeps();
     deps.readDeletionTargetEntries.mockReturnValue([

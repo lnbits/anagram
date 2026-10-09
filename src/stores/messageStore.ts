@@ -635,6 +635,22 @@ function resolveReplyTargetEventIdValue(
   return normalizeEventId(persistedEventId);
 }
 
+function replaceMessageInWindow(
+  currentMessages: Message[],
+  message: Message,
+  previousMessageId = message.id,
+): Message[] {
+  // Persistence and edit collapse can leave both a temporary/event alias and
+  // the retained local row in the loaded window. Replace them atomically.
+  const retained = currentMessages.filter(
+    (entry) =>
+      entry.id !== previousMessageId &&
+      entry.id !== message.id &&
+      !(message.eventId && entry.eventId === message.eventId),
+  );
+  return [...retained, message].sort(compareMessagesBySentAt);
+}
+
 function applyMessageUpsert(
   currentMessages: Message[],
   paginationState: ChatMessagePaginationState | null | undefined,
@@ -652,11 +668,9 @@ function applyMessageUpsert(
       entry.id === message.id || Boolean(message.eventId && entry.eventId === message.eventId),
   );
   if (existingIndex >= 0) {
-    const nextMessages = [...currentMessages];
-    nextMessages[existingIndex] = message;
     return {
       ignored: false,
-      messages: nextMessages,
+      messages: replaceMessageInWindow(currentMessages, message),
       paginationState: paginationState ?? buildDefaultChatMessagePaginationState(),
     };
   }
@@ -728,6 +742,7 @@ function applyMessageUpsert(
 
 export const __messageStoreTestUtils = {
   applyMessageUpsert,
+  replaceMessageInWindow,
   areReactionListsEqual: areReactionListsEqualValue,
   buildChatMetaWithUnseenReactionCount: buildChatMetaWithUnseenReactionCountValue,
   buildDeletedMessageMeta,
@@ -953,9 +968,7 @@ export const useMessageStore = defineStore('messageStore', () => {
       return;
     }
 
-    const nextMessages = [...existingMessages];
-    nextMessages[existingIndex] = message;
-    messagesByChat.value[normalizedChatId] = nextMessages;
+    messagesByChat.value[normalizedChatId] = replaceMessageInWindow(existingMessages, message);
   }
 
   function getMessageFromState(chatId: string, messageId: string): Message | null {
@@ -1173,9 +1186,11 @@ export const useMessageStore = defineStore('messageStore', () => {
       return;
     }
 
-    const nextMessages = [...existingMessages];
-    nextMessages[existingIndex] = nextMessage;
-    messagesByChat.value[normalizedChatId] = nextMessages;
+    messagesByChat.value[normalizedChatId] = replaceMessageInWindow(
+      existingMessages,
+      nextMessage,
+      previousMessageId,
+    );
   }
 
   function insertOptimisticOutboundMessage(chatId: string, message: Message): void {

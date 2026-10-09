@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 const {
   applyMessageUpsert,
+  replaceMessageInWindow,
   areReactionListsEqual,
   buildChatMetaWithUnseenReactionCount,
   buildDefaultChatMessagePaginationState,
@@ -31,6 +32,47 @@ const {
 } = __messageStoreTestUtils;
 
 describe('messageStore logic', () => {
+  it('promotes a temporary row without duplicating an already persisted copy', () => {
+    const persisted: Message = {
+      id: '3',
+      chatId: 'chat',
+      text: 'reply',
+      sender: 'them',
+      sentAt: '2026-01-01T00:00:00.000Z',
+      authorPublicKey: 'peer',
+      eventId: 'reply',
+      nostrEvent: null,
+      meta: {},
+    };
+    const temporary = { ...persisted, id: 'incoming:reply', eventId: null };
+    const unrelated = { ...temporary, id: '2', text: 'keep me' };
+    expect(
+      replaceMessageInWindow([unrelated, temporary, persisted], persisted, temporary.id),
+    ).toEqual([unrelated, persisted]);
+  });
+
+  it('merges all aliases when an edit matches both a local row ID and another row event ID', () => {
+    const original: Message = {
+      id: '3',
+      chatId: 'chat',
+      text: 'original',
+      sender: 'them',
+      sentAt: '2026-01-01T00:00:00.000Z',
+      authorPublicKey: 'peer',
+      eventId: 'original',
+      nostrEvent: null,
+      meta: {},
+    };
+    const unrelated = { ...original, id: '2', eventId: null, text: 'keep me' };
+    const replacement = { ...original, id: '1', eventId: 'replacement', text: 'edited' };
+    const edited = { ...replacement, id: original.id };
+    const pagination = buildDefaultChatMessagePaginationState();
+    const result = applyMessageUpsert([replacement, unrelated, original], pagination, edited);
+    expect(result.messages).toEqual([unrelated, edited]);
+    expect(result.paginationState).toBe(pagination);
+    expect(result.ignored).toBe(false);
+  });
+
   it('preserves incoming history and updates arriving after a load starts, without retaining unrelated cached history', () => {
     const old: Message = {
       id: '1',

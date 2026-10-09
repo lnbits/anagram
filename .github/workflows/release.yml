@@ -72,6 +72,7 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             bundles: appimage
+            bundle-config: --config src-tauri/tauri.ubuntu-appimage.conf.json
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -87,7 +88,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libdbus-1-dev xdg-utils webkit2gtk-driver xvfb dbus-x11 gnome-keyring
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libdbus-1-dev \
+            libfontconfig1 libfreetype6 libexpat1 zlib1g libuuid1 libharfbuzz0b libfribidi0 \
+            libx11-6 libx11-xcb1 libxcb1 libwayland-client0 libgpg-error0 libcom-err2 \
+            libgmp10 libasound2 libjack-jackd2-0 \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav gstreamer1.0-tools \
+            xdg-utils webkit2gtk-driver xvfb dbus-x11 gnome-keyring
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
@@ -116,7 +123,7 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: '1'
         with:
           tauriScript: npm run tauri
-          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} ${{ matrix.bundle-config }} -- --locked
           uploadWorkflowArtifacts: true
           workflowArtifactNamePattern: desktop-[platform]-[arch]-[bundle]
       - name: Install native test driver

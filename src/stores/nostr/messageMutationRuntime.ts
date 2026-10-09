@@ -441,18 +441,13 @@ export function createMessageMutationRuntime({
           originalMessage.author_public_key.trim().toLowerCase() &&
         Boolean(candidate.event_id) &&
         !candidate.meta.deleted &&
+        messageEditReferencesEventId(candidate.meta, originalEventId) &&
         areMessageEditTimestampsEqual(candidate.created_at, originalMessage.created_at)
       );
     });
-    candidates.sort((first, second) => {
-      const firstHasReference = messageEditReferencesEventId(first.meta, originalEventId);
-      const secondHasReference = messageEditReferencesEventId(second.meta, originalEventId);
-      if (firstHasReference !== secondHasReference) {
-        return firstHasReference ? -1 : 1;
-      }
-
-      return second.id - first.id;
-    });
+    // Timestamp equality alone cannot identify an edit: a sender may post
+    // several independent messages in one second. Only collapse a linked edit.
+    candidates.sort((first, second) => second.id - first.id);
     return candidates[0] ?? null;
   }
 

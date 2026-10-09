@@ -14,7 +14,7 @@ fi
 state=$(mktemp -d)
 export XDG_CONFIG_HOME="$state/config" XDG_DATA_HOME="$state/data" XDG_CACHE_HOME="$state/cache" XDG_RUNTIME_DIR="$state/runtime"
 mkdir -m 700 -p "$XDG_RUNTIME_DIR"
-export GDK_BACKEND=x11
+# Let the packaged launcher select its backend, as it does for a normal launch.
 driver_pid=''
 finish() {
   [[ -z "$driver_pid" ]] || kill "$driver_pid" 2>/dev/null || true

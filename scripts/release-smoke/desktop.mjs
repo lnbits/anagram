@@ -202,8 +202,13 @@ async function send(text) {
   );
 }
 try {
+  const launchStarted = Date.now();
   await open();
   await until(() => exists(testid('auth-open-login-button')), 'fresh release login screen');
+  const loginReadyMs = Date.now() - launchStarted;
+  console.log(`Packaged login ready in ${loginReadyMs}ms`);
+  if (process.platform === 'linux' && loginReadyMs > 20000)
+    throw new Error(`Linux packaged login took ${loginReadyMs}ms (limit 20000ms)`);
   // Configure only relay preferences before first login; all auth goes through UI/native storage.
   await execute(
     `localStorage.setItem('relays', JSON.stringify(arguments[0].map(url => ({url,read:true,write:true}))))`,
@@ -265,6 +270,7 @@ try {
       {
         passed: true,
         binary,
+        loginReadyMs,
         checks: [
           'login',
           'first-relay',

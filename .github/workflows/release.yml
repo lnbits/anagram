@@ -124,8 +124,14 @@ jobs:
         with:
           tauriScript: npm run tauri
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} ${{ matrix.bundle-config }} -- --locked
-          uploadWorkflowArtifacts: true
+          uploadWorkflowArtifacts: ${{ runner.os != 'Linux' }}
           workflowArtifactNamePattern: desktop-[platform]-[arch]-[bundle]
+      - name: Prepare portable Linux AppImage
+        if: runner.os == 'Linux'
+        run: |
+          mapfile -t packages < <(find src-tauri/target -name '*.AppImage' -type f)
+          [[ ${#packages[@]} -eq 1 ]]
+          bash scripts/postprocess-appimage.sh "${packages[0]}"
       - name: Install native test driver
         if: runner.os == 'Linux'
         run: cargo install tauri-driver --version 2.1.0 --locked
@@ -137,6 +143,15 @@ jobs:
           mapfile -t packages < <(find src-tauri/target -name '*.AppImage' -type f)
           [[ ${#packages[@]} -eq 1 ]]
           xvfb-run -a -s "-screen 0 1920x1440x24" dbus-run-session -- bash scripts/release-smoke/linux.sh "${packages[0]}"
+          mkdir -p "$RUNNER_TEMP/anagram-linux-release"
+          cp "${packages[0]}" "$RUNNER_TEMP/anagram-linux-release/"
+      - name: Upload tested Linux AppImage
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux-amd64-appimage
+          path: ${{ runner.temp }}/anagram-linux-release/*.AppImage
+          if-no-files-found: error
       - name: Test installed Windows app
         if: runner.os == 'Windows'
         shell: pwsh

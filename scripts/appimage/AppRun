@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -e
+
+appdir="$(readlink -f "$(dirname "$0")")"
+export APPDIR="$appdir"
+export PATH="$appdir/usr/bin:${PATH:-/usr/bin:/bin}"
+export XDG_DATA_DIRS="$appdir/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+
+# Keep the GTK and GStreamer integration prepared by linuxdeploy. The hooks
+# are generated inside the AppImage.
+# shellcheck disable=SC1091
+source "$appdir/apprun-hooks/linuxdeploy-plugin-gtk.sh"
+# Napstr's released GTK hook selects X11/XWayland. Newer Tauri hooks no
+# longer do so. Keep that proven default, with native Wayland as a fallback
+# for desktops without an X server.
+export GDK_BACKEND="x11,wayland"
+export LD_LIBRARY_PATH="$appdir/usr/lib:$appdir/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# shellcheck disable=SC1091
+source "$appdir/apprun-hooks/linuxdeploy-plugin-gstreamer.sh"
+
+# WebKitGTK's helper paths in this AppDir are relative to usr/.
+cd "$appdir/usr"
+exec "$appdir/usr/bin/anagram" "$@"

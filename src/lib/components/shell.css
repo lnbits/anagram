@@ -45,7 +45,10 @@ textarea:focus {
   border-color: var(--q-primary);
 }
 button:focus-visible,
-a:focus-visible {
+a:focus-visible,
+select:focus-visible,
+.search-box input:focus-visible {
+  /* Selects and the borderless contacts filter show no border change on focus. */
   outline: 2px solid var(--q-primary);
   outline-offset: 2px;
 }
@@ -1065,6 +1068,12 @@ input[type='range'] {
 .message-row:hover .message-menu-trigger,
 .message-row:focus-within .message-menu-trigger {
   opacity: 1;
+}
+/* Touch tablets have no hover to reveal the trigger (phones are handled below). */
+@media (hover: none) {
+  .message-menu-trigger {
+    opacity: 1;
+  }
 }
 @media (min-width: 768px) {
   .bubble-layout .message-row.own {

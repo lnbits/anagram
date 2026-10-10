@@ -158,7 +158,8 @@
   .row-dropdown button:hover {
     background: var(--nc-hover);
   }
-  @media (max-width: 767px) {
+  /* Touch screens of any width have no hover to reveal the menu button. */
+  @media (max-width: 767px), (hover: none) {
     .row-menu {
       opacity: 1;
     }

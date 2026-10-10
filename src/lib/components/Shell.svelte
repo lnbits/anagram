@@ -24,6 +24,15 @@
   import DateDivider from './DateDivider.svelte';
   import MediaUploadConfirmation from './MediaUploadConfirmation.svelte';
   import { chatDate } from '#src/utils/chatDate.ts';
+  import {
+    isRtlDocument,
+    sidebarKeyDelta,
+    sidebarWidthFromPointer,
+  } from '#src/utils/sidebarResize.ts';
+  import {
+    formatUnreadChatBadgeLabel,
+    formatUnreadDocumentTitle,
+  } from '#src/utils/unreadChatBadge.ts';
   import { messagePresentation, messageMenuPosition } from '#src/utils/messagePresentation.ts';
   import {
     isAndroidRelayNotificationSupported,
@@ -773,7 +782,7 @@
           ? MIN_DESKTOP_SIDEBAR_WIDTH
           : event.key === 'End'
             ? MAX_DESKTOP_SIDEBAR_WIDTH
-            : sidebarWidth + (event.key === 'ArrowLeft' ? -16 : 16),
+            : sidebarWidth + sidebarKeyDelta(event.key, isRtlDocument()),
       );
     }
   }
@@ -1037,13 +1046,13 @@
       contextMessage = '';
   }}
   onpointermove={(e) => {
-    if (resizing) resizeTo(e.clientX);
+    if (resizing) resizeTo(sidebarWidthFromPointer(e.clientX, innerWidth, isRtlDocument()));
   }}
   onpointerup={() => (resizing = false)}
   onblur={() => (resizing = false)}
 />
 <svelte:head
-  ><title>{$state.unread ? `(${$state.unread}) ` : ''}{$translate('Anagram')}</title></svelte:head
+  ><title>{formatUnreadDocumentTitle($translate('Anagram'), $state.unread)}</title></svelte:head
 >
 {#if section === 'settings'}
   {#await import('./settings/SettingsShell.svelte') then component}<component.default
@@ -1230,7 +1239,7 @@
             aria-label={item}
             onclick={() => nav(item as typeof section)}
             ><Icon name={item} />{#if item === 'chats' && $state.unread}<span
-                class="badge nav-badge">{$state.unread}</span
+                class="badge nav-badge">{formatUnreadChatBadgeLabel($state.unread)}</span
               >{/if}</button
           >{/each}
       </nav>

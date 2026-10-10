@@ -18,6 +18,12 @@
     MAX_DESKTOP_SIDEBAR_WIDTH,
   } from '#src/utils/themeStorage.ts';
   import './settings.css';
+  import {
+    isRtlDocument,
+    sidebarKeyDelta,
+    sidebarWidthFromPointer,
+  } from '#src/utils/sidebarResize.ts';
+  import { formatUnreadChatBadgeLabel } from '#src/utils/unreadChatBadge.ts';
   const route = toStore(() => page.url.pathname);
   const nostr = useNostrStore(),
     update = useAppUpdateStore();
@@ -94,7 +100,7 @@
 <svelte:window
   onresize={() => (mobile = matchMedia('(max-width: 767px)').matches)}
   onpointermove={(e) => {
-    if (resizing) resize(e.clientX);
+    if (resizing) resize(sidebarWidthFromPointer(e.clientX, innerWidth, isRtlDocument()));
   }}
   onpointerup={() => (resizing = false)}
   onblur={() => (resizing = false)}
@@ -137,7 +143,7 @@
           aria-label={target}
           onclick={() => goto(`/${target}`)}
           ><Icon name={target} />{#if target === 'chats' && $state.unread}<span
-              class="badge nav-badge">{$state.unread}</span
+              class="badge nav-badge">{formatUnreadChatBadgeLabel($state.unread)}</span
             >{/if}</button
         >{/each}
     </nav>
@@ -159,7 +165,7 @@
     onkeydown={(e) => {
       if (['ArrowLeft', 'ArrowRight'].includes(e.key)) {
         e.preventDefault();
-        resize(width + (e.key === 'ArrowLeft' ? -16 : 16));
+        resize(width + sidebarKeyDelta(e.key, isRtlDocument()));
       }
     }}
   ></div>

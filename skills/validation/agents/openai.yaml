@@ -1,7 +1,0 @@
-interface:
-  display_name: "Validation"
-  short_description: "Pick the right checks for repo changes"
-  default_prompt: "Use $validation to choose the smallest useful test and build plan for this repo."
-
-policy:
-  allow_implicit_invocation: true

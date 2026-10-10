@@ -135,7 +135,10 @@ export function yieldToNextPaint(): Promise<void> {
   }
 
   return new Promise<void>((resolve) => {
+    // Off-screen webviews can report visible while animation frames are suspended.
+    const timeout = globalThis.setTimeout(resolve, 50);
     globalThis.requestAnimationFrame(() => {
+      globalThis.clearTimeout(timeout);
       globalThis.setTimeout(resolve, 0);
     });
   });

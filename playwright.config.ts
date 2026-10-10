@@ -1,46 +1,35 @@
 import { defineConfig } from '@playwright/test';
-
-const appBaseUrl = process.env.APP_BASE_URL ?? 'http://127.0.0.1:4100';
-const isCi = Boolean(process.env.CI);
-const disablesNdkOutboxForE2E = process.env.APP_E2E_DISABLE_NDK_OUTBOX === 'true';
-const configuredWorkers = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? '', 10);
-const webServerCommand = `${JSON.stringify(process.execPath)} ./scripts/quasar.cjs dev --port 4100 --hostname 127.0.0.1`;
-
+const liveCalls = process.env.ANAGRAM_LIVE_CALL_TEST === '1';
+const port = Number(process.env.ANAGRAM_E2E_PORT ?? (liveCalls ? 5187 : 5173));
 export default defineConfig({
   testDir: './e2e',
-  timeout: 90_000,
+  testIgnore: ['**/pwa/**', '**/memory-lifetime.spec.ts'],
+  timeout: 90000,
+  expect: { timeout: 15000 },
   fullyParallel: false,
-  forbidOnly: isCi,
-  retries: isCi ? 1 : 0,
-  workers:
-    Number.isInteger(configuredWorkers) && configuredWorkers > 0 ? configuredWorkers : isCi ? 1 : 2,
-  expect: {
-    timeout: 15_000,
-  },
-  reporter: isCi
-    ? [['github'], ['html', { open: 'never' }]]
-    : [['list'], ['html', { open: 'never' }]],
+  workers: 1,
   use: {
-    baseURL: appBaseUrl,
-    browserName: 'chromium',
-    headless: true,
-    viewport: {
-      width: 1440,
-      height: 960,
-    },
-    testIdAttribute: 'data-testid',
-    trace: isCi ? 'on-first-retry' : 'retain-on-failure',
+    baseURL: `http://127.0.0.1:${port}`,
+    launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH },
+    trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
   },
-  webServer: {
-    command: webServerCommand,
-    url: appBaseUrl,
-    reuseExistingServer: !isCi && !disablesNdkOutboxForE2E,
-    timeout: 120_000,
-    env: {
-      ...process.env,
-      ...(isCi && !disablesNdkOutboxForE2E ? { APP_E2E_DISABLE_NDK_OUTBOX: 'true' } : {}),
+  webServer: [
+    {
+      command: liveCalls
+        ? `APP_IROH_RELAY_URL=https://127.0.0.1:7004/ npm run dev -- --port ${port}`
+        : `npm run dev -- --port ${port}`,
+      url: `http://127.0.0.1:${port}`,
+      reuseExistingServer: !liveCalls && !process.env.ANAGRAM_E2E_PORT,
     },
-  },
+    ...(liveCalls
+      ? [{ command: 'node scripts/iroh-test-proxy.cjs', port: 7004, reuseExistingServer: false }]
+      : []),
+    { command: 'node scripts/test-relay.mjs', port: 7777, reuseExistingServer: true },
+    {
+      command: 'TEST_RELAY_PORT=7778 node scripts/test-relay.mjs',
+      port: 7778,
+      reuseExistingServer: true,
+    },
+  ],
 });

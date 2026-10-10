@@ -1,6 +1,6 @@
-import NDK, { NDKPrivateKeySigner, NDKRelayStatus } from '@nostr-dev-kit/ndk';
+import NostrClient, { NostrPrivateKeySigner, NostrRelayStatus } from '#src/lib/nostr/client.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ref } from 'vue';
+import { ref } from '#src/lib/state/reactivity.ts';
 
 const developerTraceDataServiceMock = vi.hoisted(() => ({
   appendEntry: vi.fn(async () => {}),
@@ -12,37 +12,38 @@ const chatDataServiceMock = vi.hoisted(() => ({
   init: vi.fn(async () => {}),
   listChats: vi.fn(async () => []),
   listMessages: vi.fn(async () => []),
+  findLatestMessageByAuthor: vi.fn(),
 }));
 
 const browserNotificationsMock = vi.hoisted(() => ({
   areBrowserNotificationsEnabled: vi.fn(() => true),
 }));
 
-vi.mock('src/services/developerTraceDataService', () => ({
+vi.mock('#src/services/developerTraceDataService.ts', () => ({
   developerTraceDataService: developerTraceDataServiceMock,
 }));
 
-vi.mock('src/services/chatDataService', () => ({
+vi.mock('#src/services/chatDataService.ts', () => ({
   chatDataService: chatDataServiceMock,
 }));
 
-vi.mock('src/utils/browserNotificationPreference', () => ({
+vi.mock('#src/utils/browserNotificationPreference.ts', () => ({
   areBrowserNotificationsEnabled: browserNotificationsMock.areBrowserNotificationsEnabled,
 }));
 
-import { createAuthIdentityRuntime } from 'src/stores/nostr/authIdentityRuntime';
-import { AUTH_METHOD_STORAGE_KEY, PUBLIC_KEY_STORAGE_KEY } from 'src/stores/nostr/constants';
-import { createDeveloperRelayRuntime } from 'src/stores/nostr/developerRelayRuntime';
+import { createAuthIdentityRuntime } from '#src/stores/nostr/authIdentityRuntime.ts';
+import { AUTH_METHOD_STORAGE_KEY, PUBLIC_KEY_STORAGE_KEY } from '#src/stores/nostr/constants.ts';
+import { createDeveloperRelayRuntime } from '#src/stores/nostr/developerRelayRuntime.ts';
 import {
   createDeveloperTraceRuntime,
   readDeveloperDiagnosticsEnabledFromStorage,
-} from 'src/stores/nostr/developerTrace';
-import { createInboundPresentationRuntime } from 'src/stores/nostr/inboundPresentationRuntime';
-import { hasStorage, isPlainRecord } from 'src/stores/nostr/shared';
-import { createStartupRuntime } from 'src/stores/nostr/startupRuntime';
-import { createInitialStartupStepSnapshots } from 'src/stores/nostr/startupState';
-import { createSubscriptionRefreshRuntime } from 'src/stores/nostr/subscriptionRefreshRuntime';
-import { createTrackedContactStateRuntime } from 'src/stores/nostr/trackedContactStateRuntime';
+} from '#src/stores/nostr/developerTrace.ts';
+import { createInboundPresentationRuntime } from '#src/stores/nostr/inboundPresentationRuntime.ts';
+import { hasStorage, isPlainRecord } from '#src/stores/nostr/shared.ts';
+import { createStartupRuntime } from '#src/stores/nostr/startupRuntime.ts';
+import { createInitialStartupStepSnapshots } from '#src/stores/nostr/startupState.ts';
+import { createSubscriptionRefreshRuntime } from '#src/stores/nostr/subscriptionRefreshRuntime.ts';
+import { createTrackedContactStateRuntime } from '#src/stores/nostr/trackedContactStateRuntime.ts';
 
 const PUBKEY_A = 'a'.repeat(64);
 const PUBKEY_B = 'b'.repeat(64);
@@ -85,6 +86,12 @@ describe('nostr runtime core logic', () => {
     developerTraceDataServiceMock.listEntries.mockResolvedValue([]);
     browserNotificationsMock.areBrowserNotificationsEnabled.mockReturnValue(true);
     chatDataServiceMock.listMessages.mockResolvedValue([]);
+    chatDataServiceMock.findLatestMessageByAuthor.mockImplementation(
+      async (_chat, author) =>
+        (await chatDataServiceMock.listMessages()).find(
+          (row: any) => row.author_public_key === author,
+        ) ?? null,
+    );
     chatDataServiceMock.listChats.mockResolvedValue([]);
     (globalThis as Record<string, unknown>).window = undefined;
     (globalThis as Record<string, unknown>).document = undefined;
@@ -147,7 +154,7 @@ describe('nostr runtime core logic', () => {
       runtime.shouldApplyPrivateContactListEvent({
         created_at: 10,
         id: EVENT_ID_A,
-      } as never)
+      } as never),
     ).toBe(true);
     runtime.markPrivateContactListEventApplied({
       created_at: 10,
@@ -157,13 +164,13 @@ describe('nostr runtime core logic', () => {
       runtime.shouldApplyPrivateContactListEvent({
         created_at: 9,
         id: 'd'.repeat(64),
-      } as never)
+      } as never),
     ).toBe(false);
     expect(
       runtime.shouldApplyPrivateContactListEvent({
         created_at: 10,
         id: EVENT_ID_A,
-      } as never)
+      } as never),
     ).toBe(false);
 
     const relayState = runtime.buildContactRelayListEventState({
@@ -176,14 +183,14 @@ describe('nostr runtime core logic', () => {
         pubkey: PUBKEY_A.toUpperCase(),
         created_at: 19,
         id: 'f'.repeat(64),
-      } as never)
+      } as never),
     ).toBe(false);
     expect(
       runtime.shouldApplyContactRelayListEvent({
         pubkey: PUBKEY_A,
         created_at: 20,
         id: 'f'.repeat(64),
-      } as never)
+      } as never),
     ).toBe(true);
 
     const profileState = runtime.buildContactProfileEventState({
@@ -196,7 +203,7 @@ describe('nostr runtime core logic', () => {
         pubkey: PUBKEY_B,
         created_at: 29,
         id: '2'.repeat(64),
-      } as never)
+      } as never),
     ).toBe(false);
 
     runtime.pruneTrackedContactRelayListEventState([PUBKEY_B]);
@@ -208,21 +215,21 @@ describe('nostr runtime core logic', () => {
         pubkey: PUBKEY_A,
         created_at: 1,
         id: '3'.repeat(64),
-      } as never)
+      } as never),
     ).toBe(true);
     expect(
       runtime.shouldApplyContactProfileEvent({
         pubkey: PUBKEY_B,
         created_at: 1,
         id: '4'.repeat(64),
-      } as never)
+      } as never),
     ).toBe(true);
     expect(
       runtime.shouldApplyContactProfileEvent({
         pubkey: 'not-a-pubkey',
         created_at: 1,
         id: '5'.repeat(64),
-      } as never)
+      } as never),
     ).toBe(false);
   });
 
@@ -248,8 +255,8 @@ describe('nostr runtime core logic', () => {
             relayUrls
               .map((value) => value.trim())
               .filter(Boolean)
-              .map((value) => (value.endsWith('/') ? value : `${value}/`))
-          )
+              .map((value) => (value.endsWith('/') ? value : `${value}/`)),
+          ),
         ),
       normalizeThrottleMs: (value) =>
         Number.isFinite(value) ? Math.max(0, Math.floor(Number(value))) : 0,
@@ -281,8 +288,8 @@ describe('nostr runtime core logic', () => {
           sinceOverride: 10,
           restoreThrottleMs: 15,
           startupTrackStep: true,
-        }
-      )
+        },
+      ),
     ).toEqual({
       restoreThrottleMs: 15,
       seedRelayUrls: ['wss://one.example/', 'wss://two.example/', 'wss://three.example/'],
@@ -372,14 +379,14 @@ describe('nostr runtime core logic', () => {
     expect(
       runtime
         .getStartupStepSnapshot('private-contact-relays')
-        .internalTasks.find((task) => task.id === 'private-contact-relays')
+        .internalTasks.find((task) => task.id === 'private-contact-relays'),
     ).toMatchObject({ status: 'in_progress' });
     batchTracker.finishItem();
     await vi.advanceTimersByTimeAsync(100);
     expect(
       runtime
         .getStartupStepSnapshot('private-contact-relays')
-        .internalTasks.find((task) => task.id === 'private-contact-relays')
+        .internalTasks.find((task) => task.id === 'private-contact-relays'),
     ).toMatchObject({ status: 'success' });
 
     const failingTracker = runtime.createStartupBatchTracker('private-message-events');
@@ -389,7 +396,7 @@ describe('nostr runtime core logic', () => {
     expect(
       runtime
         .getStartupStepSnapshot('private-message-events')
-        .internalTasks.find((task) => task.id === 'private-message-events')
+        .internalTasks.find((task) => task.id === 'private-message-events'),
     ).toMatchObject({
       status: 'error',
       errorMessage: 'boom',
@@ -415,8 +422,8 @@ describe('nostr runtime core logic', () => {
   });
 
   it('resolves auth identity from storage, NIP-07 presence, and signer state', async () => {
-    const privateKey = NDKPrivateKeySigner.generate().privateKey;
-    const expectedPubkey = new NDKPrivateKeySigner(privateKey).pubkey;
+    const privateKey = NostrPrivateKeySigner.generate().privateKey;
+    const expectedPubkey = new NostrPrivateKeySigner(privateKey).pubkey;
     const localStorage = createMockStorage({
       [AUTH_METHOD_STORAGE_KEY]: 'unexpected',
       [PUBLIC_KEY_STORAGE_KEY]: expectedPubkey.toUpperCase(),
@@ -425,7 +432,7 @@ describe('nostr runtime core logic', () => {
     const signer = {
       user: vi.fn(async () => signerUser),
     } as never;
-    const ndk = new NDK();
+    const ndk = new NostrClient();
 
     (globalThis as Record<string, unknown>).window = {
       localStorage: localStorage.api,
@@ -484,7 +491,7 @@ describe('nostr runtime core logic', () => {
         now: new Date('2026-01-01T00:00:00.000Z'),
         error: new Error('trace failed'),
         list: Array.from({ length: 35 }, (_, index) => index),
-      })
+      }),
     ).toMatchObject({
       now: '2026-01-01T00:00:00.000Z',
       error: {
@@ -492,7 +499,7 @@ describe('nostr runtime core logic', () => {
       },
     });
     expect(
-      runtime.shouldEchoDeveloperTraceToConsole('subscription:private-messages', 'start')
+      runtime.shouldEchoDeveloperTraceToConsole('subscription:private-messages', 'start'),
     ).toBe(true);
 
     runtime.logDeveloperTrace('info', 'subscription:private-messages', 'start', {
@@ -511,23 +518,19 @@ describe('nostr runtime core logic', () => {
       runtime.buildConsoleTracePrefixArgs('subscription:private-messages', 'req', {
         relayUrls: ['wss://relay.one', 'wss://relay.two'],
         reqStatement: ['REQ', 'private-messages-1', '{"kinds":[4],"limit":100}'],
-      })
+      }),
     ).toEqual([
       'relays=wss://relay.one, wss://relay.two',
       'reqStatement=["REQ","private-messages-1","{\\"kinds\\":[4],\\"limit\\":100}"]',
     ]);
     expect(developerTraceDataServiceMock.appendEntry).toHaveBeenCalledTimes(2);
     expect(developerTraceVersion.value).toBe(2);
-    expect(console.info).toHaveBeenCalledWith(
-      '[subscription:private-messages] req',
-      'relays=wss://relay.one, wss://relay.two',
-      'reqStatement=["REQ","private-messages-1","{\\"kinds\\":[4],\\"limit\\":100}"]',
-      expect.objectContaining({
-        relayUrls: ['wss://relay.one', 'wss://relay.two'],
-        reqStatement: ['REQ', 'private-messages-1', '{"kinds":[4],"limit":100}'],
-        subId: 'private-messages-1',
-      })
-    );
+    const consoleSnapshot = vi.mocked(console.info).mock.calls.at(-1)!;
+    expect(consoleSnapshot).toHaveLength(1);
+    expect(typeof consoleSnapshot[0]).toBe('string');
+    expect(consoleSnapshot[0]).toContain('[subscription:private-messages] req');
+    expect(consoleSnapshot[0]).toContain('relays=wss://relay.one, wss://relay.two');
+    expect(consoleSnapshot[0]).toContain('"subId":"private-messages-1"');
 
     runtime.setDeveloperDiagnosticsEnabled(false);
     await flushPromises();
@@ -542,7 +545,7 @@ describe('nostr runtime core logic', () => {
     const relay = {
       url: 'wss://relay.example/',
       connected: true,
-      status: NDKRelayStatus.CONNECTED,
+      status: NostrRelayStatus.CONNECTED,
       connectionStats: {
         attempts: 2,
         success: 1,
@@ -585,7 +588,7 @@ describe('nostr runtime core logic', () => {
       {
         relayCount: 1,
       },
-      'warn'
+      'warn',
     );
 
     expect(logDeveloperTrace).toHaveBeenNthCalledWith(
@@ -598,7 +601,7 @@ describe('nostr runtime core logic', () => {
         pool: {
           total: 1,
         },
-      })
+      }),
     );
     expect(logDeveloperTrace).toHaveBeenNthCalledWith(2, 'warn', 'message-relays', 'appended', {
       relayCount: 1,
@@ -623,7 +626,7 @@ describe('nostr runtime core logic', () => {
 
       constructor(
         public title: string,
-        public options: NotificationOptions
+        public options: NotificationOptions,
       ) {
         notifications.push(this);
       }
@@ -675,7 +678,7 @@ describe('nostr runtime core logic', () => {
         senderPubkeyHex: PUBKEY_B,
         relayUrls: ['wss://relay.example', ''],
         recipients: [PUBKEY_A, ''],
-      })
+      }),
     ).toMatchObject({
       wrappedKind: 1059,
       relayCount: 1,
@@ -690,21 +693,21 @@ describe('nostr runtime core logic', () => {
             name: 'Profile Name',
           },
         } as never,
-        PUBKEY_A
-      )
+        PUBKEY_A,
+      ),
     ).toBe('Display Name');
 
     expect(
-      await runtime.shouldNotifyForAcceptedChatOnly(PUBKEY_A, { inbox_state: 'blocked' })
+      await runtime.shouldNotifyForAcceptedChatOnly(PUBKEY_A, { inbox_state: 'blocked' }),
     ).toBe(false);
     expect(
       await runtime.shouldNotifyForAcceptedChatOnly(PUBKEY_A, {
         inbox_state: 'accepted',
         muted: true,
-      })
+      }),
     ).toBe(false);
     expect(await runtime.shouldNotifyForAcceptedChatOnly(PUBKEY_A, { accepted_at: 'now' })).toBe(
-      true
+      true,
     );
     chatDataServiceMock.listMessages.mockResolvedValue([
       {
@@ -750,7 +753,7 @@ describe('nostr runtime core logic', () => {
     notifications[0]?.onclick?.();
     expect(focus).toHaveBeenCalledTimes(1);
     expect(assign).toHaveBeenCalledWith(
-      `https://chat.example/app/#/chats/${encodeURIComponent(PUBKEY_B)}`
+      `https://chat.example/app/#/chats/${encodeURIComponent(PUBKEY_B)}`,
     );
   });
 });

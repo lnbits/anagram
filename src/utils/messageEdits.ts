@@ -1,4 +1,4 @@
-import type { EditedMessageMetadata } from 'src/types/chat';
+import type { EditedMessageMetadata } from '#src/types/chat.ts';
 
 export const MESSAGE_EDIT_MARKER = 'edit';
 

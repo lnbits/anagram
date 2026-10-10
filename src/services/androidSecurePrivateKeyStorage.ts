@@ -1,12 +1,12 @@
-import { SecureStorage } from '@aparajita/capacitor-secure-storage';
-import { Capacitor } from '@capacitor/core';
-import { NDKPrivateKeySigner } from '@nostr-dev-kit/ndk';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
+import { SecureStorage } from '#src/lib/platform/legacyNative.ts';
+import { Capacitor } from '#src/lib/platform/legacyNative.ts';
+import { NostrPrivateKeySigner } from '#src/lib/nostr/client.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
 import {
   AUTH_METHOD_STORAGE_KEY,
   PRIVATE_KEY_STORAGE_KEY,
   PUBLIC_KEY_STORAGE_KEY,
-} from 'src/stores/nostr/constants';
+} from '#src/stores/nostr/constants.ts';
 
 const ANDROID_SECURE_PRIVATE_KEY_STORAGE_KEY = 'nostr-chat:nsec';
 const ANDROID_MEMORY_ONLY_PRIVATE_KEY_SESSION_KEY = 'nostr-chat:android-memory-only-nsec-pubkey';
@@ -89,7 +89,7 @@ export function clearAndroidPrivateKeySessionMetadata(): void {
 
 function derivePublicKeyFromPrivateKeyHex(privateKeyHex: string): string | null {
   try {
-    return inputSanitizerService.normalizeHexKey(new NDKPrivateKeySigner(privateKeyHex).pubkey);
+    return inputSanitizerService.normalizeHexKey(new NostrPrivateKeySigner(privateKeyHex).pubkey);
   } catch {
     return null;
   }

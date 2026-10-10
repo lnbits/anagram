@@ -1,11 +1,18 @@
-import { NDKRelaySet, NDKRelayStatus } from '@nostr-dev-kit/ndk';
-import { RELAY_PUBLISH_TIMEOUT_MS } from 'src/stores/nostr/constants';
-import { createRelayPublishRuntime } from 'src/stores/nostr/relayPublishRuntime';
+import { contactsService } from '#src/services/contactsService.ts';
+import { NostrPrivateKeySigner, NostrRelaySet, NostrRelayStatus } from '#src/lib/nostr/client.ts';
+import { RELAY_PUBLISH_TIMEOUT_MS } from '#src/stores/nostr/constants.ts';
+import { createRelayPublishRuntime } from '#src/stores/nostr/relayPublishRuntime.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-function createRuntime(options: { blockReasonByRelayUrl?: Map<string, string> } = {}) {
+function createRuntime(
+  options: {
+    blockReasonByRelayUrl?: Map<string, string>;
+    overrides?: Partial<Parameters<typeof createRelayPublishRuntime>[0]>;
+  } = {},
+) {
   const ndk = {};
   const runtime = createRelayPublishRuntime({
+    prepareOutgoingPrivateMessage: vi.fn(async () => {}),
     appendRelayStatusesToMessageEvent: vi.fn(async () => {}),
     buildRelaySaveStatus: vi.fn(() => ({
       errorMessage: null,
@@ -29,6 +36,7 @@ function createRuntime(options: { blockReasonByRelayUrl?: Map<string, string> } 
     toStoredNostrEvent: vi.fn(async () => null),
     toUnixTimestamp: () => Math.floor(Date.now() / 1000),
     updateStoredEventSinceFromCreatedAt: vi.fn(),
+    ...options.overrides,
   });
 
   return {
@@ -42,27 +50,146 @@ describe('relayPublishRuntime', () => {
     vi.restoreAllMocks();
   });
 
+  it('orders rapid group profile updates after the restored profile timestamp', async () => {
+    const signer = NostrPrivateKeySigner.generate();
+    const restored = Math.floor(Date.now() / 1000) + 10;
+    vi.spyOn(contactsService, 'init').mockResolvedValue();
+    vi.spyOn(contactsService, 'getContactByPublicKey').mockResolvedValue({
+      id: 1,
+      public_key: signer.pubkey,
+      type: 'group',
+      name: 'Group',
+      given_name: null,
+      meta: {
+        owner_public_key: 'a'.repeat(64),
+        group_private_key_encrypted: 'encrypted',
+        profile_event_created_at: restored,
+        pinned: 'c'.repeat(64),
+        pinned_created_at: 100,
+      },
+      relays: [{ url: 'wss://group.example/', read: true, write: true }],
+      sendMessagesToAppRelays: false,
+    });
+    const published: number[] = [];
+    const profiles: Record<string, unknown>[] = [];
+    vi.spyOn(NostrRelaySet, 'fromRelayUrls').mockReturnValue({
+      relays: new Set([
+        {
+          status: NostrRelayStatus.CONNECTED,
+          url: 'wss://group.example/',
+          publish: async (event: { created_at: number; content: string }) => {
+            profiles.push(JSON.parse(event.content));
+            published.push(event.created_at);
+            return true;
+          },
+        },
+      ]),
+    } as never);
+    const { runtime } = createRuntime({
+      overrides: {
+        decryptGroupIdentitySecretContent: async () => ({
+          version: 1,
+          group_pubkey: signer.pubkey,
+          group_privkey: signer.privateKey,
+        }),
+        resolveGroupPublishRelayUrls: () => ['wss://group.example/'],
+      },
+    });
+    await runtime.publishGroupMetadata(signer.pubkey, { name: 'First' });
+    await runtime.publishGroupMetadata(signer.pubkey, { name: 'Second' });
+    expect(published).toEqual([restored + 1, restored + 2]);
+    expect(profiles[1]).toMatchObject({ pinned: 'c'.repeat(64), pinned_created_at: 100 });
+    await runtime.publishGroupMetadata(signer.pubkey, {
+      name: 'Third',
+      pinned: '',
+      pinned_created_at: 0,
+    });
+    expect(profiles[2].pinned).toBe('');
+  });
+
+  it('lets call controls proceed after one ack while still publishing to every relay', async () => {
+    const { runtime } = createRuntime();
+    let rejectSlow!: (error: Error) => void;
+    const fast = {
+      status: NostrRelayStatus.CONNECTED,
+      url: 'wss://fast.example/',
+      publish: vi.fn(async () => true),
+    };
+    const slow = {
+      status: NostrRelayStatus.CONNECTED,
+      url: 'wss://slow.example/',
+      publish: vi.fn(
+        () =>
+          new Promise<boolean>((_resolve, reject) => {
+            rejectSlow = reject;
+          }),
+      ),
+    };
+    vi.spyOn(NostrRelaySet, 'fromRelayUrls').mockReturnValue({
+      relays: new Set([fast, slow]),
+    } as never);
+    const result = await runtime.publishEventWithRelayStatuses(
+      { sig: 'signature' } as never,
+      [fast.url, slow.url],
+      'recipient',
+      true,
+    );
+    expect(fast.publish).toHaveBeenCalledOnce();
+    expect(slow.publish).toHaveBeenCalledOnce();
+    expect(result.error).toBeNull();
+    expect(result.relayStatuses).toEqual([
+      expect.objectContaining({ relay_url: fast.url, status: 'published' }),
+      expect.objectContaining({ relay_url: slow.url, status: 'pending' }),
+    ]);
+    rejectSlow(new Error('Late failure'));
+    await Promise.resolve();
+    expect(result.error).toBeNull();
+  });
+
+  it('still requires an acknowledgement for call controls when all relays reject', async () => {
+    const { runtime } = createRuntime();
+    vi.spyOn(NostrRelaySet, 'fromRelayUrls').mockReturnValue({
+      relays: new Set([
+        {
+          status: NostrRelayStatus.CONNECTED,
+          url: 'wss://no.example/',
+          publish: async () => {
+            throw new Error('rejected');
+          },
+        },
+      ]),
+    } as never);
+    const result = await runtime.publishEventWithRelayStatuses(
+      { sig: 'signature' } as never,
+      ['wss://no.example/'],
+      'recipient',
+      true,
+    );
+    expect(result.error).toBeInstanceOf(Error);
+    expect(result.relayStatuses[0].status).toBe('failed');
+  });
+
   it('waits for every connected relay to settle before finalizing publish statuses', async () => {
     const { runtime } = createRuntime();
     let acknowledgeSlowRelay: (success: boolean) => void = () => {
       throw new Error('Slow relay publish was not initialized.');
     };
     const fastRelay = {
-      status: NDKRelayStatus.CONNECTED,
+      status: NostrRelayStatus.CONNECTED,
       url: 'wss://fast.example/',
       publish: vi.fn(async () => true),
     };
     const slowRelay = {
-      status: NDKRelayStatus.CONNECTED,
+      status: NostrRelayStatus.CONNECTED,
       url: 'wss://slow.example/',
       publish: vi.fn(
         () =>
           new Promise<boolean>((resolve) => {
             acknowledgeSlowRelay = resolve;
-          })
+          }),
       ),
     };
-    vi.spyOn(NDKRelaySet, 'fromRelayUrls').mockReturnValue({
+    vi.spyOn(NostrRelaySet, 'fromRelayUrls').mockReturnValue({
       relays: new Set([fastRelay, slowRelay]),
     } as never);
 
@@ -75,7 +202,7 @@ describe('relayPublishRuntime', () => {
           sign: vi.fn(),
         } as never,
         ['wss://fast.example/', 'wss://slow.example/'],
-        'recipient'
+        'recipient',
       )
       .finally(() => {
         publishSettled = true;
@@ -101,26 +228,26 @@ describe('relayPublishRuntime', () => {
           relay_url: 'wss://slow.example/',
           status: 'published',
         }),
-      ])
+      ]),
     );
   });
 
   it('records another relay failure after the first relay acknowledges publish', async () => {
     const { runtime } = createRuntime();
     const fastRelay = {
-      status: NDKRelayStatus.CONNECTED,
+      status: NostrRelayStatus.CONNECTED,
       url: 'wss://fast.example/',
       publish: vi.fn(async () => true),
     };
     const rejectingRelay = {
-      status: NDKRelayStatus.CONNECTED,
+      status: NostrRelayStatus.CONNECTED,
       url: 'wss://rejecting.example/',
       publish: vi.fn(async () => {
         await Promise.resolve();
         throw new Error('Relay rejected the event.');
       }),
     };
-    vi.spyOn(NDKRelaySet, 'fromRelayUrls').mockReturnValue({
+    vi.spyOn(NostrRelaySet, 'fromRelayUrls').mockReturnValue({
       relays: new Set([fastRelay, rejectingRelay]),
     } as never);
 
@@ -131,7 +258,7 @@ describe('relayPublishRuntime', () => {
         sign: vi.fn(),
       } as never,
       ['wss://fast.example/', 'wss://rejecting.example/'],
-      'recipient'
+      'recipient',
     );
 
     expect(result.error).toBeNull();
@@ -146,23 +273,23 @@ describe('relayPublishRuntime', () => {
           relay_url: 'wss://rejecting.example/',
           status: 'failed',
         }),
-      ])
+      ]),
     );
   });
 
   it('accepts a delayed relay acknowledgement before the publish deadline', async () => {
     const { runtime } = createRuntime();
     const delayedRelay = {
-      status: NDKRelayStatus.CONNECTED,
+      status: NostrRelayStatus.CONNECTED,
       url: 'wss://delayed.example/',
       publish: vi.fn(
         () =>
           new Promise<boolean>((resolve) => {
             globalThis.setTimeout(() => resolve(true), 40);
-          })
+          }),
       ),
     };
-    vi.spyOn(NDKRelaySet, 'fromRelayUrls').mockReturnValue({
+    vi.spyOn(NostrRelaySet, 'fromRelayUrls').mockReturnValue({
       relays: new Set([delayedRelay]),
     } as never);
 
@@ -173,7 +300,7 @@ describe('relayPublishRuntime', () => {
         sign: vi.fn(),
       } as never,
       ['wss://delayed.example/'],
-      'recipient'
+      'recipient',
     );
 
     expect(result.error).toBeNull();
@@ -188,11 +315,11 @@ describe('relayPublishRuntime', () => {
   it('times out hung relays instead of blocking the publish path', async () => {
     const { runtime } = createRuntime();
     const slowRelay = {
-      status: NDKRelayStatus.CONNECTED,
+      status: NostrRelayStatus.CONNECTED,
       url: 'wss://slow.example/',
       publish: vi.fn(() => new Promise<boolean>(() => {})),
     };
-    vi.spyOn(NDKRelaySet, 'fromRelayUrls').mockReturnValue({
+    vi.spyOn(NostrRelaySet, 'fromRelayUrls').mockReturnValue({
       relays: new Set([slowRelay]),
     } as never);
 
@@ -204,7 +331,7 @@ describe('relayPublishRuntime', () => {
         sign: vi.fn(),
       } as never,
       ['wss://slow.example/'],
-      'self'
+      'self',
     );
     const elapsedMs = Date.now() - startedAt;
 
@@ -223,11 +350,11 @@ describe('relayPublishRuntime', () => {
   it('does not let publishing initiate a connection to a disconnected relay', async () => {
     const { runtime } = createRuntime();
     const disconnectedRelay = {
-      status: NDKRelayStatus.DISCONNECTED,
+      status: NostrRelayStatus.DISCONNECTED,
       url: 'wss://disconnected.example/',
       publish: vi.fn(async () => true),
     };
-    vi.spyOn(NDKRelaySet, 'fromRelayUrls').mockReturnValue({
+    vi.spyOn(NostrRelaySet, 'fromRelayUrls').mockReturnValue({
       relays: new Set([disconnectedRelay]),
     } as never);
 
@@ -238,7 +365,7 @@ describe('relayPublishRuntime', () => {
         sign: vi.fn(),
       } as never,
       [disconnectedRelay.url],
-      'recipient'
+      'recipient',
     );
 
     expect(disconnectedRelay.publish).not.toHaveBeenCalled();
@@ -259,11 +386,11 @@ describe('relayPublishRuntime', () => {
       blockReasonByRelayUrl: new Map([[relayUrl, blockReason]]),
     });
     const cooledRelay = {
-      status: NDKRelayStatus.DISCONNECTED,
+      status: NostrRelayStatus.DISCONNECTED,
       url: relayUrl,
       publish: vi.fn(async () => true),
     };
-    const relaySetSpy = vi.spyOn(NDKRelaySet, 'fromRelayUrls').mockReturnValue({
+    const relaySetSpy = vi.spyOn(NostrRelaySet, 'fromRelayUrls').mockReturnValue({
       relays: new Set(),
     } as never);
 
@@ -275,7 +402,7 @@ describe('relayPublishRuntime', () => {
         sign: vi.fn(),
       } as never,
       [relayUrl],
-      'recipient'
+      'recipient',
     );
 
     expect(Date.now() - startedAt).toBeLessThan(100);

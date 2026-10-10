@@ -1,0 +1,577 @@
+@font-face {
+  font-family: 'Manrope';
+  src: url('/fonts/Manrope-latin-variable.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Space Grotesk';
+  src: url('/fonts/SpaceGrotesk-latin-variable.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 600 700;
+  font-display: swap;
+}
+
+:root {
+  --q-primary: #4fa9e6;
+  --q-secondary: #8c99a6;
+  --q-negative: #ef6b73;
+  --nc-bg: #ffffff;
+  --nc-panel-opacity: 100;
+  --nc-panel-alpha: 1;
+  --nc-panel-sidebar-bg: #f7f7f7;
+  --nc-panel-rail-bg: #f7f7f7;
+  --nc-panel-thread-bg: #ffffff;
+  --nc-panel-header-bg: #ffffff;
+  --nc-app-background: #ffffff;
+  --nc-app-background-mobile: #ffffff;
+  --nc-sidebar: #f7f7f7;
+  --nc-thread-bg: #ffffff;
+  --nc-sent: #dfefff;
+  --nc-received: #f4f6f8;
+  --nc-border: #e5eaef;
+  --nc-rail: #f7f7f7;
+  --nc-shadow-sm: none;
+  --nc-shadow-md: 0 16px 40px rgba(23, 35, 52, 0.12);
+  --nc-title-font:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    'Manrope',
+    sans-serif;
+  --nc-mobile-font:
+    -apple-system,
+    BlinkMacSystemFont,
+    'SF Pro Text',
+    'SF UI Text',
+    Roboto,
+    'Segoe UI',
+    system-ui,
+    sans-serif;
+  --nc-mobile-message-font-size: 16px;
+  --nc-mobile-message-line-height: 20px;
+  --nc-mobile-ui-font-size: 16px;
+  --nc-mobile-ui-line-height: 20px;
+  --nc-mobile-caption-font-size: 13px;
+  --nc-mobile-caption-line-height: 17px;
+  --nc-mobile-small-font-size: 12px;
+  --nc-mobile-small-line-height: 15px;
+  --nc-mobile-header-title-font-size: 20px;
+  --nc-mobile-header-title-line-height: 24px;
+  --nc-mobile-header-subtitle-font-size: 14px;
+  --nc-mobile-header-subtitle-line-height: 18px;
+  --nc-visual-viewport-height: 100vh;
+  --nc-visual-viewport-offset-top: 0px;
+  --nc-mobile-keyboard-inset: 0px;
+  --nc-btn-radius: 12px;
+  --nc-btn-soft-bg: transparent;
+  --nc-btn-soft-border: transparent;
+  --nc-btn-soft-shadow: none;
+  --nc-btn-soft-hover-bg: rgba(31, 45, 61, 0.04);
+  --nc-btn-solid-shadow: none;
+  --nc-btn-round-bg: rgba(31, 45, 61, 0.04);
+  --nc-btn-round-border: rgba(31, 45, 61, 0.08);
+  --nc-reaction-accent-bg: rgba(79, 169, 230, 0.12);
+  --nc-reaction-accent-bg-hover: rgba(79, 169, 230, 0.18);
+  --nc-reaction-accent-border: rgba(79, 169, 230, 0.26);
+  --nc-reaction-accent-shadow: none;
+  --nc-reaction-accent-shadow-soft: none;
+  --nc-reaction-accent-shadow-hover: none;
+  --nc-reaction-accent-text: #3377ae;
+  --nc-reaction-accent-icon-bg: #4fa9e6;
+  --nc-reaction-accent-icon-shadow: none;
+  --nc-glass-blur: 0px;
+  --nc-glass-blur-soft: 0px;
+  --nc-glass-blur-overlay: 0px;
+  --nc-glass-blur-strong: 0px;
+  --nc-danger: #b42332;
+  --nc-success: #15803d;
+  --nc-text: #1f2d3d;
+  --nc-text-secondary: #8f99a5;
+  --nc-muted: #9aa5b1;
+  --nc-search-bg: #eef1f4;
+  --nc-hover: #edf1f5;
+  --nc-active: #5a9bd5;
+  --nc-menu-bg: #ffffff;
+  --nc-surface-soft: rgba(31, 45, 61, 0.025);
+  --nc-surface-soft-strong: rgba(31, 45, 61, 0.05);
+  --nc-sticky-bg: rgba(247, 247, 247, 0.96);
+  --nc-overlay: rgba(255, 255, 255, 0.62);
+  --nc-chip-hover-bg: rgba(79, 169, 230, 0.12);
+  --nc-active-text: #ffffff;
+  --nc-active-subtext: rgba(255, 255, 255, 0.88);
+}
+
+body.body--dark {
+  color-scheme: dark;
+  --q-primary: #64b5f6;
+  --nc-bg: #0d141b;
+  --nc-panel-sidebar-bg: #17212b;
+  --nc-panel-rail-bg: #17212b;
+  --nc-panel-thread-bg: #0e1621;
+  --nc-panel-header-bg: #17212b;
+  --nc-app-background: #0d141b;
+  --nc-app-background-mobile: #0d141b;
+  --nc-sidebar: #17212b;
+  --nc-thread-bg: #0e1621;
+  --nc-sent: #2b5278;
+  --nc-received: #182533;
+  --nc-border: #22303d;
+  --nc-rail: #17212b;
+  --nc-shadow-sm: none;
+  --nc-shadow-md: 0 16px 42px rgba(0, 0, 0, 0.42);
+  --nc-btn-soft-bg: transparent;
+  --nc-btn-soft-border: transparent;
+  --nc-btn-soft-shadow: none;
+  --nc-btn-soft-hover-bg: rgba(255, 255, 255, 0.07);
+  --nc-btn-solid-shadow: none;
+  --nc-btn-round-bg: rgba(255, 255, 255, 0.08);
+  --nc-btn-round-border: rgba(255, 255, 255, 0.1);
+  --nc-reaction-accent-bg: rgba(100, 181, 246, 0.2);
+  --nc-reaction-accent-bg-hover: rgba(100, 181, 246, 0.28);
+  --nc-reaction-accent-border: rgba(100, 181, 246, 0.34);
+  --nc-reaction-accent-text: #d8eeff;
+  --nc-reaction-accent-icon-bg: #64b5f6;
+  --nc-danger: #ff8992;
+  --nc-success: #4ade80;
+  --nc-text: #edf3f9;
+  --nc-text-secondary: #a6b8ca;
+  --nc-muted: #8799ac;
+  --nc-search-bg: #242f3d;
+  --nc-hover: #1e2a36;
+  --nc-active: #2b5278;
+  --nc-menu-bg: #17212b;
+  --nc-surface-soft: rgba(255, 255, 255, 0.02);
+  --nc-surface-soft-strong: rgba(255, 255, 255, 0.04);
+  --nc-sticky-bg: rgba(36, 47, 61, 0.92);
+  --nc-overlay: rgba(14, 22, 33, 0.45);
+  --nc-chip-hover-bg: rgba(100, 181, 246, 0.18);
+  --nc-active-text: #ffffff;
+  --nc-active-subtext: #dcecff;
+}
+
+/* Optional accents only. The original light/dark rules above remain the default. */
+body[data-accent] {
+  --q-primary: var(--theme-accent-light);
+  --nc-sent: color-mix(in srgb, var(--q-primary) 14%, white);
+  --nc-active: var(--theme-accent-light);
+  --nc-active-group-icon: color-mix(in srgb, var(--q-primary) 80%, white);
+  --nc-chip-hover-bg: color-mix(in srgb, var(--q-primary) 12%, transparent);
+  --nc-reaction-accent-bg: color-mix(in srgb, var(--q-primary) 12%, transparent);
+  --nc-reaction-accent-bg-hover: color-mix(in srgb, var(--q-primary) 18%, transparent);
+  --nc-reaction-accent-border: color-mix(in srgb, var(--q-primary) 26%, transparent);
+  --nc-reaction-accent-text: var(--q-primary);
+  --nc-reaction-accent-icon-bg: var(--q-primary);
+}
+body.body--dark[data-accent] {
+  --q-primary: var(--theme-accent-dark);
+  --nc-sent: color-mix(in srgb, var(--q-primary) 35%, var(--nc-thread-bg));
+  --nc-active: var(--nc-sent);
+  --nc-active-subtext: color-mix(in srgb, var(--q-primary) 15%, white);
+  --nc-chip-hover-bg: color-mix(in srgb, var(--q-primary) 18%, transparent);
+  --nc-reaction-accent-bg: color-mix(in srgb, var(--q-primary) 20%, transparent);
+  --nc-reaction-accent-bg-hover: color-mix(in srgb, var(--q-primary) 28%, transparent);
+  --nc-reaction-accent-border: color-mix(in srgb, var(--q-primary) 34%, transparent);
+}
+
+body.body--dark .q-btn.q-btn--flat.q-btn--round:not(.text-negative):not(.text-positive):not(.text-warning):not(.text-info),
+body.body--dark .q-btn.q-btn--outline.q-btn--round:not(.text-negative):not(.text-positive):not(.text-warning):not(.text-info) {
+  color: var(--nc-text-secondary) !important;
+}
+
+.auth-entry-page {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background:
+    radial-gradient(
+      ellipse 78% 48% at 50% 100%,
+      rgba(239, 252, 255, 0.98) 0%,
+      rgba(188, 238, 250, 0.92) 14%,
+      rgba(110, 210, 243, 0.78) 30%,
+      rgba(43, 151, 217, 0.42) 52%,
+      rgba(25, 112, 189, 0.08) 72%,
+      rgba(25, 112, 189, 0) 86%
+    ),
+    radial-gradient(
+      ellipse 42% 30% at 50% 56%,
+      rgba(76, 182, 255, 0.52) 0%,
+      rgba(76, 182, 255, 0.24) 28%,
+      rgba(76, 182, 255, 0) 62%
+    ),
+    linear-gradient(180deg, #4443a0 0%, #4052a6 26%, #3568b0 52%, #267fbe 74%, #65cde8 100%);
+}
+
+.auth-entry-page::before {
+  content: '';
+  position: absolute;
+  inset: -18%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      ellipse 40% 26% at 50% 70%,
+      rgba(58, 211, 255, 0.42) 0%,
+      rgba(58, 211, 255, 0.16) 42%,
+      rgba(58, 211, 255, 0) 72%
+    ),
+    radial-gradient(
+      ellipse 52% 34% at 50% 98%,
+      rgba(255, 255, 255, 0.24) 0%,
+      rgba(255, 255, 255, 0.08) 36%,
+      rgba(255, 255, 255, 0) 68%
+    );
+  filter: blur(46px);
+}
+
+body {
+  color-scheme: light;
+  font-family: var(--nc-title-font);
+  color: var(--nc-text);
+  letter-spacing: 0;
+  background: var(--nc-app-background);
+  background-attachment: scroll;
+}
+
+@media (--nc-mobile-viewport) {
+  body {
+    font-family: var(--nc-mobile-font);
+    background: var(--nc-app-background-mobile);
+    background-attachment: scroll;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .nc-input.q-field--dense .q-field__native,
+  .nc-input.q-field--dense .q-field__input {
+    font-family: var(--nc-mobile-font);
+    font-size: var(--nc-mobile-ui-font-size);
+    font-weight: 400;
+    line-height: var(--nc-mobile-ui-line-height) !important;
+    letter-spacing: 0;
+  }
+
+  .nc-input.q-field--dense .q-field__native::placeholder,
+  .nc-input.q-field--dense .q-field__input::placeholder {
+    font-size: var(--nc-mobile-ui-font-size);
+    font-weight: 400;
+  }
+}
+
+body.body--dark {
+  color: var(--nc-text);
+}
+
+body.native-mobile.mobile {
+  --nc-native-app-safe-area-top: max(env(safe-area-inset-top), 24px);
+}
+
+body.native-mobile.mobile.platform-ios {
+  --nc-native-app-safe-area-top: max(env(safe-area-inset-top), 30px);
+}
+
+body.native-mobile.mobile .sidebar-top,
+body.native-mobile.mobile .contacts-sidebar__top,
+body.native-mobile.mobile .settings-sidebar__top,
+body.native-mobile.mobile .settings-detail-layout__header {
+  padding-top: calc(var(--nc-native-app-safe-area-top) + 12px);
+}
+
+body.native-mobile.mobile .thread-header {
+  padding-top: calc(var(--nc-native-app-safe-area-top) + 8px);
+}
+
+body.native-mobile.mobile .contacts-detail-mobile-header {
+  padding-top: calc(var(--nc-native-app-safe-area-top) + 10px);
+}
+
+body.native-mobile.mobile .home-shell__sync-status {
+  top: calc(var(--nc-native-app-safe-area-top) + 12px);
+}
+
+body.native-mobile.mobile .thread-more--top {
+  top: calc(var(--nc-native-app-safe-area-top) + 44px);
+}
+
+body.native-mobile.mobile.platform-android.nc-native-keyboard-visible {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: var(--nc-visual-viewport-height);
+  min-height: var(--nc-visual-viewport-height);
+  max-height: var(--nc-visual-viewport-height);
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body.native-mobile.mobile.platform-android.nc-native-keyboard-visible #q-app,
+body.native-mobile.mobile.platform-android.nc-native-keyboard-visible .q-layout,
+body.native-mobile.mobile.platform-android.nc-native-keyboard-visible .q-page-container {
+  height: var(--nc-visual-viewport-height) !important;
+  min-height: var(--nc-visual-viewport-height) !important;
+  max-height: var(--nc-visual-viewport-height) !important;
+  overflow: hidden;
+}
+
+body.native-mobile.mobile.nc-native-keyboard-visible .q-dialog__inner {
+  padding-bottom: var(--nc-mobile-keyboard-inset) !important;
+}
+
+body.native-mobile.mobile.nc-native-keyboard-visible .app-dialog {
+  max-height: calc(var(--nc-visual-viewport-height) - var(--nc-native-app-safe-area-top) - 12px);
+}
+
+body.native-mobile.mobile.nc-native-keyboard-visible .app-dialog__body {
+  overflow-y: auto;
+}
+
+/* Shared by dialogs, text fields, lists and message history. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #526171 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #526171;
+  border-radius: 8px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #718092;
+}
+
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+::selection {
+  background: rgba(46, 129, 255, 0.25);
+}
+
+.sidebar-top__title,
+.contacts-sidebar__title,
+.settings-sidebar__title,
+.settings-detail-layout__title {
+  font-family: var(--nc-title-font);
+  letter-spacing: 0.02em;
+  color: var(--nc-text);
+}
+
+body.body--dark .text-grey-5 {
+  color: var(--nc-muted) !important;
+}
+
+body.body--dark .text-grey-6,
+body.body--dark .text-grey-7,
+body.body--dark .text-grey-8,
+body.body--dark .text-grey-9 {
+  color: var(--nc-text-secondary) !important;
+}
+
+.nc-input .q-field__control {
+  border-radius: 12px !important;
+  background: var(--nc-search-bg);
+  box-shadow: none;
+  color: inherit;
+}
+
+.nc-input.q-field--outlined .q-field__control::before {
+  border-color: transparent;
+}
+
+.nc-input.q-field--focused .q-field__control::before,
+.nc-input.q-field--focused .q-field__control::after {
+  border-color: var(--q-primary);
+}
+
+.nc-input.q-field--focused .q-field__control {
+  box-shadow: 0 0 0 1px rgba(100, 181, 246, 0.28);
+}
+
+.nc-input .q-field__native,
+.nc-input .q-field__input,
+.nc-input .q-field__prepend,
+.nc-input .q-field__append,
+.nc-input .q-field__suffix {
+  color: inherit;
+}
+
+.nc-input .q-field__label {
+  color: var(--nc-text-secondary);
+}
+
+.q-btn {
+  font-weight: 600;
+  letter-spacing: 0;
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.q-btn .q-btn__content {
+  gap: 6px;
+  font-weight: inherit;
+}
+
+.q-btn:not(.q-btn--round):not(.q-btn--fab):not(.q-btn--fab-mini) {
+  border-radius: var(--nc-btn-radius);
+}
+
+.q-btn.q-btn--flat:not(.q-btn--round):not(.q-btn--fab):not(.q-btn--fab-mini),
+.q-btn.q-btn--outline:not(.q-btn--round):not(.q-btn--fab):not(.q-btn--fab-mini) {
+  background: var(--nc-btn-soft-bg);
+  box-shadow: var(--nc-btn-soft-shadow);
+}
+
+.q-btn.q-btn--flat:not(.q-btn--round):not(.q-btn--fab):not(.q-btn--fab-mini)::before,
+.q-btn.q-btn--outline:not(.q-btn--round):not(.q-btn--fab):not(.q-btn--fab-mini)::before {
+  border-color: var(--nc-btn-soft-border);
+}
+
+.q-btn.q-btn--unelevated:not(.q-btn--round):not(.q-btn--fab):not(.q-btn--fab-mini),
+.q-btn:not(.q-btn--flat):not(.q-btn--outline):not(.q-btn--round):not(.q-btn--fab):not(.q-btn--fab-mini) {
+  box-shadow: var(--nc-btn-solid-shadow);
+}
+
+.q-btn.q-btn--flat.q-btn--round,
+.q-btn.q-btn--outline.q-btn--round,
+.q-btn.q-btn--unelevated.q-btn--round {
+  background: transparent;
+  box-shadow: none;
+}
+
+.q-btn.q-btn--flat.q-btn--round::before,
+.q-btn.q-btn--outline.q-btn--round::before,
+.q-btn.q-btn--unelevated.q-btn--round::before {
+  border-color: transparent;
+}
+
+.q-btn:not(.q-btn--disabled):hover {
+  transform: none;
+}
+
+.q-btn.q-btn--flat:not(.q-btn--disabled):hover,
+.q-btn.q-btn--outline:not(.q-btn--disabled):hover {
+  background: var(--nc-btn-soft-hover-bg);
+}
+
+.q-btn.q-btn--round:not(.q-btn--disabled):hover {
+  background: transparent;
+  box-shadow: none;
+}
+
+.q-btn.q-btn--disabled,
+.q-btn:disabled {
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.app-shell__resize-handle {
+  position: relative;
+  width: 0;
+  min-width: 0;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+  overflow: visible;
+  z-index: 2;
+}
+
+.app-shell__resize-handle::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 10px;
+  background: transparent;
+  transform: translateX(-50%);
+  cursor: col-resize;
+}
+
+.app-shell__resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: var(--nc-border);
+  transform: translateX(-50%);
+  transition: background-color 0.18s ease, width 0.18s ease;
+  pointer-events: none;
+}
+
+.app-shell__resize-handle:hover::after,
+.app-shell__resize-handle:focus-visible::after {
+  width: 2px;
+  background: var(--q-primary);
+}
+
+.nc-pop-menu {
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--nc-border);
+  background: var(--nc-menu-bg);
+  background-image: none;
+  box-shadow: var(--nc-shadow-md);
+  backdrop-filter: none;
+}
+
+.nc-pop-menu__list {
+  min-width: 188px;
+  padding: 6px;
+}
+
+.nc-pop-menu__list .q-item {
+  border-radius: 8px;
+  min-height: 36px;
+  color: var(--nc-text);
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+
+.nc-pop-menu__list .q-item:hover {
+  transform: none;
+  background: var(--nc-hover);
+  color: var(--nc-text);
+}
+
+body.body--dark .nc-pop-menu {
+  border-color: var(--nc-border);
+  background: var(--nc-menu-bg);
+  background-image: none;
+  box-shadow: var(--nc-shadow-md);
+}
+
+body.body--dark .nc-pop-menu__list .q-item {
+  color: var(--nc-text);
+}
+
+body.body--dark .nc-pop-menu__list .q-item:hover {
+  color: var(--nc-text);
+  background: var(--nc-hover);
+}
+
+@media (--nc-mobile-viewport) {
+  .app-shell__resize-handle {
+    display: none;
+  }
+}

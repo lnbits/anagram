@@ -1,14 +1,19 @@
+import { normalizeChatGroupEpochKeysValue } from '#src/utils/groupEpochMetadata.ts';
+export { normalizeChatGroupEpochKeysValue } from '#src/utils/groupEpochMetadata.ts';
 import {
-  type NDKRelayList,
-  type NDKUserProfile,
+  type NostrRelayList,
+  type NostrUserProfile,
   nip19,
   normalizeRelayUrl,
-} from '@nostr-dev-kit/ndk';
-import type { ChatRow } from 'src/services/chatDataService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import type { ContactProfileEventState, ContactRelayListEventState } from 'src/stores/nostr/types';
-import type { ChatGroupEpochKey } from 'src/types/chat';
-import type { ContactMetadata, ContactRecord, ContactRelay } from 'src/types/contact';
+} from '#src/lib/nostr/client.ts';
+import type { ChatRow } from '#src/services/chatDataService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import type {
+  ContactProfileEventState,
+  ContactRelayListEventState,
+} from '#src/stores/nostr/types.ts';
+import type { ChatGroupEpochKey } from '#src/types/chat.ts';
+import type { ContactMetadata, ContactRecord, ContactRelay } from '#src/types/contact.ts';
 
 const GROUP_EPOCH_KEYS_CHAT_META_KEY = 'group_epoch_keys';
 const GROUP_CURRENT_EPOCH_PUBLIC_KEY_CHAT_META_KEY = 'current_epoch_public_key';
@@ -70,7 +75,7 @@ function normalizeOptionalUnixSecondsValue(value: number | null | undefined): nu
 export function resolvePrivateMessagesLiveReconnectSinceValue(input: {
   liveCoverageAt: number | null | undefined;
   lastEventTime: number | null | undefined;
-  startupFloorSince: number;
+  initialLiveSince: number;
   lookbackSeconds: number;
 }): number {
   const normalizedLookbackSeconds =
@@ -87,75 +92,26 @@ export function resolvePrivateMessagesLiveReconnectSinceValue(input: {
     return Math.max(0, lastEventTime - normalizedLookbackSeconds);
   }
 
-  return normalizeOptionalUnixSecondsValue(input.startupFloorSince) ?? 0;
-}
-
-export function normalizeChatGroupEpochKeysValue(value: unknown): ChatGroupEpochKey[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  const entriesByEpoch = new Map<number, ChatGroupEpochKey>();
-  for (const entry of value) {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      continue;
-    }
-
-    const epochNumber = Number('epoch_number' in entry ? entry.epoch_number : Number.NaN);
-    const epochPublicKey = inputSanitizerService.normalizeHexKey(
-      'epoch_public_key' in entry && typeof entry.epoch_public_key === 'string'
-        ? entry.epoch_public_key
-        : ''
-    );
-    const epochPrivateKeyEncrypted =
-      'epoch_private_key_encrypted' in entry &&
-      typeof entry.epoch_private_key_encrypted === 'string'
-        ? entry.epoch_private_key_encrypted.trim()
-        : '';
-
-    if (
-      !Number.isInteger(epochNumber) ||
-      epochNumber < 0 ||
-      !epochPublicKey ||
-      !epochPrivateKeyEncrypted
-    ) {
-      continue;
-    }
-
-    entriesByEpoch.set(Math.floor(epochNumber), {
-      epoch_number: Math.floor(epochNumber),
-      epoch_public_key: epochPublicKey,
-      epoch_private_key_encrypted: epochPrivateKeyEncrypted,
-      ...('invitation_created_at' in entry &&
-      typeof entry.invitation_created_at === 'string' &&
-      entry.invitation_created_at.trim()
-        ? { invitation_created_at: entry.invitation_created_at.trim() }
-        : {}),
-    });
-  }
-
-  return Array.from(entriesByEpoch.values()).sort(
-    (first, second) => second.epoch_number - first.epoch_number
-  );
+  return normalizeOptionalUnixSecondsValue(input.initialLiveSince) ?? 0;
 }
 
 export function resolveGroupChatEpochEntriesValue(
-  chat: Pick<ChatRow, 'meta' | 'type'>
+  chat: Pick<ChatRow, 'meta' | 'type'>,
 ): ChatGroupEpochKey[] {
   if (chat.type !== 'group') {
     return [];
   }
 
-  const entriesByEpoch = new Map<number, ChatGroupEpochKey>(
+  const entriesByEpoch = new Map<string, ChatGroupEpochKey>(
     normalizeChatGroupEpochKeysValue(chat.meta?.[GROUP_EPOCH_KEYS_CHAT_META_KEY]).map((entry) => [
-      entry.epoch_number,
+      `${entry.epoch_number}:${entry.epoch_public_key}`,
       entry,
-    ])
+    ]),
   );
   const currentEpochPublicKey = inputSanitizerService.normalizeHexKey(
     typeof chat.meta?.[GROUP_CURRENT_EPOCH_PUBLIC_KEY_CHAT_META_KEY] === 'string'
       ? String(chat.meta[GROUP_CURRENT_EPOCH_PUBLIC_KEY_CHAT_META_KEY])
-      : ''
+      : '',
   );
   const currentEpochPrivateKeyEncrypted =
     typeof chat.meta?.[GROUP_CURRENT_EPOCH_PRIVATE_KEY_ENCRYPTED_CHAT_META_KEY] === 'string'
@@ -166,14 +122,14 @@ export function resolveGroupChatEpochEntriesValue(
     currentEpochPublicKey &&
     currentEpochPrivateKeyEncrypted &&
     !Array.from(entriesByEpoch.values()).some(
-      (entry) => entry.epoch_public_key === currentEpochPublicKey
+      (entry) => entry.epoch_public_key === currentEpochPublicKey,
     )
   ) {
     const fallbackEpochNumber = Math.max(
       0,
-      ...Array.from(entriesByEpoch.values(), (entry) => entry.epoch_number)
+      ...Array.from(entriesByEpoch.values(), (entry) => entry.epoch_number),
     );
-    entriesByEpoch.set(fallbackEpochNumber, {
+    entriesByEpoch.set(`${fallbackEpochNumber}:${currentEpochPublicKey}`, {
       epoch_number: fallbackEpochNumber,
       epoch_public_key: currentEpochPublicKey,
       epoch_private_key_encrypted: currentEpochPrivateKeyEncrypted,
@@ -181,22 +137,23 @@ export function resolveGroupChatEpochEntriesValue(
   }
 
   return Array.from(entriesByEpoch.values()).sort(
-    (first, second) => second.epoch_number - first.epoch_number
+    (first, second) => second.epoch_number - first.epoch_number,
   );
 }
 
 export function resolveCurrentGroupChatEpochEntryValue(
-  chat: Pick<ChatRow, 'meta' | 'type'>
+  chat: Pick<ChatRow, 'meta' | 'type'>,
 ): ChatGroupEpochKey | null {
   const epochEntries = resolveGroupChatEpochEntriesValue(chat);
-  if (epochEntries.length === 0) {
+  if (epochEntries.length === 0 || Number(chat.meta?.group_conflicting_epoch ?? -1) >= epochEntries[0].epoch_number ||
+      epochEntries.filter((e) => e.epoch_number === epochEntries[0].epoch_number).length > 1) {
     return null;
   }
 
   const currentEpochPublicKey = inputSanitizerService.normalizeHexKey(
     typeof chat.meta?.[GROUP_CURRENT_EPOCH_PUBLIC_KEY_CHAT_META_KEY] === 'string'
       ? String(chat.meta[GROUP_CURRENT_EPOCH_PUBLIC_KEY_CHAT_META_KEY])
-      : ''
+      : '',
   );
   if (!currentEpochPublicKey) {
     return epochEntries[0] ?? null;
@@ -212,7 +169,7 @@ export function resolveCurrentGroupChatEpochEntryValue(
 export function findHigherKnownGroupEpochConflictValue(
   chat: Pick<ChatRow, 'meta' | 'type'> | null | undefined,
   incomingEpochNumber: number,
-  incomingCreatedAt: string | null = null
+  incomingCreatedAt: string | null = null,
 ): {
   higherEpochEntry: ChatGroupEpochKey;
   olderHigherEpochEntry: ChatGroupEpochKey | null;
@@ -232,14 +189,16 @@ export function findHigherKnownGroupEpochConflictValue(
   const olderHigherEpochEntry =
     incomingCreatedAtUnix === null
       ? (higherEpochEntries.find(
-          (entry) => parseOptionalUnixTimestampValue(entry.invitation_created_at) !== null
+          (entry) => parseOptionalUnixTimestampValue(entry.invitation_created_at) !== null,
         ) ?? null)
       : (higherEpochEntries.find((entry) => {
           const higherEpochCreatedAtUnix = parseOptionalUnixTimestampValue(
-            entry.invitation_created_at
+            entry.invitation_created_at,
           );
           return (
-            higherEpochCreatedAtUnix !== null && higherEpochCreatedAtUnix <= incomingCreatedAtUnix
+            // Nostr timestamps have whole-second precision. A message and a
+            // rotation in the same second cannot be ordered by created_at.
+            higherEpochCreatedAtUnix !== null && higherEpochCreatedAtUnix < incomingCreatedAtUnix
           );
         }) ?? null);
 
@@ -252,14 +211,14 @@ export function findHigherKnownGroupEpochConflictValue(
 export function findConflictingKnownGroupEpochNumberValue(
   chat: Pick<ChatRow, 'meta' | 'type'> | null | undefined,
   incomingEpochNumber: number,
-  incomingEpochPublicKey: string | null | undefined
+  incomingEpochPublicKey: string | null | undefined,
 ): ChatGroupEpochKey | null {
   if (!chat || chat.type !== 'group') {
     return null;
   }
 
   const normalizedIncomingEpochPublicKey = inputSanitizerService.normalizeHexKey(
-    incomingEpochPublicKey ?? ''
+    incomingEpochPublicKey ?? '',
   );
   if (!normalizedIncomingEpochPublicKey) {
     return null;
@@ -269,7 +228,7 @@ export function findConflictingKnownGroupEpochNumberValue(
     resolveGroupChatEpochEntriesValue(chat).find(
       (entry) =>
         entry.epoch_number === incomingEpochNumber &&
-        entry.epoch_public_key !== normalizedIncomingEpochPublicKey
+        entry.epoch_public_key !== normalizedIncomingEpochPublicKey,
     ) ?? null
   );
 }
@@ -308,7 +267,7 @@ export function resolveIncomingChatInboxStateValue(options: {
 }
 
 export function isContactListedInPrivateContactListValue(
-  contact: Pick<ContactRecord, 'meta'> | null | undefined
+  contact: Pick<ContactRecord, 'meta'> | null | undefined,
 ): boolean {
   return contact?.meta?.[PRIVATE_CONTACT_LIST_MEMBER_CONTACT_META_KEY] === true;
 }
@@ -340,7 +299,7 @@ function normalizeRelayStatusUrlValue(value: string): string | null {
   try {
     return normalizeRelayUrl(normalized);
   } catch {
-    return normalized;
+    return null;
   }
 }
 
@@ -380,9 +339,22 @@ export function normalizeWritableRelayUrlsValue(relays: ContactRelay[] | undefin
   return Array.from(uniqueRelays);
 }
 
+// Group rosters can be stored on either the public outbox or the advertised
+// receive relay. NIP-10050 entries are read-only in our contact model.
+export function resolveGroupReadRelayUrlsValue(
+  relays: ContactRelay[] | undefined,
+  seedRelayUrls: string[] = [],
+): string[] {
+  return normalizeRelayStatusUrlsValue([
+    ...inputSanitizerService.normalizeReadableRelayUrls(relays),
+    ...normalizeWritableRelayUrlsValue(relays),
+    ...seedRelayUrls,
+  ]);
+}
+
 export function resolveGroupPublishRelayUrlsValue(
   relays: ContactRelay[] | undefined,
-  seedRelayUrls: string[] = []
+  seedRelayUrls: string[] = [],
 ): string[] {
   return normalizeRelayStatusUrlsValue([
     ...inputSanitizerService.normalizeStringArray(seedRelayUrls),
@@ -481,9 +453,9 @@ export function buildAcceptedGroupInviteChatPlanValue(options: {
 }
 
 function readProfileFieldValue(
-  profile: NDKUserProfile | null,
+  profile: NostrUserProfile | null,
   keys: string[],
-  fallback = ''
+  fallback = '',
 ): string | undefined {
   for (const key of keys) {
     const rawValue = profile?.[key];
@@ -503,9 +475,9 @@ function readProfileFieldValue(
 
 export function buildUpdatedContactMetaValue(
   existingMeta: ContactMetadata | undefined,
-  profile: NDKUserProfile | null,
+  profile: NostrUserProfile | null,
   resolvedNpub: string | null,
-  resolvedNprofile: string | null
+  resolvedNprofile: string | null,
 ): ContactMetadata {
   const meta: ContactMetadata = {
     ...(existingMeta ?? {}),
@@ -520,7 +492,7 @@ export function buildUpdatedContactMetaValue(
   const nextDisplayName = readProfileFieldValue(
     profile,
     ['displayName', 'display_name'],
-    meta.display_name ?? ''
+    meta.display_name ?? '',
   );
   const nextWebsite = readProfileFieldValue(profile, ['website'], meta.website ?? '');
   const nextBanner = readProfileFieldValue(profile, ['banner'], meta.banner ?? '');
@@ -569,6 +541,17 @@ export function buildUpdatedContactMetaValue(
     meta.group = profile.group;
   }
 
+  if (profile) {
+    const pin = inputSanitizerService.normalizeContactMetadata(profile);
+    if (pin.pinned) meta.pinned = pin.pinned;
+    else delete meta.pinned;
+    if (pin.pinned_created_at) meta.pinned_created_at = pin.pinned_created_at;
+    else delete meta.pinned_created_at;
+  }
+
+  const birthday = inputSanitizerService.normalizeContactBirthday(profile?.birthday);
+  if (birthday) meta.birthday = birthday;
+
   if (resolvedNpub?.trim()) {
     meta.npub = resolvedNpub.trim();
   }
@@ -590,20 +573,20 @@ function normalizeStoredContactEventCreatedAtValue(value: unknown): number | nul
 }
 
 export function readContactProfileEventSinceValue(
-  meta: ContactMetadata | undefined
+  meta: ContactMetadata | undefined,
 ): number | null {
   return normalizeStoredContactEventCreatedAtValue(meta?.profile_event_created_at);
 }
 
 export function readContactRelayListEventSinceValue(
-  meta: ContactMetadata | undefined
+  meta: ContactMetadata | undefined,
 ): number | null {
   return normalizeStoredContactEventCreatedAtValue(meta?.relay_list_event_created_at);
 }
 
 export function applyContactProfileEventStateToMetaValue(
   meta: ContactMetadata | undefined,
-  eventState: ContactProfileEventState | null | undefined
+  eventState: ContactProfileEventState | null | undefined,
 ): ContactMetadata {
   const nextMeta: ContactMetadata = {
     ...(meta ?? {}),
@@ -618,7 +601,7 @@ export function applyContactProfileEventStateToMetaValue(
 
 export function applyContactRelayListEventStateToMetaValue(
   meta: ContactMetadata | undefined,
-  eventState: ContactRelayListEventState | null | undefined
+  eventState: ContactRelayListEventState | null | undefined,
 ): ContactMetadata {
   const nextMeta: ContactMetadata = {
     ...(meta ?? {}),
@@ -651,7 +634,7 @@ function encodeNprofileValue(pubkeyHex: string): string | null {
 
 export function buildIdentifierFallbacksValue(
   pubkeyHex: string,
-  existingMeta?: ContactMetadata
+  existingMeta?: ContactMetadata,
 ): string[] {
   const nip05Identifier = existingMeta?.nip05?.trim() ?? '';
   const nprofileIdentifier = existingMeta?.nprofile?.trim() || encodeNprofileValue(pubkeyHex) || '';
@@ -661,15 +644,13 @@ export function buildIdentifierFallbacksValue(
   return [nip05Identifier, npubIdentifier, hexIdentifier, nprofileIdentifier]
     .map((identifier) => identifier.trim())
     .filter(
-      (identifier, index, list) => identifier.length > 0 && list.indexOf(identifier) === index
+      (identifier, index, list) => identifier.length > 0 && list.indexOf(identifier) === index,
     );
 }
 
 export function relayEntriesFromRelayListValue(
   relayList:
-    | Pick<NDKRelayList, 'readRelayUrls' | 'writeRelayUrls' | 'bothRelayUrls'>
-    | null
-    | undefined
+    Pick<NostrRelayList, 'readRelayUrls' | 'writeRelayUrls' | 'bothRelayUrls'> | null | undefined,
 ): ContactRelay[] {
   if (!relayList) {
     return [];
@@ -695,7 +676,7 @@ export function relayEntriesFromRelayListValue(
 }
 
 export function relayEntriesFromDirectMessageReceiveRelayEventValue(
-  event: { tags?: string[][] } | null | undefined
+  event: { tags?: string[][] } | null | undefined,
 ): ContactRelay[] {
   if (!Array.isArray(event?.tags)) {
     return [];
@@ -708,13 +689,13 @@ export function relayEntriesFromDirectMessageReceiveRelayEventValue(
         url: String(tag[1] ?? ''),
         read: true,
         write: false,
-      }))
+      })),
   );
 }
 
 export function mergeRelayEntriesWithDirectMessageReceiveRelayEntriesValue(
   relayEntries: ContactRelay[] | undefined,
-  directMessageReceiveRelayEntries: ContactRelay[] | undefined
+  directMessageReceiveRelayEntries: ContactRelay[] | undefined,
 ): ContactRelay[] {
   return inputSanitizerService.normalizeRelayListMetadataEntries([
     ...(relayEntries ?? []),
@@ -728,7 +709,7 @@ export function mergeRelayEntriesWithDirectMessageReceiveRelayEntriesValue(
 
 export function contactRelayListsEqualValue(
   first: ContactRelay[] | undefined,
-  second: ContactRelay[] | undefined
+  second: ContactRelay[] | undefined,
 ): boolean {
   return (
     JSON.stringify(inputSanitizerService.normalizeRelayListMetadataEntries(first ?? [])) ===
@@ -738,7 +719,7 @@ export function contactRelayListsEqualValue(
 
 export function contactMetadataEqualValue(
   first: ContactMetadata | undefined,
-  second: ContactMetadata | undefined
+  second: ContactMetadata | undefined,
 ): boolean {
   return (
     JSON.stringify(inputSanitizerService.normalizeContactMetadata(first ?? {})) ===
@@ -748,7 +729,7 @@ export function contactMetadataEqualValue(
 
 export function shouldPreserveExistingGroupRelaysValue(
   contact: Pick<ContactRecord, 'type' | 'public_key' | 'relays'> | null | undefined,
-  nextRelayEntries: ContactRelay[] | undefined
+  nextRelayEntries: ContactRelay[] | undefined,
 ): boolean {
   return (
     contact?.type === 'group' &&

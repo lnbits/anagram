@@ -1,4 +1,4 @@
-import { defineStore } from 'pinia';
+import { defineStore } from '#src/lib/state/store.ts';
 import {
   type AppBuildInfo,
   CURRENT_APP_BUILD_INFO,
@@ -11,8 +11,8 @@ import {
   isAppShellRuntimeEnabled,
   registerAppShellServiceWorker,
   unregisterAppShellServiceWorkers,
-} from 'src/services/appShellService';
-import { computed, ref } from 'vue';
+} from '#src/services/appShellService.ts';
+import { computed, ref } from '#src/lib/state/reactivity.ts';
 
 const UPDATE_CHECK_THROTTLE_MS = 30_000;
 

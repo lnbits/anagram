@@ -1,5 +1,5 @@
-import NDK, { NDKEvent, NDKKind } from '@nostr-dev-kit/ndk';
-import { createGroupRosterSubscriptionRuntime } from 'src/stores/nostr/groupRosterSubscriptionRuntime';
+import NostrClient, { ClientEvent, NostrKind } from '#src/lib/nostr/client.ts';
+import { createGroupRosterSubscriptionRuntime } from '#src/stores/nostr/groupRosterSubscriptionRuntime.ts';
 import { describe, expect, it, vi } from 'vitest';
 
 describe('group roster subscriptions', () => {
@@ -8,15 +8,15 @@ describe('group roster subscriptions', () => {
       b = 'b'.repeat(64);
     let epoch = 'c'.repeat(64);
     const apply = vi.fn(async () => true);
-    const ndk = new NDK();
+    const ndk = new NostrClient();
     const stop = vi.fn();
     const subscribe = vi.fn((_label, _request, _filters, options) => {
       options.onEvent(
-        new NDKEvent(ndk, {
+        new ClientEvent(ndk, {
           pubkey: _filters.authors[0],
           created_at: 1,
           id: _filters.authors[0],
-          kind: NDKKind.FollowSet,
+          kind: NostrKind.FollowSet,
           content: 'ciphertext',
           tags: [['d', 'roster']],
         })
@@ -52,8 +52,8 @@ describe('group roster subscriptions', () => {
     ]);
     expect(subscribe).toHaveBeenCalledTimes(2);
     expect(subscribe.mock.calls.map((call) => call[2])).toEqual([
-      { kinds: [NDKKind.FollowSet], authors: [a], '#d': ['roster'] },
-      { kinds: [NDKKind.FollowSet], authors: [b], '#d': ['roster'] },
+      { kinds: [NostrKind.FollowSet], authors: [a], '#d': ['roster'] },
+      { kinds: [NostrKind.FollowSet], authors: [b], '#d': ['roster'] },
     ]);
     expect(apply).toHaveBeenCalledTimes(2);
     epoch = 'f'.repeat(64);

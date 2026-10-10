@@ -1,20 +1,21 @@
-import { type NDKEvent, NDKKind } from '@nostr-dev-kit/ndk';
-import { createPrivateStateRuntime } from 'src/stores/nostr/privateStateRuntime';
-import type { MessageRelayStatus } from 'src/types/chat';
+import { type ClientEvent, NostrKind } from '#src/lib/nostr/client.ts';
+import { createPrivateStateRuntime } from '#src/stores/nostr/privateStateRuntime.ts';
+import type { MessageRelayStatus } from '#src/types/chat.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ref } from 'vue';
+import { ref } from '#src/lib/state/reactivity.ts';
 
 const ndkMocks = vi.hoisted(() => {
   const groupPubkey = 'a'.repeat(64);
   const publishReplaceable = vi.fn().mockResolvedValue(undefined);
+  const publish = vi.fn().mockResolvedValue(undefined);
   const relaySetFromRelayUrls = vi.fn((relayUrls: string[]) => ({
     relayUrls,
   }));
   const signerEncrypt = vi.fn(
-    async (_user: unknown, content: string, _algorithm?: string) => `encrypted:${content}`
+    async (_user: unknown, content: string, _algorithm?: string) => `encrypted:${content}`,
   );
   const signerDecrypt = vi.fn(async (_user: unknown, content: string, _algorithm?: string) =>
-    content.startsWith('encrypted:') ? content.slice('encrypted:'.length) : content
+    content.startsWith('encrypted:') ? content.slice('encrypted:'.length) : content,
   );
 
   const signEvent = vi.fn().mockResolvedValue(undefined);
@@ -27,7 +28,7 @@ const ndkMocks = vi.hoisted(() => {
     content = '';
     tags: string[][] = [];
 
-    constructor(_ndk: unknown, event: Partial<NDKEvent>) {
+    constructor(_ndk: unknown, event: Partial<ClientEvent>) {
       Object.assign(this, event);
     }
 
@@ -37,6 +38,10 @@ const ndkMocks = vi.hoisted(() => {
 
     async sign(_signer: unknown): Promise<void> {
       await signEvent(this, _signer);
+    }
+
+    async publish(relaySet: unknown): Promise<void> {
+      await publish(this, relaySet);
     }
 
     async publishReplaceable(relaySet: unknown): Promise<void> {
@@ -81,6 +86,7 @@ const ndkMocks = vi.hoisted(() => {
     },
     groupPubkey,
     publishReplaceable,
+    publish,
     relaySetFromRelayUrls,
     signEvent,
     signerDecrypt,
@@ -93,6 +99,9 @@ const serviceMocks = vi.hoisted(() => ({
     getChatByPublicKey: vi.fn(),
     init: vi.fn(),
     listMessages: vi.fn(),
+    messageBatches: vi.fn(),
+    reactionMessageBatches: vi.fn(),
+    findLatestMessageByAuthor: vi.fn(),
     updateChatMeta: vi.fn(),
     updateChatUnreadCount: vi.fn(),
     updateMessageMeta: vi.fn(),
@@ -116,26 +125,28 @@ const messageStoreMock = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock('@nostr-dev-kit/ndk', async () => {
-  const actual = await vi.importActual<typeof import('@nostr-dev-kit/ndk')>('@nostr-dev-kit/ndk');
+vi.mock('#src/lib/nostr/client.ts', async () => {
+  const actual = await vi.importActual<typeof import('#src/lib/nostr/client.ts')>(
+    '#src/lib/nostr/client.ts',
+  );
 
   return {
     ...actual,
-    NDKEvent: ndkMocks.MockNDKEvent,
-    NDKPrivateKeySigner: ndkMocks.MockNDKPrivateKeySigner,
-    NDKRelaySet: ndkMocks.MockNDKRelaySet,
+    ClientEvent: ndkMocks.MockNDKEvent,
+    NostrPrivateKeySigner: ndkMocks.MockNDKPrivateKeySigner,
+    NostrRelaySet: ndkMocks.MockNDKRelaySet,
   };
 });
 
-vi.mock('src/services/chatDataService', () => ({
+vi.mock('#src/services/chatDataService.ts', () => ({
   chatDataService: serviceMocks.chatDataService,
 }));
 
-vi.mock('src/services/contactsService', () => ({
+vi.mock('#src/services/contactsService.ts', () => ({
   contactsService: serviceMocks.contactsService,
 }));
 
-vi.mock('src/stores/messageStore', () => ({
+vi.mock('#src/stores/messageStore.ts', () => ({
   useMessageStore: () => messageStoreMock,
 }));
 
@@ -175,6 +186,8 @@ function createDeps(overrides: Record<string, unknown> = {}) {
   };
 
   const deps = {
+    createRecoverableGroup: vi.fn(async () => ({ version: 2, group_pubkey: ndkMocks.groupPubkey,
+      group_privkey: 'b'.repeat(64), epoch_number: 0, epoch_privkey: 'epoch-private-key' })),
     beginStartupStep: vi.fn(),
     buildFreshPrivatePreferences: vi.fn((existing?: Record<string, unknown>) => ({
       ...existing,
@@ -212,7 +225,7 @@ function createDeps(overrides: Record<string, unknown> = {}) {
     }),
     completeStartupStep: vi.fn(),
     contactRelayListsEqual: vi.fn(
-      (first, second) => JSON.stringify(first) === JSON.stringify(second)
+      (first, second) => JSON.stringify(first) === JSON.stringify(second),
     ),
     createInitialGroupEpochSecretState: vi.fn(() => ({
       epoch_number: 0,
@@ -249,10 +262,10 @@ function createDeps(overrides: Record<string, unknown> = {}) {
     isRestoringStartupState: ref(false),
     ndk,
     normalizeEventId: vi.fn((value: unknown) =>
-      typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : null
+      typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : null,
     ),
     normalizeTimestamp: vi.fn((value: unknown) =>
-      typeof value === 'string' && value.trim() ? value.trim() : null
+      typeof value === 'string' && value.trim() ? value.trim() : null,
     ),
     pendingContactCursorPublishStates: new Map(),
     pendingContactCursorPublishTimers: new Map(),
@@ -282,10 +295,10 @@ function createDeps(overrides: Record<string, unknown> = {}) {
     sha256Hex: vi.fn(async (value: string) => `sha256:${value}`),
     shouldApplyPrivateContactListEvent: vi.fn(() => true),
     toComparableTimestamp: vi.fn((value: string | null | undefined) =>
-      value ? Date.parse(value) || 0 : 0
+      value ? Date.parse(value) || 0 : 0,
     ),
     toIsoTimestampFromUnix: vi.fn((value: number | undefined) =>
-      typeof value === 'number' ? new Date(value * 1000).toISOString() : ''
+      typeof value === 'number' ? new Date(value * 1000).toISOString() : '',
     ),
     updateStoredEventSinceFromCreatedAt: vi.fn(),
     writePrivatePreferencesToStorage: vi.fn(),
@@ -301,6 +314,21 @@ describe('privateStateRuntime', () => {
     serviceMocks.chatDataService.init.mockResolvedValue(undefined);
     serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue(null);
     serviceMocks.chatDataService.listMessages.mockResolvedValue([]);
+    serviceMocks.chatDataService.messageBatches.mockImplementation(async function* () {
+      yield await serviceMocks.chatDataService.listMessages();
+    });
+    serviceMocks.chatDataService.reactionMessageBatches.mockImplementation(async function* () {
+      yield (await serviceMocks.chatDataService.listMessages()).filter(
+        (row) => row.meta?.reactions?.length,
+      );
+    });
+    serviceMocks.chatDataService.findLatestMessageByAuthor.mockImplementation(
+      async (_chat, author) =>
+        (await serviceMocks.chatDataService.listMessages())
+          .filter((row) => row.author_public_key === author)
+          .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0] ?? null,
+    );
+
     serviceMocks.chatDataService.updateChatMeta.mockResolvedValue(undefined);
     serviceMocks.chatDataService.updateChatUnreadCount.mockResolvedValue(undefined);
     serviceMocks.chatDataService.updateMessageMeta.mockResolvedValue(undefined);
@@ -318,6 +346,7 @@ describe('privateStateRuntime', () => {
       reactionsMarkedCount: 0,
     });
     ndkMocks.publishReplaceable.mockClear();
+    ndkMocks.publish.mockClear();
     ndkMocks.relaySetFromRelayUrls.mockClear();
     ndkMocks.MockNDKPrivateKeySigner.generate.mockClear();
     ndkMocks.signEvent.mockClear();
@@ -338,8 +367,8 @@ describe('privateStateRuntime', () => {
         {
           at: '2026-01-02T00:00:00.000Z',
           eventId: 'a',
-        }
-      )
+        },
+      ),
     ).toBeLessThan(0);
 
     expect(
@@ -351,8 +380,8 @@ describe('privateStateRuntime', () => {
         {
           at: '2026-01-02T00:00:00.000Z',
           eventId: 'c',
-        }
-      )
+        },
+      ),
     ).toBeLessThan(0);
   });
 
@@ -405,6 +434,31 @@ describe('privateStateRuntime', () => {
     expect(deps.pendingContactCursorPublishStates.has(contactPublicKey)).toBe(false);
   });
 
+  it('publishes rapid private preference changes after the restored timestamp without collisions', async () => {
+    const deps = createDeps();
+    const runtime = createPrivateStateRuntime(deps);
+    const restoredAt = Math.floor(Date.now() / 1000) + 10;
+    (deps.ndk.fetchEvent as ReturnType<typeof vi.fn>).mockResolvedValue({
+      created_at: restoredAt,
+      content: 'encrypted',
+    });
+    deps.decryptPrivatePreferencesContent.mockResolvedValue({ contactSecret: 'a'.repeat(64) });
+    await runtime.restorePrivatePreferences();
+    await runtime.publishPrivatePreferences({
+      contactSecret: 'a'.repeat(64),
+      irohRelaySettings: { mode: 'custom', customRelays: ['https://one.example.com/'] },
+    });
+    await runtime.publishPrivatePreferences({
+      contactSecret: 'a'.repeat(64),
+      irohRelaySettings: { mode: 'custom', customRelays: ['https://two.example.com/'] },
+    });
+    expect(ndkMocks.publish.mock.calls.map((call) => (call[0] as ClientEvent).created_at)).toEqual([
+      restoredAt + 1,
+      restoredAt + 2,
+    ]);
+    expect(ndkMocks.publishReplaceable).not.toHaveBeenCalled();
+  });
+
   it('restores and persists decrypted private preferences from relays', async () => {
     const deps = createDeps();
     const runtime = createPrivateStateRuntime(deps);
@@ -425,7 +479,7 @@ describe('privateStateRuntime', () => {
     expect(ndkMocks.relaySetFromRelayUrls).toHaveBeenCalledWith(
       ['wss://relay.example/'],
       deps.ndk,
-      false
+      false,
     );
     expect(deps.decryptPrivatePreferencesContent).toHaveBeenCalledWith('encrypted-preferences');
     expect(deps.writePrivatePreferencesToStorage).toHaveBeenCalledWith({
@@ -438,6 +492,14 @@ describe('privateStateRuntime', () => {
 
   it('creates group chats, publishes the secret, and reports contact-list sync failures without throwing', async () => {
     const deps = createDeps({
+      createRecoverableGroup: vi.fn().mockResolvedValue({
+        version: 2,
+        group_pubkey: ndkMocks.groupPubkey,
+        group_privkey: 'b'.repeat(64),
+        epoch_number: 0,
+        epoch_privkey: 'epoch-private-key',
+        recovery_state: { relays: ['wss://relay.example'] },
+      }),
       decryptGroupIdentitySecretContent: vi.fn().mockResolvedValue({
         version: 1,
         group_pubkey: ndkMocks.groupPubkey,
@@ -484,11 +546,14 @@ describe('privateStateRuntime', () => {
     });
 
     const result = await runtime.createGroupChat({
+      recoveryPhrase: 'test-phrase-handled-by-mock',
       name: 'Launch Group',
       about: 'Roadmap',
-      relayUrls: ['wss://relay.example'],
+      relayUrls: ['wss://relay.example', 'wss://unavailable.example'],
     });
 
+    expect(result.relayUrls).toEqual(['wss://relay.example']);
+    expect(deps.publishPrivateContactList).toHaveBeenCalledWith(['wss://relay.example']);
     expect(result.groupPublicKey).toBe(ndkMocks.groupPubkey);
     expect(result.encryptedPrivateKey).toBe('encrypted-group-secret');
     expect(result.groupSecretSave).toEqual({
@@ -501,13 +566,13 @@ describe('privateStateRuntime', () => {
     expect(result.contactListSyncError).toBe('Failed to publish private contact list.');
     const publishEventMock = deps.publishEventWithRelayStatuses as ReturnType<typeof vi.fn>;
     const groupListPublishCalls = publishEventMock.mock.calls.filter(
-      ([event]) => event.kind === 30000
+      ([event]) => event.kind === 30000,
     );
     const ownerListPublishCall = groupListPublishCalls.find(
-      ([event]) => event.getMatchingTags('d')[0]?.[1] === 'members'
+      ([event]) => event.getMatchingTags('d')[0]?.[1] === 'members',
     );
     const sharedRosterPublishCall = groupListPublishCalls.find(
-      ([event]) => event.getMatchingTags('d')[0]?.[1] === 'roster'
+      ([event]) => event.getMatchingTags('d')[0]?.[1] === 'roster',
     );
     expect(ownerListPublishCall?.[0]).toMatchObject({
       kind: 30000,
@@ -521,7 +586,7 @@ describe('privateStateRuntime', () => {
       tags: [['d', 'roster']],
     });
     expect(String(sharedRosterPublishCall?.[0]?.content ?? '')).toBe(
-      `encrypted:${JSON.stringify([['p', 'f'.repeat(64)]])}`
+      `encrypted:${JSON.stringify([['p', 'f'.repeat(64)]])}`,
     );
     expect(deps.persistIncomingGroupEpochTicket).toHaveBeenCalledWith(
       ndkMocks.groupPubkey,
@@ -530,7 +595,7 @@ describe('privateStateRuntime', () => {
       expect.objectContaining({
         accepted: true,
         fallbackName: 'Launch Group',
-      })
+      }),
     );
     expect(deps.publishGroupRelayList).toHaveBeenCalledWith(
       ndkMocks.groupPubkey,
@@ -541,7 +606,7 @@ describe('privateStateRuntime', () => {
           write: true,
         }),
       ],
-      ['wss://relay.example']
+      ['wss://relay.example'],
     );
     expect(deps.chatStore.reload).toHaveBeenCalled();
   });
@@ -579,30 +644,30 @@ describe('privateStateRuntime', () => {
     await runtime.publishGroupMembershipRosterFollowSet(
       ndkMocks.groupPubkey,
       ['c'.repeat(64)],
-      ['wss://relay.example']
+      ['wss://relay.example'],
     );
     await runtime.publishGroupMembershipRosterFollowSet(
       ndkMocks.groupPubkey,
       ['d'.repeat(64)],
-      ['wss://relay.example']
+      ['wss://relay.example'],
     );
     await runtime.publishGroupMembershipFollowSet(
       ndkMocks.groupPubkey,
       ['c'.repeat(64)],
-      ['wss://relay.example']
+      ['wss://relay.example'],
     );
     await runtime.publishGroupMembershipFollowSet(
       ndkMocks.groupPubkey,
       ['d'.repeat(64)],
-      ['wss://relay.example']
+      ['wss://relay.example'],
     );
 
     const publishEventMock = deps.publishEventWithRelayStatuses as ReturnType<typeof vi.fn>;
     const rosterCalls = publishEventMock.mock.calls.filter(
-      ([event]) => event.getMatchingTags('d')[0]?.[1] === 'roster'
+      ([event]) => event.getMatchingTags('d')[0]?.[1] === 'roster',
     );
     const memberCalls = publishEventMock.mock.calls.filter(
-      ([event]) => event.getMatchingTags('d')[0]?.[1] === 'members'
+      ([event]) => event.getMatchingTags('d')[0]?.[1] === 'members',
     );
 
     expect(rosterCalls).toHaveLength(2);
@@ -687,7 +752,7 @@ describe('privateStateRuntime', () => {
         }
 
         return null;
-      }
+      },
     );
     serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue(groupChat);
     serviceMocks.contactsService.updateContact.mockResolvedValue({
@@ -737,9 +802,10 @@ describe('privateStateRuntime', () => {
       'cccccccccccccccc',
       expect.objectContaining({
         seedRelayUrls: expect.arrayContaining(['wss://seed.example/', 'wss://relay.example/']),
-      })
+      }),
     );
     expect(serviceMocks.contactsService.updateContact).toHaveBeenCalledWith(7, {
+      metaBase: groupContact.meta,
       meta: expect.objectContaining({
         owner_public_key: 'f'.repeat(64),
         group_members: [
@@ -802,7 +868,7 @@ describe('privateStateRuntime', () => {
         }
 
         return null;
-      }
+      },
     );
     serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue(groupChat);
     serviceMocks.contactsService.updateContact.mockResolvedValueOnce(null).mockResolvedValueOnce({
@@ -846,6 +912,7 @@ describe('privateStateRuntime', () => {
     expect(result.didChange).toBe(true);
     expect(serviceMocks.contactsService.updateContact).toHaveBeenCalledTimes(2);
     expect(serviceMocks.contactsService.updateContact).toHaveBeenLastCalledWith(7, {
+      metaBase: groupContact.meta,
       meta: expect.objectContaining({
         owner_public_key: 'f'.repeat(64),
         group_members: [
@@ -863,18 +930,18 @@ describe('privateStateRuntime', () => {
     const runtime = createPrivateStateRuntime(deps);
     const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const rosterEvent = {
-      kind: NDKKind.FollowSet,
+      kind: NostrKind.FollowSet,
       id: 'ROSTER-EVENT',
       pubkey: ndkMocks.groupPubkey,
       content: 'encrypted-roster',
       tags: [['d', 'roster']],
       getMatchingTags: (tagName: string) => (tagName === 'd' ? [['d', 'roster']] : []),
-    } as unknown as NDKEvent;
+    } as unknown as ClientEvent;
 
     await expect(
       runtime.applyGroupMembershipRosterEvent(rosterEvent, {
         seedRelayUrls: ['wss://seed.example'],
-      })
+      }),
     ).resolves.toBe(false);
 
     expect(consoleWarnSpy).toHaveBeenCalledWith(
@@ -885,7 +952,7 @@ describe('privateStateRuntime', () => {
         error: expect.objectContaining({
           message: 'Group contact not found.',
         }),
-      })
+      }),
     );
 
     consoleWarnSpy.mockRestore();
@@ -919,13 +986,13 @@ describe('privateStateRuntime', () => {
       },
     };
     const rosterEvent = {
-      kind: NDKKind.FollowSet,
+      kind: NostrKind.FollowSet,
       id: 'roster-persist-race',
       pubkey: ndkMocks.groupPubkey,
       content: 'encrypted-roster',
       tags: [['d', 'roster']],
       getMatchingTags: (tagName: string) => (tagName === 'd' ? [['d', 'roster']] : []),
-    } as unknown as NDKEvent;
+    } as unknown as ClientEvent;
 
     serviceMocks.contactsService.getContactByPublicKey.mockImplementation(
       async (pubkey: string) => {
@@ -934,7 +1001,7 @@ describe('privateStateRuntime', () => {
         }
 
         return null;
-      }
+      },
     );
     serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue(groupChat);
     serviceMocks.contactsService.updateContact.mockResolvedValue(null);
@@ -952,7 +1019,7 @@ describe('privateStateRuntime', () => {
     await expect(
       runtime.applyGroupMembershipRosterEvent(rosterEvent, {
         seedRelayUrls: ['wss://seed.example'],
-      })
+      }),
     ).resolves.toBe(false);
 
     expect(serviceMocks.contactsService.updateContact).toHaveBeenCalledTimes(2);
@@ -964,7 +1031,7 @@ describe('privateStateRuntime', () => {
         error: expect.objectContaining({
           message: 'Failed to persist refreshed group members.',
         }),
-      })
+      }),
     );
 
     consoleWarnSpy.mockRestore();
@@ -1033,7 +1100,7 @@ describe('privateStateRuntime', () => {
     const runtime = createPrivateStateRuntime(deps);
 
     serviceMocks.contactsService.getContactByPublicKey.mockImplementation(async (pubkey: string) =>
-      pubkey === ndkMocks.groupPubkey ? groupContact : null
+      pubkey === ndkMocks.groupPubkey ? groupContact : null,
     );
     serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue(groupChat);
     serviceMocks.contactsService.updateContact.mockResolvedValue({
@@ -1078,6 +1145,7 @@ describe('privateStateRuntime', () => {
     expect(result.refreshedProfileCount).toBe(1);
     expect(deps.fetchContactPreviewByPublicKey).toHaveBeenCalledTimes(2);
     expect(serviceMocks.contactsService.updateContact).toHaveBeenCalledWith(7, {
+      metaBase: groupContact.meta,
       meta: expect.objectContaining({
         group_members: [
           expect.objectContaining({
@@ -1124,7 +1192,7 @@ describe('privateStateRuntime', () => {
     const runtime = createPrivateStateRuntime(deps);
 
     serviceMocks.contactsService.getContactByPublicKey.mockImplementation(async (pubkey: string) =>
-      pubkey === ndkMocks.groupPubkey ? groupContact : null
+      pubkey === ndkMocks.groupPubkey ? groupContact : null,
     );
     serviceMocks.contactsService.updateContact.mockResolvedValue({
       ...groupContact,
@@ -1161,6 +1229,7 @@ describe('privateStateRuntime', () => {
 
     expect(deps.refreshContactRelayList).not.toHaveBeenCalled();
     expect(serviceMocks.contactsService.updateContact).toHaveBeenCalledWith(7, {
+      metaBase: groupContact.meta,
       meta: expect.objectContaining({
         owner_public_key: 'f'.repeat(64),
         group_private_key_encrypted: 'encrypted-group-secret-event',
@@ -1174,7 +1243,7 @@ describe('privateStateRuntime', () => {
       expect.objectContaining({
         accepted: true,
         fallbackName: 'Restored Group',
-      })
+      }),
     );
     expect(deps.chatStore.reload).toHaveBeenCalled();
   });
@@ -1248,11 +1317,15 @@ describe('privateStateRuntime', () => {
           version: '0.1',
           last_seen_incoming_activity_at: cursorAt,
           last_seen_incoming_activity_event_id: 'cursor-event',
-        }
-      )
+        },
+      ),
     ).resolves.toBe(true);
 
     expect(serviceMocks.contactsService.updateContact).toHaveBeenCalledWith(7, {
+      metaBase: {
+        last_seen_incoming_activity_at: '2026-01-01T00:00:00.000Z',
+        last_seen_incoming_activity_event_id: 'older-event',
+      },
       meta: {
         last_seen_incoming_activity_at: cursorAt,
         last_seen_incoming_activity_event_id: 'cursor-event',
@@ -1276,7 +1349,7 @@ describe('privateStateRuntime', () => {
             createdAt: '2026-01-04T00:00:00.000Z',
           },
         ],
-      })
+      }),
     );
     expect(serviceMocks.chatDataService.updateChatMeta).toHaveBeenCalledWith(contactPublicKey, {
       last_seen_received_activity_at: cursorAt,
@@ -1284,7 +1357,7 @@ describe('privateStateRuntime', () => {
     });
     expect(serviceMocks.chatDataService.updateChatUnreadCount).toHaveBeenCalledWith(
       contactPublicKey,
-      1
+      1,
     );
     expect(deps.scheduleChatChecks).toHaveBeenCalledWith([contactPublicKey]);
   });
@@ -1350,11 +1423,15 @@ describe('privateStateRuntime', () => {
           version: '0.1',
           last_seen_incoming_activity_at: '2026-01-03T00:00:00.000Z',
           last_seen_incoming_activity_event_id: 'cursor-event',
-        }
-      )
+        },
+      ),
     ).resolves.toBe(true);
 
     expect(serviceMocks.contactsService.updateContact).toHaveBeenCalledWith(7, {
+      metaBase: {
+        last_seen_incoming_activity_at: '2026-01-01T00:00:00.000Z',
+        last_seen_incoming_activity_event_id: 'older-event',
+      },
       meta: {
         last_seen_incoming_activity_at: '2026-01-03T00:00:00.000Z',
         last_seen_incoming_activity_event_id: 'cursor-event',
@@ -1365,7 +1442,7 @@ describe('privateStateRuntime', () => {
     });
     expect(serviceMocks.chatDataService.updateChatUnreadCount).toHaveBeenCalledWith(
       contactPublicKey,
-      0
+      0,
     );
   });
 

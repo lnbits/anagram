@@ -1,13 +1,18 @@
-import type { ChatType } from 'src/types/chat';
-import { closeIndexedDbConnection, deleteIndexedDbDatabase } from 'src/utils/indexedDbStorage';
-import { isIncomingUnreadMessageActivity } from 'src/utils/messageActivity';
-import { areMessageEditTimestampsEqual, buildEditedMessageMeta } from 'src/utils/messageEdits';
+import { mergeGroupEpochMetadata } from '#src/utils/groupEpochMetadata.ts';
+import type { ChatType } from '#src/types/chat.ts';
+import { closeIndexedDbConnection, deleteIndexedDbDatabase } from '#src/utils/indexedDbStorage.ts';
+import { isIncomingUnreadMessageActivity } from '#src/utils/messageActivity.ts';
+import {
+  areMessageEditTimestampsEqual,
+  buildEditedMessageMeta,
+  messageEditReferencesEventId,
+} from '#src/utils/messageEdits.ts';
 import {
   isDeletedMessageMeta,
   messageRecordMatchesSearchQuery,
   normalizeMessageSearchText,
   searchMessageRecords,
-} from 'src/utils/messageSearch';
+} from '#src/utils/messageSearch.ts';
 
 export interface ChatRow {
   id: string;
@@ -72,6 +77,13 @@ export interface ClearChatMessagesInput {
 }
 
 export interface CreateMessageInput {
+  // Incoming-message summary commits atomically with the row. Kept out of the
+  // stored message metadata; sender keys and unrelated chat metadata are untouched.
+  chat_activity?: {
+    incomingAt: string;
+    unreadCount: number;
+    preview?: { text: string; at: string };
+  };
   chat_public_key: string;
   author_public_key: string;
   message: string;
@@ -110,7 +122,7 @@ interface MessageRecord {
 }
 
 const CHAT_DATA_DB_NAME = 'chat-data-indexeddb-v2';
-const CHAT_DATA_DB_VERSION = 2;
+const CHAT_DATA_DB_VERSION = 5;
 
 const CHATS_STORE = 'chats';
 const MESSAGES_STORE = 'messages';
@@ -121,6 +133,23 @@ const CHATS_LAST_MESSAGE_AT_INDEX = 'last_message_at';
 const MESSAGES_CHAT_PUBLIC_KEY_INDEX = 'chat_public_key';
 const MESSAGES_CHAT_CREATED_AT_INDEX = 'chat_public_key_created_at';
 const MESSAGES_EVENT_ID_INDEX = 'event_id';
+const MESSAGES_EDIT_IDS_INDEX = 'edit_event_ids';
+const MESSAGES_REACTION_IDS_INDEX = 'reaction_event_ids';
+const MESSAGES_AUTHOR_CREATED_INDEX = 'chat_author_created';
+const MESSAGES_REPLY_INDEX = 'chat_reply_event';
+const MESSAGES_REACTION_ROWS_INDEX = 'chat_reaction_rows';
+
+function withReactionIndex<T extends { meta: Record<string, unknown> }>(
+  record: T,
+): T & { reaction_event_ids: string[] } {
+  const reactions = Array.isArray(record.meta.reactions) ? record.meta.reactions : [];
+  return {
+    ...record,
+    reaction_event_ids: reactions
+      .map((item) => normalizeEventId(item?.eventId))
+      .filter((id): id is string => !!id),
+  };
+}
 
 function canUseIndexedDb(): boolean {
   return typeof window !== 'undefined' && typeof window.indexedDB !== 'undefined';
@@ -148,7 +177,7 @@ function normalizeMetaValue(value: unknown): unknown {
       Object.entries(value).flatMap(([key, entry]) => {
         const normalizedEntry = normalizeMetaValue(entry);
         return normalizedEntry === undefined ? [] : [[key, normalizedEntry]];
-      })
+      }),
     );
   }
 
@@ -250,7 +279,7 @@ function sortMessagesByCreated(first: MessageRecord, second: MessageRecord): num
 
 function compareMessageCursor(
   first: Pick<MessageRecord, 'created_at' | 'id'>,
-  second: Pick<MessageCursor, 'created_at' | 'id'>
+  second: Pick<MessageCursor, 'created_at' | 'id'>,
 ): number {
   const byTime = toComparableTimestamp(first.created_at) - toComparableTimestamp(second.created_at);
   if (byTime !== 0) {
@@ -267,15 +296,15 @@ function createChatCreatedAtRange(chatPublicKey: string): IDBKeyRange {
 function createChatCreatedAtRangeFromCursor(
   chatPublicKey: string,
   cursor: MessageCursor | undefined,
-  direction: IDBCursorDirection
+  direction: IDBCursorDirection,
 ): IDBKeyRange {
   if (!cursor) {
     return createChatCreatedAtRange(chatPublicKey);
   }
 
   return direction === 'next'
-    ? IDBKeyRange.lowerBound([chatPublicKey, cursor.created_at], false)
-    : IDBKeyRange.upperBound([chatPublicKey, cursor.created_at], false);
+    ? IDBKeyRange.bound([chatPublicKey, cursor.created_at], [chatPublicKey, '\uffff'])
+    : IDBKeyRange.bound([chatPublicKey, ''], [chatPublicKey, cursor.created_at]);
 }
 
 function toChatRow(record: ChatRecord): ChatRow {
@@ -368,7 +397,7 @@ class ChatDataService {
     const transaction = db.transaction(CHATS_STORE, 'readonly');
     const store = transaction.objectStore(CHATS_STORE);
     const records = await requestToPromise<ChatRecord[]>(
-      store.getAll() as IDBRequest<ChatRecord[]>
+      store.getAll() as IDBRequest<ChatRecord[]>,
     );
     await waitForTransaction(transaction);
 
@@ -385,7 +414,7 @@ class ChatDataService {
     const transaction = db.transaction(CHATS_STORE, 'readonly');
     const store = transaction.objectStore(CHATS_STORE);
     const record = await requestToPromise<ChatRecord | undefined>(
-      store.get(normalizedPublicKey) as IDBRequest<ChatRecord | undefined>
+      store.get(normalizedPublicKey) as IDBRequest<ChatRecord | undefined>,
     );
     await waitForTransaction(transaction);
 
@@ -409,24 +438,32 @@ class ChatDataService {
       meta: normalizeMeta(input.meta),
     };
 
-    const existing = await this.getChatByPublicKey(publicKey);
-    if (existing) {
-      return existing;
-    }
-
     const db = await this.getDatabase();
     const transaction = db.transaction(CHATS_STORE, 'readwrite');
     const store = transaction.objectStore(CHATS_STORE);
-
+    const completed = waitForTransaction(transaction);
+    void completed.catch(() => {});
     try {
-      await requestToPromise<IDBValidKey>(store.add(record) as IDBRequest<IDBValidKey>);
-      await waitForTransaction(transaction);
+      const existing = await requestToPromise<ChatRecord | undefined>(store.get(publicKey));
+      if (existing) {
+        // A profile/owner restore and the first epoch ticket can create the same
+        // group concurrently. Keep the existing chat and atomically add its key.
+        if (record.type === 'group' && Array.isArray(record.meta.group_epoch_keys)) {
+          existing.type = 'group';
+          existing.meta = mergeGroupEpochMetadata(existing.meta, {
+            ...existing.meta,
+            group_epoch_keys: record.meta.group_epoch_keys,
+          });
+          store.put(existing);
+        }
+        await completed;
+        return toChatRow(existing);
+      }
+      if (record.type === 'group') record.meta = mergeGroupEpochMetadata({}, record.meta);
+      store.add(withReactionIndex(record));
+      await completed;
       return toChatRow(record);
     } catch (error) {
-      if (isConstraintError(error)) {
-        return this.getChatByPublicKey(publicKey);
-      }
-
       console.error('Failed to create chat row in IndexedDB.', error);
       return null;
     }
@@ -436,7 +473,8 @@ class ChatDataService {
     chatPublicKey: string,
     lastMessage: string,
     lastMessageAt: string,
-    unreadCount: number
+    unreadCount: number,
+    authorPublicKey?: string | null,
   ): Promise<void> {
     const normalizedPublicKey = normalizePublicKeyValue(chatPublicKey);
     if (!normalizedPublicKey) {
@@ -447,10 +485,10 @@ class ChatDataService {
     const transaction = db.transaction(CHATS_STORE, 'readwrite');
     const store = transaction.objectStore(CHATS_STORE);
     const existingRecord = await requestToPromise<ChatRecord | undefined>(
-      store.get(normalizedPublicKey) as IDBRequest<ChatRecord | undefined>
+      store.get(normalizedPublicKey) as IDBRequest<ChatRecord | undefined>,
     );
 
-    if (!existingRecord) {
+    if (!existingRecord || existingRecord.meta.deleted_locally === true) {
       await waitForTransaction(transaction);
       return;
     }
@@ -460,6 +498,14 @@ class ChatDataService {
       type: normalizeChatType(existingRecord.type),
       last_message: lastMessage,
       last_message_at: toIsoTimestamp(lastMessageAt),
+      ...(authorPublicKey
+        ? {
+            meta: {
+              ...normalizeMeta(existingRecord.meta),
+              last_message_author_public_key: authorPublicKey,
+            },
+          }
+        : {}),
       unread_count: normalizeUnreadCount(unreadCount),
     });
     await waitForTransaction(transaction);
@@ -475,10 +521,14 @@ class ChatDataService {
     const transaction = db.transaction(CHATS_STORE, 'readwrite');
     const store = transaction.objectStore(CHATS_STORE);
     const existingRecord = await requestToPromise<ChatRecord | undefined>(
-      store.get(normalizedPublicKey) as IDBRequest<ChatRecord | undefined>
+      store.get(normalizedPublicKey) as IDBRequest<ChatRecord | undefined>,
     );
 
-    if (!existingRecord || existingRecord.unread_count === normalizeUnreadCount(unreadCount)) {
+    if (
+      !existingRecord ||
+      existingRecord.meta.deleted_locally === true ||
+      existingRecord.unread_count === normalizeUnreadCount(unreadCount)
+    ) {
       await waitForTransaction(transaction);
       return;
     }
@@ -501,7 +551,7 @@ class ChatDataService {
     const transaction = db.transaction(CHATS_STORE, 'readwrite');
     const store = transaction.objectStore(CHATS_STORE);
     const existingRecord = await requestToPromise<ChatRecord | undefined>(
-      store.get(normalizedPublicKey) as IDBRequest<ChatRecord | undefined>
+      store.get(normalizedPublicKey) as IDBRequest<ChatRecord | undefined>,
     );
 
     if (!existingRecord || existingRecord.unread_count === 0) {
@@ -527,7 +577,7 @@ class ChatDataService {
     const transaction = db.transaction(CHATS_STORE, 'readwrite');
     const store = transaction.objectStore(CHATS_STORE);
     const existingRecord = await requestToPromise<ChatRecord | undefined>(
-      store.get(normalizedPublicKey) as IDBRequest<ChatRecord | undefined>
+      store.get(normalizedPublicKey) as IDBRequest<ChatRecord | undefined>,
     );
 
     if (!existingRecord) {
@@ -538,7 +588,10 @@ class ChatDataService {
     store.put({
       ...existingRecord,
       type: normalizeChatType(existingRecord.type),
-      meta: normalizeMeta(meta),
+      meta:
+        existingRecord.type === 'group'
+          ? mergeGroupEpochMetadata(existingRecord.meta, normalizeMeta(meta))
+          : normalizeMeta(meta),
     });
     await waitForTransaction(transaction);
   }
@@ -553,7 +606,7 @@ class ChatDataService {
     const transaction = db.transaction(CHATS_STORE, 'readwrite');
     const store = transaction.objectStore(CHATS_STORE);
     const existingRecord = await requestToPromise<ChatRecord | undefined>(
-      store.get(normalizedPublicKey) as IDBRequest<ChatRecord | undefined>
+      store.get(normalizedPublicKey) as IDBRequest<ChatRecord | undefined>,
     );
 
     if (!existingRecord) {
@@ -567,14 +620,21 @@ class ChatDataService {
       ...existingRecord,
       ...(nextType ? { type: nextType } : {}),
       ...(nextName ? { name: nextName } : {}),
-      ...(input.meta !== undefined ? { meta: normalizeMeta(input.meta) } : {}),
+      ...(input.meta !== undefined
+        ? {
+            meta:
+              (nextType ?? existingRecord.type) === 'group'
+                ? mergeGroupEpochMetadata(existingRecord.meta, normalizeMeta(input.meta))
+                : normalizeMeta(input.meta),
+          }
+        : {}),
     });
     await waitForTransaction(transaction);
   }
 
   async clearChatMessages(
     chatPublicKey: string,
-    input: ClearChatMessagesInput = {}
+    input: ClearChatMessagesInput = {},
   ): Promise<boolean> {
     const normalizedPublicKey = normalizePublicKeyValue(chatPublicKey);
     if (!normalizedPublicKey) {
@@ -586,7 +646,7 @@ class ChatDataService {
     const chatsStore = transaction.objectStore(CHATS_STORE);
     const messagesStore = transaction.objectStore(MESSAGES_STORE);
     const existingRecord = await requestToPromise<ChatRecord | undefined>(
-      chatsStore.get(normalizedPublicKey) as IDBRequest<ChatRecord | undefined>
+      chatsStore.get(normalizedPublicKey) as IDBRequest<ChatRecord | undefined>,
     );
 
     if (!existingRecord) {
@@ -612,7 +672,7 @@ class ChatDataService {
     const messageIds = await requestToPromise<IDBValidKey[]>(
       messagesByChatIndex.getAllKeys(IDBKeyRange.only(normalizedPublicKey)) as IDBRequest<
         IDBValidKey[]
-      >
+      >,
     );
 
     for (const messageId of messageIds) {
@@ -639,7 +699,7 @@ class ChatDataService {
     const chatsStore = transaction.objectStore(CHATS_STORE);
     const messagesStore = transaction.objectStore(MESSAGES_STORE);
     const existingRecord = await requestToPromise<ChatRecord | undefined>(
-      chatsStore.get(normalizedPublicKey) as IDBRequest<ChatRecord | undefined>
+      chatsStore.get(normalizedPublicKey) as IDBRequest<ChatRecord | undefined>,
     );
 
     if (!existingRecord) {
@@ -647,13 +707,24 @@ class ChatDataService {
       return false;
     }
 
-    chatsStore.delete(normalizedPublicKey);
+    if (existingRecord.type === 'group') {
+      // Keep encrypted epoch keys and a local tombstone: relay backups and
+      // reissued tickets must not silently recreate a deleted conversation.
+      chatsStore.put({
+        ...existingRecord,
+        last_message: '',
+        unread_count: 0,
+        meta: { ...existingRecord.meta, deleted_locally: true, unseen_reaction_count: 0 },
+      });
+    } else {
+      chatsStore.delete(normalizedPublicKey);
+    }
 
     const messagesByChatIndex = messagesStore.index(MESSAGES_CHAT_PUBLIC_KEY_INDEX);
     const messageIds = await requestToPromise<IDBValidKey[]>(
       messagesByChatIndex.getAllKeys(IDBKeyRange.only(normalizedPublicKey)) as IDBRequest<
         IDBValidKey[]
-      >
+      >,
     );
 
     for (const messageId of messageIds) {
@@ -669,6 +740,22 @@ class ChatDataService {
     }
   }
 
+  async reopenDeletedGroupChat(chatPublicKey: string): Promise<ChatRow | null> {
+    const key = normalizePublicKeyValue(chatPublicKey);
+    if (!key) return null;
+    const db = await this.getDatabase();
+    const transaction = db.transaction(CHATS_STORE, 'readwrite');
+    const store = transaction.objectStore(CHATS_STORE);
+    const record = await requestToPromise<ChatRecord | undefined>(store.get(key));
+    if (record?.type === 'group' && record.meta.deleted_locally === true) {
+      record.meta = { ...record.meta };
+      delete record.meta.deleted_locally;
+      store.put(record);
+    }
+    await waitForTransaction(transaction);
+    return record ? toChatRow(record) : null;
+  }
+
   async listMessages(chatPublicKey: string): Promise<MessageRow[]> {
     const normalizedPublicKey = normalizePublicKeyValue(chatPublicKey);
     if (!normalizedPublicKey) {
@@ -680,35 +767,212 @@ class ChatDataService {
     const store = transaction.objectStore(MESSAGES_STORE);
     const index = store.index(MESSAGES_CHAT_PUBLIC_KEY_INDEX);
     const records = await requestToPromise<MessageRecord[]>(
-      index.getAll(IDBKeyRange.only(normalizedPublicKey)) as IDBRequest<MessageRecord[]>
+      index.getAll(IDBKeyRange.only(normalizedPublicKey)) as IDBRequest<MessageRecord[]>,
     );
     await waitForTransaction(transaction);
 
     return records.sort(sortMessagesByCreated).map((record) => toMessageRow(record));
   }
 
-  async searchMessages(chatPublicKey: string, query: string): Promise<MessageSearchResult[]> {
-    const normalizedPublicKey = normalizePublicKeyValue(chatPublicKey);
-    if (!normalizedPublicKey || !normalizeMessageSearchText(query)) {
-      return [];
-    }
-
+  async listMessagesInSecond(chatPublicKey: string, timestamp: string): Promise<MessageRow[]> {
+    const chat = normalizePublicKeyValue(chatPublicKey);
+    const time = Date.parse(timestamp);
+    if (!chat || !Number.isFinite(time)) return [];
+    const start = new Date(Math.floor(time / 1000) * 1000).toISOString();
+    const end = new Date(Date.parse(start) + 1000).toISOString();
     const db = await this.getDatabase();
-    const transaction = db.transaction(MESSAGES_STORE, 'readonly');
-    const store = transaction.objectStore(MESSAGES_STORE);
-    const index = store.index(MESSAGES_CHAT_PUBLIC_KEY_INDEX);
-    const records = await requestToPromise<MessageRecord[]>(
-      index.getAll(IDBKeyRange.only(normalizedPublicKey)) as IDBRequest<MessageRecord[]>
+    const tx = db.transaction(MESSAGES_STORE, 'readonly');
+    const rows = await requestToPromise<MessageRecord[]>(
+      tx
+        .objectStore(MESSAGES_STORE)
+        .index(MESSAGES_CHAT_CREATED_AT_INDEX)
+        .getAll(IDBKeyRange.bound([chat, start], [chat, end], false, true)),
     );
-    await waitForTransaction(transaction);
+    await waitForTransaction(tx);
+    return rows.map(toMessageRow);
+  }
 
-    return searchMessageRecords(records, query, normalizeMeta).map((record) => ({
-      id: record.id,
-      chat_public_key: record.chat_public_key,
-      message: record.message,
-      created_at: record.created_at,
-      event_id: normalizeEventId(record.event_id),
-    }));
+  // Legacy delete-and-replace edits share an author and Nostr second. Look up
+  // that second through the compound index, never scan the whole conversation.
+  async findDeletedMessageInSecond(
+    chatPublicKey: string,
+    author: string,
+    timestamp: string,
+  ): Promise<MessageRow | null> {
+    const start = new Date(Math.floor(Date.parse(timestamp) / 1000) * 1000).toISOString();
+    const end = new Date(Date.parse(start) + 1000).toISOString();
+    const db = await this.getDatabase();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(MESSAGES_STORE, 'readonly');
+      const request = tx
+        .objectStore(MESSAGES_STORE)
+        .index(MESSAGES_CHAT_CREATED_AT_INDEX)
+        .openCursor(IDBKeyRange.bound([chatPublicKey, start], [chatPublicKey, end], false, true));
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return resolve(null);
+        const row = toMessageRow(cursor.value as MessageRecord);
+        if (row.author_public_key.toLowerCase() === author && row.event_id && row.meta.deleted)
+          return resolve(row);
+        cursor.continue();
+      };
+    });
+  }
+
+  // Seek once per author instead of reading every message when opening a chat.
+  async findLatestIncomingMessage(
+    chatPublicKey: string,
+    ownPublicKey: string | null,
+  ): Promise<MessageRow | null> {
+    return this.findLatestActivityMessage(chatPublicKey, ownPublicKey, true);
+  }
+
+  async findLatestMessageByAuthor(
+    chatPublicKey: string,
+    authorPublicKey: string | null,
+  ): Promise<MessageRow | null> {
+    return this.findLatestActivityMessage(chatPublicKey, authorPublicKey, false);
+  }
+
+  private async findLatestActivityMessage(
+    chatPublicKey: string,
+    ownPublicKey: string | null,
+    incoming: boolean,
+  ): Promise<MessageRow | null> {
+    const chat = normalizePublicKeyValue(chatPublicKey);
+    const own = normalizePublicKeyValue(ownPublicKey);
+    if (!chat || !own) return null;
+    const db = await this.getDatabase();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(MESSAGES_STORE, 'readonly');
+      const index = tx.objectStore(MESSAGES_STORE).index(MESSAGES_AUTHOR_CREATED_INDEX);
+      let latest: MessageRow | null = null;
+      const authors = index.openKeyCursor(IDBKeyRange.bound([chat], [chat, []]));
+      authors.onsuccess = () => {
+        const cursor = authors.result;
+        if (!cursor) return;
+        const author = (cursor.key as string[])[1];
+        if (
+          normalizePublicKeyValue(author) &&
+          (incoming
+            ? normalizePublicKeyValue(author) !== own
+            : normalizePublicKeyValue(author) === own)
+        ) {
+          const rows = index.openCursor(
+            IDBKeyRange.bound([chat, author], [chat, author, []]),
+            'prev',
+          );
+          rows.onsuccess = () => {
+            const rowCursor = rows.result;
+            if (!rowCursor) return;
+            const row = toMessageRow(rowCursor.value as MessageRecord);
+            const timestamp = Date.parse(row.created_at);
+            if ((incoming && !isIncomingUnreadMessageActivity(row, own)) || !(timestamp > 0)) {
+              rowCursor.continue();
+              return;
+            }
+            if (
+              !latest ||
+              timestamp > Date.parse(latest.created_at) ||
+              (timestamp === Date.parse(latest.created_at) && row.id > latest.id)
+            )
+              latest = row;
+          };
+        }
+        // Array keys sort after string timestamps: skip this author's entire history.
+        cursor.continue([chat, author, []]);
+      };
+      tx.oncomplete = () => resolve(latest);
+      tx.onabort = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async listMessagesReplyingTo(chatPublicKey: string, eventIds: string[]): Promise<MessageRow[]> {
+    const chat = normalizePublicKeyValue(chatPublicKey);
+    const ids = [...new Set(eventIds.map(normalizeEventId).filter((id): id is string => !!id))];
+    if (!chat || !ids.length) return [];
+    const db = await this.getDatabase();
+    const tx = db.transaction(MESSAGES_STORE, 'readonly');
+    const index = tx.objectStore(MESSAGES_STORE).index(MESSAGES_REPLY_INDEX);
+    const batches = await Promise.all(
+      ids.map((id) => requestToPromise<MessageRecord[]>(index.getAll([chat, id]))),
+    );
+    await waitForTransaction(tx);
+    return batches.flat().sort(sortMessagesByCreated).map(toMessageRow);
+  }
+
+  // Sparse compound index includes only rows that carry a non-empty reaction array,
+  // including legacy reactions without event IDs. Page by length + row ID.
+  async *reactionMessageBatches(chatPublicKey: string, size = 250): AsyncGenerator<MessageRow[]> {
+    const chat = normalizePublicKeyValue(chatPublicKey);
+    if (!chat) return;
+    const db = await this.getDatabase();
+    let after: IDBValidKey[] = [chat, 1];
+    let excludeAfter = false;
+    const limit = Math.max(1, Math.min(1000, Math.floor(size) || 250));
+    for (;;) {
+      const tx = db.transaction(MESSAGES_STORE, 'readonly');
+      const request = tx
+        .objectStore(MESSAGES_STORE)
+        .index(MESSAGES_REACTION_ROWS_INDEX)
+        .getAll(
+          IDBKeyRange.bound(
+            after,
+            [chat, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER],
+            excludeAfter,
+          ),
+          limit,
+        );
+      const rows = await requestToPromise<MessageRecord[]>(request);
+      await waitForTransaction(tx);
+      if (!rows.length) return;
+      yield rows.map(toMessageRow);
+      if (rows.length < limit) return;
+      const last = rows[rows.length - 1];
+      after = [chat, (last.meta.reactions as unknown[]).length, last.id];
+      excludeAfter = true;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  async *messageBatches(
+    chatPublicKey: string,
+    size = 250,
+    afterTimestamp = '',
+  ): AsyncGenerator<MessageRow[]> {
+    let cursor: MessageCursor =
+      afterTimestamp && Date.parse(afterTimestamp) > 0
+        ? { id: Number.MAX_SAFE_INTEGER, created_at: afterTimestamp }
+        : { id: 0, created_at: '' };
+    for (;;) {
+      const batch = await this.listMessagesAfter(chatPublicKey, cursor, size);
+      if (!batch.rows.length) return;
+      yield batch.rows;
+      if (!batch.has_more) return;
+      const last = batch.rows[batch.rows.length - 1];
+      cursor = { id: last.id, created_at: last.created_at };
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  async searchMessages(chatPublicKey: string, query: string): Promise<MessageSearchResult[]> {
+    const results: MessageSearchResult[] = [];
+    if (!query.trim()) return results;
+    for await (const batch of this.messageBatches(chatPublicKey)) {
+      for (const row of batch) {
+        if (messageRecordMatchesSearchQuery(row, normalizeMessageSearchText(query), normalizeMeta))
+          results.push({
+            id: row.id,
+            chat_public_key: row.chat_public_key,
+            message: row.message,
+            created_at: row.created_at,
+            event_id: row.event_id,
+          });
+      }
+    }
+    return results.reverse();
   }
 
   async listLatestMessages(chatPublicKey: string, limit: number): Promise<MessageBatchResult> {
@@ -721,7 +985,7 @@ class ChatDataService {
   async listMessagesBefore(
     chatPublicKey: string,
     cursor: MessageCursor,
-    limit: number
+    limit: number,
   ): Promise<MessageBatchResult> {
     return this.collectMessagesByCursor(chatPublicKey, {
       direction: 'prev',
@@ -733,7 +997,7 @@ class ChatDataService {
   async listMessagesAfter(
     chatPublicKey: string,
     cursor: MessageCursor,
-    limit: number
+    limit: number,
   ): Promise<MessageBatchResult> {
     return this.collectMessagesByCursor(chatPublicKey, {
       direction: 'next',
@@ -745,7 +1009,7 @@ class ChatDataService {
   async findFirstIncomingMessageAfter(
     chatPublicKey: string,
     afterTimestamp: string,
-    loggedInPublicKey: string
+    loggedInPublicKey: string,
   ): Promise<MessageRow | null> {
     const normalizedPublicKey = normalizePublicKeyValue(chatPublicKey);
     const normalizedLoggedInPublicKey = normalizePublicKeyValue(loggedInPublicKey);
@@ -755,38 +1019,52 @@ class ChatDataService {
     }
 
     const db = await this.getDatabase();
-    const transaction = db.transaction(MESSAGES_STORE, 'readonly');
-    const store = transaction.objectStore(MESSAGES_STORE);
-    const index = store.index(MESSAGES_CHAT_CREATED_AT_INDEX);
-    const request = index.openCursor(
-      IDBKeyRange.lowerBound([normalizedPublicKey, trimmedAfterTimestamp], true),
-      'next'
-    );
-
-    const matchingRow = await new Promise<MessageRow | null>((resolve, reject) => {
-      request.onsuccess = () => {
-        const cursorValue = request.result;
-        if (!cursorValue) {
-          resolve(null);
-          return;
+    // Seek each sender's first unread row. A long run of our own outgoing
+    // messages must never turn opening a thread into a full-history walk.
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(MESSAGES_STORE, 'readonly');
+      const index = tx.objectStore(MESSAGES_STORE).index(MESSAGES_AUTHOR_CREATED_INDEX);
+      let first: MessageRow | null = null;
+      const authors = index.openKeyCursor(
+        IDBKeyRange.bound([normalizedPublicKey], [normalizedPublicKey, []]),
+      );
+      authors.onsuccess = () => {
+        const cursor = authors.result;
+        if (!cursor) return;
+        const author = (cursor.key as string[])[1];
+        if (
+          normalizePublicKeyValue(author) &&
+          normalizePublicKeyValue(author) !== normalizedLoggedInPublicKey
+        ) {
+          const rows = index.openCursor(
+            IDBKeyRange.bound(
+              [normalizedPublicKey, author, trimmedAfterTimestamp],
+              [normalizedPublicKey, author, []],
+              true,
+            ),
+          );
+          rows.onsuccess = () => {
+            const item = rows.result;
+            if (!item) return;
+            const row = toMessageRow(item.value as MessageRecord);
+            if (!isIncomingUnreadMessageActivity(row, normalizedLoggedInPublicKey)) {
+              item.continue();
+              return;
+            }
+            if (
+              !first ||
+              row.created_at < first.created_at ||
+              (row.created_at === first.created_at && row.id < first.id)
+            )
+              first = row;
+          };
         }
-
-        const record = cursorValue.value as MessageRecord;
-        if (isIncomingUnreadMessageActivity(record, normalizedLoggedInPublicKey)) {
-          resolve(toMessageRow(record));
-          return;
-        }
-
-        cursorValue.continue();
+        cursor.continue([normalizedPublicKey, author, []]);
       };
-
-      request.onerror = () => {
-        reject(request.error ?? new Error('Failed to iterate paged message cursor.'));
-      };
+      tx.oncomplete = () => resolve(first);
+      tx.onabort = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error);
     });
-
-    await waitForTransaction(transaction);
-    return matchingRow;
   }
 
   async listAllMessages(): Promise<MessageRow[]> {
@@ -794,7 +1072,7 @@ class ChatDataService {
     const transaction = db.transaction(MESSAGES_STORE, 'readonly');
     const store = transaction.objectStore(MESSAGES_STORE);
     const records = await requestToPromise<MessageRecord[]>(
-      store.getAll() as IDBRequest<MessageRecord[]>
+      store.getAll() as IDBRequest<MessageRecord[]>,
     );
     await waitForTransaction(transaction);
 
@@ -810,7 +1088,7 @@ class ChatDataService {
     const transaction = db.transaction(MESSAGES_STORE, 'readonly');
     const store = transaction.objectStore(MESSAGES_STORE);
     const record = await requestToPromise<MessageRecord | undefined>(
-      store.get(messageId) as IDBRequest<MessageRecord | undefined>
+      store.get(messageId) as IDBRequest<MessageRecord | undefined>,
     );
     await waitForTransaction(transaction);
 
@@ -828,20 +1106,8 @@ class ChatDataService {
       return null;
     }
 
-    const chat = await this.getChatByPublicKey(chatPublicKey);
-    if (!chat) {
-      return null;
-    }
-
-    if (eventId) {
-      const existingMessage = await this.getMessageByEventId(eventId);
-      if (existingMessage) {
-        return existingMessage;
-      }
-    }
-
     const record: Omit<MessageRecord, 'id'> = {
-      chat_public_key: chat.public_key,
+      chat_public_key: chatPublicKey,
       author_public_key: authorPublicKey,
       message,
       created_at: createdAt,
@@ -850,14 +1116,67 @@ class ChatDataService {
     };
 
     const db = await this.getDatabase();
-    const transaction = db.transaction(MESSAGES_STORE, 'readwrite');
+    // Validate and insert within the same transaction: no duplicate preflight
+    // transactions, and concurrent deliveries observe a single committed row.
+    const transaction = db.transaction([CHATS_STORE, MESSAGES_STORE], 'readwrite');
     const store = transaction.objectStore(MESSAGES_STORE);
-
+    const completed = waitForTransaction(transaction);
+    void completed.catch(() => {});
     try {
+      const [chat, existing] = await Promise.all([
+        requestToPromise<ChatRecord | undefined>(
+          transaction.objectStore(CHATS_STORE).get(chatPublicKey),
+        ),
+        eventId
+          ? requestToPromise<MessageRecord | undefined>(
+              store.index(MESSAGES_EVENT_ID_INDEX).get(eventId),
+            )
+          : undefined,
+      ]);
+      if (chat?.type === 'group' && chat.meta.deleted_locally === true) {
+        await completed;
+        return null;
+      }
+      if (!chat || existing) {
+        await completed;
+        return chat && existing ? toMessageRow(existing) : null;
+      }
+      if (input.chat_activity) {
+        const activity = input.chat_activity;
+        const meta = normalizeMeta(chat.meta);
+        const currentIncoming = String(meta.last_incoming_message_at ?? '');
+        const seenAt =
+          [
+            meta.last_seen_received_activity_at,
+            meta.last_seen_incoming_activity_at,
+            meta.last_outgoing_message_at,
+          ]
+            .filter((value): value is string => typeof value === 'string')
+            .sort()
+            .at(-1) ?? '';
+        const preview =
+          activity.preview && activity.preview.at >= chat.last_message_at
+            ? activity.preview
+            : undefined;
+        transaction.objectStore(CHATS_STORE).put({
+          ...chat,
+          meta: {
+            ...meta,
+            ...(preview ? { last_message_author_public_key: authorPublicKey } : {}),
+            last_incoming_message_at:
+              activity.incomingAt > currentIncoming ? activity.incomingAt : currentIncoming,
+          },
+          unread_count:
+            seenAt >= activity.incomingAt
+              ? chat.unread_count
+              : normalizeUnreadCount(activity.unreadCount),
+          ...(preview ? { last_message: preview.text, last_message_at: preview.at } : {}),
+        });
+      }
       const insertedId = await requestToPromise<IDBValidKey>(
-        store.add(record) as IDBRequest<IDBValidKey>
+        store.add(withReactionIndex(record)) as IDBRequest<IDBValidKey>,
       );
-      await waitForTransaction(transaction);
+      await completed;
 
       return toMessageRow({
         ...record,
@@ -875,7 +1194,7 @@ class ChatDataService {
 
   async updateMessageMeta(
     messageId: number,
-    meta: Record<string, unknown>
+    meta: Record<string, unknown>,
   ): Promise<MessageRow | null> {
     const normalizedMessageId = Number(messageId);
     if (!Number.isInteger(normalizedMessageId) || normalizedMessageId <= 0) {
@@ -886,7 +1205,7 @@ class ChatDataService {
     const transaction = db.transaction(MESSAGES_STORE, 'readwrite');
     const store = transaction.objectStore(MESSAGES_STORE);
     const record = await requestToPromise<MessageRecord | undefined>(
-      store.get(normalizedMessageId) as IDBRequest<MessageRecord | undefined>
+      store.get(normalizedMessageId) as IDBRequest<MessageRecord | undefined>,
     );
     if (!record) {
       await waitForTransaction(transaction);
@@ -899,7 +1218,9 @@ class ChatDataService {
     };
 
     try {
-      await requestToPromise<IDBValidKey>(store.put(nextRecord) as IDBRequest<IDBValidKey>);
+      await requestToPromise<IDBValidKey>(
+        store.put(withReactionIndex(nextRecord)) as IDBRequest<IDBValidKey>,
+      );
       await waitForTransaction(transaction);
       return toMessageRow(nextRecord);
     } catch (error) {
@@ -910,7 +1231,7 @@ class ChatDataService {
 
   async applyMessageEdit(
     messageId: number,
-    input: ApplyMessageEditInput
+    input: ApplyMessageEditInput,
   ): Promise<MessageRow | null> {
     const normalizedMessageId = Number(messageId);
     const replacementEventId = normalizeEventId(input.event_id);
@@ -935,7 +1256,7 @@ class ChatDataService {
     const store = transaction.objectStore(MESSAGES_STORE);
     const eventIdIndex = store.index(MESSAGES_EVENT_ID_INDEX);
     const originalRecord = await requestToPromise<MessageRecord | undefined>(
-      store.get(normalizedMessageId) as IDBRequest<MessageRecord | undefined>
+      store.get(normalizedMessageId) as IDBRequest<MessageRecord | undefined>,
     );
     if (!originalRecord) {
       await waitForTransaction(transaction);
@@ -943,7 +1264,7 @@ class ChatDataService {
     }
 
     const persistedReplacement = await requestToPromise<MessageRecord | undefined>(
-      eventIdIndex.get(replacementEventId) as IDBRequest<MessageRecord | undefined>
+      eventIdIndex.get(replacementEventId) as IDBRequest<MessageRecord | undefined>,
     );
     if (
       persistedReplacement &&
@@ -985,24 +1306,97 @@ class ChatDataService {
           originalRecord.meta,
           effectiveReplacement.meta,
           previousEventId,
-          editedAt
-        )
+          editedAt,
+        ),
       ),
     };
 
     try {
       if (persistedReplacement && persistedReplacement.id !== originalRecord.id) {
         await requestToPromise<undefined>(
-          store.delete(persistedReplacement.id) as IDBRequest<undefined>
+          store.delete(persistedReplacement.id) as IDBRequest<undefined>,
         );
       }
-      await requestToPromise<IDBValidKey>(store.put(nextRecord) as IDBRequest<IDBValidKey>);
+      await requestToPromise<IDBValidKey>(
+        store.put(withReactionIndex(nextRecord)) as IDBRequest<IDBValidKey>,
+      );
       await waitForTransaction(transaction);
       return toMessageRow(nextRecord);
     } catch (error) {
       console.error('Failed to apply message edit in IndexedDB.', error);
       return null;
     }
+  }
+
+  // Reconcile a late intermediate edit without replacing the newer text or scanning history.
+  async reconcileMessageEditPredecessor(
+    messageId: number,
+    incoming: {
+      eventId: string;
+      previousEventId: string;
+      chat: string;
+      author: string;
+      createdAt: string;
+    },
+  ): Promise<MessageRow | null> {
+    const db = await this.getDatabase();
+    const transaction = db.transaction(MESSAGES_STORE, 'readwrite');
+    const store = transaction.objectStore(MESSAGES_STORE);
+    const latest = await requestToPromise<MessageRecord | undefined>(store.get(messageId));
+    const references = (record: MessageRecord) => {
+      const edited = record.meta.edited as { previousEventIds?: string[] } | undefined;
+      return edited?.previousEventIds ?? [];
+    };
+    const matches = (record: MessageRecord) =>
+      record.chat_public_key === incoming.chat &&
+      record.author_public_key === incoming.author &&
+      areMessageEditTimestampsEqual(record.created_at, incoming.createdAt);
+    if (
+      !latest ||
+      !matches(latest) ||
+      !references(latest).includes(incoming.eventId) ||
+      incoming.previousEventId === latest.event_id ||
+      incoming.previousEventId === incoming.eventId
+    ) {
+      await waitForTransaction(transaction);
+      return latest ? toMessageRow(latest) : null;
+    }
+    const [exact, edited] = await Promise.all([
+      requestToPromise<MessageRecord | undefined>(
+        store.index(MESSAGES_EVENT_ID_INDEX).get(incoming.previousEventId),
+      ),
+      requestToPromise<MessageRecord | undefined>(
+        store.index(MESSAGES_EDIT_IDS_INDEX).get(incoming.previousEventId),
+      ),
+    ]);
+    const ancestor = exact ?? edited;
+    if (ancestor && !matches(ancestor)) {
+      await waitForTransaction(transaction);
+      return toMessageRow(latest);
+    }
+    const next: MessageRecord = {
+      ...latest,
+      meta: {
+        ...latest.meta,
+        edited: {
+          ...(latest.meta.edited as Record<string, unknown>),
+          previousEventIds: [
+            ...new Set([
+              ...references(latest),
+              incoming.previousEventId,
+              ...(ancestor ? references(ancestor) : []),
+              ...(ancestor?.event_id && ancestor.event_id !== latest.event_id
+                ? [ancestor.event_id]
+                : []),
+            ]),
+          ],
+        },
+      },
+    };
+    if (ancestor && ancestor.id !== latest.id) store.delete(ancestor.id);
+    store.put(withReactionIndex(next));
+    await waitForTransaction(transaction);
+    return toMessageRow(next);
   }
 
   async updateMessageEventId(messageId: number, eventId: string): Promise<MessageRow | null> {
@@ -1021,11 +1415,19 @@ class ChatDataService {
     const transaction = db.transaction(MESSAGES_STORE, 'readwrite');
     const store = transaction.objectStore(MESSAGES_STORE);
     const record = await requestToPromise<MessageRecord | undefined>(
-      store.get(normalizedMessageId) as IDBRequest<MessageRecord | undefined>
+      store.get(normalizedMessageId) as IDBRequest<MessageRecord | undefined>,
     );
     if (!record) {
       await waitForTransaction(transaction);
       return null;
+    }
+
+    // Relay acknowledgements may finish after an edit has replaced this row.
+    // Check inside the write transaction so an old publish cannot rebind the
+    // replacement to a deleted predecessor (including during a retry).
+    if (messageEditReferencesEventId(record.meta, normalizedEventId)) {
+      await waitForTransaction(transaction);
+      return toMessageRow(record);
     }
 
     const nextRecord: MessageRecord = {
@@ -1034,7 +1436,9 @@ class ChatDataService {
     };
 
     try {
-      await requestToPromise<IDBValidKey>(store.put(nextRecord) as IDBRequest<IDBValidKey>);
+      await requestToPromise<IDBValidKey>(
+        store.put(withReactionIndex(nextRecord)) as IDBRequest<IDBValidKey>,
+      );
       await waitForTransaction(transaction);
       return toMessageRow(nextRecord);
     } catch (error) {
@@ -1058,11 +1462,38 @@ class ChatDataService {
     const store = transaction.objectStore(MESSAGES_STORE);
     const index = store.index(MESSAGES_EVENT_ID_INDEX);
     const record = await requestToPromise<MessageRecord | undefined>(
-      index.get(normalizedEventId) as IDBRequest<MessageRecord | undefined>
+      index.get(normalizedEventId) as IDBRequest<MessageRecord | undefined>,
     );
     await waitForTransaction(transaction);
 
     return record ? toMessageRow(record) : null;
+  }
+
+  async getIncomingMessageContext(
+    chatPublicKey: string,
+    eventId: string,
+  ): Promise<{ chat: ChatRow | null; existingMessage: MessageRow | null }> {
+    const db = await this.getDatabase();
+    const tx = db.transaction([CHATS_STORE, MESSAGES_STORE], 'readonly');
+    const store = tx.objectStore(MESSAGES_STORE);
+    const id = normalizeEventId(eventId);
+    const [chat, exact, edited] = await Promise.all([
+      requestToPromise<ChatRecord | undefined>(
+        tx.objectStore(CHATS_STORE).get(normalizePublicKeyValue(chatPublicKey)),
+      ),
+      id
+        ? requestToPromise<MessageRecord | undefined>(store.index(MESSAGES_EVENT_ID_INDEX).get(id))
+        : undefined,
+      id
+        ? requestToPromise<MessageRecord | undefined>(store.index(MESSAGES_EDIT_IDS_INDEX).get(id))
+        : undefined,
+    ]);
+    await waitForTransaction(tx);
+    const message = exact ?? edited;
+    return {
+      chat: chat ? toChatRow(chat) : null,
+      existingMessage: message ? toMessageRow(message) : null,
+    };
   }
 
   async getMessageByEventIdOrEditReference(eventId: string): Promise<MessageRow | null> {
@@ -1071,33 +1502,20 @@ class ChatDataService {
       return null;
     }
 
-    const exactMessage = await this.getMessageByEventId(normalizedEventId);
-    if (exactMessage) {
-      return exactMessage;
-    }
-
     const db = await this.getDatabase();
     const transaction = db.transaction(MESSAGES_STORE, 'readonly');
     const store = transaction.objectStore(MESSAGES_STORE);
-    const records = await requestToPromise<MessageRecord[]>(
-      store.getAll() as IDBRequest<MessageRecord[]>
-    );
+    const [exact, edited] = await Promise.all([
+      requestToPromise<MessageRecord | undefined>(
+        store.index(MESSAGES_EVENT_ID_INDEX).get(normalizedEventId),
+      ),
+      requestToPromise<MessageRecord | undefined>(
+        store.index(MESSAGES_EDIT_IDS_INDEX).get(normalizedEventId),
+      ),
+    ]);
     await waitForTransaction(transaction);
-
-    const matchingRecord = records.find((record) => {
-      const edited = normalizeMeta(record.meta).edited;
-      if (!edited || typeof edited !== 'object' || Array.isArray(edited)) {
-        return false;
-      }
-
-      const previousEventIds = (edited as Record<string, unknown>).previousEventIds;
-      return (
-        Array.isArray(previousEventIds) &&
-        previousEventIds.some((entry) => normalizeEventId(entry) === normalizedEventId)
-      );
-    });
-
-    return matchingRecord ? toMessageRow(matchingRecord) : null;
+    const record = exact ?? edited;
+    return record ? toMessageRow(record) : null;
   }
 
   async deleteMessageByEventId(eventId: string): Promise<boolean> {
@@ -1134,16 +1552,11 @@ class ChatDataService {
     const db = await this.getDatabase();
     const transaction = db.transaction(MESSAGES_STORE, 'readonly');
     const store = transaction.objectStore(MESSAGES_STORE);
-    const records = await requestToPromise<MessageRecord[]>(
-      store.getAll() as IDBRequest<MessageRecord[]>
+    const record = await requestToPromise<MessageRecord | undefined>(
+      store.index(MESSAGES_REACTION_IDS_INDEX).get(normalizedEventId),
     );
     await waitForTransaction(transaction);
-
-    const matchingRecord = records.find((record) => {
-      return hasReactionEventId(normalizeMeta(record.meta), normalizedEventId);
-    });
-
-    return matchingRecord ? toMessageRow(matchingRecord) : null;
+    return record ? toMessageRow(record) : null;
   }
 
   async getDatabase(): Promise<IDBDatabase> {
@@ -1208,7 +1621,7 @@ class ChatDataService {
             MESSAGES_CHAT_PUBLIC_KEY_INDEX,
             {
               unique: false,
-            }
+            },
           );
         }
         if (!messagesStore.indexNames.contains(MESSAGES_CHAT_CREATED_AT_INDEX)) {
@@ -1217,8 +1630,49 @@ class ChatDataService {
             [MESSAGES_CHAT_PUBLIC_KEY_INDEX, 'created_at'],
             {
               unique: false,
-            }
+            },
           );
+        }
+        if (!messagesStore.indexNames.contains(MESSAGES_EDIT_IDS_INDEX)) {
+          messagesStore.createIndex(MESSAGES_EDIT_IDS_INDEX, 'meta.edited.previousEventIds', {
+            multiEntry: true,
+          });
+        }
+        if (!messagesStore.indexNames.contains(MESSAGES_REACTION_IDS_INDEX)) {
+          messagesStore.createIndex(MESSAGES_REACTION_IDS_INDEX, MESSAGES_REACTION_IDS_INDEX, {
+            multiEntry: true,
+          });
+          // Upgrade old rows one cursor at a time, never materializing the history.
+          const backfill = messagesStore.openCursor();
+          backfill.onsuccess = () => {
+            const cursor = backfill.result;
+            if (!cursor) return;
+            const record = cursor.value as MessageRecord;
+            if (Array.isArray(record.meta?.reactions) && record.meta.reactions.length)
+              cursor.update(withReactionIndex(record));
+            cursor.continue();
+          };
+        }
+        // Additive indexes: IndexedDB indexes existing rows atomically; no row rewrites.
+        if (!messagesStore.indexNames.contains(MESSAGES_AUTHOR_CREATED_INDEX)) {
+          messagesStore.createIndex(MESSAGES_AUTHOR_CREATED_INDEX, [
+            'chat_public_key',
+            'author_public_key',
+            'created_at',
+          ]);
+        }
+        if (!messagesStore.indexNames.contains(MESSAGES_REPLY_INDEX)) {
+          messagesStore.createIndex(MESSAGES_REPLY_INDEX, [
+            'chat_public_key',
+            'meta.reply.eventId',
+          ]);
+        }
+        if (!messagesStore.indexNames.contains(MESSAGES_REACTION_ROWS_INDEX)) {
+          messagesStore.createIndex(MESSAGES_REACTION_ROWS_INDEX, [
+            'chat_public_key',
+            'meta.reactions.length',
+            'id',
+          ]);
         }
         if (!messagesStore.indexNames.contains(MESSAGES_EVENT_ID_INDEX)) {
           messagesStore.createIndex(MESSAGES_EVENT_ID_INDEX, MESSAGES_EVENT_ID_INDEX, {
@@ -1251,7 +1705,7 @@ class ChatDataService {
       direction: IDBCursorDirection;
       limit: number;
       cursor?: MessageCursor;
-    }
+    },
   ): Promise<MessageBatchResult> {
     const normalizedPublicKey = normalizePublicKeyValue(chatPublicKey);
     const normalizedLimit = Math.max(0, Math.floor(Number(options.limit) || 0));
@@ -1268,7 +1722,7 @@ class ChatDataService {
     const index = store.index(MESSAGES_CHAT_CREATED_AT_INDEX);
     const request = index.openCursor(
       createChatCreatedAtRangeFromCursor(normalizedPublicKey, options.cursor, options.direction),
-      options.direction
+      options.direction,
     );
 
     const batchResult = await new Promise<MessageBatchResult>((resolve, reject) => {
@@ -1296,7 +1750,16 @@ class ChatDataService {
           const shouldInclude = options.direction === 'next' ? comparison > 0 : comparison < 0;
 
           if (!shouldInclude) {
-            cursorValue.continue();
+            // Skip a large run sharing one timestamp in a single index operation.
+            if (
+              record.created_at === options.cursor.created_at &&
+              record.id !== options.cursor.id
+            ) {
+              cursorValue.continuePrimaryKey(
+                [normalizedPublicKey, options.cursor.created_at],
+                options.cursor.id,
+              );
+            } else cursorValue.continue();
             return;
           }
         }

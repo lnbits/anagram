@@ -1,6 +1,6 @@
-import { watchRelaySettingsSubscriptions } from 'src/stores/nostr/relaySettingsSubscriptions';
+import { watchRelaySettingsSubscriptions } from '#src/stores/nostr/relaySettingsSubscriptions.ts';
 import { describe, expect, it, vi } from 'vitest';
-import { ref } from 'vue';
+import { ref } from '#src/lib/state/reactivity.ts';
 
 describe('relay settings orchestration', () => {
   it('ignores hydration and startup changes and uses one path for real settings changes', () => {

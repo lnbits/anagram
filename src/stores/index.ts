@@ -1,7 +1,1 @@
-import { createPinia } from 'pinia';
-import { store } from 'quasar/wrappers';
-
-export default store(() => {
-  const pinia = createPinia();
-  return pinia;
-});
+export { defineStore } from '#src/lib/state/store.ts';

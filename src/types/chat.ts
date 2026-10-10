@@ -1,5 +1,5 @@
-import type { NostrEvent } from '@nostr-dev-kit/ndk';
-import type { ContactGroupMember } from 'src/types/contact';
+import type { NostrEvent } from '#src/lib/nostr/client.ts';
+import type { ContactGroupMember } from '#src/types/contact.ts';
 
 export type ChatInboxState = 'accepted' | 'blocked';
 export type ChatType = 'user' | 'group';
@@ -9,6 +9,8 @@ export interface ChatGroupEpochKey {
   epoch_public_key: string;
   epoch_private_key_encrypted: string;
   invitation_created_at?: string;
+  invitation_proof?: string;
+  invitation_event_id?: string;
 }
 
 export interface GroupMemberTicketDelivery {
@@ -19,6 +21,8 @@ export interface GroupMemberTicketDelivery {
 }
 
 export interface ChatMetadata {
+  deleted_locally?: boolean;
+  group_conflicting_epoch?: number;
   avatar?: string;
   picture?: string;
   given_name?: string;

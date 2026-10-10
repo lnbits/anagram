@@ -1,64 +1,72 @@
-import NDK, {
-  NDKEvent,
-  type NDKFilter,
-  NDKKind,
-  NDKRelayList,
-  NDKRelaySet,
-  NDKSubscriptionCacheUsage,
-  type NDKSubscriptionOptions,
-  type NDKUser,
-  type NDKUserProfile,
-} from '@nostr-dev-kit/ndk';
-import { contactsService } from 'src/services/contactsService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
+import {
+  metadataIndexerFallbacks,
+  PUBLIC_DISCOVERY_INDEXERS,
+} from '#src/stores/nostr/metadataIndexers.ts';
+import { createProfileHydrationRuntime } from '#src/stores/nostr/profileHydrationRuntime.ts';
+import { getPublicProfile, rememberPublicProfile } from '#src/lib/state/publicProfiles.ts';
+import NostrClient, {
+  ClientEvent,
+  type NostrFilter,
+  NostrKind,
+  NostrRelayList,
+  NostrRelaySet,
+  NostrSubscriptionCacheUsage,
+  type NostrSubscriptionOptions,
+  type NostrUser,
+  type NostrUserProfile,
+} from '#src/lib/nostr/client.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
 import {
   bucketRelayTargets,
   createDesiredSubscriptions,
   subscriptionSignature,
-} from 'src/stores/nostr/desiredSubscriptions';
+} from '#src/stores/nostr/desiredSubscriptions.ts';
 import {
   mergeRelayEntriesWithDirectMessageReceiveRelayEntriesValue,
   normalizeWritableRelayUrlsValue,
   relayEntriesFromDirectMessageReceiveRelayEventValue,
-} from 'src/stores/nostr/valueUtils';
-import type { ContactMetadata, ContactRecord, ContactRelay } from 'src/types/contact';
+} from '#src/stores/nostr/valueUtils.ts';
+import type { ContactMetadata, ContactRecord, ContactRelay } from '#src/types/contact.ts';
 
 interface ContactSubscriptionsRuntimeDeps {
+  applyOwnRelayList?: (event: ClientEvent) => Promise<void>;
+  applyOwnPrivateRelayList?: (event: ClientEvent) => Promise<void>;
   queueRoutingRefresh?: () => void;
   applyContactProfileEventStateToMeta: (
     meta: ContactMetadata | undefined,
     eventState: {
       createdAt: number;
       eventId: string;
-    }
+    },
   ) => ContactMetadata;
   applyContactRelayListEventStateToMeta: (
     meta: ContactMetadata | undefined,
     eventState: {
       createdAt: number;
       eventId: string;
-    }
+    },
   ) => ContactMetadata;
-  buildContactProfileEventState: (event: Pick<NDKEvent, 'created_at' | 'id'>) => {
+  buildContactProfileEventState: (event: Pick<ClientEvent, 'created_at' | 'id'>) => {
     createdAt: number;
     eventId: string;
   };
-  buildContactRelayListEventState: (event: Pick<NDKEvent, 'created_at' | 'id'>) => {
+  buildContactRelayListEventState: (event: Pick<ClientEvent, 'created_at' | 'id'>) => {
     createdAt: number;
     eventId: string;
   };
   buildSubscriptionEventDetails: (
-    event: Pick<NDKEvent, 'id' | 'kind' | 'created_at' | 'pubkey'>
+    event: Pick<ClientEvent, 'id' | 'kind' | 'created_at' | 'pubkey'>,
   ) => Record<string, unknown>;
   buildSubscriptionRelayDetails: (relayUrls: string[]) => Record<string, unknown>;
   buildTrackedContactSubscriptionTargetDetails: (
-    contactPubkeys: string[]
+    contactPubkeys: string[],
   ) => Promise<Record<string, unknown>>;
   buildUpdatedContactMeta: (
     existingMeta: ContactMetadata | undefined,
-    profile: NDKUserProfile | null,
+    profile: NostrUserProfile | null,
     resolvedNpub: string | null,
-    resolvedNprofile: string | null
+    resolvedNprofile: string | null,
   ) => ContactMetadata;
   bumpContactListVersion: () => void;
   chatStore: {
@@ -66,63 +74,65 @@ interface ContactSubscriptionsRuntimeDeps {
   };
   contactMetadataEqual: (
     first: ContactMetadata | undefined,
-    second: ContactMetadata | undefined
+    second: ContactMetadata | undefined,
   ) => boolean;
   contactRelayListsEqual: (
     first: ContactRelay[] | undefined,
-    second: ContactRelay[] | undefined
+    second: ContactRelay[] | undefined,
   ) => boolean;
   encodeNprofile: (pubkeyHex: string) => string | null;
   encodeNpub: (pubkeyHex: string) => string | null;
   ensureRelayConnections: (relayUrls: string[]) => Promise<void>;
-  extractRelayUrlsFromEvent: (event: NDKEvent) => string[];
+  extractRelayUrlsFromEvent: (event: ClientEvent) => string[];
   formatSubscriptionLogValue: (value: string | null | undefined) => string | null;
   getFilterSince: () => number;
   getLoggedInPublicKeyHex: () => string | null;
-  getLoggedInSignerUser: () => Promise<NDKUser>;
+  getLoggedInSignerUser: () => Promise<NostrUser>;
   isPubkeyBlocked: (pubkeyHex: string) => boolean;
   listTrackedContactPubkeys: () => Promise<string[]>;
   logSubscription: (label: string, stage: string, details?: Record<string, unknown>) => void;
   markContactProfileEventApplied: (
     pubkeyHex: string,
-    eventState: { createdAt: number; eventId: string }
+    eventState: { createdAt: number; eventId: string },
   ) => void;
   markContactRelayListEventApplied: (
     pubkeyHex: string,
-    eventState: { createdAt: number; eventId: string }
+    eventState: { createdAt: number; eventId: string },
   ) => void;
-  ndk: NDK;
-  parseContactProfileEvent: (event: Pick<NDKEvent, 'content'>) => NDKUserProfile | null;
+  ndk: NostrClient;
+  parseContactProfileEvent: (event: Pick<ClientEvent, 'content'>) => NostrUserProfile | null;
   pruneTrackedContactProfileEventState: (activePubkeys: string[]) => void;
   pruneTrackedContactRelayListEventState: (activePubkeys: string[]) => void;
-  relayEntriesFromRelayList: (relayList: NDKRelayList | null | undefined) => ContactRelay[];
+  relayEntriesFromRelayList: (relayList: NostrRelayList | null | undefined) => ContactRelay[];
   relaySignature: (relays: string[]) => string;
   resolveTrackedContactReadRelayUrls: (seedRelayUrls?: string[]) => Promise<string[]>;
   shouldApplyContactProfileEvent: (
-    event: Pick<NDKEvent, 'created_at' | 'id' | 'pubkey'>
+    event: Pick<ClientEvent, 'created_at' | 'id' | 'pubkey'>,
   ) => boolean;
   shouldApplyContactRelayListEvent: (
-    event: Pick<NDKEvent, 'created_at' | 'id' | 'pubkey'>
+    event: Pick<ClientEvent, 'created_at' | 'id' | 'pubkey'>,
   ) => boolean;
   shouldPreserveExistingGroupRelays: (
     contact: Pick<ContactRecord, 'type' | 'public_key' | 'relays'> | null | undefined,
-    nextRelayEntries: ContactRelay[] | undefined
+    nextRelayEntries: ContactRelay[] | undefined,
   ) => boolean;
   subscribeWithReqLogging: (
     label: string,
     requestLabel: string,
-    filters: NDKFilter | NDKFilter[],
-    options: NDKSubscriptionOptions & {
-      onEvent?: (event: NDKEvent) => void;
+    filters: NostrFilter | NostrFilter[],
+    options: NostrSubscriptionOptions & {
+      onEvent?: (event: ClientEvent) => void;
       onEose?: () => void;
       onClose?: () => void;
     },
-    details?: Record<string, unknown>
-  ) => ReturnType<NDK['subscribe']>;
+    details?: Record<string, unknown>,
+  ) => ReturnType<NostrClient['subscribe']>;
   updateStoredEventSinceFromCreatedAt: (value: unknown) => void;
 }
 
 export function createContactSubscriptionsRuntime({
+  applyOwnPrivateRelayList = async () => {},
+  applyOwnRelayList,
   queueRoutingRefresh = () => {},
   applyContactProfileEventStateToMeta,
   applyContactRelayListEventStateToMeta,
@@ -155,15 +165,106 @@ export function createContactSubscriptionsRuntime({
   updateStoredEventSinceFromCreatedAt,
 }: ContactSubscriptionsRuntimeDeps) {
   const subscriptions = createDesiredSubscriptions();
+  const metadataClient = new NostrClient({ authenticate: false });
+  const profileHydration = createProfileHydrationRuntime({
+    isBlocked: isPubkeyBlocked,
+    getOwnPublicKey: getLoggedInPublicKeyHex,
+    onPrivateRelayList: (event) => {
+      void applyOwnPrivateRelayList(event).catch(() => {});
+    },
+    onProfile: queueContactProfileEventApplication,
+    onRelayList: queueContactRelayListEventApplication,
+    subscribe: (filters, relayUrls, onEvent, onDone) => {
+      if (relayUrls.every((url) => PUBLIC_DISCOVERY_INDEXERS.includes(url)))
+        return metadataClient.subscribe(filters, {
+          relayUrls,
+          onEvent,
+          onEose: () => onDone(true),
+          onClose: () => onDone(false),
+          closeOnEose: true,
+        });
+      return subscribeWithReqLogging('profile-lookup', 'profile-lookup', filters, {
+        relaySet: NostrRelaySet.fromRelayUrls(relayUrls, ndk, false),
+        onEvent,
+        onEose: () => onDone(true),
+        onClose: () => onDone(false),
+        closeOnEose: true,
+      });
+    },
+  });
   let generation = 0;
   let contactProfileApplyQueue = Promise.resolve();
   let contactRelayListApplyQueue = Promise.resolve();
   let activeContactPubkeys = new Set<string>();
-  const relayEvents = new Map<string, Map<number, NDKEvent>>();
+  let trackedContactPubkeys = new Set<string>();
+  let visibleProfileKeys: string[] = [];
+  let baseVisibleProfileKeys: string[] = [];
+  const mountedProfiles = new Map<string, number>();
+  let visibleGroupKey = '';
+  let visibleProfileSignature = '';
+  let visibleProfileTimer: ReturnType<typeof setTimeout> | undefined;
+  function setVisibleProfileTargets(publicKeys: string[], groupPublicKey = ''): void {
+    baseVisibleProfileKeys = publicKeys;
+    const targets = [...publicKeys, ...mountedProfiles.keys()];
+    const keys = [
+      ...new Set(targets.filter((key) => /^[a-f0-9]{64}$/.test(key) && !isPubkeyBlocked(key))),
+    ].sort();
+    const groupKey = inputSanitizerService.normalizeHexKey(groupPublicKey) ?? '';
+    const signature = JSON.stringify([keys, groupKey]);
+    if (signature === visibleProfileSignature) return;
+    visibleProfileSignature = signature;
+    visibleProfileKeys = keys;
+    void contactsService.restorePublicProfiles(keys).catch(() => {});
+    visibleGroupKey = groupKey;
+    clearTimeout(visibleProfileTimer);
+    visibleProfileTimer = setTimeout(() => {
+      visibleProfileTimer = undefined;
+      void subscribeContactProfileUpdates().catch(() => {});
+    }, 50);
+  }
+  // Mounted mention labels share the same batched, account-scoped profile queue.
+  function retainVisibleProfileTarget(publicKey: string): () => void {
+    if (!/^[a-f0-9]{64}$/.test(publicKey) || isPubkeyBlocked(publicKey)) return () => {};
+    const token = generation;
+    mountedProfiles.set(publicKey, (mountedProfiles.get(publicKey) ?? 0) + 1);
+    setVisibleProfileTargets(baseVisibleProfileKeys, visibleGroupKey);
+    let released = false;
+    return () => {
+      if (released || token !== generation) return;
+      released = true;
+      const count = (mountedProfiles.get(publicKey) ?? 1) - 1;
+      if (count) mountedProfiles.set(publicKey, count);
+      else mountedProfiles.delete(publicKey);
+      setVisibleProfileTargets(baseVisibleProfileKeys, visibleGroupKey);
+    };
+  }
+  async function ensureTrackedContact(publicKey: string): Promise<ContactRecord | null> {
+    const existing = await contactsService.getContactByPublicKey(publicKey);
+    if (existing || !trackedContactPubkeys.has(publicKey) || isPubkeyBlocked(publicKey))
+      return existing;
+    // A local profile cache is not membership in the private contact list.
+    return (
+      (await contactsService.createContact({
+        public_key: publicKey,
+        name: publicKey.slice(0, 16),
+        meta: {},
+      })) ?? contactsService.getContactByPublicKey(publicKey)
+    );
+  }
+  const relayEvents = new Map<string, Map<number, ClientEvent>>();
+  const profileSnapshots = new Map<
+    string,
+    {
+      profile: NostrUserProfile;
+      event: ClientEvent;
+      createdAt: number;
+      eventId: string;
+    }
+  >();
 
   async function applyGroupMemberProfile(
     publicKey: string,
-    profile: NDKUserProfile
+    profile: NostrUserProfile,
   ): Promise<void> {
     for (const group of await contactsService.listContacts()) {
       if (
@@ -175,7 +276,7 @@ export function createContactSubscriptionsRuntime({
         {},
         profile,
         encodeNpub(publicKey),
-        encodeNprofile(publicKey)
+        encodeNprofile(publicKey),
       );
       const members = group.meta.group_members.map((member) =>
         member.public_key !== publicKey
@@ -187,20 +288,21 @@ export function createContactSubscriptionsRuntime({
                 ['about', 'picture', 'avatar', 'nip05', 'nprofile'].flatMap((key) => {
                   const value = metadata[key as keyof ContactMetadata];
                   return typeof value === 'string' ? [[key, value]] : [];
-                })
+                }),
               ),
-            }
+            },
       );
       if (JSON.stringify(members) === JSON.stringify(group.meta.group_members)) continue;
       await contactsService.updateContact(group.id, {
+        metaBase: group.meta,
         meta: { ...group.meta, group_members: members },
       });
       bumpContactListVersion();
     }
   }
 
-  async function applyContactProfileEvent(event: NDKEvent): Promise<void> {
-    if (!shouldApplyContactProfileEvent(event)) {
+  async function applyContactProfileEvent(event: ClientEvent, replay = false): Promise<void> {
+    if (!replay && !shouldApplyContactProfileEvent(event)) {
       return;
     }
 
@@ -219,8 +321,16 @@ export function createContactSubscriptionsRuntime({
     }
 
     const nextEventState = buildContactProfileEventState(event);
+    const cached = profileSnapshots.get(normalizedPubkey);
+    if (
+      cached &&
+      (cached.createdAt > nextEventState.createdAt ||
+        (cached.createdAt === nextEventState.createdAt && cached.eventId < nextEventState.eventId))
+    )
+      return;
+    profileSnapshots.set(normalizedPubkey, { profile: nextProfile, event, ...nextEventState });
     await contactsService.init();
-    const existingContact = await contactsService.getContactByPublicKey(normalizedPubkey);
+    const existingContact = await ensureTrackedContact(normalizedPubkey);
     if (
       existingContact?.meta.blocked === true ||
       (existingContact?.meta.profile_event_created_at ?? 0) > nextEventState.createdAt
@@ -237,9 +347,9 @@ export function createContactSubscriptionsRuntime({
               {},
               nextProfile,
               encodeNpub(normalizedPubkey),
-              encodeNprofile(normalizedPubkey)
+              encodeNprofile(normalizedPubkey),
             ),
-            nextEventState
+            nextEventState,
           ),
         });
       }
@@ -254,7 +364,7 @@ export function createContactSubscriptionsRuntime({
       existingContact.meta,
       nextProfile,
       existingContact.meta.npub?.trim() || encodeNpub(normalizedPubkey) || '',
-      existingContact.meta.nprofile?.trim() || encodeNprofile(normalizedPubkey) || ''
+      existingContact.meta.nprofile?.trim() || encodeNprofile(normalizedPubkey) || '',
     );
     const persistedMeta = applyContactProfileEventStateToMeta(nextMeta, nextEventState);
     const nextName =
@@ -273,6 +383,7 @@ export function createContactSubscriptionsRuntime({
     }
 
     const updatedContact = await contactsService.updateContact(existingContact.id, {
+      metaBase: existingContact.meta,
       name: nextName,
       ...(nextMeta.group === true ? { type: 'group' as const } : {}),
       meta: persistedMeta,
@@ -291,20 +402,32 @@ export function createContactSubscriptionsRuntime({
     }
   }
 
-  function queueContactProfileEventApplication(event: NDKEvent): void {
+  function queueContactProfileEventApplication(event: ClientEvent): void {
+    const publicKey = inputSanitizerService.normalizeHexKey(event.pubkey);
+    if (!publicKey || isPubkeyBlocked(publicKey)) return;
+    const profile = parseContactProfileEvent(event);
+    if (!profile) return;
+    const state = buildContactProfileEventState(event);
+    // The verified kind-0 event reaches every visible identity before any IDB
+    // work or relay-list reconciliation can hold up profile persistence.
+    rememberPublicProfile(publicKey, profile, state.createdAt, state.eventId);
+    const displayProfile = getPublicProfile(publicKey);
+    if (displayProfile?.eventId === state.eventId)
+      void contactsService.savePublicProfile(publicKey, displayProfile).catch(() => {});
+    const runGeneration = generation;
     contactProfileApplyQueue = contactRelayListApplyQueue
-      .then(() => applyContactProfileEvent(event))
+      .then(() => (runGeneration === generation ? applyContactProfileEvent(event) : undefined))
       .catch((error) => {
         console.error('Failed to process contact profile event', error);
       });
     contactRelayListApplyQueue = contactProfileApplyQueue;
   }
 
-  async function applyContactRelayListEvent(event: NDKEvent): Promise<void> {
+  async function applyContactRelayListEvent(event: ClientEvent): Promise<void> {
     const normalizedPubkey = inputSanitizerService.normalizeHexKey(event.pubkey);
     if (!normalizedPubkey || isPubkeyBlocked(normalizedPubkey)) return;
-    const byKind = relayEvents.get(normalizedPubkey) ?? new Map<number, NDKEvent>();
-    const kind = event.kind ?? NDKKind.RelayList;
+    const byKind = new Map(relayEvents.get(normalizedPubkey));
+    const kind = event.kind ?? NostrKind.RelayList;
     const previous = byKind.get(kind);
     if (
       previous &&
@@ -314,9 +437,9 @@ export function createContactSubscriptionsRuntime({
       return;
     const nextEventState = buildContactRelayListEventState(event);
     await contactsService.init();
-    const existingContact = await contactsService.getContactByPublicKey(normalizedPubkey);
+    const existingContact = await ensureTrackedContact(normalizedPubkey);
     if (!existingContact) {
-      if (kind === NDKKind.RelayList)
+      if (kind === NostrKind.RelayList)
         markContactRelayListEventApplied(normalizedPubkey, nextEventState);
       return;
     }
@@ -324,20 +447,19 @@ export function createContactSubscriptionsRuntime({
       return;
     }
 
-    const isGeneralList = kind === NDKKind.RelayList;
+    const isGeneralList = kind === NostrKind.RelayList;
     const storedCreatedAt = isGeneralList
       ? existingContact.meta.relay_list_event_created_at
       : existingContact.meta.dm_receive_relay_event_created_at;
     if ((storedCreatedAt ?? 0) > nextEventState.createdAt) return;
     byKind.set(kind, event);
-    relayEvents.set(normalizedPubkey, byKind);
-    const relayListEvent = byKind.get(NDKKind.RelayList);
-    const dmRelayEvent = byKind.get(NDKKind.DirectMessageReceiveRelayList);
+    const relayListEvent = byKind.get(NostrKind.RelayList);
+    const dmRelayEvent = byKind.get(NostrKind.DirectMessageReceiveRelayList);
     const persistedMeta = isGeneralList
       ? applyContactRelayListEventStateToMeta(existingContact.meta, nextEventState)
       : { ...existingContact.meta, dm_receive_relay_event_created_at: nextEventState.createdAt };
     const generalEntries = relayListEvent
-      ? relayEntriesFromRelayList(NDKRelayList.from(relayListEvent))
+      ? relayEntriesFromRelayList(NostrRelayList.from(relayListEvent))
       : (existingContact.meta.general_relay_entries ?? existingContact.relays ?? []);
     const dmEntries = dmRelayEvent
       ? relayEntriesFromDirectMessageReceiveRelayEventValue(dmRelayEvent)
@@ -346,7 +468,7 @@ export function createContactSubscriptionsRuntime({
     persistedMeta.dm_receive_relay_entries = dmEntries;
     const nextRelayEntries = mergeRelayEntriesWithDirectMessageReceiveRelayEntriesValue(
       generalEntries,
-      dmEntries
+      dmEntries,
     );
 
     if (shouldPreserveExistingGroupRelays(existingContact, nextRelayEntries)) {
@@ -357,13 +479,15 @@ export function createContactSubscriptionsRuntime({
       });
       if (!contactMetadataEqual(existingContact.meta, persistedMeta)) {
         const updatedContact = await contactsService.updateContact(existingContact.id, {
+          metaBase: existingContact.meta,
           meta: persistedMeta,
         });
         if (!updatedContact) {
           return;
         }
       }
-      if (kind === NDKKind.RelayList)
+      relayEvents.set(normalizedPubkey, byKind);
+      if (kind === NostrKind.RelayList)
         markContactRelayListEventApplied(normalizedPubkey, nextEventState);
       return;
     }
@@ -372,12 +496,14 @@ export function createContactSubscriptionsRuntime({
       contactRelayListsEqual(existingContact.relays, nextRelayEntries) &&
       contactMetadataEqual(existingContact.meta, persistedMeta)
     ) {
-      if (kind === NDKKind.RelayList)
+      relayEvents.set(normalizedPubkey, byKind);
+      if (kind === NostrKind.RelayList)
         markContactRelayListEventApplied(normalizedPubkey, nextEventState);
       return;
     }
 
     const updatedContact = await contactsService.updateContact(existingContact.id, {
+      metaBase: existingContact.meta,
       meta: persistedMeta,
       relays: nextRelayEntries,
     });
@@ -385,7 +511,8 @@ export function createContactSubscriptionsRuntime({
       return;
     }
 
-    if (kind === NDKKind.RelayList)
+    relayEvents.set(normalizedPubkey, byKind);
+    if (kind === NostrKind.RelayList)
       markContactRelayListEventApplied(normalizedPubkey, nextEventState);
     if (!contactRelayListsEqual(existingContact.relays, nextRelayEntries)) {
       bumpContactListVersion();
@@ -393,9 +520,14 @@ export function createContactSubscriptionsRuntime({
     }
   }
 
-  function queueContactRelayListEventApplication(event: NDKEvent): void {
+  function queueContactRelayListEventApplication(event: ClientEvent): void {
+    if (event.pubkey === getLoggedInPublicKeyHex() && applyOwnRelayList) {
+      void applyOwnRelayList(event).catch(() => {});
+      return;
+    }
+    const runGeneration = generation;
     contactRelayListApplyQueue = contactRelayListApplyQueue
-      .then(() => applyContactRelayListEvent(event))
+      .then(() => (runGeneration === generation ? applyContactRelayListEvent(event) : undefined))
       .catch((error) => {
         console.error('Failed to process contact relay list event', error);
       });
@@ -403,7 +535,7 @@ export function createContactSubscriptionsRuntime({
 
   async function subscribeContactProfileUpdates(
     seedRelayUrls: string[] = [],
-    _force = false
+    _force = false,
   ): Promise<void> {
     const runGeneration = generation;
     const self = getLoggedInPublicKeyHex();
@@ -414,11 +546,16 @@ export function createContactSubscriptionsRuntime({
     const fallback = await resolveTrackedContactReadRelayUrls(seedRelayUrls);
     const tracked = new Set([self, ...(await listTrackedContactPubkeys())]);
     const contacts = await contactsService.listContacts();
+    const visibleRelayUrls = inputSanitizerService.normalizeReadableRelayUrls(
+      contacts.find((contact) => contact.public_key === visibleGroupKey)?.relays,
+    );
     const members = contacts
       .filter((contact) => contact.type === 'group' && !contact.meta.blocked)
       .flatMap((contact) => contact.meta.group_members?.map((member) => member.public_key) ?? [])
       .filter((publicKey) => !isPubkeyBlocked(publicKey));
-    const pubkeys = [...new Set([...tracked, ...members])].sort();
+    const pubkeys = [...new Set([...tracked, ...members, ...visibleProfileKeys])]
+      .filter((key) => !isPubkeyBlocked(key))
+      .sort();
     pruneTrackedContactProfileEventState(pubkeys);
     pruneTrackedContactRelayListEventState(pubkeys);
     if (runGeneration !== generation) return;
@@ -429,28 +566,67 @@ export function createContactSubscriptionsRuntime({
         const publishedOn = normalizeWritableRelayUrlsValue(entries);
         return {
           publicKey,
-          relayUrls: publishedOn.length
-            ? publishedOn
-            : inputSanitizerService.normalizeReadableRelayUrls(entries),
+          relayUrls: [
+            ...new Set([
+              ...(publishedOn.length
+                ? publishedOn
+                : inputSanitizerService.normalizeReadableRelayUrls(entries)),
+              ...inputSanitizerService.normalizeReadableRelayUrls(contact?.relays),
+              ...(visibleProfileKeys.includes(publicKey) ? visibleRelayUrls : []),
+              ...metadataIndexerFallbacks(fallback, publicKey === self),
+              ...fallback,
+            ]),
+          ],
         };
       }),
-      fallback
+      fallback,
     );
+    // Refresh tracked routes even when their names/pictures are already cached.
+    // A profile is not evidence that its older relay lists were also fetched.
+    // Refresh missing/visible identities independently of the broad live snapshot.
+    // Historical group authors may have no contact record or current roster entry.
+    void contactsService.restorePublicProfiles(pubkeys).catch(() => {});
+    profileHydration.request(
+      buckets.flatMap(({ publicKeys, relayUrls }) =>
+        publicKeys
+          .filter(
+            (key) =>
+              tracked.has(key) ||
+              visibleProfileKeys.includes(key) ||
+              !getPublicProfile(key)?.name ||
+              !getPublicProfile(key)?.picture,
+          )
+          .map((publicKey) => ({
+            publicKey,
+            relayUrls: [...relayUrls].sort(
+              (a, b) =>
+                Number(PUBLIC_DISCOVERY_INDEXERS.includes(b)) -
+                Number(PUBLIC_DISCOVERY_INDEXERS.includes(a)),
+            ),
+          })),
+      ),
+      visibleProfileKeys,
+    );
+    trackedContactPubkeys = tracked;
+    activeContactPubkeys = new Set(pubkeys);
     await subscriptions.reconcile(
-      buckets.map(({ publicKeys, relayUrls }) => {
+      buckets.map(({ publicKeys, relayUrls: lookupRelayUrls }) => {
+        const relayUrls = lookupRelayUrls.filter(
+          (url) => !PUBLIC_DISCOVERY_INDEXERS.includes(url) || fallback.includes(url),
+        );
         const contacts = publicKeys.filter(
-          (publicKey) => publicKey !== self && tracked.has(publicKey)
+          (publicKey) => publicKey !== self && tracked.has(publicKey),
         );
         const memberKeys = publicKeys.filter((publicKey) => !tracked.has(publicKey));
-        const filters: NDKFilter[] = [
-          ...(memberKeys.length ? [{ kinds: [NDKKind.Metadata], authors: memberKeys }] : []),
+        const filters: NostrFilter[] = [
+          ...(memberKeys.length ? [{ kinds: [NostrKind.Metadata], authors: memberKeys }] : []),
           ...(contacts.length
             ? [
                 {
                   kinds: [
-                    NDKKind.Metadata,
-                    NDKKind.RelayList,
-                    NDKKind.DirectMessageReceiveRelayList,
+                    NostrKind.Metadata,
+                    NostrKind.RelayList,
+                    NostrKind.DirectMessageReceiveRelayList,
                   ],
                   authors: contacts,
                 },
@@ -460,7 +636,7 @@ export function createContactSubscriptionsRuntime({
           ...(publicKeys.includes(self)
             ? [
                 {
-                  kinds: [NDKKind.Metadata, NDKKind.DirectMessageReceiveRelayList],
+                  kinds: [NostrKind.Metadata, NostrKind.DirectMessageReceiveRelayList],
                   authors: [self],
                 },
               ]
@@ -483,38 +659,79 @@ export function createContactSubscriptionsRuntime({
               'contact-hydration',
               filters,
               {
-                relaySet: NDKRelaySet.fromRelayUrls(relayUrls, ndk, false),
-                cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+                relaySet: NostrRelaySet.fromRelayUrls(relayUrls, ndk, false),
+                cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
                 onEvent: (event) => {
-                  const wrapped = event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
+                  if (runGeneration !== generation) return;
+                  const wrapped =
+                    event instanceof ClientEvent ? event : new ClientEvent(ndk, event);
                   updateStoredEventSinceFromCreatedAt(wrapped.created_at);
-                  if (wrapped.kind === NDKKind.Metadata)
+                  if (wrapped.kind === NostrKind.Metadata)
                     queueContactProfileEventApplication(wrapped);
                   else queueContactRelayListEventApplication(wrapped);
                 },
                 onEose,
                 onClose,
               },
-              { signature, ...buildSubscriptionRelayDetails(relayUrls) }
+              { signature, ...buildSubscriptionRelayDetails(relayUrls) },
             ),
         };
-      })
+      }),
     );
     activeContactPubkeys = new Set(pubkeys);
     await subscriptions.waitForEose();
+    if (runGeneration !== generation) return;
+    // Relays/pool deduplicate kind-0 events. Reuse snapshots for new rosters and
+    // contacts recreated by private-list reconciliation, without refetching or
+    // rewriting every profile in an established account.
+    contactProfileApplyQueue = contactRelayListApplyQueue.then(async () => {
+      if (runGeneration !== generation) return;
+      const stored = new Map(
+        (await contactsService.listContacts()).map((contact) => [contact.public_key, contact]),
+      );
+      const memberKeys = new Set(members);
+      for (const key of new Set([...tracked, ...memberKeys])) {
+        const snapshot = profileSnapshots.get(key);
+        if (!snapshot) continue;
+        const contact = stored.get(key);
+        if (
+          tracked.has(key) &&
+          (!contact ||
+            contact.meta.profile_event_created_at === undefined ||
+            contact.meta.profile_event_created_at < snapshot.createdAt)
+        ) {
+          await applyContactProfileEvent(snapshot.event, true);
+        } else if (memberKeys.has(key)) await applyGroupMemberProfile(key, snapshot.profile);
+      }
+    });
+    contactRelayListApplyQueue = contactProfileApplyQueue;
+    await contactProfileApplyQueue;
   }
 
   // Both public entry points converge on the same hydration operation.
   const subscribeContactRelayListUpdates = subscribeContactProfileUpdates;
   function resetContactSubscriptionsRuntimeState(_reason = 'replace'): void {
     generation += 1;
+    profileHydration.reset();
+    for (const relay of metadataClient.pool.relays.values()) relay.disconnect();
+    clearTimeout(visibleProfileTimer);
+    visibleProfileTimer = undefined;
+    visibleProfileKeys = [];
+    baseVisibleProfileKeys = [];
+    mountedProfiles.clear();
+    visibleGroupKey = '';
+    visibleProfileSignature = '';
     subscriptions.stop();
     activeContactPubkeys.clear();
+    trackedContactPubkeys.clear();
     contactProfileApplyQueue = Promise.resolve();
     contactRelayListApplyQueue = Promise.resolve();
     relayEvents.clear();
+    profileSnapshots.clear();
   }
   return {
+    retainVisibleProfileTarget,
+    setVisibleProfileTargets,
     hasActiveContactHydration: (publicKey: string) =>
       subscriptions.size() > 0 && activeContactPubkeys.has(publicKey),
     resetContactSubscriptionsRuntimeState,

@@ -1,5 +1,5 @@
-import type { PublishUserMetadataInput } from 'src/stores/nostrStore';
-import type { ContactProfileForm } from 'src/types/contactProfile';
+import type { PublishUserMetadataInput } from '#src/stores/nostrStore.ts';
+import type { ContactProfileForm } from '#src/types/contactProfile.ts';
 
 function cleanString(value: string): string | undefined {
   const trimmed = value.trim();

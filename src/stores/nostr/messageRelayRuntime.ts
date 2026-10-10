@@ -1,13 +1,13 @@
-import type { NostrEvent } from '@nostr-dev-kit/ndk';
-import { chatDataService } from 'src/services/chatDataService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { nostrEventDataService } from 'src/services/nostrEventDataService';
+import type { NostrEvent } from '#src/lib/nostr/client.ts';
+import { chatDataService } from '#src/services/chatDataService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { nostrEventDataService } from '#src/services/nostrEventDataService.ts';
 import type {
   PendingIncomingDeletion,
   PendingIncomingReaction,
   QueuePrivateMessageUiRefreshOptions,
-} from 'src/stores/nostr/types';
-import type { MessageRelayStatus, NostrEventDirection } from 'src/types/chat';
+} from '#src/stores/nostr/types.ts';
+import type { MessageRelayStatus, NostrEventDirection } from '#src/types/chat.ts';
 
 interface MessageRelayRuntimeDeps {
   bumpDeveloperDiagnosticsVersion: () => void;
@@ -40,7 +40,7 @@ export function createMessageRelayRuntime({
 }: MessageRelayRuntimeDeps) {
   async function refreshMessageInLiveState(messageId: number): Promise<void> {
     try {
-      const { useMessageStore } = await import('src/stores/messageStore');
+      const { useMessageStore } = await import('#src/stores/messageStore.ts');
       await useMessageStore().refreshPersistedMessage(messageId);
     } catch (error) {
       console.error('Failed to sync persisted message into live state', error);

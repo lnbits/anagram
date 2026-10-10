@@ -1,6 +1,6 @@
-import type { NDKEvent } from '@nostr-dev-kit/ndk';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import type { ContactProfileEventState, ContactRelayListEventState } from 'src/stores/nostr/types';
+import type { ClientEvent } from '#src/lib/nostr/client.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import type { ContactProfileEventState, ContactRelayListEventState } from '#src/stores/nostr/types.ts';
 
 export function createTrackedContactStateRuntime() {
   const lastContactProfileEventStateByPubkey = new Map<string, ContactProfileEventState>();
@@ -8,7 +8,7 @@ export function createTrackedContactStateRuntime() {
   let lastPrivateContactListCreatedAt = 0;
   let lastPrivateContactListEventId = '';
 
-  function shouldApplyPrivateContactListEvent(event: NDKEvent): boolean {
+  function shouldApplyPrivateContactListEvent(event: ClientEvent): boolean {
     const createdAt = Number(event.created_at ?? 0);
     if (createdAt > lastPrivateContactListCreatedAt) {
       return true;
@@ -26,13 +26,13 @@ export function createTrackedContactStateRuntime() {
     return eventId !== lastPrivateContactListEventId;
   }
 
-  function markPrivateContactListEventApplied(event: Pick<NDKEvent, 'created_at' | 'id'>): void {
+  function markPrivateContactListEventApplied(event: Pick<ClientEvent, 'created_at' | 'id'>): void {
     lastPrivateContactListCreatedAt = Number(event.created_at ?? 0);
     lastPrivateContactListEventId = event.id?.trim() ?? '';
   }
 
   function buildContactRelayListEventState(
-    event: Pick<NDKEvent, 'created_at' | 'id'>
+    event: Pick<ClientEvent, 'created_at' | 'id'>
   ): ContactRelayListEventState {
     return {
       createdAt: Number(event.created_at ?? 0),
@@ -50,7 +50,7 @@ export function createTrackedContactStateRuntime() {
   }
 
   function shouldApplyContactRelayListEvent(
-    event: Pick<NDKEvent, 'created_at' | 'id' | 'pubkey'>
+    event: Pick<ClientEvent, 'created_at' | 'id' | 'pubkey'>
   ): boolean {
     const normalizedPubkey = inputSanitizerService.normalizeHexKey(event.pubkey);
     if (!normalizedPubkey) {
@@ -82,7 +82,7 @@ export function createTrackedContactStateRuntime() {
   }
 
   function buildContactProfileEventState(
-    event: Pick<NDKEvent, 'created_at' | 'id'>
+    event: Pick<ClientEvent, 'created_at' | 'id'>
   ): ContactProfileEventState {
     return {
       createdAt: Number(event.created_at ?? 0),
@@ -100,7 +100,7 @@ export function createTrackedContactStateRuntime() {
   }
 
   function shouldApplyContactProfileEvent(
-    event: Pick<NDKEvent, 'created_at' | 'id' | 'pubkey'>
+    event: Pick<ClientEvent, 'created_at' | 'id' | 'pubkey'>
   ): boolean {
     const normalizedPubkey = inputSanitizerService.normalizeHexKey(event.pubkey);
     if (!normalizedPubkey) {

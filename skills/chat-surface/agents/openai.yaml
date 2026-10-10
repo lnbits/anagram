@@ -1,7 +1,0 @@
-interface:
-  display_name: "Chat Surface"
-  short_description: "Work safely in the chat UI and state layer"
-  default_prompt: "Use $chat-surface to change routed pages, chat UI, or Pinia state for this repo."
-
-policy:
-  allow_implicit_invocation: true

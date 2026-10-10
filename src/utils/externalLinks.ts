@@ -1,5 +1,7 @@
-import { AppLauncher } from '@capacitor/app-launcher';
-import { Capacitor } from '@capacitor/core';
+import { isTauri } from '@tauri-apps/api/core';
+import { openUrl } from '@tauri-apps/plugin-opener';
+import { AppLauncher } from '#src/lib/platform/legacyNative.ts';
+import { Capacitor } from '#src/lib/platform/legacyNative.ts';
 
 function normalizeExternalHttpUrl(value: string): string | null {
   try {
@@ -19,6 +21,8 @@ export async function openExternalHttpUrl(value: string): Promise<void> {
   if (!url) {
     throw new Error('Only HTTP(S) links can be opened.');
   }
+
+  if (isTauri()) { await openUrl(url); return; }
 
   if (Capacitor.isNativePlatform()) {
     const result = await AppLauncher.openUrl({ url });

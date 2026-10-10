@@ -1,0 +1,24 @@
+[Unit]
+Description=Anagram Dad Jokes bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+WorkingDirectory=/opt/dad-jokes
+ExecStart=/usr/bin/node --env-file-if-exists=/opt/dad-jokes/.env /opt/dad-jokes/bot.js
+Environment=DATA_DIR=/var/lib/anagram-dad-jokes
+StateDirectory=anagram-dad-jokes
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

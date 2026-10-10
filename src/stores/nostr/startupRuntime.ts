@@ -10,8 +10,8 @@ import {
   type StartupStepId,
   type StartupStepSnapshot,
   type StartupTrackId,
-} from 'src/stores/nostr/startupState';
-import type { Ref } from 'vue';
+} from '#src/stores/nostr/startupState.ts';
+import type { Ref } from '#src/lib/state/reactivity.ts';
 
 interface StartupRuntimeState {
   startupDisplayShownAt: number;

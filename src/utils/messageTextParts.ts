@@ -1,8 +1,9 @@
+import { parseRoomLink } from '#src/utils/callRoom.ts';
 import {
   buildNostrMentionTextParts,
   type NostrMentionProfile,
   type NostrMentionTextPart,
-} from 'src/utils/nostrMentions';
+} from '#src/utils/nostrMentions.ts';
 
 export type MessageTextPart =
   | NostrMentionTextPart
@@ -13,7 +14,7 @@ export type MessageTextPart =
       href: string;
     };
 
-const WEB_URL_PATTERN = /\b(?:https?:\/\/|www\.)[^\s<>"'`]+/giu;
+const WEB_URL_PATTERN = /\b(?:https?:\/\/|anagram:\/\/room\/call\/|www\.)[^\s<>"'`]+/giu;
 const SIMPLE_TRAILING_PUNCTUATION_PATTERN = /[.,!?;:]+$/u;
 const CLOSING_DELIMITERS: Record<string, string> = {
   ')': '(',
@@ -45,6 +46,7 @@ function trimTrailingUrlPunctuation(candidate: string): string {
 }
 
 function buildHttpHref(value: string): string | null {
+  if (value.startsWith('anagram://room/call/')) return parseRoomLink(value) ? value : null;
   const href = /^www\./iu.test(value) ? `https://${value}` : value;
 
   try {
@@ -112,7 +114,35 @@ function linkifyTextPart(part: NostrMentionTextPart): MessageTextPart[] {
 
 export function buildMessageTextParts(
   text: string,
-  profiles: NostrMentionProfile[] = []
+  profiles: NostrMentionProfile[] = [],
 ): MessageTextPart[] {
   return buildNostrMentionTextParts(text, profiles).flatMap(linkifyTextPart);
+}
+
+// Remove only duplicate links represented by visible image/video attachments.
+// Work on original offsets so captions, mentions and unrelated links stay intact.
+export function withoutPreviewMediaUrls(
+  text: string,
+  attachments: ReadonlyArray<{ url: string; mimeType: string }>,
+): string {
+  const previewUrls = new Set(
+    attachments
+      .filter(
+        (attachment) =>
+          /^https:\/\//.test(attachment.url) && /^(image|video)\//.test(attachment.mimeType),
+      )
+      .map((attachment) => buildHttpHref(attachment.url))
+      .filter((href): href is string => Boolean(href)),
+  );
+  if (!previewUrls.size) return text;
+  let cursor = 0;
+  let result = '';
+  for (const match of text.matchAll(WEB_URL_PATTERN)) {
+    const candidate = trimTrailingUrlPunctuation(match[0]);
+    const href = buildHttpHref(candidate);
+    if (!href || !previewUrls.has(href)) continue;
+    result += text.slice(cursor, match.index);
+    cursor = match.index + candidate.length;
+  }
+  return cursor ? (result + text.slice(cursor)).trim() : text;
 }

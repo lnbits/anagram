@@ -1,6 +1,6 @@
-import NDK, { NDKEvent, NDKKind } from '@nostr-dev-kit/ndk';
+import NostrClient, { ClientEvent, NostrKind } from '#src/lib/nostr/client.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ref } from 'vue';
+import { ref } from '#src/lib/state/reactivity.ts';
 
 const chatDataServiceMock = vi.hoisted(() => ({
   init: vi.fn(async () => {}),
@@ -15,16 +15,16 @@ const contactsServiceMock = vi.hoisted(() => ({
   deleteContact: vi.fn(async () => {}),
 }));
 
-vi.mock('src/services/chatDataService', () => ({
+vi.mock('#src/services/chatDataService.ts', () => ({
   chatDataService: chatDataServiceMock,
 }));
 
-vi.mock('src/services/contactsService', () => ({
+vi.mock('#src/services/contactsService.ts', () => ({
   contactsService: contactsServiceMock,
 }));
 
-import { PRIVATE_CONTACT_LIST_D_TAG } from 'src/stores/nostr/constants';
-import { createPrivateContactListRuntime } from 'src/stores/nostr/privateContactListRuntime';
+import { PRIVATE_CONTACT_LIST_D_TAG } from '#src/stores/nostr/constants.ts';
+import { createPrivateContactListRuntime } from '#src/stores/nostr/privateContactListRuntime.ts';
 
 const LOGGED_IN_PUBKEY = 'a'.repeat(64);
 const PUBKEY_B = 'b'.repeat(64);
@@ -66,13 +66,13 @@ describe('private contact list runtime', () => {
     'startup',
     'subscription',
   ] as const)('restores old private contact-list entries through %s without a message-history cutoff', async (source) => {
-    const ndk = new NDK();
+    const ndk = new NostrClient();
     Object.defineProperty(ndk, 'subscribe', {
       configurable: true,
       value: undefined,
     });
-    const listEvent = new NDKEvent(ndk, {
-      kind: NDKKind.FollowSet,
+    const listEvent = new ClientEvent(ndk, {
+      kind: NostrKind.FollowSet,
       pubkey: LOGGED_IN_PUBKEY,
       created_at: 1_700_000_000,
       content: 'encrypted-private-contact-list',
@@ -95,7 +95,7 @@ describe('private contact list runtime', () => {
       return { stop: vi.fn() } as never;
     });
     const publishReplaceable = vi
-      .spyOn(NDKEvent.prototype, 'publishReplaceable')
+      .spyOn(ClientEvent.prototype, 'publishReplaceable')
       .mockResolvedValue(undefined as never);
 
     chatDataServiceMock.listChats.mockResolvedValue([
@@ -171,7 +171,7 @@ describe('private contact list runtime', () => {
     });
 
     const expectedFilter = {
-      kinds: [NDKKind.FollowSet],
+      kinds: [NostrKind.FollowSet],
       authors: [LOGGED_IN_PUBKEY],
       '#d': [PRIVATE_CONTACT_LIST_D_TAG],
     };
@@ -220,13 +220,13 @@ describe('private contact list runtime', () => {
   });
 
   it('adds outgoing message targets during Contacts refresh and publishes them', async () => {
-    const ndk = new NDK();
+    const ndk = new NostrClient();
     Object.defineProperty(ndk, 'subscribe', {
       configurable: true,
       value: undefined,
     });
-    const listEvent = new NDKEvent(ndk, {
-      kind: NDKKind.FollowSet,
+    const listEvent = new ClientEvent(ndk, {
+      kind: NostrKind.FollowSet,
       pubkey: LOGGED_IN_PUBKEY,
       created_at: 1_700_000_000,
       content: 'encrypted-private-contact-list',
@@ -234,7 +234,7 @@ describe('private contact list runtime', () => {
     });
     vi.spyOn(ndk, 'fetchEvent').mockResolvedValue(listEvent);
     const publishReplaceable = vi
-      .spyOn(NDKEvent.prototype, 'publishReplaceable')
+      .spyOn(ClientEvent.prototype, 'publishReplaceable')
       .mockResolvedValue(undefined as never);
 
     chatDataServiceMock.listChats.mockResolvedValue([

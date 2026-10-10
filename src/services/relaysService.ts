@@ -1,6 +1,6 @@
-import { contactsService } from 'src/services/contactsService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import type { ContactRelay } from 'src/types/contact';
+import { contactsService } from '#src/services/contactsService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import type { ContactRelay } from '#src/types/contact.ts';
 
 function normalizeRelayValue(value: unknown): ContactRelay | null {
   if (typeof value === 'string') {

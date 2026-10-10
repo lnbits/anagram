@@ -1,11 +1,11 @@
-import { STARTUP_CHECKPOINT_STORAGE_KEY } from 'src/stores/nostr/constants';
+import { STARTUP_CHECKPOINT_STORAGE_KEY } from '#src/stores/nostr/constants.ts';
 import {
   buildStartupRelaySignature,
   isStartupCheckpointCurrent,
   normalizeStartupCheckpoint,
   readStartupCheckpoint,
   writeStartupCheckpoint,
-} from 'src/stores/nostr/startupCheckpoint';
+} from '#src/stores/nostr/startupCheckpoint.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const PUBKEY = 'a'.repeat(64);

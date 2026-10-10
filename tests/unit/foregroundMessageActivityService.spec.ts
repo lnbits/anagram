@@ -2,7 +2,7 @@ import {
   emitForegroundMessageActivity,
   FOREGROUND_MESSAGE_ACTIVITY_EVENT,
   readForegroundMessageActivityDetail,
-} from 'src/services/foregroundMessageActivityService';
+} from '#src/services/foregroundMessageActivityService.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 class TestCustomEvent<T = unknown> extends Event {

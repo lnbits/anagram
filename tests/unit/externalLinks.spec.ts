@@ -5,19 +5,9 @@ const mocks = vi.hoisted(() => ({
   openUrl: vi.fn(),
 }));
 
-vi.mock('@capacitor/app-launcher', () => ({
-  AppLauncher: {
-    openUrl: mocks.openUrl,
-  },
-}));
+vi.mock('#src/lib/platform/legacyNative.ts', () => ({ AppLauncher: {openUrl:mocks.openUrl}, Capacitor: {isNativePlatform:mocks.isNativePlatform} }));
 
-vi.mock('@capacitor/core', () => ({
-  Capacitor: {
-    isNativePlatform: mocks.isNativePlatform,
-  },
-}));
-
-import { openExternalHttpUrl } from 'src/utils/externalLinks';
+import { openExternalHttpUrl } from '#src/utils/externalLinks.ts';
 
 describe('external links', () => {
   const browserOpen = vi.fn();

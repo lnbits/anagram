@@ -1,16 +1,16 @@
 import type {
-  NDKRelayConnectionStats,
-  NDKRelayInformation,
-  NDKUserProfile,
+  NostrRelayConnectionStats,
+  NostrRelayInformation,
+  NostrUserProfile,
   NostrEvent,
-} from '@nostr-dev-kit/ndk';
-import type { chatDataService } from 'src/services/chatDataService';
+} from '#src/lib/nostr/client.ts';
+import type { chatDataService } from '#src/services/chatDataService.ts';
 import type {
   DeveloperTraceEntry,
   DeveloperTraceLevel,
-} from 'src/services/developerTraceDataService';
-import type { ChatGroupEpochKey, MessageReaction, MessageRelayStatus } from 'src/types/chat';
-import type { ContactRelay } from 'src/types/contact';
+} from '#src/services/developerTraceDataService.ts';
+import type { ChatGroupEpochKey, MessageReaction, MessageRelayStatus } from '#src/types/chat.ts';
+import type { ContactRelay } from '#src/types/contact.ts';
 
 export interface NostrIdentifierResolutionResult {
   isValid: boolean;
@@ -93,6 +93,8 @@ export interface Nip46SessionSnapshot {
 }
 
 export interface SendGiftWrappedRumorOptions {
+  // Time-sensitive controls proceed once any recipient relay accepts them.
+  returnOnFirstAck?: boolean;
   localMessageId?: number;
   createdAt?: string;
   publishSelfCopy?: boolean;
@@ -127,6 +129,7 @@ export interface RelaySaveStatus {
 }
 
 export interface CreateGroupChatResult {
+  relayUrls: string[];
   groupPublicKey: string;
   encryptedPrivateKey: string;
   groupSecretSave: RelaySaveStatus;
@@ -146,6 +149,7 @@ export interface PublishGroupMemberChangesResult {
 export type RotateGroupEpochResult = PublishGroupMemberChangesResult;
 
 export interface CreateGroupChatInput {
+  recoveryPhrase?: string;
   name?: string;
   about?: string;
   relayUrls?: string[];
@@ -166,23 +170,13 @@ export interface SubscribePrivateMessagesOptions {
   startupTrackStep?: boolean;
 }
 
-export interface RefreshPrivateMessagesLiveSubscriptionOptions
-  extends SubscribePrivateMessagesOptions {
+export interface RefreshPrivateMessagesLiveSubscriptionOptions extends SubscribePrivateMessagesOptions {
   forceRecreate?: boolean;
   probeTimeoutMs?: number;
 }
 
 export interface RefreshPrivateMessagesLiveSubscriptionResult {
   recreatedLiveSubscription: boolean;
-}
-
-export interface PrivateMessagesBackfillState {
-  pubkey: string;
-  nextSince: number;
-  nextUntil: number;
-  floorSince: number;
-  delayMs: number;
-  completed: boolean;
 }
 
 export interface QueuePrivateMessageUiRefreshOptions {
@@ -192,10 +186,7 @@ export interface QueuePrivateMessageUiRefreshOptions {
 }
 
 export type MissingMessageDependencyRepairReason =
-  | 'reply-target-missing'
-  | 'reaction-target-missing'
-  | 'deletion-target-missing'
-  | 'reply-open';
+  'reply-target-missing' | 'reaction-target-missing' | 'deletion-target-missing' | 'reply-open';
 
 export interface RepairMissingMessageDependencyOptions {
   reason: MissingMessageDependencyRepairReason;
@@ -229,6 +220,7 @@ export type SubscriptionLogName =
 export interface PrivatePreferences {
   contactSecret: string;
   blossomServerUrl?: string;
+  irohRelaySettings?: import('#src/utils/irohRelays.ts').IrohRelaySettings;
   [key: string]: unknown;
 }
 
@@ -247,6 +239,9 @@ export interface GroupIdentitySecretContent {
   version: number;
   group_pubkey: string;
   group_privkey: string;
+  recovery_entropy?: string;
+  recovery_state_id?: string;
+  recovery_state?: import('./groupRecovery.ts').GroupRecoveryState;
   epoch_number?: number;
   epoch_privkey?: string;
   name?: string;
@@ -389,7 +384,7 @@ export type {
   ChatGroupEpochKey,
   DeveloperTraceEntry,
   DeveloperTraceLevel,
-  NDKRelayConnectionStats,
-  NDKRelayInformation,
-  NDKUserProfile,
+  NostrRelayConnectionStats,
+  NostrRelayInformation,
+  NostrUserProfile,
 };

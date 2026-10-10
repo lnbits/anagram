@@ -1,7 +1,7 @@
-import { useMessageBubbleStatus } from 'src/composables/useMessageBubbleStatus';
-import type { Message } from 'src/types/chat';
+import { useMessageBubbleStatus } from '#src/composables/useMessageBubbleStatus.ts';
+import type { Message } from '#src/types/chat.ts';
 import { describe, expect, it } from 'vitest';
-import { computed, ref } from 'vue';
+import { computed, ref } from '#src/lib/state/reactivity.ts';
 
 describe('useMessageBubbleStatus', () => {
   it('builds outbound relay status tabs with published success counts', () => {
@@ -77,5 +77,73 @@ describe('useMessageBubbleStatus', () => {
         retryableCount: 0,
       }),
     ]);
+  });
+  it('shows relay copies for restored own messages without inventing publish acknowledgements', () => {
+    const message = ref<Message>({
+      id: '2',
+      chatId: 'group',
+      text: 'Restored',
+      sender: 'me',
+      sentAt: '2026-01-01T00:00:00Z',
+      authorPublicKey: 'me',
+      meta: {},
+      nostrEvent: {
+        direction: 'out',
+        event: {
+          id: 'restored',
+          kind: 14,
+          content: 'Restored',
+          tags: [],
+          pubkey: 'me',
+          created_at: 1,
+          sig: '',
+        },
+        relay_statuses: [
+          {
+            relay_url: 'wss://archive.example',
+            direction: 'inbound',
+            scope: 'subscription',
+            status: 'received',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+        ],
+      },
+    });
+    const state = useMessageBubbleStatus({
+      message,
+      isMine: computed(() => true),
+      contactName: computed(() => 'Group'),
+      contactRelayUrls: computed(() => ['wss://other.example']),
+    });
+    expect(state.hasRelayStatuses.value).toBe(true);
+    expect(state.showOutboundStatus.value).toBe(false);
+    expect(state.statusSegments.value).toEqual([
+      { key: 'received', className: 'bubble__status-segment--green', weight: 1 },
+    ]);
+    expect(state.statusSections.value).toEqual([
+      expect.objectContaining({
+        key: 'received',
+        items: [
+          expect.objectContaining({
+            relayUrl: 'wss://archive.example',
+            status: 'received',
+            retryable: false,
+          }),
+        ],
+      }),
+    ]);
+    // A relay copy must never mask a real failed publish from this device.
+    message.value.nostrEvent!.relay_statuses.push({
+      relay_url: 'wss://recipient.example',
+      direction: 'outbound',
+      scope: 'recipient',
+      status: 'failed',
+      updated_at: '2026-01-01T00:00:00Z',
+    });
+    expect(state.showOutboundStatus.value).toBe(true);
+    expect(state.statusSegments.value).toEqual([expect.objectContaining({ key: 'failed' })]);
+    expect(state.statusSections.value[0].retryableCount).toBe(1);
+    message.value.nostrEvent!.relay_statuses = [];
+    expect(state.hasRelayStatuses.value).toBe(false);
   });
 });

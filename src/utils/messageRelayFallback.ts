@@ -1,7 +1,7 @@
-import type { QVueGlobals } from 'quasar';
-import { contactsService } from 'src/services/contactsService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { useNostrStore } from 'src/stores/nostrStore';
+import type { QVueGlobals } from '#src/lib/platform/ui.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { useNostrStore } from '#src/stores/nostrStore.ts';
 
 export const CONTACT_RELAY_FALLBACK_MESSAGE =
   'No relays found for this contact. Do you want to use the application default relays?';

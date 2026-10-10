@@ -1,5 +1,5 @@
-import { nip19 } from '@nostr-dev-kit/ndk';
-import { __chatStoreTestUtils } from 'src/stores/chatStore';
+import { nip19 } from '#src/lib/nostr/client.ts';
+import { __chatStoreTestUtils } from '#src/stores/chatStore.ts';
 import { describe, expect, it } from 'vitest';
 
 const {
@@ -23,6 +23,15 @@ const {
 } = __chatStoreTestUtils;
 
 describe('chatStore logic', () => {
+  it('keeps locally deleted groups hidden even when accepted history is replayed', () => {
+    expect(resolveChatCategory({
+      deleted_locally: true,
+      inbox_state: 'accepted',
+      last_outgoing_message_at: '2026-10-07T14:00:00.000Z',
+      last_incoming_message_at: '2026-10-07T15:00:00.000Z',
+    })).toBe('hidden');
+  });
+
   it('tracks the latest message author per chat with stable timestamp tie-breaking', () => {
     const snapshots = buildLastMessageAuthorSnapshotByPublicKey([
       {

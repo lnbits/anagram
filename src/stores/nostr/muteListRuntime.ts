@@ -1,16 +1,16 @@
-import NDK, {
-  NDKEvent,
-  NDKRelaySet,
-  NDKSubscriptionCacheUsage,
-  type NDKUser,
+import NostrClient, {
+  ClientEvent,
+  NostrRelaySet,
+  NostrSubscriptionCacheUsage,
+  type NostrUser,
   type NostrEvent,
-} from '@nostr-dev-kit/ndk';
-import { type ChatRow, chatDataService } from 'src/services/chatDataService';
-import { contactsService } from 'src/services/contactsService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { MUTE_LIST_KIND } from 'src/stores/nostr/constants';
-import { createReadyRelaySet, fetchEventWithRelayTimeout } from 'src/stores/nostr/relayQueryUtils';
-import type { ContactMetadata, ContactRecord } from 'src/types/contact';
+} from '#src/lib/nostr/client.ts';
+import { type ChatRow, chatDataService } from '#src/services/chatDataService.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { MUTE_LIST_KIND } from '#src/stores/nostr/constants.ts';
+import { createReadyRelaySet, fetchEventWithRelayTimeout } from '#src/stores/nostr/relayQueryUtils.ts';
+import type { ContactMetadata, ContactRecord } from '#src/types/contact.ts';
 
 interface MuteListRuntimeDeps {
   beginStartupStep: (stepId: 'mute-list') => void;
@@ -23,8 +23,8 @@ interface MuteListRuntimeDeps {
   ensureRelayConnections: (relayUrls: string[]) => Promise<void>;
   failStartupStep: (stepId: 'mute-list', error: unknown) => void;
   getLoggedInPublicKeyHex: () => string | null;
-  getLoggedInSignerUser: () => Promise<NDKUser>;
-  ndk: NDK;
+  getLoggedInSignerUser: () => Promise<NostrUser>;
+  ndk: NostrClient;
   resolveLoggedInPublishRelayUrls: (seedRelayUrls?: string[]) => Promise<string[]>;
   resolveLoggedInReadRelayUrls: (seedRelayUrls?: string[]) => Promise<string[]>;
   updateStartupInternalTask: (
@@ -165,8 +165,8 @@ function normalizeChatMeta(meta: ChatRow['meta'] | undefined): Record<string, un
   return meta && typeof meta === 'object' && !Array.isArray(meta) ? { ...meta } : {};
 }
 
-function eventToNdkEvent(ndk: NDK, event: NDKEvent | NostrEvent): NDKEvent {
-  return event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
+function eventToNdkEvent(ndk: NostrClient, event: ClientEvent | NostrEvent): ClientEvent {
+  return event instanceof ClientEvent ? event : new ClientEvent(ndk, event);
 }
 
 function metadataEqual(first: Record<string, unknown>, second: Record<string, unknown>): boolean {
@@ -272,6 +272,7 @@ export function createMuteListRuntime({
       }
 
       await contactsService.updateContact(contact.id, {
+        metaBase: contact.meta,
         meta: nextContactMeta,
       });
       didChangeContacts = true;
@@ -375,7 +376,7 @@ export function createMuteListRuntime({
         authors: [loggedInPubkeyHex],
       },
       {
-        cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+        cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
       },
       relaySet
     );
@@ -441,7 +442,7 @@ export function createMuteListRuntime({
       },
       loggedInPubkeyHex
     );
-    const muteListEvent = new NDKEvent(ndk, {
+    const muteListEvent = new ClientEvent(ndk, {
       kind: MUTE_LIST_KIND,
       created_at: Math.floor(Date.now() / 1000),
       pubkey: user.pubkey,
@@ -449,7 +450,7 @@ export function createMuteListRuntime({
       tags: [],
     });
 
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
+    const relaySet = NostrRelaySet.fromRelayUrls(relayUrls, ndk, false);
     await muteListEvent.publishReplaceable(relaySet);
     updateStoredEventSinceFromCreatedAt(muteListEvent.created_at);
     hasRestoredMuteList = true;

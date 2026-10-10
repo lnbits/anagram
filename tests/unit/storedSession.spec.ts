@@ -1,9 +1,9 @@
-import { createStoredSessionChecker } from 'src/router/storedSession';
+import { createStoredSessionChecker } from '#src/router/storedSession.ts';
 import {
   AUTH_METHOD_STORAGE_KEY,
   PRIVATE_KEY_STORAGE_KEY,
   PUBLIC_KEY_STORAGE_KEY,
-} from 'src/stores/nostr/constants';
+} from '#src/stores/nostr/constants.ts';
 import { describe, expect, it, vi } from 'vitest';
 
 function createStorage(initialValues: Record<string, string> = {}): Storage {

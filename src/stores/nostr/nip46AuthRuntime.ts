@@ -1,21 +1,21 @@
-import type NDK from '@nostr-dev-kit/ndk';
-import { NDKNip46Signer, normalizeRelayUrl } from '@nostr-dev-kit/ndk';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
+import type NostrClient from '#src/lib/nostr/client.ts';
+import { NostrNip46Signer, normalizeRelayUrl } from '#src/lib/nostr/client.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
 import type {
   AuthMethod,
   Nip46LoginResult,
   Nip46NostrConnectLogin,
   Nip46SessionSnapshot,
-} from 'src/stores/nostr/types';
+} from '#src/stores/nostr/types.ts';
 
 export const NIP46_DEFAULT_PERMISSIONS = 'sign_event,nip44_encrypt,nip44_decrypt';
 const NIP46_APP_NAME = 'Anagram';
 
 interface Nip46AuthRuntimeDeps {
   clearCurrentAuthSession: () => void;
-  ndk: NDK;
+  ndk: NostrClient;
   resetEventSinceForFreshLogin: () => void;
-  setCachedSigner: (signer: NDKNip46Signer | null) => void;
+  setCachedSigner: (signer: NostrNip46Signer | null) => void;
   setCachedSignerSessionKey: (sessionKey: string | null) => void;
   setStoredAuthSession: (authMethod: AuthMethod, pubkeyHex: string) => void;
   setStoredNip46SignerPayload: (payload: string) => void;
@@ -27,6 +27,7 @@ interface CreateNip46NostrConnectLoginInput {
 }
 
 interface LoginWithNip46BunkerInput {
+  signal?: AbortSignal;
   connectionToken: string;
   onAuthUrl?: (url: string) => void;
 }
@@ -241,7 +242,7 @@ export function createNip46AuthRuntime({
   setStoredAuthSession,
   setStoredNip46SignerPayload,
 }: Nip46AuthRuntimeDeps) {
-  function buildLoginResult(signer: NDKNip46Signer, pubkey: string): Nip46LoginResult {
+  function buildLoginResult(signer: NostrNip46Signer, pubkey: string): Nip46LoginResult {
     return {
       pubkey,
       signerPubkey: inputSanitizerService.normalizeHexKey(signer.bunkerPubkey ?? '') ?? null,
@@ -249,13 +250,13 @@ export function createNip46AuthRuntime({
         new Set(
           (signer.relayUrls ?? [])
             .map((relayUrl) => normalizeNip46RelayUrl(relayUrl))
-            .filter((relayUrl): relayUrl is string => Boolean(relayUrl))
-        )
+            .filter((relayUrl): relayUrl is string => Boolean(relayUrl)),
+        ),
       ),
     };
   }
 
-  function persistReadySigner(signer: NDKNip46Signer, pubkey: string): Nip46LoginResult {
+  function persistReadySigner(signer: NostrNip46Signer, pubkey: string): Nip46LoginResult {
     clearCurrentAuthSession();
     resetEventSinceForFreshLogin();
     setStoredAuthSession('nip46', pubkey);
@@ -267,9 +268,9 @@ export function createNip46AuthRuntime({
   }
 
   async function resolveReadySigner(
-    signer: NDKNip46Signer,
+    signer: NostrNip46Signer,
     onAuthUrl?: (url: string) => void,
-    options: { shouldCommit?: () => boolean } = {}
+    options: { shouldCommit?: () => boolean } = {},
   ): Promise<Nip46LoginResult> {
     if (onAuthUrl) {
       signer.on('authUrl', (url: string) => {
@@ -297,14 +298,33 @@ export function createNip46AuthRuntime({
   async function loginWithNip46Bunker({
     connectionToken,
     onAuthUrl,
+    signal,
   }: LoginWithNip46BunkerInput): Promise<Nip46LoginResult> {
     const normalizedToken = normalizeNip46BunkerUri(connectionToken);
     if (!normalizedToken) {
       throw new Error('Enter a valid bunker:// connection string with at least one relay.');
     }
 
-    const signer = NDKNip46Signer.bunker(ndk, normalizedToken);
-    return resolveReadySigner(signer, onAuthUrl);
+    const signer = NostrNip46Signer.bunker(ndk, normalizedToken);
+    if (signal?.aborted) {
+      signer.stop();
+      throw new Error('NIP-46 login was cancelled.');
+    }
+    let abort: (() => void) | undefined;
+    try {
+      return await Promise.race([
+        resolveReadySigner(signer, onAuthUrl, { shouldCommit: () => !signal?.aborted }),
+        new Promise<never>((_, reject) => {
+          abort = () => {
+            signer.stop();
+            reject(new Error('NIP-46 login was cancelled.'));
+          };
+          signal?.addEventListener('abort', abort, { once: true });
+        }),
+      ]);
+    } finally {
+      if (abort) signal?.removeEventListener('abort', abort);
+    }
   }
 
   function createNip46NostrConnectLogin({
@@ -316,7 +336,7 @@ export function createNip46AuthRuntime({
       throw new Error('Enter a valid ws:// or wss:// relay URL.');
     }
 
-    const signer = NDKNip46Signer.nostrconnect(ndk, normalizedRelayUrl, undefined, {
+    const signer = NostrNip46Signer.nostrconnect(ndk, normalizedRelayUrl, undefined, {
       name: NIP46_APP_NAME,
       perms: NIP46_DEFAULT_PERMISSIONS,
     });

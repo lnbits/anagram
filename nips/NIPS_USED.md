@@ -1,90 +1,49 @@
-# NIPs Used in This App
+# NIPs used by Anagram
 
-This list is based on the current app code, especially `src/stores/nostrStore.ts`, the profile/relay UI components, and the local group-chat draft docs in this repo.
+This is an overview of the protocols Anagram uses, not a claim of full support for every feature in each NIP.
 
-## NIP-01
+| NIP | Used for                                                                                                                   |
+| --- | -------------------------------------------------------------------------------------------------------------------------- |
+| 01  | Events, signatures and basic profile metadata.                                                                             |
+| 05  | Resolving `name@domain` identifiers to public keys.                                                                        |
+| 07  | Browser-extension login and signing.                                                                                       |
+| 11  | Displaying relay information.                                                                                              |
+| 17  | Private messages, reactions, deletions and edits.                                                                          |
+| 19  | `nsec`, `npub`, `nprofile` and `naddr` identifiers.                                                                        |
+| 24  | Additional profile fields, such as display name, website and banner.                                                       |
+| 44  | Encrypting private messages and account data.                                                                              |
+| 46  | Remote signing through `bunker://` and `nostrconnect://`.                                                                  |
+| 50  | Searching relay-hosted profiles and public groups.                                                                                           |
+| 51  | Encrypted mute lists, private-storage relay lists and group membership lists.                                              |
+| 59  | Gift-wrapping private messages and group invitations.                                                                      |
+| 65  | Relay lists for users, contacts and groups.                                                                                |
+| 78  | Encrypted account preferences, group secrets and recovery records.                                                         |
+| B7  | Blossom uploads with signed upload authorization. The server choice stays private; Anagram does not publish a server list. |
 
-- Used for standard Nostr events and profile metadata.
-- The app publishes and reads `kind:0` metadata for users and group identities, and it relies on normal event signing and signature verification when handling custom group tickets.
+## Chat protocol specs
 
-## NIP-05
+- [Direct messages](../docs/direct-messages.md)
+- [Private groups](../docs/private-groups.md)
+- [Public groups](../docs/public-groups.md)
+- [Nostr + Iroh calls](iroh-calls.md)
 
-- Used to resolve `name@domain` identifiers into pubkeys.
-- The app accepts NIP-05 identifiers when adding contacts or group members, and stores the resolved `nip05` value in contact metadata.
+## Private groups: NIP-171 draft
 
-## NIP-07
+Anagram uses the local [NIP-171 draft](nip171.md), built on NIP-17 and NIP-59. A stable group identity signs invitations (`kind:1014`), and members exchange messages through a shared epoch key. Each member's message carries a signed invitation proof that receivers verify.
 
-- Used for browser-extension login/signing.
-- The app can log in through a NIP-07 extension via `NDKNip07Signer` and checks that the extension account matches the active session.
+Removing a member rotates the epoch key. Adding members can also rotate it to hide earlier messages. Owners manage membership and recover group keys using a 12-word recovery master and encrypted recovery records.
 
-## NIP-11
+The `group` profile field is part of this draft.
 
-- Used to inspect relay metadata.
-- The relay settings/profile UI loads relay info with `fetchInfo()` and shows the returned NIP-11 details.
+## Public groups
 
-## NIP-17
+Public groups use NIP-72 metadata (`kind:34550`), NIP-C7 messages/replies (`kind:9`), NIP-25 reactions, NIP-09 deletion requests, NIP-19 links and NIP-92 attachments. Edits reuse the private-group delete-and-replace flow and edit-link extension. Anagram adds trust/block tags and signed ownership-handover pointers. It does not implement NIP-72 approval moderation or NIP-29.
 
-- This is the app's main private-message transport.
-- It sends and receives `kind:14` private message rumors inside gift wraps, and it also uses the same DM flow for wrapped reactions (`kind:7`) and deletions (`kind:5`).
-- Group chat messages are also sent as NIP-17 DMs to the group's current epoch public key.
-- Text edits follow NIP-17's delete-and-replace convention: the app sends a wrapped `kind:5` deletion and a replacement wrapped `kind:14` rumor with the original message timestamp. Replacement rumors also carry a private `e` tag marked `edit` so this client can reconcile either relay arrival order without displaying duplicate messages.
+See [Public groups](../docs/public-groups.md) for the format and limitations.
 
-## NIP-19
+## Other Anagram extensions
 
-- Used for bech32 Nostr identifiers.
-- The app decodes `nsec` and `npub` inputs, and it encodes `npub` and `nprofile` values for stored/displayed contact identifiers.
+- **Group pins:** one owner-controlled message reference in the signed group profile, as described in the chat specs above. Private profiles include only the rumor ID and timestamp hint, never message text.
 
-## NIP-24
-
-- Used for extra profile metadata fields on `kind:0` profiles.
-- The profile editor reads and writes fields such as `display_name`, `website`, `banner`, and booleans like `bot`.
-- The code also uses a `group` boolean on profiles; that part looks app-specific/draft-oriented rather than clearly standard.
-
-## NIP-44
-
-- Used for encryption throughout the app.
-- It is used by the DM/gift-wrap pipeline, and also to self-encrypt private preferences, group identity secrets, per-contact cursor data, and the private contact-list payload.
-
-## NIP-46
-
-- Used for Nostr remote signing login.
-- The app acts as a NIP-46 client and supports `bunker://` connection tokens and generated `nostrconnect://` pairing links.
-- The NIP-46 local client key is persisted as a session token so refresh and app restart can restore the remote signer connection without storing the user's `nsec`.
-- The app requests broad `sign_event`, `nip44_encrypt`, and `nip44_decrypt` permissions because private messaging, private app storage, profile updates, relay lists, and relay auth all need the active signer.
-
-## NIP-51
-
-- Used for private follow-set style lists.
-- The app restores and publishes the user's `kind:10000` mute list with muted pubkeys stored as NIP-44-encrypted private `p` items in `content`.
-- The app publishes a group-authored `kind:30000` follow set with `["d", "members"]` when a group is created and whenever the owner changes the effective group membership set.
-- Group member pubkeys are stored only as NIP-44-encrypted private `p` items in `content`, and the latest event is used to restore the owner-side `group_members` snapshot for that group.
-
-## NIP-59
-
-- Used for gift wrapping.
-- The app sends/receives `kind:1059` gift wraps and `kind:13` seals for private messaging.
-- It also gift-wraps signed `kind:1014` group epoch tickets before sending them to members.
-
-## NIP-65
-
-- Used for relay list metadata.
-- The app publishes, restores, and subscribes to relay lists using `kind:10002`.
-- It uses those relay lists for the logged-in user, contacts, and groups when deciding where to read from or publish to.
-
-## NIP-78
-
-- Used for app-specific private storage on Nostr.
-- The app uses `kind:30078` replaceable events for private preferences, group identity secrets, and per-contact cursor state.
-- Those payloads are encrypted with NIP-44 before publication.
-- The user's configured Blossom upload server is stored in the encrypted private-preferences payload and restored with the account.
-
-## NIP-B7
-
-- Used for Blossom media uploads.
-- The app uploads blobs through the configured HTTPS Blossom server and signs server-scoped `kind:24242` upload authorization events.
-- The server choice remains private in the app's NIP-78 preferences; the app does not currently publish a public `kind:10063` Blossom server list.
-
-## NIP-171
-
-- This appears to be a repo-local draft/private-group scheme layered on top of NIP-17.
-- The app implements `kind:1014` epoch tickets, verifies them on receipt, rotates epoch keys, stores epoch history, and routes group DMs through the current epoch public key.
+- **Message edits:** NIP-17 delete-and-replace messages include an `e` tag marked `edit` to link the replacement to the original.
+- **Calls:** Iroh call signalling uses encrypted `kind:21117` messages; call-history messages use an `anagram-call` tag. These are application extensions, not assigned Nostr standards. See [Iroh call protocol](iroh-calls.md).

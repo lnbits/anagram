@@ -1,4 +1,8 @@
-import NDK, { NDKNip07Signer, NDKPrivateKeySigner, type NDKSigner } from '@nostr-dev-kit/ndk';
+import NostrClient, {
+  NostrNip07Signer,
+  NostrPrivateKeySigner,
+  type NostrSigner,
+} from '#src/lib/nostr/client.ts';
 import {
   clearAndroidPrivateKeyMemoryOnlySession,
   isAndroidSecurePrivateKeyStorageAvailable,
@@ -6,7 +10,7 @@ import {
   readAndroidSecurePrivateKeyHex,
   removeAndroidSecurePrivateKeyHex,
   writeAndroidSecurePrivateKeyHex,
-} from 'src/services/androidSecurePrivateKeyStorage';
+} from '#src/services/androidSecurePrivateKeyStorage.ts';
 import {
   clearElectronPrivateKeyMemoryOnlySession,
   isElectronSecurePrivateKeyStorageAvailable,
@@ -14,28 +18,29 @@ import {
   readElectronSecurePrivateKeyHex,
   removeElectronSecurePrivateKeyHex,
   writeElectronSecurePrivateKeyHex,
-} from 'src/services/electronSecurePrivateKeyStorage';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
+} from '#src/services/electronSecurePrivateKeyStorage.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
 import {
   AUTH_METHOD_STORAGE_KEY,
   NIP46_SIGNER_PAYLOAD_STORAGE_KEY,
   PRIVATE_KEY_STORAGE_KEY,
   PUBLIC_KEY_STORAGE_KEY,
-} from 'src/stores/nostr/constants';
+} from '#src/stores/nostr/constants.ts';
 import {
   createNip46AuthRuntime,
   getNip46SessionSnapshotFromPayload,
-} from 'src/stores/nostr/nip46AuthRuntime';
-import { hasStorage } from 'src/stores/nostr/shared';
+} from '#src/stores/nostr/nip46AuthRuntime.ts';
+import { hasStorage } from '#src/stores/nostr/shared.ts';
 import type {
   AuthMethod,
   Nip46LoginResult,
   Nip46NostrConnectLogin,
   Nip46SessionSnapshot,
   SubscribePrivateMessagesOptions,
-} from 'src/stores/nostr/types';
-import { clearPersistedAppState } from 'src/utils/logoutCleanup';
-import type { Ref } from 'vue';
+} from '#src/stores/nostr/types.ts';
+import { clearLinkPreviews } from '#src/services/linkPreviewService.ts';
+import { clearPersistedAppState } from '#src/utils/logoutCleanup.ts';
+import type { Ref } from '#src/lib/state/reactivity.ts';
 
 interface RestoreRuntimeState {
   restoreContactCursorStatePromise: Promise<void> | null;
@@ -64,7 +69,7 @@ interface AuthSessionRuntimeDeps {
   hasNip07Extension: () => boolean;
   isRestoringStartupState: Ref<boolean>;
   loggedInvalidGroupEpochConflictKeys: { clear: () => void };
-  ndk: NDK;
+  ndk: NostrClient;
   pendingContactCursorPublishStates: { clear: () => void };
   pendingContactCursorPublishTimers: Map<string, ReturnType<typeof globalThis.setTimeout>>;
   pendingEventSinceState: {
@@ -76,6 +81,7 @@ interface AuthSessionRuntimeDeps {
   relayConnectPromises: { clear: () => void };
   relayStatusVersion: Ref<number>;
   resetContactSubscriptionsRuntimeState: (reason?: string) => void;
+  resetCalls?: () => void;
   resetEventSinceForFreshLogin: () => void;
   resetGroupRosterSubscriptionRuntimeState: (reason?: string) => void;
   resetMyRelayListRuntimeState: (reason?: string) => void;
@@ -93,14 +99,14 @@ interface AuthSessionRuntimeDeps {
   resetStartupStepTracking: () => void;
   resetTrackedContactEventState: () => void;
   restoreRuntimeState: RestoreRuntimeState;
-  setCachedSigner: (signer: NDKSigner | null) => void;
+  setCachedSigner: (signer: NostrSigner | null) => void;
   setCachedSignerSessionKey: (sessionKey: string | null) => void;
   setPendingPrivateMessagesEpochSubscriptionRefreshOptions: (
-    options: SubscribePrivateMessagesOptions | null
+    options: SubscribePrivateMessagesOptions | null,
   ) => void;
   setPrivateMessagesEpochSubscriptionRefreshQueue: (queue: Promise<void>) => void;
   setPrivateMessagesEpochSubscriptionRefreshTimerId: (
-    timerId: ReturnType<typeof globalThis.setTimeout> | null
+    timerId: ReturnType<typeof globalThis.setTimeout> | null,
   ) => void;
   setRestoreStartupStatePromise: (promise: Promise<void> | null) => void;
   setSyncLoggedInContactProfilePromise: (promise: Promise<void> | null) => void;
@@ -137,6 +143,7 @@ export function createAuthSessionRuntime({
   relayConnectPromises,
   relayStatusVersion,
   resetContactSubscriptionsRuntimeState,
+  resetCalls,
   resetEventSinceForFreshLogin,
   resetGroupRosterSubscriptionRuntimeState,
   resetMyRelayListRuntimeState,
@@ -164,6 +171,16 @@ export function createAuthSessionRuntime({
 }: AuthSessionRuntimeDeps) {
   let cachedPrivateKeyHex: string | null = null;
   let loadPrivateKeyHexPromise: Promise<string | null> | null = null;
+  let privateKeyGeneration = 0;
+  let secureStorageQueue = Promise.resolve();
+  function queueSecureStorage<T>(operation: () => Promise<T>): Promise<T> {
+    const next = secureStorageQueue.then(operation);
+    secureStorageQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
 
   function readLegacyPrivateKeyHex(): string | null {
     if (!hasStorage()) {
@@ -197,7 +214,7 @@ export function createAuthSessionRuntime({
   function derivePublicKeyFromPrivateKeyHex(privateKeyHex: string): string | null {
     try {
       return inputSanitizerService.normalizeHexKey(
-        new NDKPrivateKeySigner(privateKeyHex, ndk).pubkey
+        new NostrPrivateKeySigner(privateKeyHex, ndk).pubkey,
       );
     } catch {
       return null;
@@ -235,44 +252,43 @@ export function createAuthSessionRuntime({
     }
   }
 
-  async function readSecurePrivateKeyHex(): Promise<string | null> {
-    if (isAndroidSecurePrivateKeyStorageAvailable()) {
-      return readAndroidSecurePrivateKeyHex();
-    }
-
-    if (isElectronSecurePrivateKeyStorageAvailable()) {
-      return readElectronSecurePrivateKeyHex();
-    }
-
-    return null;
+  function readSecurePrivateKeyHex(): Promise<string | null> {
+    return queueSecureStorage(async () => {
+      if (isAndroidSecurePrivateKeyStorageAvailable()) return readAndroidSecurePrivateKeyHex();
+      if (isElectronSecurePrivateKeyStorageAvailable()) return readElectronSecurePrivateKeyHex();
+      return null;
+    });
   }
 
-  async function writeSecurePrivateKeyHex(privateKeyHex: string): Promise<void> {
-    if (isAndroidSecurePrivateKeyStorageAvailable()) {
-      await writeAndroidSecurePrivateKeyHex(privateKeyHex);
-      return;
-    }
-
-    if (isElectronSecurePrivateKeyStorageAvailable()) {
-      await writeElectronSecurePrivateKeyHex(privateKeyHex);
-    }
+  function writeSecurePrivateKeyHex(privateKeyHex: string): Promise<void> {
+    return queueSecureStorage(async () => {
+      if (isAndroidSecurePrivateKeyStorageAvailable())
+        await writeAndroidSecurePrivateKeyHex(privateKeyHex);
+      else if (isElectronSecurePrivateKeyStorageAvailable())
+        await writeElectronSecurePrivateKeyHex(privateKeyHex);
+    });
   }
 
-  async function removeSecurePrivateKeyHex(): Promise<void> {
-    await removeAndroidSecurePrivateKeyHex();
-    await removeElectronSecurePrivateKeyHex();
+  function removeSecurePrivateKeyHex(): Promise<void> {
+    return queueSecureStorage(async () => {
+      await removeAndroidSecurePrivateKeyHex();
+      await removeElectronSecurePrivateKeyHex();
+    });
   }
 
   async function persistSecurePrivateKeyHex(
     privateKeyHex: string,
-    pubkeyHex: string
+    pubkeyHex: string,
   ): Promise<boolean> {
+    const generation = privateKeyGeneration;
     try {
       await writeSecurePrivateKeyHex(privateKeyHex);
+      if (generation !== privateKeyGeneration) return false;
       clearSecurePrivateKeyMemoryOnlySession();
       return true;
     } catch (error) {
-      console.warn('Failed to persist private key in secure storage.', error);
+      console.warn('Failed to persist private key in secure storage.');
+      if (generation !== privateKeyGeneration) return false;
       markSecurePrivateKeyMemoryOnlySession(pubkeyHex);
       return false;
     }
@@ -283,15 +299,17 @@ export function createAuthSessionRuntime({
       return cachedPrivateKeyHex;
     }
 
+    const generation = privateKeyGeneration;
     const legacyPrivateKeyHex = readLegacyPrivateKeyHex();
     let securePrivateKeyHex: string | null = null;
 
     try {
       securePrivateKeyHex = await readSecurePrivateKeyHex();
     } catch (error) {
-      console.warn('Failed to read private key from secure storage.', error);
+      console.warn('Failed to read private key from secure storage.');
     }
 
+    if (generation !== privateKeyGeneration) return null;
     const storedPubkeyHex = getStoredPublicKeyHex();
     const securePrivateKeyPubkeyHex = securePrivateKeyHex
       ? derivePublicKeyFromPrivateKeyHex(securePrivateKeyHex)
@@ -334,6 +352,7 @@ export function createAuthSessionRuntime({
     setStoredNsecSessionMetadata(pubkeyHex);
 
     await persistSecurePrivateKeyHex(legacyPrivateKeyHex, pubkeyHex);
+    if (generation !== privateKeyGeneration) return null;
 
     if (hasStorage()) {
       window.localStorage.removeItem(PRIVATE_KEY_STORAGE_KEY);
@@ -348,9 +367,12 @@ export function createAuthSessionRuntime({
       return cachedPrivateKeyHex;
     }
 
-    loadPrivateKeyHexPromise ??= loadSecurePrivateKeyHex().finally(() => {
-      loadPrivateKeyHexPromise = null;
-    });
+    if (!loadPrivateKeyHexPromise) {
+      const pending = loadSecurePrivateKeyHex().finally(() => {
+        if (loadPrivateKeyHexPromise === pending) loadPrivateKeyHexPromise = null;
+      });
+      loadPrivateKeyHexPromise = pending;
+    }
 
     return loadPrivateKeyHexPromise;
   }
@@ -378,7 +400,7 @@ export function createAuthSessionRuntime({
   function setStoredAuthSession(
     authMethod: AuthMethod,
     pubkeyHex: string,
-    privateKeyHex?: string
+    privateKeyHex?: string,
   ): void {
     if (!hasStorage()) {
       return;
@@ -419,12 +441,15 @@ export function createAuthSessionRuntime({
     try {
       await removeSecurePrivateKeyHex();
     } catch (error) {
-      console.warn('Failed to remove private key from secure storage.', error);
+      console.warn('Failed to remove private key from secure storage.');
     }
   }
 
   function clearPrivateKey(options: { clearSecureStorage?: boolean } = {}): void {
-    const activeSigner = ndk.signer as (NDKSigner & { stop?: () => void }) | undefined;
+    clearLinkPreviews();
+    privateKeyGeneration++;
+    resetCalls?.();
+    const activeSigner = ndk.signer as (NostrSigner & { stop?: () => void }) | undefined;
     activeSigner?.stop?.();
     cachedPrivateKeyHex = null;
     loadPrivateKeyHexPromise = null;
@@ -480,14 +505,17 @@ export function createAuthSessionRuntime({
       return false;
     }
 
-    const signer = new NDKPrivateKeySigner(normalized, ndk);
+    const signer = new NostrPrivateKeySigner(normalized, ndk);
     clearPrivateKey({ clearSecureStorage: false });
+    const generation = privateKeyGeneration;
     resetEventSinceForFreshLogin();
     cachedPrivateKeyHex = normalized;
 
     if (isSecurePrivateKeyStorageAvailable()) {
       await removePersistedSecurePrivateKey();
+      if (generation !== privateKeyGeneration) return false;
       await persistSecurePrivateKeyHex(normalized, signer.pubkey);
+      if (generation !== privateKeyGeneration) return false;
       setStoredAuthSession('nsec', signer.pubkey);
     } else {
       setStoredAuthSession('nsec', signer.pubkey, normalized);
@@ -504,7 +532,7 @@ export function createAuthSessionRuntime({
       throw new Error('No NIP-07 extension detected. Install or enable one to continue.');
     }
 
-    const signer = new NDKNip07Signer(undefined, ndk);
+    const signer = new NostrNip07Signer(undefined, ndk);
     const user = await signer.blockUntilReady();
     user.ndk = ndk;
     const pubkeyHex = inputSanitizerService.normalizeHexKey(user.pubkey ?? signer.pubkey);
@@ -532,6 +560,7 @@ export function createAuthSessionRuntime({
   });
 
   async function loginWithRemoteSignerBunker(input: {
+    signal?: AbortSignal;
     connectionToken: string;
     onAuthUrl?: (url: string) => void;
   }): Promise<Nip46LoginResult> {

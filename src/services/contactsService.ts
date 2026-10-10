@@ -1,4 +1,9 @@
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
+import {
+  rememberPublicProfile,
+  clearPublicProfiles,
+  type PublicProfile,
+} from '#src/lib/state/publicProfiles.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
 import type {
   ContactMetadata,
   ContactRecord,
@@ -6,9 +11,9 @@ import type {
   ContactType,
   CreateContactInput,
   UpdateContactInput,
-} from 'src/types/contact';
-import { searchContactsForList } from 'src/utils/contactList';
-import { closeIndexedDbConnection, deleteIndexedDbDatabase } from 'src/utils/indexedDbStorage';
+} from '#src/types/contact.ts';
+import { searchContactsForList } from '#src/utils/contactList.ts';
+import { closeIndexedDbConnection, deleteIndexedDbDatabase } from '#src/utils/indexedDbStorage.ts';
 
 interface RawContactStoreRecord {
   id: number;
@@ -38,7 +43,8 @@ type DebugExecResult = Array<{
 }>;
 
 const CONTACTS_DB_NAME = 'contacts-indexeddb-v1';
-const CONTACTS_DB_VERSION = 3;
+const CONTACTS_DB_VERSION = 4;
+const PUBLIC_PROFILES_STORE = 'public_profiles';
 
 const CONTACTS_STORE = 'contacts';
 const CONTACTS_PUBLIC_KEY_INDEX = 'public_key';
@@ -206,7 +212,7 @@ function normalizeRelayList(value: unknown): ContactRelay[] {
   }
 
   return Array.from(byUrl.values()).sort((first, second) =>
-    compareRelayUrls(first.url, second.url)
+    compareRelayUrls(first.url, second.url),
   );
 }
 
@@ -253,6 +259,11 @@ function normalizeRecord(raw: RawContactStoreRecord): ContactStoreRecord | null 
 }
 
 function toContactRecord(record: ContactStoreRecord): ContactRecord {
+  const meta = parseStoredMeta(record.meta);
+  if (!meta.blocked) {
+    rememberPublicProfile(record.public_key, meta, meta.profile_event_created_at);
+    for (const member of meta.group_members ?? []) rememberPublicProfile(member.public_key, member);
+  }
   return {
     id: record.id,
     public_key: record.public_key,
@@ -296,6 +307,7 @@ class ContactsService {
   }
 
   async clearAllData(): Promise<void> {
+    clearPublicProfiles();
     this.databaseGeneration += 1;
     const dbPromise = this.dbPromise;
     this.activeDb = null;
@@ -303,6 +315,54 @@ class ContactsService {
     this.initPromise = null;
     await closeIndexedDbConnection(dbPromise);
     await deleteIndexedDbDatabase(CONTACTS_DB_NAME);
+  }
+
+  async restorePublicProfiles(publicKeys: string[]): Promise<void> {
+    const generation = this.databaseGeneration;
+    const db = await this.getDatabase();
+    if (generation !== this.databaseGeneration) return;
+    const tx = db.transaction(PUBLIC_PROFILES_STORE, 'readonly');
+    const done = waitForTransaction(tx);
+    await Promise.all(
+      [...new Set(publicKeys)].map(async (publicKey) => {
+        const record = await requestToPromise<PublicProfile | undefined>(
+          tx.objectStore(PUBLIC_PROFILES_STORE).get(publicKey),
+        );
+        if (record && generation === this.databaseGeneration)
+          rememberPublicProfile(publicKey, record, record.createdAt, record.eventId);
+      }),
+    );
+    await done;
+  }
+
+  async savePublicProfile(publicKey: string, profile: PublicProfile): Promise<void> {
+    const generation = this.databaseGeneration;
+    const db = await this.getDatabase();
+    if (generation !== this.databaseGeneration) return;
+    const tx = db.transaction(PUBLIC_PROFILES_STORE, 'readwrite');
+    const done = waitForTransaction(tx);
+    const store = tx.objectStore(PUBLIC_PROFILES_STORE);
+    const get = store.get(publicKey);
+    get.onsuccess = () => {
+      const previous = get.result as PublicProfile | undefined;
+      if (
+        previous &&
+        ((previous.createdAt ?? 0) > (profile.createdAt ?? 0) ||
+          (previous.createdAt === profile.createdAt &&
+            previous.eventId &&
+            (!profile.eventId || previous.eventId <= profile.eventId)))
+      )
+        return;
+      // Public display fields only. No contact/group secrets or membership.
+      store.put({
+        publicKey,
+        name: profile.name,
+        picture: profile.picture,
+        createdAt: profile.createdAt,
+        eventId: profile.eventId,
+      });
+    };
+    await done;
   }
 
   async listContacts(): Promise<ContactRecord[]> {
@@ -332,7 +392,7 @@ class ContactsService {
     const transaction = db.transaction(CONTACTS_STORE, 'readonly');
     const store = transaction.objectStore(CONTACTS_STORE);
     const rawRecord = await requestToPromise<RawContactStoreRecord | undefined>(
-      store.get(id) as IDBRequest<RawContactStoreRecord | undefined>
+      store.get(id) as IDBRequest<RawContactStoreRecord | undefined>,
     );
     await waitForTransaction(transaction);
 
@@ -346,7 +406,7 @@ class ContactsService {
 
   private async getContactByPublicKeyInternal(
     publicKey: string,
-    allowRetry: boolean
+    allowRetry: boolean,
   ): Promise<ContactRecord | null> {
     const normalizedPublicKey = inputSanitizerService.normalizePublicKey(publicKey);
     if (!normalizedPublicKey) {
@@ -359,7 +419,7 @@ class ContactsService {
       const store = transaction.objectStore(CONTACTS_STORE);
       const index = store.index(CONTACTS_PUBLIC_KEY_INDEX);
       const rawRecord = await requestToPromise<RawContactStoreRecord | undefined>(
-        index.get(normalizedPublicKey) as IDBRequest<RawContactStoreRecord | undefined>
+        index.get(normalizedPublicKey) as IDBRequest<RawContactStoreRecord | undefined>,
       );
       await waitForTransaction(transaction);
 
@@ -386,7 +446,7 @@ class ContactsService {
     const store = transaction.objectStore(CONTACTS_STORE);
     const index = store.index(CONTACTS_PUBLIC_KEY_INDEX);
     const count = await requestToPromise<number>(
-      index.count(IDBKeyRange.only(normalizedPublicKey))
+      index.count(IDBKeyRange.only(normalizedPublicKey)),
     );
     await waitForTransaction(transaction);
 
@@ -421,7 +481,7 @@ class ContactsService {
 
     try {
       const insertedId = await requestToPromise<IDBValidKey>(
-        store.add(record) as IDBRequest<IDBValidKey>
+        store.add(record) as IDBRequest<IDBValidKey>,
       );
       await waitForTransaction(transaction);
 
@@ -448,7 +508,7 @@ class ContactsService {
     const transaction = db.transaction(CONTACTS_STORE, 'readwrite');
     const store = transaction.objectStore(CONTACTS_STORE);
     const rawExistingRecord = await requestToPromise<RawContactStoreRecord | undefined>(
-      store.get(id) as IDBRequest<RawContactStoreRecord | undefined>
+      store.get(id) as IDBRequest<RawContactStoreRecord | undefined>,
     );
     const existingRecord = rawExistingRecord ? normalizeRecord(rawExistingRecord) : null;
     if (!existingRecord) {
@@ -520,7 +580,21 @@ class ContactsService {
     }
 
     if (input.meta !== undefined) {
-      const nextMeta = inputSanitizerService.normalizeContactMetadata(input.meta);
+      let nextMeta = inputSanitizerService.normalizeContactMetadata(input.meta);
+      if (input.metaBase !== undefined) {
+        // The caller may have awaited a relay/profile lookup since reading its
+        // snapshot. Merge only its changes inside this readwrite transaction so
+        // concurrent ownership, cursor and preference updates are not erased.
+        const base = inputSanitizerService.normalizeContactMetadata(input.metaBase);
+        const merged: Record<string, unknown> = { ...nextRecord.meta };
+        for (const key of new Set([...Object.keys(base), ...Object.keys(nextMeta)])) {
+          const field = key as keyof ContactMetadata;
+          if (JSON.stringify(base[field]) === JSON.stringify(nextMeta[field])) continue;
+          if (Object.hasOwn(nextMeta, key)) merged[key] = nextMeta[field];
+          else delete merged[key];
+        }
+        nextMeta = inputSanitizerService.normalizeContactMetadata(merged);
+      }
       if (!contactMetaEquals(nextRecord.meta, nextMeta)) {
         nextRecord.meta = nextMeta;
         didUpdateRecord = true;
@@ -547,7 +621,7 @@ class ContactsService {
 
   async updateSendMessagesToAppRelays(
     publicKey: string,
-    sendMessagesToAppRelays: boolean
+    sendMessagesToAppRelays: boolean,
   ): Promise<ContactRecord | null> {
     const normalizedPublicKey = inputSanitizerService.normalizePublicKey(publicKey);
     if (!normalizedPublicKey) {
@@ -573,7 +647,7 @@ class ContactsService {
     const transaction = db.transaction(CONTACTS_STORE, 'readwrite');
     const store = transaction.objectStore(CONTACTS_STORE);
     const rawExistingRecord = await requestToPromise<RawContactStoreRecord | undefined>(
-      store.get(id) as IDBRequest<RawContactStoreRecord | undefined>
+      store.get(id) as IDBRequest<RawContactStoreRecord | undefined>,
     );
     const existingRecord = rawExistingRecord ? normalizeRecord(rawExistingRecord) : null;
     if (!existingRecord) {
@@ -672,6 +746,9 @@ class ContactsService {
           return;
         }
 
+        if (!db.objectStoreNames.contains(PUBLIC_PROFILES_STORE))
+          db.createObjectStore(PUBLIC_PROFILES_STORE, { keyPath: 'publicKey' });
+
         const contactsStore = db.objectStoreNames.contains(CONTACTS_STORE)
           ? transaction.objectStore(CONTACTS_STORE)
           : db.createObjectStore(CONTACTS_STORE, { keyPath: 'id', autoIncrement: true });
@@ -708,7 +785,7 @@ class ContactsService {
     const transaction = db.transaction(CONTACTS_STORE, 'readonly');
     const store = transaction.objectStore(CONTACTS_STORE);
     const rawRecords = await requestToPromise<RawContactStoreRecord[]>(
-      store.getAll() as IDBRequest<RawContactStoreRecord[]>
+      store.getAll() as IDBRequest<RawContactStoreRecord[]>,
     );
     await waitForTransaction(transaction);
 

@@ -1,4 +1,4 @@
-import { normalizeRelayStatusUrlsValue } from 'src/stores/nostr/valueUtils';
+import { normalizeRelayStatusUrlsValue } from '#src/stores/nostr/valueUtils.ts';
 export function historyCoverageScope(recipient: string, relayUrls: string[]): string {
   return `${recipient}:${normalizeRelayStatusUrlsValue(relayUrls).sort().join('|')}`;
 }

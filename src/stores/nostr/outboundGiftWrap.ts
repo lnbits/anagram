@@ -1,5 +1,5 @@
-import { type NDKEvent, NDKKind, type NostrEvent } from '@nostr-dev-kit/ndk';
-import { nostrEventDataService } from 'src/services/nostrEventDataService';
+import { type ClientEvent, NostrKind, type NostrEvent } from '#src/lib/nostr/client.ts';
+import { nostrEventDataService } from '#src/services/nostrEventDataService.ts';
 
 const pending = new Map<string, Promise<NostrEvent>>();
 
@@ -8,7 +8,7 @@ const pending = new Map<string, Promise<NostrEvent>>();
 export function getOrCreateOutboundGiftWrap(
   rumor: NostrEvent,
   scope: 'recipient' | 'self',
-  create: () => Promise<NDKEvent>
+  create: () => Promise<ClientEvent>
 ): Promise<NostrEvent> {
   const key = `${rumor.id}:${scope}`;
   const existing = pending.get(key);
@@ -16,7 +16,7 @@ export function getOrCreateOutboundGiftWrap(
   const operation = (async () => {
     const stored = await nostrEventDataService.getEventById(rumor.id ?? '');
     const saved = stored?.gift_wraps?.[scope];
-    if (saved?.id && saved.sig && saved.kind === NDKKind.GiftWrap) return saved;
+    if (saved?.id && saved.sig && saved.kind === NostrKind.GiftWrap) return saved;
     const event = await (await create()).toNostrEvent();
     const persisted = await nostrEventDataService.upsertEvent({
       event: rumor,

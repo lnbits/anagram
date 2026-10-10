@@ -1,11 +1,11 @@
-import { NDKRelaySet } from '@nostr-dev-kit/ndk';
+import { NostrRelaySet } from '#src/lib/nostr/client.ts';
 import {
   createReadyRelaySet,
   fetchEventsWithRelayTimeout,
   fetchEventWithRelayTimeout,
   RelayQueryTimeoutError,
   RelayQueryUnavailableError,
-} from 'src/stores/nostr/relayQueryUtils';
+} from '#src/stores/nostr/relayQueryUtils.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 describe('relayQueryUtils', () => {
@@ -14,7 +14,7 @@ describe('relayQueryUtils', () => {
   });
 
   it('builds a relay set from currently connected relays only', () => {
-    const fromRelayUrls = vi.spyOn(NDKRelaySet, 'fromRelayUrls').mockReturnValue({} as never);
+    const fromRelayUrls = vi.spyOn(NostrRelaySet, 'fromRelayUrls').mockReturnValue({} as never);
     const ndk = {
       pool: {
         relays: new Map([
@@ -31,7 +31,7 @@ describe('relayQueryUtils', () => {
   });
 
   it('does not query disconnected relays when the pool is already known', () => {
-    const fromRelayUrls = vi.spyOn(NDKRelaySet, 'fromRelayUrls').mockReturnValue({} as never);
+    const fromRelayUrls = vi.spyOn(NostrRelaySet, 'fromRelayUrls').mockReturnValue({} as never);
     const ndk = {
       pool: {
         relays: new Map([['wss://slow.example/', { connected: false }]]),
@@ -49,7 +49,7 @@ describe('relayQueryUtils', () => {
     };
 
     await expect(
-      fetchEventWithRelayTimeout(ndk as never, { kinds: [0] }, undefined, null, 40)
+      fetchEventWithRelayTimeout(ndk as never, { kinds: [0] }, undefined, null, 40),
     ).rejects.toBeInstanceOf(RelayQueryUnavailableError);
     expect(ndk.subscribe).not.toHaveBeenCalled();
   });
@@ -62,7 +62,7 @@ describe('relayQueryUtils', () => {
 
     const startedAt = Date.now();
     await expect(
-      fetchEventWithRelayTimeout(ndk as never, { kinds: [0] }, undefined, { size: 1 } as never, 40)
+      fetchEventWithRelayTimeout(ndk as never, { kinds: [0] }, undefined, { size: 1 } as never, 40),
     ).rejects.toBeInstanceOf(RelayQueryTimeoutError);
     const elapsedMs = Date.now() - startedAt;
 
@@ -93,7 +93,13 @@ describe('relayQueryUtils', () => {
     };
 
     await expect(
-      fetchEventWithRelayTimeout(ndk as never, { kinds: [0] }, undefined, { size: 1 } as never, 200)
+      fetchEventWithRelayTimeout(
+        ndk as never,
+        { kinds: [0] },
+        undefined,
+        { size: 1 } as never,
+        200,
+      ),
     ).resolves.toBe(newerEvent);
     expect(stop).not.toHaveBeenCalled();
   });
@@ -116,7 +122,13 @@ describe('relayQueryUtils', () => {
     };
 
     await expect(
-      fetchEventWithRelayTimeout(ndk as never, { kinds: [0] }, undefined, { size: 1 } as never, 200)
+      fetchEventWithRelayTimeout(
+        ndk as never,
+        { kinds: [0] },
+        undefined,
+        { size: 1 } as never,
+        200,
+      ),
     ).resolves.toBe(delayedEvent);
   });
 
@@ -136,7 +148,7 @@ describe('relayQueryUtils', () => {
       { kinds: [0] },
       undefined,
       { size: 1 } as never,
-      200
+      200,
     );
 
     expect(result.size).toBe(0);
@@ -156,11 +168,53 @@ describe('relayQueryUtils', () => {
 
     const startedAt = Date.now();
     await expect(
-      fetchEventsWithRelayTimeout(ndk as never, { kinds: [0] }, undefined, { size: 1 } as never, 40)
+      fetchEventsWithRelayTimeout(
+        ndk as never,
+        { kinds: [0] },
+        undefined,
+        { size: 1 } as never,
+        40,
+      ),
     ).rejects.toBeInstanceOf(RelayQueryTimeoutError);
     const elapsedMs = Date.now() - startedAt;
 
     expect(stop).toHaveBeenCalledTimes(1);
     expect(elapsedMs).toBeLessThan(250);
   });
+});
+
+it.each([false, true])(
+  'keeps partial verified metadata only when explicitly allowed=%s',
+  async (allowPartialResults) => {
+    const event = { created_at: 20, deduplicationKey: () => 'kind:author' };
+    const stop = vi.fn();
+    const ndk = {
+      subscribe: vi.fn((_filters, options) => {
+        queueMicrotask(() => options.onEvent(event));
+        return { stop };
+      }),
+    };
+    const pending = fetchEventWithRelayTimeout(
+      ndk as never,
+      { kinds: [0] },
+      { allowPartialResults },
+      { size: 2 } as never,
+      20,
+    );
+    if (allowPartialResults) await expect(pending).resolves.toBe(event);
+    else await expect(pending).rejects.toBeInstanceOf(RelayQueryTimeoutError);
+    expect(stop).toHaveBeenCalledOnce();
+  },
+);
+it('does not turn an empty timed-out metadata query into an authoritative empty result', async () => {
+  const ndk = { subscribe: () => ({ stop() {} }) };
+  await expect(
+    fetchEventWithRelayTimeout(
+      ndk as never,
+      { kinds: [0] },
+      { allowPartialResults: true },
+      { size: 2 } as never,
+      20,
+    ),
+  ).rejects.toBeInstanceOf(RelayQueryTimeoutError);
 });

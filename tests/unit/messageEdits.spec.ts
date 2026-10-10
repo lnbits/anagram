@@ -5,7 +5,7 @@ import {
   messageEditReferencesEventId,
   readEditedMessageMetadata,
   readMessageEditTargetEventId,
-} from 'src/utils/messageEdits';
+} from '#src/utils/messageEdits.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('message edit helpers', () => {
@@ -21,11 +21,13 @@ describe('message edit helpers', () => {
 
   it('preserves the empty relay slot in edit marker tags on kind 14 rumors', () => {
     const runtime = createMessageEventRuntime({
+      issueOwnGroupInvitation: async () => null,
+      getLoggedInPublicKeyHex: () => null,
       decryptPrivateStringContent: async () => null,
       derivePublicKeyFromPrivateKey: () => null,
       findGroupChatEpochContextByRecipientPubkey: async () => null,
       getOrCreateSigner: async () => ({}) as never,
-      ndk: new NDK(),
+      ndk: new NostrClient(),
       readEpochNumberTag: () => null,
       readFirstTagValue: () => null,
     });
@@ -77,5 +79,5 @@ describe('message edit helpers', () => {
   });
 });
 
-import NDK from '@nostr-dev-kit/ndk';
-import { createMessageEventRuntime } from 'src/stores/nostr/messageEventRuntime';
+import NostrClient from '#src/lib/nostr/client.ts';
+import { createMessageEventRuntime } from '#src/stores/nostr/messageEventRuntime.ts';

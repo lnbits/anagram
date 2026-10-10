@@ -1,6 +1,8 @@
-import { type NDKEvent, NDKKind, nip19 } from '@nostr-dev-kit/ndk';
-import { createPrivateMessagesIngestRuntime } from 'src/stores/nostr/privateMessagesIngestRuntime';
-import type { MessageRelayStatus } from 'src/types/chat';
+import { type ClientEvent, NostrKind, nip19 } from '#src/lib/nostr/client.ts';
+import { createPrivateMessagesIngestRuntime } from '#src/stores/nostr/privateMessagesIngestRuntime.ts';
+import { CALL_PROTOCOL, CALL_SIGNAL_KIND } from '#src/types/call.ts';
+import { ROOM_PROTOCOL } from '#src/types/callRoom.ts';
+import type { MessageRelayStatus } from '#src/types/chat.ts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const ndkMocks = vi.hoisted(() => ({
@@ -9,16 +11,23 @@ const ndkMocks = vi.hoisted(() => ({
 
 const serviceMocks = vi.hoisted(() => ({
   chatDataService: {
+    updateChat: vi.fn(async () => {}),
     applyMessageEdit: vi.fn(),
+    reconcileMessageEditPredecessor: vi.fn(),
     createChat: vi.fn(),
     createMessage: vi.fn(),
+    getIncomingMessageContext: vi.fn(),
     getChatByPublicKey: vi.fn(),
     getMessageById: vi.fn(),
     getMessageByEventId: vi.fn(),
     getMessageByEventIdOrEditReference: vi.fn(),
     init: vi.fn(),
     listMessages: vi.fn(),
+    listChats: vi.fn(),
+    findLatestMessageByAuthor: vi.fn(),
+    findDeletedMessageInSecond: vi.fn().mockResolvedValue(null),
     updateChatPreview: vi.fn(),
+    updateChatMeta: vi.fn().mockResolvedValue(undefined),
     updateChatUnreadCount: vi.fn(),
   },
   contactsService: {
@@ -31,8 +40,10 @@ const serviceMocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@nostr-dev-kit/ndk', async () => {
-  const actual = await vi.importActual<typeof import('@nostr-dev-kit/ndk')>('@nostr-dev-kit/ndk');
+vi.mock('#src/lib/nostr/client.ts', async () => {
+  const actual = await vi.importActual<typeof import('#src/lib/nostr/client.ts')>(
+    '#src/lib/nostr/client.ts',
+  );
 
   return {
     ...actual,
@@ -40,15 +51,22 @@ vi.mock('@nostr-dev-kit/ndk', async () => {
   };
 });
 
-vi.mock('src/services/chatDataService', () => ({
+vi.mock('#src/stores/messageStore.ts', () => ({
+  useMessageStore: () => ({
+    stageIncomingMessage: vi.fn(),
+    upsertPersistedMessage: vi.fn().mockResolvedValue(undefined),
+  }),
+}));
+
+vi.mock('#src/services/chatDataService.ts', () => ({
   chatDataService: serviceMocks.chatDataService,
 }));
 
-vi.mock('src/services/contactsService', () => ({
+vi.mock('#src/services/contactsService.ts', () => ({
   contactsService: serviceMocks.contactsService,
 }));
 
-vi.mock('src/services/nostrEventDataService', () => ({
+vi.mock('#src/services/nostrEventDataService.ts', () => ({
   nostrEventDataService: serviceMocks.nostrEventDataService,
 }));
 
@@ -63,17 +81,17 @@ function makeRelayStatus(overrides: Partial<MessageRelayStatus> = {}): MessageRe
   };
 }
 
-function makeWrappedEvent(overrides: Partial<NDKEvent> = {}): NDKEvent {
+function makeWrappedEvent(overrides: Partial<ClientEvent> = {}): ClientEvent {
   return {
     id: 'wrapped-event',
-    kind: NDKKind.GiftWrap,
+    kind: NostrKind.GiftWrap,
     created_at: 1700000000,
     pubkey: 'relay-author',
     content: '',
     tags: [],
     getMatchingTags: vi.fn(() => []),
     ...overrides,
-  } as unknown as NDKEvent;
+  } as unknown as ClientEvent;
 }
 
 function makeRumorEvent(options: {
@@ -84,17 +102,17 @@ function makeRumorEvent(options: {
   content?: string;
   createdAt?: number;
   tags?: string[][];
-}): NDKEvent {
+}): ClientEvent {
   const tags = options.tags ?? [['p', options.recipientPubkey]];
   return {
     id: options.eventId ?? 'rumor-event',
-    kind: options.kind ?? NDKKind.PrivateDirectMessage,
+    kind: options.kind ?? NostrKind.PrivateDirectMessage,
     created_at: options.createdAt ?? 1700000000,
     pubkey: options.senderPubkey ?? 'a'.repeat(64),
     content: options.content ?? 'Hello there',
     tags,
     getMatchingTags: vi.fn((tagName: string) => tags.filter((tag) => tag[0] === tagName)),
-  } as unknown as NDKEvent;
+  } as unknown as ClientEvent;
 }
 
 function createDeps() {
@@ -107,6 +125,7 @@ function createDeps() {
   };
 
   return {
+    verifyIncomingGroupMessage: vi.fn().mockResolvedValue(true),
     appendRelayStatusesToMessageEvent: vi.fn().mockResolvedValue(undefined),
     applyPendingIncomingDeletionsForMessage: vi.fn(async (messageRow) => messageRow),
     applyPendingIncomingReactionsForMessage: vi.fn(async (messageRow) => messageRow),
@@ -125,7 +144,7 @@ function createDeps() {
     formatSubscriptionLogValue: vi.fn((value) => value ?? null),
     getPrivateMessagesRestoreThrottleMs: vi.fn(() => 25),
     isContactListedInPrivateContactList: vi.fn(
-      (contact) => contact?.meta?.private_contact_list_member === true
+      (contact) => contact?.meta?.private_contact_list_member === true,
     ),
     isPubkeyBlocked: vi.fn((_pubkeyHex: string) => false),
     lastSeenReceivedActivityAtMetaKey: 'last_seen_received_activity_at',
@@ -135,13 +154,15 @@ function createDeps() {
     logInvalidIncomingEpochNumber: vi.fn(),
     logSubscription: vi.fn(),
     normalizeEventId: vi.fn((value: unknown) =>
-      typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : null
+      typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : null,
     ),
     normalizeThrottleMs: vi.fn((value: number | undefined) => value ?? 0),
     normalizeTimestamp: vi.fn((value: unknown) =>
-      typeof value === 'string' && value.trim() ? value.trim() : null
+      typeof value === 'string' && value.trim() ? value.trim() : null,
     ),
     persistIncomingGroupEpochTicket: vi.fn().mockResolvedValue(undefined),
+    processIncomingCallSignal: vi.fn().mockResolvedValue(undefined),
+    processIncomingRoomSignal: vi.fn().mockResolvedValue(undefined),
     processIncomingDeletionRumorEvent: vi.fn().mockResolvedValue(undefined),
     processIncomingReactionRumorEvent: vi.fn().mockResolvedValue(undefined),
     queueBackgroundGroupContactRefresh: vi.fn(),
@@ -150,11 +171,11 @@ function createDeps() {
     refreshReplyPreviewsForTargetMessage: vi.fn().mockResolvedValue(0),
     resolveCurrentGroupChatEpochEntry: vi.fn(() => null),
     resolveGroupDisplayName: vi.fn(
-      (groupPublicKey: string) => `Group ${groupPublicKey.slice(0, 8)}`
+      (groupPublicKey: string) => `Group ${groupPublicKey.slice(0, 8)}`,
     ),
     resolveIncomingChatInboxStateValue: vi.fn(
       ({ isAcceptedContact }): 'accepted' | 'blocked' | 'request' =>
-        isAcceptedContact ? 'accepted' : 'request'
+        isAcceptedContact ? 'accepted' : 'request',
     ),
     resolveIncomingPrivateMessageRecipientContext: vi.fn().mockResolvedValue({
       recipientPubkey: 'b'.repeat(64),
@@ -164,12 +185,12 @@ function createDeps() {
     shouldNotifyForAcceptedChatOnly: vi.fn().mockResolvedValue(false),
     showIncomingMessageBrowserNotification: vi.fn(),
     toComparableTimestamp: vi.fn((value: string | null | undefined) =>
-      value ? Date.parse(value) || 0 : 0
+      value ? Date.parse(value) || 0 : 0,
     ),
     toIsoTimestampFromUnix: vi.fn((value: number | undefined) =>
-      typeof value === 'number' ? new Date(value * 1000).toISOString() : ''
+      typeof value === 'number' ? new Date(value * 1000).toISOString() : '',
     ),
-    toStoredNostrEvent: vi.fn(async (event: NDKEvent) => ({
+    toStoredNostrEvent: vi.fn(async (event: ClientEvent) => ({
       id: event.id,
       kind: event.kind,
       created_at: event.created_at,
@@ -197,8 +218,12 @@ describe('privateMessagesIngestRuntime', () => {
     serviceMocks.chatDataService.getMessageById.mockResolvedValue(null);
     serviceMocks.chatDataService.getMessageByEventId.mockResolvedValue(null);
     serviceMocks.chatDataService.getMessageByEventIdOrEditReference.mockImplementation((eventId) =>
-      serviceMocks.chatDataService.getMessageByEventId(eventId)
+      serviceMocks.chatDataService.getMessageByEventId(eventId),
     );
+    serviceMocks.chatDataService.getIncomingMessageContext.mockImplementation(async (chat, id) => ({
+      chat: await serviceMocks.chatDataService.getChatByPublicKey(chat),
+      existingMessage: await serviceMocks.chatDataService.getMessageByEventIdOrEditReference(id),
+    }));
     serviceMocks.chatDataService.listMessages.mockResolvedValue([]);
     serviceMocks.chatDataService.applyMessageEdit.mockResolvedValue(null);
     serviceMocks.chatDataService.updateChatPreview.mockResolvedValue(undefined);
@@ -210,15 +235,326 @@ describe('privateMessagesIngestRuntime', () => {
     ndkMocks.giftUnwrap.mockReset();
   });
 
+  it.each([14, 7, 5])('drops unauthorized group kind %s before any effects', async (kind) => {
+    const deps = createDeps();
+    const group = 'c'.repeat(64),
+      epoch = 'd'.repeat(64),
+      account = 'b'.repeat(64);
+    deps.resolveIncomingPrivateMessageRecipientContext.mockResolvedValue({
+      recipientPubkey: epoch,
+      unwrapSigner: {} as never,
+      groupChatPublicKey: group,
+    });
+    deps.verifyIncomingGroupMessage.mockResolvedValue(false);
+    ndkMocks.giftUnwrap.mockResolvedValue(makeRumorEvent({ recipientPubkey: epoch, kind }));
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+    await runtime.queuePrivateMessageIngestion(makeWrappedEvent(), account);
+    expect(deps.verifyIncomingGroupMessage).toHaveBeenCalledOnce();
+    expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
+    expect(serviceMocks.chatDataService.applyMessageEdit).not.toHaveBeenCalled();
+    expect(serviceMocks.nostrEventDataService.upsertEvent).not.toHaveBeenCalled();
+    expect(deps.processIncomingDeletionRumorEvent).not.toHaveBeenCalled();
+    expect(deps.processIncomingReactionRumorEvent).not.toHaveBeenCalled();
+    expect(deps.showIncomingMessageBrowserNotification).not.toHaveBeenCalled();
+    expect(deps.chatStore.applyIncomingMessage).not.toHaveBeenCalled();
+  });
+
+  it('preempts a persisted history page when foreground traffic arrives', async () => {
+    const { MessageInbox } = await import('#src/lib/nostr/inbox.ts');
+    const { ClientEvent: Event } = await import('#src/lib/nostr/client.ts');
+    const inbox = new MessageInbox();
+    const account = `priority-${crypto.randomUUID()}`;
+    const raw = (id: string) => ({
+      id,
+      kind: 1059,
+      pubkey: 'a'.repeat(64),
+      created_at: 1,
+      tags: [],
+      content: 'ciphertext',
+    });
+    for (let n = 0; n < 40; n++)
+      await inbox.put({
+        account,
+        id: `history-${n}`,
+        event: raw(`history-${n}`),
+        priority: 1,
+        queuedAt: n,
+        throttle: 0,
+      });
+    const deps = createDeps();
+    const seen: string[] = [];
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    deps.resolveIncomingPrivateMessageRecipientContext.mockImplementation(async (event) => {
+      seen.push(event.id);
+      if (seen.length === 1) await barrier;
+      return null;
+    });
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+    const history = runtime.resumePendingPrivateMessages(undefined, account);
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    const foreground = runtime.queuePrivateMessageIngestion(
+      new Event(undefined, raw('urgent')),
+      account,
+      { priority: 'foreground' },
+    );
+    await vi.waitFor(async () => expect((await inbox.next(account, 1))[0].id).toBe('urgent'));
+    release();
+    await foreground;
+    await history;
+    await runtime.getPrivateMessagesIngestQueue();
+    expect(seen[1]).toBe('urgent');
+    expect(seen).toHaveLength(41);
+    runtime.resetPrivateMessagesIngestRuntimeState();
+  });
+
+  it('drains arrivals queued while the last inbox read is returning empty', async () => {
+    const { MessageInbox } = await import('#src/lib/nostr/inbox.ts');
+    const { ClientEvent: Event } = await import('#src/lib/nostr/client.ts');
+    const account = crypto.randomUUID();
+    const deps = createDeps();
+    deps.resolveIncomingPrivateMessageRecipientContext.mockResolvedValue(null);
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+    let release!: () => void;
+    const emptyRead = new Promise<never[]>((resolve) => {
+      release = () => resolve([]);
+    });
+    const next = vi.spyOn(MessageInbox.prototype, 'next').mockReturnValueOnce(emptyRead);
+    const wrap = (id: string) =>
+      new Event(undefined, {
+        id,
+        kind: 1059,
+        pubkey: 'a'.repeat(64),
+        tags: [],
+        content: 'ciphertext',
+        created_at: 1,
+      });
+    try {
+      await runtime.queuePrivateMessageIngestion(wrap('first'), account);
+      await vi.waitFor(() => expect(next).toHaveBeenCalled());
+      const late = runtime.queuePrivateMessageIngestion(wrap('late'), account);
+      // The worker's empty snapshot predates this new arrival and its journal commit.
+      await vi.waitFor(async () =>
+        expect(await new MessageInbox().hasPending(account, 'late')).toBe(true),
+      );
+      release();
+      await late;
+      await runtime.getPrivateMessagesIngestQueue();
+      expect(
+        deps.resolveIncomingPrivateMessageRecipientContext.mock.calls.map(([event]) => event.id),
+      ).toEqual(['first', 'late']);
+    } finally {
+      release();
+      next.mockRestore();
+      runtime.resetPrivateMessagesIngestRuntimeState();
+    }
+  });
+
+  it('resolves recipient context while journal persistence is still pending', async () => {
+    const { MessageInbox } = await import('#src/lib/nostr/inbox.ts');
+    const { ClientEvent: Event } = await import('#src/lib/nostr/client.ts');
+    const account = crypto.randomUUID();
+    let release!: () => void;
+    const put = vi.spyOn(MessageInbox.prototype, 'put').mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const deps = createDeps();
+    deps.resolveIncomingPrivateMessageRecipientContext.mockResolvedValue(null);
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+    const pending = runtime.queuePrivateMessageIngestion(
+      new Event(undefined, {
+        id: 'hot',
+        kind: 1059,
+        pubkey: 'a'.repeat(64),
+        tags: [],
+        content: 'ciphertext',
+        created_at: 1,
+      }),
+      account,
+      { priority: 'foreground' },
+    );
+    await vi.waitFor(() =>
+      expect(deps.resolveIncomingPrivateMessageRecipientContext).toHaveBeenCalledOnce(),
+    );
+    release();
+    expect(await pending).toBe(false);
+    await runtime.getPrivateMessagesIngestQueue();
+    put.mockRestore();
+    runtime.resetPrivateMessagesIngestRuntimeState();
+  });
+
+  it('acknowledges a durably completed wrapper without resolving keys or decrypting again', async () => {
+    const { MessageInbox } = await import('#src/lib/nostr/inbox.ts');
+    const { ClientEvent: Event } = await import('#src/lib/nostr/client.ts');
+    const account = crypto.randomUUID();
+    await new MessageInbox().complete(account, 'completed');
+    const deps = createDeps(),
+      runtime = createPrivateMessagesIngestRuntime(deps);
+    const event = new Event(undefined, {
+      id: 'completed',
+      kind: 1059,
+      pubkey: 'a'.repeat(64),
+      tags: [],
+      content: 'ciphertext',
+      created_at: 1,
+    });
+    const results = await Promise.all([
+      runtime.queuePrivateMessageIngestion(event, account),
+      runtime.queuePrivateMessageIngestion(event, account),
+    ]);
+    expect(results).toEqual([true, true]);
+    expect(deps.resolveIncomingPrivateMessageRecipientContext).not.toHaveBeenCalled();
+    expect(ndkMocks.giftUnwrap).not.toHaveBeenCalled();
+    runtime.resetPrivateMessagesIngestRuntimeState();
+  });
+
+  it('does not requeue a waiting dependency repair after the account queue resets', async () => {
+    const { MessageInbox } = await import('#src/lib/nostr/inbox.ts');
+    const { ClientEvent: Event } = await import('#src/lib/nostr/client.ts');
+    let release!: () => void;
+    const put = vi.spyOn(MessageInbox.prototype, 'put').mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const runtime = createPrivateMessagesIngestRuntime(createDeps());
+    const event = new Event(undefined, {
+      id: 'repair-during-logout',
+      kind: 1059,
+      pubkey: 'a'.repeat(64),
+      tags: [],
+      content: 'ciphertext',
+      created_at: 1,
+    });
+    try {
+      const account = crypto.randomUUID();
+      const initial = runtime.queuePrivateMessageIngestion(event, account);
+      const repair = runtime.queuePrivateMessageIngestion(event, account, { reprocess: true });
+      runtime.resetPrivateMessagesIngestRuntimeState();
+      release();
+      expect(await initial).toBe(false);
+      expect(await repair).toBe(false);
+      expect(put).toHaveBeenCalledOnce();
+    } finally {
+      put.mockRestore();
+      runtime.resetPrivateMessagesIngestRuntimeState();
+    }
+  });
+
   it('requests a retry when the gift-wrap recipient context is not ready', async () => {
     const deps = createDeps();
     deps.resolveIncomingPrivateMessageRecipientContext.mockResolvedValue(null);
     const runtime = createPrivateMessagesIngestRuntime(deps);
 
     await expect(
-      runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64))
+      runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64)),
     ).resolves.toBe(false);
   });
+
+  it('routes authenticated call controls without touching chat or event persistence', async () => {
+    const deps = createDeps();
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+    const signal = {
+      protocol: CALL_PROTOCOL,
+      action: 'invite',
+      callId: crypto.randomUUID(),
+      mode: 'audio',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      address: { id: 'c'.repeat(64), relayUrl: 'https://relay.example/' },
+      mimeType: 'audio/webm;codecs=opus',
+    };
+    ndkMocks.giftUnwrap.mockResolvedValue(
+      makeRumorEvent({
+        recipientPubkey: 'b'.repeat(64),
+        kind: CALL_SIGNAL_KIND,
+        createdAt: Math.floor(Date.now() / 1000),
+        content: JSON.stringify(signal),
+      }),
+    );
+    await runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64));
+    expect(deps.processIncomingCallSignal).toHaveBeenCalledWith('a'.repeat(64), signal);
+    expect(serviceMocks.chatDataService.createChat).not.toHaveBeenCalled();
+    expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
+    expect(serviceMocks.nostrEventDataService.upsertEvent).not.toHaveBeenCalled();
+    expect(deps.chatStore.recordIncomingActivity).not.toHaveBeenCalled();
+    expect(deps.showIncomingMessageBrowserNotification).not.toHaveBeenCalled();
+  });
+
+  it('routes room controls by the authenticated author without creating chat messages', async () => {
+    const deps = createDeps();
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+    const signal = {
+      protocol: ROOM_PROTOCOL,
+      action: 'closed',
+      roomId: crypto.randomUUID(),
+      senderSession: crypto.randomUUID(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+    ndkMocks.giftUnwrap.mockResolvedValue(
+      makeRumorEvent({
+        recipientPubkey: 'b'.repeat(64),
+        kind: CALL_SIGNAL_KIND,
+        createdAt: Math.floor(Date.now() / 1000),
+        content: JSON.stringify(signal),
+      }),
+    );
+    await runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64));
+    expect(deps.processIncomingRoomSignal).toHaveBeenCalledWith('a'.repeat(64), signal);
+    expect(deps.processIncomingCallSignal).not.toHaveBeenCalled();
+    expect(serviceMocks.chatDataService.createChat).not.toHaveBeenCalled();
+    expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
+    expect(serviceMocks.nostrEventDataService.upsertEvent).not.toHaveBeenCalled();
+    expect(deps.showIncomingMessageBrowserNotification).not.toHaveBeenCalled();
+  });
+
+  it.each(['stale', 'self', 'blocked', 'group', 'multi-recipient'])(
+    'drops %s call controls',
+    async (scenario) => {
+      const deps = createDeps();
+      if (scenario === 'blocked') deps.isPubkeyBlocked.mockReturnValue(true);
+      if (scenario === 'group')
+        deps.resolveIncomingPrivateMessageRecipientContext.mockResolvedValue({
+          recipientPubkey: 'b'.repeat(64),
+          unwrapSigner: {} as never,
+          groupChatPublicKey: 'c'.repeat(64),
+        });
+      const runtime = createPrivateMessagesIngestRuntime(deps);
+      const signal = {
+        protocol: CALL_PROTOCOL,
+        action: 'end',
+        reason: 'cancelled',
+        callId: crypto.randomUUID(),
+        mode: 'audio',
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      };
+      ndkMocks.giftUnwrap.mockResolvedValue(
+        makeRumorEvent({
+          recipientPubkey: 'b'.repeat(64),
+          senderPubkey: scenario === 'self' ? 'b'.repeat(64) : 'a'.repeat(64),
+          kind: CALL_SIGNAL_KIND,
+          createdAt: Math.floor(Date.now() / 1000) - (scenario === 'stale' ? 120 : 0),
+          content: JSON.stringify(signal),
+          ...(scenario === 'multi-recipient'
+            ? {
+                tags: [
+                  ['p', 'b'.repeat(64)],
+                  ['p', 'c'.repeat(64)],
+                ],
+              }
+            : {}),
+        }),
+      );
+      await runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64));
+      expect(deps.processIncomingCallSignal).not.toHaveBeenCalled();
+      expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it('requests a retry when gift-wrap decryption fails', async () => {
     const deps = createDeps();
@@ -226,7 +562,7 @@ describe('privateMessagesIngestRuntime', () => {
     ndkMocks.giftUnwrap.mockRejectedValue(new Error('Signer is not ready'));
 
     await expect(
-      runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64))
+      runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64)),
     ).resolves.toBe(false);
   });
 
@@ -238,10 +574,10 @@ describe('privateMessagesIngestRuntime', () => {
       () =>
         new Promise<null>((resolve) => {
           releaseActiveBackgroundTask = resolve;
-        })
+        }),
     );
     const runtime = createPrivateMessagesIngestRuntime(deps);
-    const makeTrackedWrappedEvent = (id: string, kind: number): NDKEvent => {
+    const makeTrackedWrappedEvent = (id: string, kind: number): ClientEvent => {
       const event = makeWrappedEvent({ id });
       Object.defineProperty(event, 'kind', {
         configurable: true,
@@ -254,23 +590,23 @@ describe('privateMessagesIngestRuntime', () => {
     };
 
     const activeBackgroundResult = runtime.queuePrivateMessageIngestion(
-      makeTrackedWrappedEvent('active-background', NDKKind.GiftWrap),
-      'b'.repeat(64)
+      makeTrackedWrappedEvent('active-background', NostrKind.GiftWrap),
+      'b'.repeat(64),
     );
     await vi.waitFor(() => expect(processingOrder).toEqual(['active-background']));
 
     const queuedBackgroundResult = runtime.queuePrivateMessageIngestion(
-      makeTrackedWrappedEvent('queued-background', NDKKind.Text),
-      'b'.repeat(64)
+      makeTrackedWrappedEvent('queued-background', NostrKind.Text),
+      'b'.repeat(64),
     );
     const foregroundResult = runtime.queuePrivateMessageIngestion(
-      makeTrackedWrappedEvent('foreground-handoff', NDKKind.Text),
+      makeTrackedWrappedEvent('foreground-handoff', NostrKind.Text),
       'b'.repeat(64),
-      { priority: 'foreground' }
+      { priority: 'foreground' },
     );
     const lastBackgroundResult = runtime.queuePrivateMessageIngestion(
-      makeTrackedWrappedEvent('last-background', NDKKind.Text),
-      'b'.repeat(64)
+      makeTrackedWrappedEvent('last-background', NostrKind.Text),
+      'b'.repeat(64),
     );
 
     releaseActiveBackgroundTask?.(null);
@@ -289,7 +625,7 @@ describe('privateMessagesIngestRuntime', () => {
     ]);
   });
 
-  it('creates request chats for first-contact direct messages and queues UI refreshes', async () => {
+  it('creates request chats and inserts messages directly into live state', async () => {
     const deps = createDeps();
     const runtime = createPrivateMessagesIngestRuntime(deps);
     const createdAt = '2023-11-14T22:13:20.000Z';
@@ -329,27 +665,26 @@ describe('privateMessagesIngestRuntime', () => {
         public_key: 'a'.repeat(64),
         name: 'Chat aaaaaaaa',
         meta: {},
-      })
+      }),
     );
     expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         chat_public_key: 'a'.repeat(64),
         message: 'Hello there',
         event_id: 'rumor-event',
-      })
+      }),
     );
-    expect(deps.chatStore.recordIncomingActivity).toHaveBeenCalledWith('a'.repeat(64), createdAt);
-    expect(serviceMocks.chatDataService.updateChatPreview).toHaveBeenCalledWith(
-      'a'.repeat(64),
-      'Hello there',
-      createdAt,
-      1
+    expect(deps.chatStore.applyIncomingMessage).toHaveBeenCalled();
+    expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_public_key: 'a'.repeat(64),
+        chat_activity: expect.objectContaining({
+          unreadCount: 1,
+          preview: { text: 'Hello there', at: createdAt },
+        }),
+      }),
     );
-    expect(deps.queuePrivateMessagesUiRefresh).toHaveBeenCalledWith({
-      throttleMs: 25,
-      reloadChats: true,
-      reloadMessages: true,
-    });
+    expect(deps.queuePrivateMessagesUiRefresh).not.toHaveBeenCalled();
   });
 
   it('drops inbound events from blocked pubkeys before persistence', async () => {
@@ -373,7 +708,7 @@ describe('privateMessagesIngestRuntime', () => {
       'drop',
       expect.objectContaining({
         reason: 'blocked-pubkey',
-      })
+      }),
     );
     expect(deps.toStoredNostrEvent).not.toHaveBeenCalled();
     expect(serviceMocks.chatDataService.init).not.toHaveBeenCalled();
@@ -422,18 +757,17 @@ describe('privateMessagesIngestRuntime', () => {
     });
     await runtime.getPrivateMessagesIngestQueue();
 
-    expect(serviceMocks.chatDataService.updateChatPreview).toHaveBeenCalledWith(
-      chatPublicKey,
-      'Same-second inbound',
-      existingPreviewAt,
-      1
+    expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_public_key: chatPublicKey,
+        chat_activity: expect.objectContaining({
+          unreadCount: 1,
+          preview: { text: 'Same-second inbound', at: existingPreviewAt },
+        }),
+      }),
     );
     expect(serviceMocks.chatDataService.updateChatUnreadCount).not.toHaveBeenCalled();
-    expect(deps.queuePrivateMessagesUiRefresh).toHaveBeenCalledWith({
-      throttleMs: 25,
-      reloadChats: true,
-      reloadMessages: true,
-    });
+    expect(deps.queuePrivateMessagesUiRefresh).not.toHaveBeenCalled();
   });
 
   it('uses the local chat name for incoming foreground notification presentation', async () => {
@@ -482,7 +816,7 @@ describe('privateMessagesIngestRuntime', () => {
         chatPubkey: chatPublicKey,
         title: 'Alice Local',
         messageText: 'Named hello',
-      })
+      }),
     );
   });
 
@@ -547,19 +881,22 @@ describe('privateMessagesIngestRuntime', () => {
             },
           ],
         }),
-      })
+      }),
     );
-    expect(serviceMocks.chatDataService.updateChatPreview).toHaveBeenCalledWith(
-      chatPublicKey,
-      'Picture',
-      createdAt,
-      1
+    expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_public_key: chatPublicKey,
+        chat_activity: expect.objectContaining({
+          unreadCount: 1,
+          preview: { text: 'Picture', at: createdAt },
+        }),
+      }),
     );
     expect(deps.showIncomingMessageBrowserNotification).toHaveBeenCalledWith(
       expect.objectContaining({
         chatPubkey: chatPublicKey,
         messageText: 'Picture',
-      })
+      }),
     );
   });
 
@@ -600,13 +937,13 @@ describe('privateMessagesIngestRuntime', () => {
       unwrapSigner: {} as never,
       groupChatPublicKey: groupPublicKey,
     });
-    deps.findGroupChatEpochContextByRecipientPubkey.mockResolvedValue({
+    deps.findGroupChatEpochContextByRecipientPubkey.mockImplementation(async (key) => key === epochPublicKey ? {
       chat: groupChat,
       epochEntry: {
         epoch_number: 0,
         epoch_public_key: epochPublicKey,
       },
-    });
+    } : null);
     deps.resolveIncomingChatInboxStateValue.mockReturnValue('accepted');
     deps.shouldNotifyForAcceptedChatOnly.mockResolvedValue(true);
     ndkMocks.giftUnwrap.mockResolvedValue(rumorEvent);
@@ -647,20 +984,23 @@ describe('privateMessagesIngestRuntime', () => {
     expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         message: rawMentionMessage,
-      })
+      }),
     );
-    expect(serviceMocks.chatDataService.updateChatPreview).toHaveBeenCalledWith(
-      groupPublicKey,
-      '@Bobby Group hello',
-      createdAt,
-      1
+    expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_public_key: groupPublicKey,
+        chat_activity: expect.objectContaining({
+          unreadCount: 1,
+          preview: { text: '@Bobby Group hello', at: createdAt },
+        }),
+      }),
     );
     expect(deps.showIncomingMessageBrowserNotification).toHaveBeenCalledWith(
       expect.objectContaining({
         chatPubkey: groupPublicKey,
         title: 'Group',
         messageText: '@Bobby Group hello',
-      })
+      }),
     );
   });
 
@@ -727,11 +1067,7 @@ describe('privateMessagesIngestRuntime', () => {
     expect(serviceMocks.chatDataService.updateChatUnreadCount).not.toHaveBeenCalled();
     expect(deps.shouldNotifyForAcceptedChatOnly).not.toHaveBeenCalled();
     expect(deps.showIncomingMessageBrowserNotification).not.toHaveBeenCalled();
-    expect(deps.queuePrivateMessagesUiRefresh).toHaveBeenCalledWith({
-      throttleMs: 25,
-      reloadChats: true,
-      reloadMessages: true,
-    });
+    expect(deps.queuePrivateMessagesUiRefresh).not.toHaveBeenCalled();
   });
 
   it('persists restored messages before the latest own message without unread or notification state', async () => {
@@ -834,13 +1170,13 @@ describe('privateMessagesIngestRuntime', () => {
       unwrapSigner: {} as never,
       groupChatPublicKey: groupPublicKey,
     });
-    deps.findGroupChatEpochContextByRecipientPubkey.mockResolvedValue({
+    deps.findGroupChatEpochContextByRecipientPubkey.mockImplementation(async (key) => key === oldEpochPublicKey ? {
       chat: groupChat,
       epochEntry: {
         epoch_number: 0,
         epoch_public_key: oldEpochPublicKey,
       },
-    });
+    } : null);
     deps.findHigherKnownGroupEpochConflict.mockReturnValue({
       higherEpochEntry,
       olderHigherEpochEntry: higherEpochEntry,
@@ -862,14 +1198,14 @@ describe('privateMessagesIngestRuntime', () => {
       expect.objectContaining({
         higherEpochEntry,
         olderHigherEpochEntry: higherEpochEntry,
-      })
+      }),
     );
     expect(deps.logInboundEvent).toHaveBeenCalledWith(
       'drop',
       expect.objectContaining({
         reason: 'invalid-epoch-number',
         epochNumber: 0,
-      })
+      }),
     );
     expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
     expect(deps.chatStore.recordIncomingActivity).not.toHaveBeenCalled();
@@ -969,7 +1305,7 @@ describe('privateMessagesIngestRuntime', () => {
         direction: 'in',
         eventId: 'duplicate-event',
         uiThrottleMs: 25,
-      })
+      }),
     );
     expect(deps.applyPendingIncomingReactionsForMessage).toHaveBeenCalledWith(existingMessage, {
       uiThrottleMs: 25,
@@ -1030,7 +1366,7 @@ describe('privateMessagesIngestRuntime', () => {
     ndkMocks.giftUnwrap.mockResolvedValue(rumorEvent);
     serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue(chat);
     serviceMocks.chatDataService.getMessageByEventId.mockImplementation(async (eventId) =>
-      eventId === originalEventId ? originalMessage : null
+      eventId === originalEventId ? originalMessage : null,
     );
     serviceMocks.chatDataService.applyMessageEdit.mockResolvedValue(editedMessage);
 
@@ -1045,14 +1381,14 @@ describe('privateMessagesIngestRuntime', () => {
         message: 'After edit',
         event_id: replacementEventId,
         previous_event_id: originalEventId,
-      })
+      }),
     );
     expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
     expect(serviceMocks.chatDataService.updateChatPreview).toHaveBeenCalledWith(
       senderPublicKey,
       'After edit',
       createdAt,
-      0
+      0,
     );
   });
 
@@ -1063,7 +1399,7 @@ describe('privateMessagesIngestRuntime', () => {
       recipientPubkey: 'b'.repeat(64),
       senderPubkey: 'a'.repeat(64),
       eventId: 'reaction-event',
-      kind: NDKKind.Reaction,
+      kind: NostrKind.Reaction,
     });
 
     ndkMocks.giftUnwrap.mockResolvedValue(rumorEvent);
@@ -1083,9 +1419,9 @@ describe('privateMessagesIngestRuntime', () => {
         relayStatuses: [makeRelayStatus()],
         rumorNostrEvent: expect.objectContaining({
           id: 'reaction-event',
-          kind: NDKKind.Reaction,
+          kind: NostrKind.Reaction,
         }),
-      })
+      }),
     );
     expect(serviceMocks.chatDataService.createChat).not.toHaveBeenCalled();
     expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
@@ -1098,7 +1434,7 @@ describe('privateMessagesIngestRuntime', () => {
       recipientPubkey: 'b'.repeat(64),
       senderPubkey: 'a'.repeat(64),
       eventId: 'deletion-event',
-      kind: NDKKind.EventDeletion,
+      kind: NostrKind.EventDeletion,
     });
 
     ndkMocks.giftUnwrap.mockResolvedValue(rumorEvent);
@@ -1115,7 +1451,7 @@ describe('privateMessagesIngestRuntime', () => {
       expect.objectContaining({
         uiThrottleMs: 25,
         seedRelayUrls: ['wss://relay.example'],
-      })
+      }),
     );
     expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
   });
@@ -1175,11 +1511,11 @@ describe('privateMessagesIngestRuntime', () => {
       'drop',
       expect.objectContaining({
         reason: expectedReason,
-      })
+      }),
     );
   });
 
-  it('persists historical group epoch tickets even when a newer epoch is already known', async () => {
+  it.each([false, true])('retains verified epoch tickets with a newer epoch known, locally deleted=%s', async (deleted) => {
     const deps = createDeps();
     const runtime = createPrivateMessagesIngestRuntime(deps);
     const createdAt = '2023-11-14T22:13:20.000Z';
@@ -1219,6 +1555,7 @@ describe('privateMessagesIngestRuntime', () => {
       unread_count: 0,
       meta: {
         inbox_state: 'accepted',
+        deleted_locally: deleted,
         accepted_at: createdAt,
       },
     });
@@ -1243,20 +1580,23 @@ describe('privateMessagesIngestRuntime', () => {
       expect.objectContaining({
         accepted: true,
         invitationCreatedAt: createdAt,
-      })
+      }),
     );
-    expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
+    if (deleted) {
+      expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
+      expect(deps.upsertIncomingGroupInviteRequestChat).not.toHaveBeenCalled();
+    } else expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         chat_public_key: 'a'.repeat(64),
         message: 'Epoch 2',
         event_id: 'signed-epoch-ticket',
-      })
+      }),
     );
     expect(deps.logInboundEvent).not.toHaveBeenCalledWith(
       'drop',
       expect.objectContaining({
         reason: 'invalid-epoch-number',
-      })
+      }),
     );
   });
 
@@ -1294,7 +1634,7 @@ describe('privateMessagesIngestRuntime', () => {
       'drop',
       expect.objectContaining({
         reason: 'blocked-pubkey',
-      })
+      }),
     );
     expect(serviceMocks.chatDataService.createChat).not.toHaveBeenCalled();
     expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
@@ -1344,8 +1684,36 @@ describe('privateMessagesIngestRuntime', () => {
       'drop',
       expect.objectContaining({
         reason: 'cleared-request-message',
-      })
+      }),
     );
+  });
+
+  it('repairs cached outgoing conversations with indexed lookups without reviving blocked or cleared requests', async () => {
+    const deps = createDeps();
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+    const account = 'a'.repeat(64);
+    const at = '2024-01-01T00:00:00.000Z';
+    const rows = [
+      { public_key: 'b'.repeat(64), meta: { inbox_state: 'request' } },
+      { public_key: 'c'.repeat(64), meta: { inbox_state: 'blocked' } },
+      { public_key: 'd'.repeat(64), meta: { request_cleared_at: at } },
+      { public_key: 'e'.repeat(64), meta: { inbox_state: 'request' } },
+    ];
+    serviceMocks.chatDataService.listChats.mockResolvedValue(rows);
+    serviceMocks.chatDataService.getChatByPublicKey.mockImplementation(async (key) =>
+      rows.find((row) => row.public_key === key),
+    );
+    serviceMocks.chatDataService.findLatestMessageByAuthor.mockResolvedValue({ created_at: at });
+    serviceMocks.contactsService.getContactByPublicKey.mockImplementation(async (key) =>
+      key === 'e'.repeat(64) ? { meta: { blocked: true } } : null,
+    );
+    await runtime.repairRestoredOutgoingChats(account);
+    expect(deps.chatStore.acceptChat).toHaveBeenCalledExactlyOnceWith('b'.repeat(64), {
+      acceptedAt: at,
+    });
+    expect(serviceMocks.chatDataService.findLatestMessageByAuthor).toHaveBeenCalledTimes(2);
+    expect(serviceMocks.chatDataService.listMessages).not.toHaveBeenCalled();
+    runtime.resetPrivateMessagesIngestRuntimeState();
   });
 
   it('treats self-sent gift-wrapped messages as outbound activity for the other participant', async () => {
@@ -1366,7 +1734,7 @@ describe('privateMessagesIngestRuntime', () => {
       ['p', otherParticipantPubkey],
     ];
     (rumorEvent.getMatchingTags as ReturnType<typeof vi.fn>).mockImplementation(
-      (tagName: string) => (tagName === 'p' ? rumorEvent.tags : [])
+      (tagName: string) => (tagName === 'p' ? rumorEvent.tags : []),
     );
 
     ndkMocks.giftUnwrap.mockResolvedValue(rumorEvent);
@@ -1397,7 +1765,13 @@ describe('privateMessagesIngestRuntime', () => {
     expect(serviceMocks.chatDataService.createChat).toHaveBeenCalledWith(
       expect.objectContaining({
         public_key: otherParticipantPubkey,
-      })
+      }),
+    );
+    expect(deps.resolveIncomingChatInboxStateValue).toHaveBeenCalledWith(
+      expect.objectContaining({ isAcceptedContact: true }),
+    );
+    expect(serviceMocks.chatDataService.createChat).toHaveBeenCalledWith(
+      expect.objectContaining({ meta: expect.objectContaining({ inbox_state: 'accepted' }) }),
     );
     expect(serviceMocks.nostrEventDataService.upsertEvent).toHaveBeenCalledWith({
       event: expect.objectContaining({
@@ -1406,12 +1780,89 @@ describe('privateMessagesIngestRuntime', () => {
       direction: 'out',
       relay_statuses: [makeRelayStatus()],
     });
-    expect(serviceMocks.chatDataService.updateChatPreview).toHaveBeenCalledWith(
-      otherParticipantPubkey,
-      'Saved note',
-      createdAt,
-      0
+    expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_public_key: otherParticipantPubkey,
+        chat_activity: expect.objectContaining({
+          unreadCount: 0,
+          preview: { text: 'Saved note', at: createdAt },
+        }),
+      }),
     );
     expect(deps.showIncomingMessageBrowserNotification).not.toHaveBeenCalled();
+  });
+  it('reconciles a late intermediate edit without replacing newer content', async () => {
+    const deps = createDeps(),
+      runtime = createPrivateMessagesIngestRuntime(deps);
+    const sender = 'a'.repeat(64),
+      recipient = 'b'.repeat(64),
+      originalId = 'c'.repeat(64),
+      middleId = 'd'.repeat(64),
+      latestId = 'e'.repeat(64);
+    const time = '2023-11-14T22:13:20.000Z';
+    const original = {
+      id: 98,
+      chat_public_key: sender,
+      author_public_key: sender,
+      message: 'Original',
+      event_id: originalId,
+      created_at: time,
+      meta: {},
+    };
+    const latest = {
+      ...original,
+      id: 99,
+      message: 'Latest',
+      event_id: latestId,
+      meta: { edited: { editedAt: time, previousEventIds: [middleId] } },
+    };
+    serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue({
+      id: sender,
+      public_key: sender,
+      type: 'user',
+      name: 'Alice',
+      last_message: 'Latest',
+      last_message_at: time,
+      unread_count: 0,
+      meta: {},
+    });
+    serviceMocks.chatDataService.getMessageByEventId.mockImplementation(async (id) =>
+      id === originalId ? original : id === latestId ? latest : null,
+    );
+    serviceMocks.chatDataService.getMessageByEventIdOrEditReference.mockImplementation(
+      async (id) =>
+        id === middleId ? latest : serviceMocks.chatDataService.getMessageByEventId(id),
+    );
+    serviceMocks.chatDataService.reconcileMessageEditPredecessor.mockResolvedValue(latest);
+    ndkMocks.giftUnwrap.mockResolvedValue(
+      makeRumorEvent({
+        recipientPubkey: recipient,
+        senderPubkey: sender,
+        eventId: middleId,
+        content: 'Middle',
+        tags: [
+          ['p', recipient],
+          ['e', originalId, '', 'edit'],
+        ],
+      }),
+    );
+    await runtime.queuePrivateMessageIngestion(makeWrappedEvent(), recipient, { uiThrottleMs: 25 });
+    await runtime.getPrivateMessagesIngestQueue();
+    expect(serviceMocks.chatDataService.reconcileMessageEditPredecessor).toHaveBeenCalledWith(
+      latest.id,
+      {
+        eventId: middleId,
+        previousEventId: originalId,
+        chat: sender,
+        author: sender,
+        createdAt: time,
+      },
+    );
+    expect(serviceMocks.chatDataService.applyMessageEdit).not.toHaveBeenCalled();
+    expect(deps.logInboundEvent).toHaveBeenCalledWith(
+      'message-persisted',
+      expect.objectContaining({ persistence: 'ignored-edit-predecessor' }),
+    );
+    runtime.resetPrivateMessagesIngestRuntimeState();
   });
 });

@@ -1,0 +1,132 @@
+name: Android APK
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        type: string
+        required: false
+        default: ''
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      NDK_VERSION: '29.0.13846066'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: android
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+      - name: Set release version
+        if: inputs.release_tag != ''
+        run: npm run release:version
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+      - run: npm run verify:iroh
+      - name: Install NDK
+        run: |
+          sdkmanager "ndk;$NDK_VERSION" "build-tools;35.0.0"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+      - name: Generate Android project
+        run: |
+          npm run tauri -- android init --ci
+          node scripts/prepare-android.mjs
+          node scripts/mobile-version.mjs
+          sdk=$(sed -n 's/.*compileSdk = \([0-9]*\).*/\1/p' src-tauri/gen/android/app/build.gradle.kts)
+          [[ "$sdk" =~ ^[0-9]+$ ]]
+          sdkmanager "platforms;android-$sdk"
+          npm run tauri -- icon src-tauri/icons/icon.png --output src-tauri/icons
+      - name: Build ARM64 and ARMv7 APK
+        run: npm run tauri -- android build --ci --apk --target aarch64 armv7 --config src-tauri/mobile-version.json -- --locked
+      - name: Test notification crypto and policy
+        run: ./src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:testArm64ReleaseUnitTest -x rustBuildArm64Release
+      - name: Sign APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: bash scripts/package-android.sh
+      - name: Test release APK startup and relay connectivity
+        env:
+          ANDROID_SERIAL: emulator-5554
+          # Recent avdmanager and emulator versions choose different default
+          # user directories. Give both tools the same explicit AVD location.
+          ANDROID_AVD_HOME: ${{ runner.temp }}/anagram-avds
+          ANDROID_USER_HOME: ${{ runner.temp }}/anagram-android-user
+        run: |
+          python3 -B -m unittest discover -s scripts/release-smoke -p 'test_android.py'
+          ./src-tauri/gen/android/gradlew --stop
+          sudo chmod 666 /dev/kvm
+          sdkmanager "emulator" "system-images;android-35;google_apis;x86_64"
+          mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_USER_HOME"
+          echo no | avdmanager create avd --name anagram-startup --path "$ANDROID_AVD_HOME/anagram-startup.avd" --package "system-images;android-35;google_apis;x86_64"
+          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -Fx anagram-startup
+          "$ANDROID_HOME/emulator/emulator" -avd anagram-startup -port 5554 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swangle -feature -Vulkan -memory 3072 -cores 2 > emulator.log 2>&1 &
+          emulator_pid=$!
+          trap 'kill "$emulator_pid" || true' EXIT
+          for _attempt in $(seq 1 150); do
+            if ! kill -0 "$emulator_pid" 2>/dev/null; then
+              cat emulator.log
+              echo 'Android emulator exited before booting.' >&2
+              exit 1
+            fi
+            [[ "$(timeout 5 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == 1 ]] && break
+            sleep 2
+          done
+          [[ "$(adb shell getprop sys.boot_completed | tr -d '\r')" == 1 ]]
+          mapfile -t apks < <(find mobile-assets -name '*.apk' -type f)
+          [[ ${#apks[@]} -eq 1 ]]
+          bash scripts/test-android-startup.sh "${apks[0]}"
+          # CallStyle is enforced by Android 12+, so JVM tests alone cannot
+          # validate it. Reuse this Android 15 emulator after the release smoke.
+          # The debug test harness packages the native libraries just built above.
+          ./src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:assembleUniversalDebug :app:assembleUniversalDebugAndroidTest -x rustBuildUniversalDebug
+          adb uninstall com.nostr.anagram
+          adb install src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+          adb install src-tauri/gen/android/app/build/outputs/apk/androidTest/universal/debug/app-universal-debug-androidTest.apk
+          adb shell pm grant com.nostr.anagram android.permission.POST_NOTIFICATIONS
+          adb shell am instrument -w -e class com.nostr.anagram.CallNotificationsDeviceTest com.nostr.anagram.test/androidx.test.runner.AndroidJUnitRunner | tee android-startup-results/call-notifications.txt
+          grep -Eq '^OK \([0-9]+ tests?\)' android-startup-results/call-notifications.txt
+          node scripts/test-android-call-notifications.mjs | tee android-startup-results/call-notification-relay.txt
+      - name: Upload startup diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-startup-diagnostics
+          path: |
+            android-startup-results/
+            emulator.log
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-android
+          path: mobile-assets/*.apk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove signing material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/anagram-signing.jks"

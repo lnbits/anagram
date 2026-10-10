@@ -1,4 +1,4 @@
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
 
 export const FOREGROUND_MESSAGE_ACTIVITY_EVENT = 'anagram:foreground-message-activity';
 

@@ -1,1 +1,0 @@
-Private one-to-one and group messaging over the Nostr protocol.

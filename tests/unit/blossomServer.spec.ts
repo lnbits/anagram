@@ -5,7 +5,7 @@ import {
   getBlossomServerHost,
   normalizeBlossomServerUrl,
   requireBlossomServerUrl,
-} from 'src/utils/blossomServer';
+} from '#src/utils/blossomServer.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('Blossom server helpers', () => {

@@ -1,15 +1,15 @@
-import type NDK from '@nostr-dev-kit/ndk';
-import { NDKKind, normalizeRelayUrl } from '@nostr-dev-kit/ndk';
-import { chatDataService } from 'src/services/chatDataService';
-import { contactsService } from 'src/services/contactsService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { useNip65RelayStore } from 'src/stores/nip65RelayStore';
+import type NostrClient from '#src/lib/nostr/client.ts';
+import { NostrKind, normalizeRelayUrl } from '#src/lib/nostr/client.ts';
+import { chatDataService } from '#src/services/chatDataService.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { useNip65RelayStore } from '#src/stores/nip65RelayStore.ts';
 import {
   GROUP_CURRENT_EPOCH_PRIVATE_KEY_ENCRYPTED_CHAT_META_KEY,
   GROUP_CURRENT_EPOCH_PUBLIC_KEY_CHAT_META_KEY,
   GROUP_EPOCH_KEYS_CHAT_META_KEY,
   PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS,
-} from 'src/stores/nostr/constants';
+} from '#src/stores/nostr/constants.ts';
 import type {
   AuthMethod,
   DeveloperDiagnosticsSnapshot,
@@ -23,19 +23,19 @@ import type {
   PendingIncomingDeletion,
   PendingIncomingReaction,
   RelayConnectionState,
-} from 'src/stores/nostr/types';
-import { useRelayStore } from 'src/stores/relayStore';
-import type { ContactMetadata } from 'src/types/contact';
-import type { Ref } from 'vue';
+} from '#src/stores/nostr/types.ts';
+import { useRelayStore } from '#src/stores/relayStore.ts';
+import type { ContactMetadata } from '#src/types/contact.ts';
+import type { Ref } from '#src/lib/state/reactivity.ts';
 
 interface DeveloperDiagnosticsDeps {
   applyPendingIncomingDeletionsForMessage: (
     message: Awaited<ReturnType<typeof chatDataService.getMessageByEventId>>,
-    options?: { uiThrottleMs?: number }
+    options?: { uiThrottleMs?: number },
   ) => Promise<Awaited<ReturnType<typeof chatDataService.getMessageByEventId>>>;
   applyPendingIncomingReactionsForMessage: (
     message: Awaited<ReturnType<typeof chatDataService.getMessageByEventId>>,
-    options?: { uiThrottleMs?: number }
+    options?: { uiThrottleMs?: number },
   ) => Promise<Awaited<ReturnType<typeof chatDataService.getMessageByEventId>>>;
   buildRelaySnapshot: (relay: unknown) => DeveloperRelaySnapshot;
   bumpDeveloperDiagnosticsVersion: () => void;
@@ -56,7 +56,7 @@ interface DeveloperDiagnosticsDeps {
   hasNip07Extension: () => boolean;
   isRestoringStartupState: Ref<boolean>;
   listPrivateMessageRecipientPubkeys: () => Promise<string[]>;
-  ndk: NDK;
+  ndk: NostrClient;
   normalizeChatGroupEpochKeys: (value: unknown) => Array<{
     epoch_number: number;
     epoch_public_key: string;
@@ -79,10 +79,11 @@ interface DeveloperDiagnosticsDeps {
   processIncomingReactionDeletion: (
     reactionEventId: string,
     deletionAuthorPublicKey: string,
-    options?: { uiThrottleMs?: number }
+    options?: { uiThrottleMs?: number },
   ) => Promise<boolean>;
   resolveLoggedInPublishRelayUrls: (seedRelayUrls?: string[]) => Promise<string[]>;
   resolveLoggedInReadRelayUrls: (seedRelayUrls?: string[]) => Promise<string[]>;
+  startPrivateMessagesHistoryRestore: () => void;
   subscribePrivateMessagesForLoggedInUser: (
     force?: boolean,
     options?: {
@@ -90,7 +91,7 @@ interface DeveloperDiagnosticsDeps {
       seedRelayUrls?: string[];
       sinceOverride?: number;
       startupTrackStep?: boolean;
-    }
+    },
   ) => Promise<void>;
   toOptionalIsoTimestampFromUnix: (value: number | null | undefined) => string | null;
 }
@@ -134,6 +135,7 @@ export function createDeveloperDiagnosticsRuntime({
   processIncomingReactionDeletion,
   resolveLoggedInPublishRelayUrls,
   resolveLoggedInReadRelayUrls,
+  startPrivateMessagesHistoryRestore,
   subscribePrivateMessagesForLoggedInUser,
   toOptionalIsoTimestampFromUnix,
 }: DeveloperDiagnosticsDeps) {
@@ -170,7 +172,7 @@ export function createDeveloperDiagnosticsRuntime({
   }
 
   function buildDeveloperGroupSubscriptionContactMeta(
-    meta: ContactMetadata | undefined
+    meta: ContactMetadata | undefined,
   ): Record<string, unknown> {
     if (!meta || typeof meta !== 'object') {
       return {};
@@ -188,7 +190,7 @@ export function createDeveloperDiagnosticsRuntime({
   }
 
   function buildDeveloperGroupSubscriptionChatMeta(
-    meta: Record<string, unknown> | undefined
+    meta: Record<string, unknown> | undefined,
   ): Record<string, unknown> {
     const normalizedEpochKeys = normalizeChatGroupEpochKeys(meta?.[GROUP_EPOCH_KEYS_CHAT_META_KEY]);
 
@@ -222,14 +224,14 @@ export function createDeveloperDiagnosticsRuntime({
 
     const recipientPubkeys = new Set(await listPrivateMessageRecipientPubkeys());
     const groupContacts = (await contactsService.listContacts()).filter(
-      (contact) => contact.type === 'group'
+      (contact) => contact.type === 'group',
     );
     if (groupContacts.length === 0) {
       return [];
     }
 
     const chatsByPubkey = new Map(
-      (await chatDataService.listChats()).map((chat) => [chat.public_key, chat] as const)
+      (await chatDataService.listChats()).map((chat) => [chat.public_key, chat] as const),
     );
 
     const snapshots: Array<DeveloperGroupMessageSubscriptionSnapshot | null> = groupContacts.map(
@@ -241,12 +243,12 @@ export function createDeveloperDiagnosticsRuntime({
 
         const groupChat = chatsByPubkey.get(normalizedGroupPubkey) ?? null;
         const epochKeys = normalizeChatGroupEpochKeys(
-          groupChat?.meta?.[GROUP_EPOCH_KEYS_CHAT_META_KEY]
+          groupChat?.meta?.[GROUP_EPOCH_KEYS_CHAT_META_KEY],
         );
         const currentEpochPubkey = inputSanitizerService.normalizeHexKey(
           typeof groupChat?.meta?.[GROUP_CURRENT_EPOCH_PUBLIC_KEY_CHAT_META_KEY] === 'string'
             ? String(groupChat.meta[GROUP_CURRENT_EPOCH_PUBLIC_KEY_CHAT_META_KEY])
-            : (epochKeys[0]?.epoch_public_key ?? '')
+            : (epochKeys[0]?.epoch_public_key ?? ''),
         );
         if (!currentEpochPubkey || !recipientPubkeys.has(currentEpochPubkey)) {
           return null;
@@ -279,7 +281,7 @@ export function createDeveloperDiagnosticsRuntime({
             chatMeta: buildDeveloperGroupSubscriptionChatMeta(groupChat?.meta),
           } as Record<string, unknown>,
         };
-      }
+      },
     );
 
     return snapshots
@@ -289,7 +291,7 @@ export function createDeveloperDiagnosticsRuntime({
 
   function getPendingDeveloperQueueTargetEventIds(): string[] {
     return Array.from(
-      new Set([...pendingIncomingReactions.keys(), ...pendingIncomingDeletions.keys()])
+      new Set([...pendingIncomingReactions.keys(), ...pendingIncomingDeletions.keys()]),
     );
   }
 
@@ -311,7 +313,7 @@ export function createDeveloperDiagnosticsRuntime({
     targetEventId: string,
     options: {
       uiThrottleMs?: number;
-    } = {}
+    } = {},
   ): Promise<boolean> {
     const normalizedTargetEventId = normalizeEventId(targetEventId);
     if (!normalizedTargetEventId) {
@@ -328,7 +330,7 @@ export function createDeveloperDiagnosticsRuntime({
 
     for (const pendingDeletion of pendingEntries) {
       const shouldTryReactionDeletion =
-        pendingDeletion.targetKind === null || pendingDeletion.targetKind === NDKKind.Reaction;
+        pendingDeletion.targetKind === null || pendingDeletion.targetKind === NostrKind.Reaction;
       if (!shouldTryReactionDeletion) {
         remainingEntries.push(pendingDeletion);
         continue;
@@ -337,7 +339,7 @@ export function createDeveloperDiagnosticsRuntime({
       const handled = await processIncomingReactionDeletion(
         normalizedTargetEventId,
         pendingDeletion.deletionAuthorPublicKey,
-        options
+        options,
       );
       if (!handled) {
         remainingEntries.push(pendingDeletion);
@@ -364,7 +366,7 @@ export function createDeveloperDiagnosticsRuntime({
     targetEventIds: string[],
     options: {
       uiThrottleMs?: number;
-    } = {}
+    } = {},
   ): Promise<boolean> {
     let didChange = false;
 
@@ -424,7 +426,7 @@ export function createDeveloperDiagnosticsRuntime({
       getPendingDeveloperQueueTargetEventIds(),
       {
         uiThrottleMs: PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS,
-      }
+      },
     );
 
     if (didChange) {
@@ -456,7 +458,7 @@ export function createDeveloperDiagnosticsRuntime({
     const effectivePublishRelayUrls = await resolveLoggedInPublishRelayUrls();
     const configuredRelayList = Array.from(configuredRelayUrls);
     const privateMessagesRelayUrls = normalizeRelayStatusUrls(
-      privateMessagesSubscriptionRelayUrls.value
+      privateMessagesSubscriptionRelayUrls.value,
     );
     const groupMessagesSubscription = await buildDeveloperGroupMessageSubscriptionSnapshot();
     const relayRows: DeveloperRelayRow[] = normalizeRelayStatusUrls([
@@ -510,12 +512,12 @@ export function createDeveloperDiagnosticsRuntime({
         lastEventId: privateMessagesSubscriptionLastEventId.value,
         lastEventCreatedAt: privateMessagesSubscriptionLastEventCreatedAt.value,
         lastEventCreatedAtIso: toOptionalIsoTimestampFromUnix(
-          privateMessagesSubscriptionLastEventCreatedAt.value
+          privateMessagesSubscriptionLastEventCreatedAt.value,
         ),
         lastEoseAt: privateMessagesSubscriptionLastEoseAt.value,
         liveCoverageAt: privateMessagesSubscriptionLiveCoverageAt.value,
         liveCoverageAtIso: toOptionalIsoTimestampFromUnix(
-          privateMessagesSubscriptionLiveCoverageAt.value
+          privateMessagesSubscriptionLiveCoverageAt.value,
         ),
       },
       groupMessagesSubscription,
@@ -548,33 +550,16 @@ export function createDeveloperDiagnosticsRuntime({
     bumpDeveloperDiagnosticsVersion();
   }
 
-  async function refreshPrivateMessages(options: { lookbackMinutes?: number } = {}): Promise<void> {
-    const lookbackMinutes =
-      typeof options.lookbackMinutes === 'number' && Number.isFinite(options.lookbackMinutes)
-        ? Math.max(1, Math.floor(options.lookbackMinutes))
-        : 0;
-    const sinceOverride =
-      lookbackMinutes > 0
-        ? Math.max(0, Math.floor(Date.now() / 1000) - lookbackMinutes * 60)
-        : undefined;
-
-    console.log('Refreshing private messages', {
-      lookbackMinutes,
-      sinceOverride: sinceOverride ?? null,
-      sinceOverrideIso: toOptionalIsoTimestampFromUnix(sinceOverride ?? null),
-    });
-
+  async function refreshPrivateMessages(): Promise<void> {
     await subscribePrivateMessagesForLoggedInUser(true, {
       restoreThrottleMs: PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS,
-      sinceOverride,
     });
+    startPrivateMessagesHistoryRestore();
     bumpDeveloperDiagnosticsVersion();
   }
 
-  async function restartPrivateMessagesDiagnosticsSubscription(
-    options: { lookbackMinutes?: number } = {}
-  ): Promise<void> {
-    await refreshPrivateMessages(options);
+  async function restartPrivateMessagesDiagnosticsSubscription(): Promise<void> {
+    await refreshPrivateMessages();
   }
 
   return {

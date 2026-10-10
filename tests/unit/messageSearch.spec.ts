@@ -5,7 +5,7 @@ import {
   type SearchableMessageRecord,
   searchMessageRecords,
   sortSearchableMessagesByCreated,
-} from 'src/utils/messageSearch';
+} from '#src/utils/messageSearch.ts';
 import { describe, expect, it } from 'vitest';
 
 function buildRecord(

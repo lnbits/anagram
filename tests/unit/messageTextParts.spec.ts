@@ -1,11 +1,11 @@
-import { nip19 } from '@nostr-dev-kit/ndk';
-import { buildMessageTextParts } from 'src/utils/messageTextParts';
+import { nip19 } from '#src/lib/nostr/client.ts';
+import { buildMessageTextParts, withoutPreviewMediaUrls } from '#src/utils/messageTextParts.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('message text parts', () => {
   it('turns HTTP(S) and www URLs into links while preserving surrounding punctuation', () => {
     const parts = buildMessageTextParts(
-      'Read https://example.com/docs?q=chat, then (www.example.org/help).'
+      'Read https://example.com/docs?q=chat, then (www.example.org/help).',
     );
 
     expect(parts.map(({ type, text }) => ({ type, text }))).toEqual([
@@ -58,5 +58,30 @@ describe('message text parts', () => {
       { type: 'text', text: ', see ' },
       { type: 'url', text: 'https://example.com' },
     ]);
+  });
+});
+
+describe('preview media captions', () => {
+  const image = { url: 'https://media.example/image.png', mimeType: 'image/png' };
+  const video = { url: 'https://media.example/movie.mp4?token=123', mimeType: 'video/mp4' };
+  it('removes duplicate preview URLs but preserves captions, mentions and unrelated links', () => {
+    const caption = 'Hello nostr:npub1example — see https://example.org/article';
+    expect(withoutPreviewMediaUrls(`${caption}\n${image.url}\n${video.url}`, [image, video])).toBe(
+      caption,
+    );
+  });
+  it('leaves no empty text for a media-only message', () => {
+    expect(withoutPreviewMediaUrls(`  ${image.url}\n`, [image])).toBe('');
+  });
+  it('does not remove links without a renderable matching preview', () => {
+    const audio = { url: 'https://media.example/audio.mp3', mimeType: 'audio/mpeg' };
+    const insecure = { ...image, url: 'http://media.example/image.png' };
+    const raw = `${image.url}\n${audio.url}\n${insecure.url}\n${video.url}&other=1`;
+    expect(withoutPreviewMediaUrls(raw, [video, audio, insecure])).toBe(raw);
+    expect(withoutPreviewMediaUrls(raw, [])).toBe(raw);
+  });
+  it('preserves punctuation and the original caption spelling', () => {
+    expect(withoutPreviewMediaUrls(`Thanks!
+${image.url}`, [image])).toBe('Thanks!');
   });
 });

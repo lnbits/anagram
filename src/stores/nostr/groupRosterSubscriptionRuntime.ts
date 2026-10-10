@@ -1,33 +1,33 @@
-import NDK, {
-  NDKEvent,
-  type NDKFilter,
-  NDKKind,
-  NDKRelaySet,
-  NDKSubscriptionCacheUsage,
-  type NDKSubscriptionOptions,
-} from '@nostr-dev-kit/ndk';
-import { GROUP_SHARED_ROSTER_FOLLOW_SET_D_TAG } from 'src/stores/nostr/constants';
+import NostrClient, {
+  ClientEvent,
+  type NostrFilter,
+  NostrKind,
+  NostrRelaySet,
+  NostrSubscriptionCacheUsage,
+  type NostrSubscriptionOptions,
+} from '#src/lib/nostr/client.ts';
+import { GROUP_SHARED_ROSTER_FOLLOW_SET_D_TAG } from '#src/stores/nostr/constants.ts';
 import {
   bucketRelayTargets,
   createDesiredSubscriptions,
   subscriptionSignature,
-} from 'src/stores/nostr/desiredSubscriptions';
+} from '#src/stores/nostr/desiredSubscriptions.ts';
 
 interface GroupRosterSubscriptionRuntimeDeps {
   hydrateMemberProfiles?: () => Promise<void>;
   applyGroupMembershipRosterEvent: (
-    event: NDKEvent,
+    event: ClientEvent,
     options?: {
       refreshMemberProfiles?: boolean;
       seedRelayUrls?: string[];
     }
   ) => Promise<boolean>;
   buildSubscriptionEventDetails: (
-    event: Pick<NDKEvent, 'id' | 'kind' | 'created_at' | 'pubkey'>
+    event: Pick<ClientEvent, 'id' | 'kind' | 'created_at' | 'pubkey'>
   ) => Record<string, unknown>;
   buildSubscriptionRelayDetails: (relayUrls: string[]) => Record<string, unknown>;
   ensureRelayConnections: (relayUrls: string[]) => Promise<void>;
-  extractRelayUrlsFromEvent: (event: NDKEvent) => string[];
+  extractRelayUrlsFromEvent: (event: ClientEvent) => string[];
   formatSubscriptionLogValue: (value: string | null | undefined) => string | null;
   getFilterSince: () => number;
   getLoggedInPublicKeyHex: () => string | null;
@@ -40,7 +40,7 @@ interface GroupRosterSubscriptionRuntimeDeps {
     }>
   >;
   logSubscription: (label: string, stage: string, details?: Record<string, unknown>) => void;
-  ndk: NDK;
+  ndk: NostrClient;
   relaySignature: (relays: string[]) => string;
   restoreGroupMembershipRoster: (
     groupPublicKey: string,
@@ -49,14 +49,14 @@ interface GroupRosterSubscriptionRuntimeDeps {
   subscribeWithReqLogging: (
     label: string,
     requestLabel: string,
-    filters: NDKFilter | NDKFilter[],
-    options: NDKSubscriptionOptions & {
-      onEvent?: (event: NDKEvent) => void;
+    filters: NostrFilter | NostrFilter[],
+    options: NostrSubscriptionOptions & {
+      onEvent?: (event: ClientEvent) => void;
       onEose?: () => void;
       onClose?: () => void;
     },
     details?: Record<string, unknown>
-  ) => ReturnType<NDK['subscribe']>;
+  ) => ReturnType<NostrClient['subscribe']>;
   updateStoredEventSinceFromCreatedAt: (value: unknown) => void;
 }
 
@@ -76,10 +76,10 @@ export function createGroupRosterSubscriptionRuntime({
   let generation = 0;
   let initialHydrationCount = 0;
   let groupRosterApplyQueue = Promise.resolve();
-  const latestEvents = new Map<string, NDKEvent>();
+  const latestEvents = new Map<string, ClientEvent>();
   const epochs = new Map<string, string>();
 
-  function apply(event: NDKEvent, relayUrls: string[]): void {
+  function apply(event: ClientEvent, relayUrls: string[]): void {
     groupRosterApplyQueue = groupRosterApplyQueue
       .then(async () => {
         const changed = await applyGroupMembershipRosterEvent(event, {
@@ -119,8 +119,8 @@ export function createGroupRosterSubscriptionRuntime({
     try {
       await subscriptions.reconcile(
         buckets.map(({ publicKeys, relayUrls }) => {
-          const filters: NDKFilter = {
-            kinds: [NDKKind.FollowSet],
+          const filters: NostrFilter = {
+            kinds: [NostrKind.FollowSet],
             authors: publicKeys,
             '#d': [GROUP_SHARED_ROSTER_FOLLOW_SET_D_TAG],
           };
@@ -136,10 +136,10 @@ export function createGroupRosterSubscriptionRuntime({
                 'group-roster',
                 filters,
                 {
-                  relaySet: NDKRelaySet.fromRelayUrls(relayUrls, ndk, false),
-                  cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+                  relaySet: NostrRelaySet.fromRelayUrls(relayUrls, ndk, false),
+                  cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
                   onEvent: (event) => {
-                    const wrapped = event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
+                    const wrapped = event instanceof ClientEvent ? event : new ClientEvent(ndk, event);
                     const previous = latestEvents.get(wrapped.pubkey);
                     if (
                       previous &&

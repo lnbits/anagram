@@ -1,7 +1,7 @@
-import { NDKKind } from '@nostr-dev-kit/ndk';
-import { chatDataService } from 'src/services/chatDataService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { nostrEventDataService } from 'src/services/nostrEventDataService';
+import { NostrKind } from '#src/lib/nostr/client.ts';
+import { chatDataService } from '#src/services/chatDataService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { nostrEventDataService } from '#src/services/nostrEventDataService.ts';
 import {
   OUTBOUND_MESSAGE_REPLAY_MAX_RETRY_TARGETS_PER_SWEEP,
   OUTBOUND_MESSAGE_REPLAY_ONLINE_DELAY_MS,
@@ -9,8 +9,8 @@ import {
   OUTBOUND_MESSAGE_REPLAY_RETRY_COOLDOWN_MS,
   OUTBOUND_MESSAGE_REPLAY_STARTUP_DELAY_MS,
   OUTBOUND_MESSAGE_REPLAY_SWEEP_INTERVAL_MS,
-} from 'src/stores/nostr/constants';
-import type { MessageRelayStatus } from 'src/types/chat';
+} from '#src/stores/nostr/constants.ts';
+import type { MessageRelayStatus } from '#src/types/chat.ts';
 
 interface RetryDirectMessageRelayOptions {
   trigger?: string;
@@ -232,7 +232,7 @@ export function createOutboundMessageReplayRuntime({
       outer: for (const outboundEvent of outboundEvents) {
         if (
           outboundEvent.direction !== 'out' ||
-          outboundEvent.event.kind !== NDKKind.PrivateDirectMessage
+          outboundEvent.event.kind !== NostrKind.PrivateDirectMessage
         ) {
           continue;
         }

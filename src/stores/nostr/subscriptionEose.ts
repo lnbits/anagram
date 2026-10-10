@@ -1,9 +1,9 @@
-import type { NDKSubscription } from '@nostr-dev-kit/ndk';
+import type { NostrSubscription } from '#src/lib/nostr/client.ts';
 
-// NDK waits indefinitely with one responding relay and one disconnected relay. The initial
+// NostrClient waits indefinitely with one responding relay and one disconnected relay. The initial
 // snapshot is complete once every connected target has sent EOSE. Keep the listener open so
 // a late relay still delivers its snapshot when it connects.
-export function observeConnectedRelayEose(subscription: NDKSubscription, onEose: () => void): void {
+export function observeConnectedRelayEose(subscription: NostrSubscription, onEose: () => void): void {
   if (!subscription.relaySet || !subscription.eosesSeen) return;
   // A caller's bounded hydration wait may expire before a large snapshot finishes.
   // Continue observing until EOSE or close so late completion can release history restore.

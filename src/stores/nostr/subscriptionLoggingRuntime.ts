@@ -1,25 +1,25 @@
-import type NDK from '@nostr-dev-kit/ndk';
+import type NostrClient from '#src/lib/nostr/client.ts';
 import type {
-  NDKEvent,
-  NDKFilter,
-  NDKSubscription,
-  NDKSubscriptionOptions,
-} from '@nostr-dev-kit/ndk';
-import { chatDataService } from 'src/services/chatDataService';
-import { contactsService } from 'src/services/contactsService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { observeConnectedRelayEose } from 'src/stores/nostr/subscriptionEose';
-import type { SubscriptionLogName } from 'src/stores/nostr/types';
-import type { ChatGroupEpochKey } from 'src/types/chat';
-import type { ContactRecord } from 'src/types/contact';
+  ClientEvent,
+  NostrFilter,
+  NostrSubscription,
+  NostrSubscriptionOptions,
+} from '#src/lib/nostr/client.ts';
+import { chatDataService } from '#src/services/chatDataService.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { observeConnectedRelayEose } from '#src/stores/nostr/subscriptionEose.ts';
+import type { SubscriptionLogName } from '#src/stores/nostr/types.ts';
+import type { ChatGroupEpochKey } from '#src/types/chat.ts';
+import type { ContactRecord } from '#src/types/contact.ts';
 
 interface SubscriptionLoggingRuntimeDeps {
-  ndk: NDK;
+  ndk: NostrClient;
   logDeveloperTrace: (
     level: 'info' | 'warn' | 'error',
     area: string,
     phase: string,
-    details: Record<string, unknown>
+    details: Record<string, unknown>,
   ) => void;
   normalizeEventId: (value: unknown) => string | null;
   resolveGroupChatEpochEntries: (chat: {
@@ -61,7 +61,7 @@ export function createSubscriptionLoggingRuntime({
   }
 
   function buildSubscriptionEventDetails(
-    event: Pick<NDKEvent, 'id' | 'kind' | 'created_at' | 'pubkey'>
+    event: Pick<ClientEvent, 'id' | 'kind' | 'created_at' | 'pubkey'>,
   ): Record<string, unknown> {
     return {
       eventId: formatSubscriptionLogValue(event.id),
@@ -72,36 +72,28 @@ export function createSubscriptionLoggingRuntime({
   }
 
   function buildLoggedNostrEvent(
-    event: Pick<NDKEvent, 'id' | 'kind' | 'created_at' | 'pubkey' | 'content' | 'tags'>,
-    storedEvent: Record<string, unknown> | null | undefined = null
+    event: Pick<ClientEvent, 'id' | 'kind' | 'created_at' | 'pubkey' | 'content' | 'tags'>,
+    storedEvent: Record<string, unknown> | null | undefined = null,
   ): Record<string, unknown> {
-    if (storedEvent) {
-      return JSON.parse(JSON.stringify(storedEvent)) as Record<string, unknown>;
-    }
-
     return {
       id: normalizeEventId(event.id ?? null) ?? event.id ?? null,
       kind: event.kind ?? null,
-      created_at: Number.isInteger(event.created_at) ? Number(event.created_at) : null,
-      pubkey: inputSanitizerService.normalizeHexKey(event.pubkey ?? '') ?? event.pubkey ?? null,
-      content: typeof event.content === 'string' ? event.content : '',
-      tags: Array.isArray(event.tags)
-        ? event.tags
-            .filter((tag): tag is string[] => Array.isArray(tag))
-            .map((tag) => tag.map((value) => String(value ?? '')))
-        : [],
+      created_at: event.created_at ?? null,
+      pubkey: inputSanitizerService.normalizeHexKey(event.pubkey ?? '') ?? null,
+      contentLength: typeof event.content === 'string' ? event.content.length : 0,
+      tagCount: Array.isArray(event.tags) ? event.tags.length : 0,
     };
   }
 
   async function buildTrackedContactSubscriptionTargetDetails(
-    contactPubkeys: string[]
+    contactPubkeys: string[],
   ): Promise<Record<string, unknown>> {
     const normalizedContactPubkeys = Array.from(
       new Set(
         contactPubkeys
           .map((pubkey) => inputSanitizerService.normalizeHexKey(pubkey))
-          .filter((pubkey): pubkey is string => Boolean(pubkey))
-      )
+          .filter((pubkey): pubkey is string => Boolean(pubkey)),
+      ),
     );
     if (normalizedContactPubkeys.length === 0) {
       return {
@@ -117,7 +109,7 @@ export function createSubscriptionLoggingRuntime({
       (await chatDataService.listChats())
         .filter((chat) => chat.type === 'group')
         .map((chat) => inputSanitizerService.normalizeHexKey(chat.public_key))
-        .filter((pubkey): pubkey is string => Boolean(pubkey))
+        .filter((pubkey): pubkey is string => Boolean(pubkey)),
     );
     const contactsByPubkey = new Map(
       (await contactsService.listContacts())
@@ -125,7 +117,7 @@ export function createSubscriptionLoggingRuntime({
           const normalizedPubkey = inputSanitizerService.normalizeHexKey(contact.public_key);
           return normalizedPubkey ? ([normalizedPubkey, contact] as const) : null;
         })
-        .filter((entry): entry is readonly [string, ContactRecord] => Boolean(entry))
+        .filter((entry): entry is readonly [string, ContactRecord] => Boolean(entry)),
     );
 
     const userTargetPubkeys: string[] = [];
@@ -151,15 +143,15 @@ export function createSubscriptionLoggingRuntime({
 
   async function buildPrivateMessageSubscriptionTargetDetails(
     recipientPubkeys: string[],
-    loggedInPubkeyHex: string | null
+    loggedInPubkeyHex: string | null,
   ): Promise<Record<string, unknown>> {
     const normalizedLoggedInPubkey = inputSanitizerService.normalizeHexKey(loggedInPubkeyHex ?? '');
     const normalizedRecipientPubkeys = Array.from(
       new Set(
         recipientPubkeys
           .map((pubkey) => inputSanitizerService.normalizeHexKey(pubkey))
-          .filter((pubkey): pubkey is string => Boolean(pubkey))
-      )
+          .filter((pubkey): pubkey is string => Boolean(pubkey)),
+      ),
     );
     const recipientSet = new Set(normalizedRecipientPubkeys);
 
@@ -195,7 +187,7 @@ export function createSubscriptionLoggingRuntime({
 
         matchedEpochRecipientPubkeys.add(normalizedEpochPubkey);
         groupChatPubkeys.add(
-          formatSubscriptionLogValue(normalizedGroupChatPubkey) ?? normalizedGroupChatPubkey
+          formatSubscriptionLogValue(normalizedGroupChatPubkey) ?? normalizedGroupChatPubkey,
         );
         epochRecipients.push({
           groupChatPubkey:
@@ -209,7 +201,8 @@ export function createSubscriptionLoggingRuntime({
 
     const unclassifiedRecipientPubkeys = normalizedRecipientPubkeys
       .filter(
-        (pubkey) => pubkey !== normalizedLoggedInPubkey && !matchedEpochRecipientPubkeys.has(pubkey)
+        (pubkey) =>
+          pubkey !== normalizedLoggedInPubkey && !matchedEpochRecipientPubkeys.has(pubkey),
       )
       .map((pubkey) => formatSubscriptionLogValue(pubkey) ?? pubkey);
 
@@ -225,23 +218,26 @@ export function createSubscriptionLoggingRuntime({
     };
   }
 
-  function buildNostrReqFrame(subId: string, filters: NDKFilter | NDKFilter[]): unknown[] {
+  function buildNostrReqFrame(subId: string, filters: NostrFilter | NostrFilter[]): unknown[] {
     const normalizedFilters = Array.isArray(filters) ? filters : [filters];
     const serializedFilters = normalizedFilters.map(
-      (filter) => JSON.parse(JSON.stringify(filter)) as Record<string, unknown>
+      (filter) => JSON.parse(JSON.stringify(filter)) as Record<string, unknown>,
     );
 
     return ['REQ', subId, ...serializedFilters];
   }
 
-  function buildLoggedNostrReqStatement(subId: string, filters: NDKFilter | NDKFilter[]): string[] {
+  function buildLoggedNostrReqStatement(
+    subId: string,
+    filters: NostrFilter | NostrFilter[],
+  ): string[] {
     const normalizedFilters = Array.isArray(filters) ? filters : [filters];
 
     return [
       'REQ',
       subId,
       ...normalizedFilters.map((filter) =>
-        JSON.stringify(JSON.parse(JSON.stringify(filter)) as Record<string, unknown>)
+        JSON.stringify(JSON.parse(JSON.stringify(filter)) as Record<string, unknown>),
       ),
     ];
   }
@@ -259,13 +255,13 @@ export function createSubscriptionLoggingRuntime({
   function subscribeWithReqLogging(
     name: SubscriptionLogName,
     label: string,
-    filters: NDKFilter | NDKFilter[],
-    options: NDKSubscriptionOptions,
-    details: Record<string, unknown> = {}
+    filters: NostrFilter | NostrFilter[],
+    options: NostrSubscriptionOptions,
+    details: Record<string, unknown> = {},
   ) {
     const subId = createLoggedSubscriptionSubId(label);
     let initialEoseDelivered = false;
-    const onEose = (source: NDKSubscription) => {
+    const onEose = (source: NostrSubscription) => {
       if (initialEoseDelivered) return;
       initialEoseDelivered = true;
       options.onEose?.(source);
@@ -273,7 +269,7 @@ export function createSubscriptionLoggingRuntime({
     const subscription = ndk.subscribe(filters, {
       ...options,
       subId,
-      // Routing and batching are explicit. NDK regrouping would replace unrelated listeners.
+      // Routing and batching are explicit. NostrClient regrouping would replace unrelated listeners.
       groupable: false,
       ...(options.onEose ? { onEose } : {}),
     });
@@ -284,9 +280,9 @@ export function createSubscriptionLoggingRuntime({
     const relayUrls = Array.from(
       new Set<string>(
         [...(options.relaySet?.relayUrls ?? []), ...(options.relayUrls ?? [])].filter(
-          (url): url is string => typeof url === 'string' && url.trim().length > 0
-        )
-      )
+          (url): url is string => typeof url === 'string' && url.trim().length > 0,
+        ),
+      ),
     );
 
     logDeveloperTrace('info', `subscription:${name}`, 'req', {

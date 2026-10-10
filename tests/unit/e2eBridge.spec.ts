@@ -36,6 +36,7 @@ const moduleMocks = vi.hoisted(() => {
     replaceRelayEntries: vi.fn(),
   };
   const chatStore = {
+    addContact: vi.fn().mockResolvedValue(null),
     acceptChat: vi.fn().mockResolvedValue(undefined),
     chats: [] as Array<{
       id: string;
@@ -82,7 +83,7 @@ const moduleMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock('src/services/inputSanitizerService', () => ({
+vi.mock('#src/services/inputSanitizerService.ts', () => ({
   inputSanitizerService: {
     normalizeHexKey: vi.fn((value: string) => {
       const normalized = String(value ?? '')
@@ -96,44 +97,44 @@ vi.mock('src/services/inputSanitizerService', () => ({
         .filter((url) => url.length > 0)
         .map((url) => ({
           url,
-        }))
+        })),
     ),
   },
 }));
 
-vi.mock('src/utils/browserNotificationPreference', () => ({
+vi.mock('#src/utils/browserNotificationPreference.ts', () => ({
   saveBrowserNotificationsPreference: moduleMocks.saveBrowserNotificationsPreference,
 }));
 
-vi.mock('src/stores/nostrStore', () => ({
+vi.mock('#src/stores/nostrStore.ts', () => ({
   useNostrStore: () => moduleMocks.nostrStore,
 }));
 
-vi.mock('src/stores/relayStore', () => ({
+vi.mock('#src/stores/relayStore.ts', () => ({
   useRelayStore: () => moduleMocks.relayStore,
 }));
 
-vi.mock('src/stores/nip65RelayStore', () => ({
+vi.mock('#src/stores/nip65RelayStore.ts', () => ({
   useNip65RelayStore: () => moduleMocks.nip65RelayStore,
 }));
 
-vi.mock('src/stores/chatStore', () => ({
+vi.mock('#src/stores/chatStore.ts', () => ({
   useChatStore: () => moduleMocks.chatStore,
 }));
 
-vi.mock('src/stores/messageStore', () => ({
+vi.mock('#src/stores/messageStore.ts', () => ({
   useMessageStore: () => moduleMocks.messageStore,
 }));
 
-vi.mock('src/services/chatDataService', () => ({
+vi.mock('#src/services/chatDataService.ts', () => ({
   chatDataService: moduleMocks.chatDataService,
 }));
 
-vi.mock('src/services/contactsService', () => ({
+vi.mock('#src/services/contactsService.ts', () => ({
   contactsService: moduleMocks.contactsService,
 }));
 
-vi.mock('src/services/nostrEventDataService', () => ({
+vi.mock('#src/services/nostrEventDataService.ts', () => ({
   nostrEventDataService: moduleMocks.nostrEventDataService,
 }));
 
@@ -161,7 +162,7 @@ describe('e2eBridge', () => {
     moduleMocks.nostrStore.refreshPrivateMessagesLiveSubscriptionForReconnect.mockImplementation(
       async () => {
         moduleMocks.nostrStore.privateMessagesSubscriptionLastEoseAt = new Date().toISOString();
-      }
+      },
     );
     moduleMocks.relayStore.relays = ['ws://relay.one'];
     moduleMocks.chatStore.chats = [];
@@ -181,7 +182,7 @@ describe('e2eBridge', () => {
         chatId: string,
         text: string,
         _replyTo: null,
-        options: { createdAt?: string } = {}
+        options: { createdAt?: string } = {},
       ) => ({
         id: '1',
         chatId,
@@ -192,7 +193,7 @@ describe('e2eBridge', () => {
         eventId: 'b'.repeat(64),
         nostrEvent: null,
         meta: {},
-      })
+      }),
     );
     moduleMocks.nostrEventDataService.getEventById.mockResolvedValue(null);
 
@@ -207,7 +208,7 @@ describe('e2eBridge', () => {
   });
 
   it('installs the bridge and bootstraps a session through the mocked stores', async () => {
-    const { installAppE2EBridge } = await import('src/testing/e2eBridge');
+    const { installAppE2EBridge } = await import('#src/testing/e2eBridge.ts');
     installAppE2EBridge();
 
     const bridge = (globalThis.window as typeof window & { __appE2E__: any }).__appE2E__;
@@ -233,7 +234,7 @@ describe('e2eBridge', () => {
     expect(moduleMocks.nostrStore.savePrivateKey).toHaveBeenCalledWith('private-key');
     expect(moduleMocks.nostrStore.updateLoggedInUserRelayList).toHaveBeenCalledWith(
       [{ url: 'ws://relay.one' }, { url: 'ws://relay.two' }],
-      { refreshSubscriptions: false }
+      { refreshSubscriptions: false },
     );
     expect(moduleMocks.chatStore.reload).toHaveBeenCalledTimes(1);
     expect(moduleMocks.messageStore.reloadLoadedMessages).toHaveBeenCalledTimes(1);
@@ -243,14 +244,14 @@ describe('e2eBridge', () => {
     vi.useFakeTimers();
     moduleMocks.nostrStore.publishMyRelayList
       .mockRejectedValueOnce(
-        new Error('Not enough relays received the event (0 published, 1 required)')
+        new Error('Not enough relays received the event (0 published, 1 required)'),
       )
       .mockRejectedValueOnce(
-        new Error('Not enough relays received the event (0 published, 1 required)')
+        new Error('Not enough relays received the event (0 published, 1 required)'),
       )
       .mockResolvedValue(undefined);
 
-    const { installAppE2EBridge } = await import('src/testing/e2eBridge');
+    const { installAppE2EBridge } = await import('#src/testing/e2eBridge.ts');
     installAppE2EBridge();
 
     const bridge = (globalThis.window as typeof window & { __appE2E__: any }).__appE2E__;
@@ -270,7 +271,7 @@ describe('e2eBridge', () => {
   });
 
   it('returns the current session snapshot from the mocked stores', async () => {
-    const { installAppE2EBridge } = await import('src/testing/e2eBridge');
+    const { installAppE2EBridge } = await import('#src/testing/e2eBridge.ts');
     installAppE2EBridge();
 
     const bridge = (globalThis.window as typeof window & { __appE2E__: any }).__appE2E__;
@@ -282,7 +283,7 @@ describe('e2eBridge', () => {
   });
 
   it('refreshes either one chat or every loaded chat depending on the options', async () => {
-    const { installAppE2EBridge } = await import('src/testing/e2eBridge');
+    const { installAppE2EBridge } = await import('#src/testing/e2eBridge.ts');
     installAppE2EBridge();
     moduleMocks.chatStore.chats = [
       {
@@ -299,12 +300,12 @@ describe('e2eBridge', () => {
     expect(moduleMocks.chatStore.reload).toHaveBeenCalledTimes(3);
     expect(moduleMocks.nostrStore.restorePrivateMessagesForRecipient).toHaveBeenCalledWith(
       PUBKEY_HEX,
-      { force: true }
+      { force: true },
     );
     expect(moduleMocks.nostrStore.restoreGroupEpochHistory).toHaveBeenCalledWith(
       PUBKEY_HEX,
       'b'.repeat(64),
-      { force: true }
+      { force: true },
     );
     expect(moduleMocks.messageStore.loadMessages).toHaveBeenCalledWith('chat-id', true);
     expect(moduleMocks.messageStore.reloadLoadedMessages).not.toHaveBeenCalled();
@@ -314,7 +315,7 @@ describe('e2eBridge', () => {
   });
 
   it('exposes private-message live reconnect diagnostics through the bridge', async () => {
-    const { installAppE2EBridge } = await import('src/testing/e2eBridge');
+    const { installAppE2EBridge } = await import('#src/testing/e2eBridge.ts');
     installAppE2EBridge();
 
     const bridge = (globalThis.window as typeof window & { __appE2E__: any }).__appE2E__;
@@ -328,7 +329,7 @@ describe('e2eBridge', () => {
     await expect(
       bridge.refreshPrivateMessagesLiveReconnect({
         forceRecreate: true,
-      })
+      }),
     ).resolves.toEqual({
       privateMessagesSubscription: {
         since: 1,
@@ -336,14 +337,14 @@ describe('e2eBridge', () => {
       },
     });
     expect(
-      moduleMocks.nostrStore.refreshPrivateMessagesLiveSubscriptionForReconnect
+      moduleMocks.nostrStore.refreshPrivateMessagesLiveSubscriptionForReconnect,
     ).toHaveBeenCalledWith({
       forceRecreate: true,
     });
   });
 
   it('logs out and redirects to the auth hash', async () => {
-    const { installAppE2EBridge } = await import('src/testing/e2eBridge');
+    const { installAppE2EBridge } = await import('#src/testing/e2eBridge.ts');
     installAppE2EBridge();
 
     const bridge = (globalThis.window as typeof window & { __appE2E__: any }).__appE2E__;
@@ -354,7 +355,7 @@ describe('e2eBridge', () => {
   });
 
   it('delegates group epoch rotation to the nostr store with normalized inputs', async () => {
-    const { installAppE2EBridge } = await import('src/testing/e2eBridge');
+    const { installAppE2EBridge } = await import('#src/testing/e2eBridge.ts');
     installAppE2EBridge();
 
     const bridge = (globalThis.window as typeof window & { __appE2E__: any }).__appE2E__;
@@ -367,12 +368,12 @@ describe('e2eBridge', () => {
     expect(moduleMocks.nostrStore.rotateGroupEpochAndSendTickets).toHaveBeenCalledWith(
       'GROUP',
       ['alice', 'bob'],
-      ['ws://relay.one']
+      ['ws://relay.one'],
     );
   });
 
   it('sends seeded bridge messages and forwards explicit createdAt values', async () => {
-    const { installAppE2EBridge } = await import('src/testing/e2eBridge');
+    const { installAppE2EBridge } = await import('#src/testing/e2eBridge.ts');
     installAppE2EBridge();
 
     const bridge = (globalThis.window as typeof window & { __appE2E__: any }).__appE2E__;
@@ -381,7 +382,7 @@ describe('e2eBridge', () => {
         chatId: '  CHAT-ID  ',
         texts: [' first ', ' ', 'second'],
         createdAts: ['2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z'],
-      })
+      }),
     ).resolves.toEqual([
       {
         id: '1',
@@ -408,7 +409,7 @@ describe('e2eBridge', () => {
       null,
       {
         createdAt: '2026-01-01T00:00:00.000Z',
-      }
+      },
     );
     expect(moduleMocks.messageStore.sendMessage).toHaveBeenNthCalledWith(
       2,
@@ -417,14 +418,14 @@ describe('e2eBridge', () => {
       null,
       {
         createdAt: '2026-01-02T00:00:00.000Z',
-      }
+      },
     );
     expect(moduleMocks.chatStore.updateChatPreview).toHaveBeenCalledTimes(2);
     expect(moduleMocks.chatStore.acceptChat).toHaveBeenCalledTimes(2);
   });
 
   it('removes a locally stored message row and backing event through the bridge helper', async () => {
-    const { installAppE2EBridge } = await import('src/testing/e2eBridge');
+    const { installAppE2EBridge } = await import('#src/testing/e2eBridge.ts');
     installAppE2EBridge();
     moduleMocks.nostrEventDataService.getEventById.mockResolvedValue({
       direction: 'in',
@@ -443,7 +444,7 @@ describe('e2eBridge', () => {
       bridge.removeStoredMessageByEventId({
         chatId: ` ${'b'.repeat(64)} `,
         eventId: ` ${'c'.repeat(64)} `,
-      })
+      }),
     ).resolves.toBe(true);
 
     expect(moduleMocks.chatDataService.deleteMessageByEventId).toHaveBeenCalledWith('c'.repeat(64));
@@ -456,7 +457,7 @@ describe('e2eBridge', () => {
   });
 
   it('updates stored contact relays through the bridge helper', async () => {
-    const { installAppE2EBridge } = await import('src/testing/e2eBridge');
+    const { installAppE2EBridge } = await import('#src/testing/e2eBridge.ts');
     installAppE2EBridge();
 
     const bridge = (globalThis.window as typeof window & { __appE2E__: any }).__appE2E__;
@@ -473,7 +474,7 @@ describe('e2eBridge', () => {
   });
 
   it('rejects invalid bootstrap and seeded-message inputs', async () => {
-    const { installAppE2EBridge } = await import('src/testing/e2eBridge');
+    const { installAppE2EBridge } = await import('#src/testing/e2eBridge.ts');
     installAppE2EBridge();
 
     const bridge = (globalThis.window as typeof window & { __appE2E__: any }).__appE2E__;
@@ -482,14 +483,14 @@ describe('e2eBridge', () => {
       bridge.bootstrapSession({
         privateKey: '   ',
         relayUrls: ['ws://relay.one'],
-      })
+      }),
     ).rejects.toThrow('A private key is required for e2e bootstrap.');
 
     await expect(
       bridge.bootstrapSession({
         privateKey: 'private-key',
         relayUrls: ['   '],
-      })
+      }),
     ).rejects.toThrow('At least one relay URL is required for e2e bootstrap.');
 
     moduleMocks.nostrStore.savePrivateKey.mockReturnValueOnce({ isValid: false });
@@ -497,12 +498,12 @@ describe('e2eBridge', () => {
       bridge.bootstrapSession({
         privateKey: 'private-key',
         relayUrls: ['ws://relay.one'],
-      })
+      }),
     ).rejects.toThrow('Invalid private key supplied for e2e bootstrap.');
 
     moduleMocks.nostrStore.getLoggedInPublicKeyHex.mockReturnValueOnce(null);
     await expect(bridge.getSessionSnapshot()).rejects.toThrow(
-      'Failed to read the logged-in public key.'
+      'Failed to read the logged-in public key.',
     );
 
     await expect(
@@ -510,21 +511,21 @@ describe('e2eBridge', () => {
         chatId: 'chat-id',
         texts: ['first'],
         createdAts: ['2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z'],
-      })
+      }),
     ).rejects.toThrow('Explicit e2e message timestamps must match the number of messages.');
 
     await expect(
       bridge.updateContactRelays({
         publicKey: 'not-a-pubkey',
         relayUrls: ['ws://relay.one'],
-      })
+      }),
     ).rejects.toThrow('A valid public key is required to update contact relays.');
 
     await expect(
       bridge.removeStoredMessageByEventId({
         chatId: 'chat-id',
         eventId: 'event-id',
-      })
+      }),
     ).rejects.toThrow('A valid chat id and event id are required to remove a stored message.');
   });
 });

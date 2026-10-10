@@ -1,6 +1,6 @@
-import { buildAvatarText } from 'src/utils/avatarText';
-import { formatCompactPublicKey } from 'src/utils/publicKeyText';
-import { buildRelayLookupKey, uniqueRelayUrls } from 'src/utils/relayUrls';
+import { buildAvatarText } from '#src/utils/avatarText.ts';
+import { formatCompactPublicKey } from '#src/utils/publicKeyText.ts';
+import { buildRelayLookupKey, uniqueRelayUrls } from '#src/utils/relayUrls.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('shared helper utils', () => {
@@ -16,7 +16,7 @@ describe('shared helper utils', () => {
   });
 
   it('normalizes relay lookup keys and preserves first unique relay entries', () => {
-    expect(buildRelayLookupKey(' WSS://Relay.Example.com ')).toBe('WSS://Relay.Example.com/');
+    expect(buildRelayLookupKey(' WSS://Relay.Example.com ')).toBe('wss://relay.example.com/');
     expect(
       uniqueRelayUrls([
         'wss://relay.example.com',

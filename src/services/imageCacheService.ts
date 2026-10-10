@@ -1,5 +1,5 @@
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { closeIndexedDbConnection, deleteIndexedDbDatabase } from 'src/utils/indexedDbStorage';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { closeIndexedDbConnection, deleteIndexedDbDatabase } from '#src/utils/indexedDbStorage.ts';
 
 const IMAGE_CACHE_DB_NAME = 'nostr-chat-image-cache';
 const IMAGE_CACHE_DB_VERSION = 1;
@@ -74,7 +74,7 @@ class ImageCacheService {
     }
 
     try {
-      const response = await fetch(sourceUrl);
+      const response = await fetch(sourceUrl, { credentials: 'omit', referrerPolicy: 'no-referrer' });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
@@ -89,7 +89,7 @@ class ImageCacheService {
       return this.replaceObjectUrl(sourceUrl, blob);
     } catch (error) {
       this.passthroughByUrl.add(sourceUrl);
-      console.warn('Failed to cache image, using remote URL directly.', sourceUrl, error);
+      console.warn('Failed to cache image, using remote URL directly.');
       return sourceUrl;
     }
   }

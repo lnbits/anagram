@@ -1,6 +1,6 @@
-import type { Chat } from 'src/types/chat';
-import { buildGroupMemberMentionProfiles } from 'src/utils/nostrMentions';
-import { formatCompactPublicKey } from 'src/utils/publicKeyText';
+import type { Chat } from '#src/types/chat.ts';
+import { buildGroupMemberMentionProfiles } from '#src/utils/nostrMentions.ts';
+import { formatCompactPublicKey } from '#src/utils/publicKeyText.ts';
 
 export function resolveChatPreviewAuthorLabel(
   chat: Chat,

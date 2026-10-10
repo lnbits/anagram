@@ -1,10 +1,10 @@
-import NDK, {
-  type NDKRelay,
-  type NDKRelayConnectionStats,
-  NDKRelayStatus,
+import NostrClient, {
+  type NostrRelay,
+  type NostrRelayConnectionStats,
+  NostrRelayStatus,
   normalizeRelayUrl,
-} from '@nostr-dev-kit/ndk';
-import type { DeveloperRelaySnapshot, DeveloperTraceLevel } from 'src/stores/nostr/types';
+} from '#src/lib/nostr/client.ts';
+import type { DeveloperRelaySnapshot, DeveloperTraceLevel } from '#src/stores/nostr/types.ts';
 
 interface DeveloperRelayRuntimeDeps {
   logDeveloperTrace: (
@@ -13,16 +13,16 @@ interface DeveloperRelayRuntimeDeps {
     phase: string,
     details: Record<string, unknown>
   ) => void;
-  ndk: NDK;
+  ndk: NostrClient;
 }
 
 export function createDeveloperRelayRuntime({ logDeveloperTrace, ndk }: DeveloperRelayRuntimeDeps) {
   function getRelayStatusName(status: number): string {
-    return NDKRelayStatus[status] ?? 'UNKNOWN';
+    return NostrRelayStatus[status] ?? 'UNKNOWN';
   }
 
   function buildRelayConnectionStatsSnapshot(
-    stats: NDKRelayConnectionStats | undefined
+    stats: NostrRelayConnectionStats | undefined
   ): Pick<
     DeveloperRelaySnapshot,
     | 'attempts'
@@ -54,7 +54,7 @@ export function createDeveloperRelayRuntime({ logDeveloperTrace, ndk }: Develope
     };
   }
 
-  function buildRelaySnapshot(relay: NDKRelay | null | undefined): DeveloperRelaySnapshot {
+  function buildRelaySnapshot(relay: NostrRelay | null | undefined): DeveloperRelaySnapshot {
     if (!relay) {
       return {
         present: false,
@@ -88,7 +88,7 @@ export function createDeveloperRelayRuntime({ logDeveloperTrace, ndk }: Develope
     });
   }
 
-  function logRelayLifecycle(eventName: string, relay: NDKRelay): void {
+  function logRelayLifecycle(eventName: string, relay: NostrRelay): void {
     logDeveloperTrace('info', 'relay', eventName, {
       ...buildRelaySnapshot(relay),
       pool: ndk.pool.stats(),

@@ -1,10 +1,11 @@
-import { NDKPrivateKeySigner } from '@nostr-dev-kit/ndk';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
+import { isNativeSecureStorage, readNativeKey, writeNativeKey, removeNativeKey } from '#src/lib/platform/secureKeys.ts';
+import { NostrPrivateKeySigner } from '#src/lib/nostr/client.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
 import {
   AUTH_METHOD_STORAGE_KEY,
   PRIVATE_KEY_STORAGE_KEY,
   PUBLIC_KEY_STORAGE_KEY,
-} from 'src/stores/nostr/constants';
+} from '#src/stores/nostr/constants.ts';
 
 const ELECTRON_SECURE_PRIVATE_KEY_STORAGE_KEY = 'nostr-chat:electron-secure-nsec';
 const ELECTRON_MEMORY_ONLY_PRIVATE_KEY_SESSION_KEY = 'nostr-chat:electron-memory-only-nsec-pubkey';
@@ -28,6 +29,7 @@ function getDesktopRuntime(): Window['desktopRuntime'] | null {
 }
 
 export function isElectronSecurePrivateKeyStorageAvailable(): boolean {
+  if (isNativeSecureStorage()) return true;
   const desktopRuntime = getDesktopRuntime();
   return Boolean(
     desktopRuntime &&
@@ -37,6 +39,7 @@ export function isElectronSecurePrivateKeyStorageAvailable(): boolean {
 }
 
 export async function readElectronSecurePrivateKeyHex(): Promise<string | null> {
+  if (isNativeSecureStorage()) return readNativeKey();
   const desktopRuntime = getDesktopRuntime();
   const localStorage = getLocalStorage();
   if (!isElectronSecurePrivateKeyStorageAvailable() || !desktopRuntime || !localStorage) {
@@ -53,6 +56,7 @@ export async function readElectronSecurePrivateKeyHex(): Promise<string | null> 
 }
 
 export async function writeElectronSecurePrivateKeyHex(privateKeyHex: string): Promise<void> {
+  if (isNativeSecureStorage()) return writeNativeKey(privateKeyHex);
   const desktopRuntime = getDesktopRuntime();
   const localStorage = getLocalStorage();
   if (!isElectronSecurePrivateKeyStorageAvailable() || !desktopRuntime || !localStorage) {
@@ -64,6 +68,7 @@ export async function writeElectronSecurePrivateKeyHex(privateKeyHex: string): P
 }
 
 export async function removeElectronSecurePrivateKeyHex(): Promise<void> {
+  if (isNativeSecureStorage()) await removeNativeKey();
   getLocalStorage()?.removeItem(ELECTRON_SECURE_PRIVATE_KEY_STORAGE_KEY);
 }
 
@@ -105,7 +110,7 @@ export function clearElectronPrivateKeySessionMetadata(): void {
 
 function derivePublicKeyFromPrivateKeyHex(privateKeyHex: string): string | null {
   try {
-    return inputSanitizerService.normalizeHexKey(new NDKPrivateKeySigner(privateKeyHex).pubkey);
+    return inputSanitizerService.normalizeHexKey(new NostrPrivateKeySigner(privateKeyHex).pubkey);
   } catch {
     return null;
   }

@@ -60,25 +60,25 @@ function resolveMockRelayConfig(overrides = {}, environment = process.env) {
     firstDefined(overrides.delayMs, environment.MOCK_RELAY_DELAY_MS),
     'MOCK_RELAY_DELAY_MS',
     0,
-    { maximum: 3_600_000 }
+    { maximum: 3_600_000 },
   );
   const readDelay = (overrideValue, environmentName) =>
     readInteger(
       firstDefined(overrideValue, environment[environmentName]),
       environmentName,
       sharedDelayMs,
-      { maximum: 3_600_000 }
+      { maximum: 3_600_000 },
     );
 
   return {
     listenHost: String(
-      firstDefined(overrides.listenHost, environment.MOCK_RELAY_LISTEN_HOST, '127.0.0.1')
+      firstDefined(overrides.listenHost, environment.MOCK_RELAY_LISTEN_HOST, '127.0.0.1'),
     ).trim(),
     listenPort: readInteger(
       firstDefined(overrides.listenPort, environment.MOCK_RELAY_PORT),
       'MOCK_RELAY_PORT',
       7002,
-      { minimum: 1 }
+      { minimum: 1 },
     ),
     targetUrl: readTargetUrl(firstDefined(overrides.targetUrl, environment.MOCK_RELAY_TARGET_URL)),
     handshakeDelayMs: readDelay(overrides.handshakeDelayMs, 'MOCK_RELAY_HANDSHAKE_DELAY_MS'),
@@ -91,24 +91,24 @@ function resolveMockRelayConfig(overrides = {}, environment = process.env) {
       firstDefined(overrides.jitterMs, environment.MOCK_RELAY_JITTER_MS),
       'MOCK_RELAY_JITTER_MS',
       0,
-      { maximum: 3_600_000 }
+      { maximum: 3_600_000 },
     ),
     dropAcks: readBoolean(
       firstDefined(overrides.dropAcks, environment.MOCK_RELAY_DROP_ACKS),
-      'MOCK_RELAY_DROP_ACKS'
+      'MOCK_RELAY_DROP_ACKS',
     ),
     dropEvents: readBoolean(
       firstDefined(overrides.dropEvents, environment.MOCK_RELAY_DROP_EVENTS),
-      'MOCK_RELAY_DROP_EVENTS'
+      'MOCK_RELAY_DROP_EVENTS',
     ),
     dropEose: readBoolean(
       firstDefined(overrides.dropEose, environment.MOCK_RELAY_DROP_EOSE),
-      'MOCK_RELAY_DROP_EOSE'
+      'MOCK_RELAY_DROP_EOSE',
     ),
     hangMode: readHangMode(firstDefined(overrides.hangMode, environment.MOCK_RELAY_HANG_MODE)),
     verbose: readBoolean(
       firstDefined(overrides.verbose, environment.MOCK_RELAY_VERBOSE),
-      'MOCK_RELAY_VERBOSE'
+      'MOCK_RELAY_VERBOSE',
     ),
   };
 }
@@ -276,7 +276,7 @@ function createClientFrameDecoder(handlers) {
 
       const maskingKey = bufferedData.subarray(headerLength, headerLength + 4);
       const payload = Buffer.from(
-        bufferedData.subarray(headerLength + 4, headerLength + 4 + payloadLength)
+        bufferedData.subarray(headerLength + 4, headerLength + 4 + payloadLength),
       );
       for (let index = 0; index < payload.length; index += 1) {
         payload[index] ^= maskingKey[index % 4];
@@ -373,6 +373,7 @@ async function startMockRelayProxy(options = {}) {
     frames: frames.slice(),
     receivedFrames: receivedFrames.slice(),
     connectionCount: acceptedConnectionCount,
+    activeConnections: sessions.size,
     maxConcurrentConnections,
     rateLimitRejections,
     duplicateActiveSignatures,
@@ -418,7 +419,7 @@ async function startMockRelayProxy(options = {}) {
       (upstreamResponse) => {
         response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
         upstreamResponse.pipe(response);
-      }
+      },
     );
     upstreamRequest.on('error', (error) => {
       if (!response.headersSent) {
@@ -494,7 +495,7 @@ async function startMockRelayProxy(options = {}) {
           'Connection: Upgrade',
           `Sec-WebSocket-Accept: ${acceptValue}`,
           '\r\n',
-        ].join('\r\n')
+        ].join('\r\n'),
       );
 
       const upstream = new WebSocket(config.targetUrl);
@@ -543,7 +544,7 @@ async function startMockRelayProxy(options = {}) {
             const signature = JSON.stringify(filters);
             if (
               [...activeSignatures].some(
-                ([key, value]) => key.startsWith(`${connectionId}:`) && value === signature
+                ([key, value]) => key.startsWith(`${connectionId}:`) && value === signature,
               )
             )
               duplicateActiveSignatures += 1;
@@ -623,9 +624,9 @@ async function startMockRelayProxy(options = {}) {
                 : ArrayBuffer.isView(event.data)
                   ? event.data.buffer.slice(
                       event.data.byteOffset,
-                      event.data.byteOffset + event.data.byteLength
+                      event.data.byteOffset + event.data.byteLength,
                     )
-                  : []
+                  : [],
             );
         if (isTextMessage) {
           try {
@@ -648,11 +649,11 @@ async function startMockRelayProxy(options = {}) {
         const behavior = resolveRelayResponseBehavior(
           isTextMessage ? payload : null,
           config,
-          random
+          random,
         );
         if (config.verbose) {
           logger.info(
-            `[mock-relay] ${behavior.shouldDrop ? 'dropping' : 'forwarding'} ${behavior.messageType} response after ${behavior.delayMs}ms`
+            `[mock-relay] ${behavior.shouldDrop ? 'dropping' : 'forwarding'} ${behavior.messageType} response after ${behavior.delayMs}ms`,
           );
         }
         if (behavior.shouldDrop) {
@@ -700,7 +701,7 @@ async function startMockRelayProxy(options = {}) {
   });
 
   logger.info(
-    `[mock-relay] listening on ws://${config.listenHost}:${config.listenPort} -> ${config.targetUrl}`
+    `[mock-relay] listening on ws://${config.listenHost}:${config.listenPort} -> ${config.targetUrl}`,
   );
 
   return {

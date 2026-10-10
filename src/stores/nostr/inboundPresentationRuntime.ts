@@ -1,9 +1,9 @@
-import { chatDataService } from 'src/services/chatDataService';
-import { emitForegroundMessageActivity } from 'src/services/foregroundMessageActivityService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import type { ContactRecord } from 'src/types/contact';
-import { areBrowserNotificationsEnabled } from 'src/utils/browserNotificationPreference';
-import type { Ref } from 'vue';
+import { chatDataService } from '#src/services/chatDataService.ts';
+import { emitForegroundMessageActivity } from '#src/services/foregroundMessageActivityService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import type { ContactRecord } from '#src/types/contact.ts';
+import { areBrowserNotificationsEnabled } from '#src/utils/browserNotificationPreference.ts';
+import type { Ref } from '#src/lib/state/reactivity.ts';
 
 interface InboundTraceOptions {
   wrappedEvent?: {
@@ -30,7 +30,7 @@ interface InboundPresentationRuntimeDeps {
     level: 'info' | 'warn' | 'error',
     area: string,
     phase: string,
-    details: Record<string, unknown>
+    details: Record<string, unknown>,
   ) => void;
   normalizeEventId: (value: unknown) => string | null;
 }
@@ -47,12 +47,12 @@ export function createInboundPresentationRuntime({
   function buildInboundTraceDetails(options: InboundTraceOptions = {}): Record<string, unknown> {
     const relayUrls = Array.isArray(options.relayUrls)
       ? options.relayUrls.filter(
-          (value): value is string => typeof value === 'string' && value.trim().length > 0
+          (value): value is string => typeof value === 'string' && value.trim().length > 0,
         )
       : [];
     const recipients = Array.isArray(options.recipients)
       ? options.recipients.filter(
-          (value): value is string => typeof value === 'string' && value.trim().length > 0
+          (value): value is string => typeof value === 'string' && value.trim().length > 0,
         )
       : [];
     const wrappedEventId =
@@ -178,7 +178,7 @@ export function createInboundPresentationRuntime({
 
   async function shouldNotifyForAcceptedChatOnly(
     chatPubkey: string,
-    chatMeta: Record<string, unknown> | null | undefined
+    chatMeta: Record<string, unknown> | null | undefined,
   ): Promise<boolean> {
     if (chatMeta?.muted === true) {
       return false;
@@ -214,15 +214,13 @@ export function createInboundPresentationRuntime({
     }
 
     try {
-      const messageRows = await chatDataService.listMessages(chatPubkey);
-      return messageRows.some(
-        (messageRow) =>
-          inputSanitizerService.normalizeHexKey(messageRow.author_public_key) === loggedInPubkeyHex
+      return Boolean(
+        await chatDataService.findLatestMessageByAuthor(chatPubkey, loggedInPubkeyHex),
       );
     } catch (error) {
       console.warn(
         'Failed to confirm accepted-chat state for browser notification eligibility',
-        error
+        error,
       );
       return false;
     }

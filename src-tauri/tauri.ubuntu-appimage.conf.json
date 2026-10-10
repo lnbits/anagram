@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "linux": {
+      "appimage": {
+        "files": {
+          "/usr/lib/libasound.so.2": "/usr/lib/x86_64-linux-gnu/libasound.so.2",
+          "/usr/lib/libcom_err.so.2": "/usr/lib/x86_64-linux-gnu/libcom_err.so.2",
+          "/usr/lib/libexpat.so.1": "/usr/lib/x86_64-linux-gnu/libexpat.so.1",
+          "/usr/lib/libfontconfig.so.1": "/usr/lib/x86_64-linux-gnu/libfontconfig.so.1",
+          "/usr/lib/libfreetype.so.6": "/usr/lib/x86_64-linux-gnu/libfreetype.so.6",
+          "/usr/lib/libfribidi.so.0": "/usr/lib/x86_64-linux-gnu/libfribidi.so.0",
+          "/usr/lib/libgmp.so.10": "/usr/lib/x86_64-linux-gnu/libgmp.so.10",
+          "/usr/lib/libgpg-error.so.0": "/usr/lib/x86_64-linux-gnu/libgpg-error.so.0",
+          "/usr/lib/libharfbuzz.so.0": "/usr/lib/x86_64-linux-gnu/libharfbuzz.so.0",
+          "/usr/lib/libjack.so.0": "/usr/lib/x86_64-linux-gnu/libjack.so.0",
+          "/usr/lib/libuuid.so.1": "/usr/lib/x86_64-linux-gnu/libuuid.so.1",
+          "/usr/lib/libz.so.1": "/usr/lib/x86_64-linux-gnu/libz.so.1",
+          "/usr/share/doc/libasound2/copyright": "/usr/share/doc/libasound2/copyright",
+          "/usr/share/doc/libcom-err2/copyright": "/usr/share/doc/libcom-err2/copyright",
+          "/usr/share/doc/libexpat1/copyright": "/usr/share/doc/libexpat1/copyright",
+          "/usr/share/doc/libfontconfig1/copyright": "/usr/share/doc/libfontconfig1/copyright",
+          "/usr/share/doc/libfreetype6/copyright": "/usr/share/doc/libfreetype6/copyright",
+          "/usr/share/doc/libfribidi0/copyright": "/usr/share/doc/libfribidi0/copyright",
+          "/usr/share/doc/libgmp10/copyright": "/usr/share/doc/libgmp10/copyright",
+          "/usr/share/doc/libgpg-error0/copyright": "/usr/share/doc/libgpg-error0/copyright",
+          "/usr/share/doc/libharfbuzz0b/copyright": "/usr/share/doc/libharfbuzz0b/copyright",
+          "/usr/share/doc/libjack-jackd2-0/copyright": "/usr/share/doc/libjack-jackd2-0/copyright",
+          "/usr/share/doc/libuuid1/copyright": "/usr/share/doc/libuuid1/copyright",
+          "/usr/share/doc/zlib1g/copyright": "/usr/share/doc/zlib1g/copyright"
+        },
+        "bundleMediaFramework": true
+      }
+    }
+  }
+}

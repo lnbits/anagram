@@ -1,6 +1,6 @@
-import { NDKEvent, NDKKind, NDKRelayList, NDKRelaySet } from '@nostr-dev-kit/ndk';
-import { createContactRelayRuntime } from 'src/stores/nostr/contactRelayRuntime';
-import type { ContactRecord, ContactRelay } from 'src/types/contact';
+import { ClientEvent, NostrKind, NostrRelayList, NostrRelaySet } from '#src/lib/nostr/client.ts';
+import { createContactRelayRuntime } from '#src/stores/nostr/contactRelayRuntime.ts';
+import type { ContactRecord, ContactRelay } from '#src/types/contact.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const USER_PUBKEY = 'a'.repeat(64);
@@ -22,11 +22,11 @@ const serviceMocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('src/services/chatDataService', () => ({
+vi.mock('#src/services/chatDataService.ts', () => ({
   chatDataService: serviceMocks.chatDataService,
 }));
 
-vi.mock('src/services/contactsService', () => ({
+vi.mock('#src/services/contactsService.ts', () => ({
   contactsService: serviceMocks.contactsService,
 }));
 
@@ -65,28 +65,28 @@ function createDeps() {
       })),
       bumpContactListVersion: vi.fn(),
       contactMetadataEqual: vi.fn(
-        (first, second) => JSON.stringify(first) === JSON.stringify(second)
+        (first, second) => JSON.stringify(first) === JSON.stringify(second),
       ),
       contactRelayListsEqual: vi.fn(
-        (first, second) => JSON.stringify(first) === JSON.stringify(second)
+        (first, second) => JSON.stringify(first) === JSON.stringify(second),
       ),
       ensureRelayConnections: vi.fn().mockResolvedValue(undefined),
-      getLoggedInPublicKeyHex: vi.fn(() => null),
+      getLoggedInPublicKeyHex: vi.fn((): string | null => null),
       getLoggedInSignerUser: vi.fn().mockResolvedValue({}),
       isPubkeyBlocked: vi.fn(() => false),
       markContactRelayListEventApplied: vi.fn(),
       ndk: ndk as never,
       normalizeRelayStatusUrls: vi.fn((relayUrls: string[]) => Array.from(new Set(relayUrls))),
       normalizeWritableRelayUrlsValue: vi.fn(
-        (relays: ContactRelay[] | undefined) => relays?.map((relay) => relay.url) ?? []
+        (relays: ContactRelay[] | undefined) => relays?.map((relay) => relay.url) ?? [],
       ),
       readContactProfileEventSince: vi.fn((meta) =>
-        typeof meta?.profile_event_created_at === 'number' ? meta.profile_event_created_at : null
+        typeof meta?.profile_event_created_at === 'number' ? meta.profile_event_created_at : null,
       ),
       readContactRelayListEventSince: vi.fn((meta) =>
         typeof meta?.relay_list_event_created_at === 'number'
           ? meta.relay_list_event_created_at
-          : null
+          : null,
       ),
       relayEntriesFromRelayList: vi.fn(() => [makeRelay()]),
       relayStore: {
@@ -110,11 +110,53 @@ describe('contactRelayRuntime', () => {
     serviceMocks.contactsService.listContacts.mockResolvedValue([]);
     serviceMocks.contactsService.getContactByPublicKey.mockResolvedValue(null);
     serviceMocks.contactsService.updateContact.mockResolvedValue(null);
-    vi.spyOn(NDKRelaySet, 'fromRelayUrls').mockReturnValue({} as never);
+    vi.spyOn(NostrRelaySet, 'fromRelayUrls').mockReturnValue({} as never);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('includes restored chats in profile discovery without accepting requests or blocked users', async () => {
+    const { deps } = createDeps();
+    serviceMocks.chatDataService.listChats.mockResolvedValue([
+      { public_key: USER_PUBKEY, meta: { inbox_state: 'request' } },
+      { public_key: PROFILE_EVENT_ID, meta: { inbox_state: 'blocked' } },
+    ]);
+    expect(await createContactRelayRuntime(deps).listTrackedContactPubkeys()).toEqual([
+      USER_PUBKEY,
+    ]);
+  });
+  it('uses only the account inbox and configured read relays, ignoring peer/group metadata seeds', async () => {
+    const { deps } = createDeps();
+    deps.getLoggedInPublicKeyHex.mockReturnValue(USER_PUBKEY);
+    Object.assign(deps.relayStore, {
+      relayEntries: [
+        makeRelay(DEFAULT_RELAY_URL),
+        { url: 'wss://local-write-only.example/', read: false, write: true },
+      ],
+    });
+    serviceMocks.contactsService.getContactByPublicKey.mockResolvedValue(
+      makeContact(USER_PUBKEY, {
+        meta: {
+          dm_receive_relay_entries: [makeRelay('wss://own-dm.example/')],
+          general_relay_entries: [
+            makeRelay('wss://own-inbox.example/'),
+            { url: 'wss://own-outbox.example/', read: false, write: true },
+          ],
+        },
+      }),
+    );
+    serviceMocks.contactsService.listContacts.mockResolvedValue([
+      makeContact(PROFILE_EVENT_ID, { relays: [makeRelay('wss://peer.example/')] }),
+      makeContact(RELAY_EVENT_ID, { type: 'group', relays: [makeRelay('wss://group.example/')] }),
+    ]);
+    expect(
+      await createContactRelayRuntime(deps).resolvePrivateMessageReadRelayUrls([
+        'wss://peer.example/',
+      ]),
+    ).toEqual(['wss://own-dm.example/', 'wss://own-inbox.example/', DEFAULT_RELAY_URL]);
+    expect(serviceMocks.contactsService.listContacts).not.toHaveBeenCalled();
   });
 
   it('omits since when no relay-list event timestamp is stored for the contact', async () => {
@@ -122,9 +164,9 @@ describe('contactRelayRuntime', () => {
     serviceMocks.contactsService.getContactByPublicKey.mockResolvedValue(
       makeContact(USER_PUBKEY, {
         meta: {},
-      })
+      }),
     );
-    vi.spyOn(NDKRelayList, 'from').mockReturnValue({
+    vi.spyOn(NostrRelayList, 'from').mockReturnValue({
       bothRelayUrls: new Set([DEFAULT_RELAY_URL]),
       created_at: 42,
       id: RELAY_EVENT_ID,
@@ -132,12 +174,12 @@ describe('contactRelayRuntime', () => {
       writeRelayUrls: new Set<string>(),
     } as never);
     ndk.fetchEvent.mockResolvedValue(
-      new NDKEvent({} as never, {
+      new ClientEvent({} as never, {
         created_at: 42,
         id: RELAY_EVENT_ID,
-        kind: NDKKind.RelayList,
+        kind: NostrKind.RelayList,
         pubkey: USER_PUBKEY,
-      })
+      }),
     );
 
     const runtime = createContactRelayRuntime(deps);
@@ -148,17 +190,34 @@ describe('contactRelayRuntime', () => {
     expect(ndk.fetchEvent.mock.calls[0][0]).toEqual(
       expect.objectContaining({
         authors: [USER_PUBKEY],
-        kinds: [NDKKind.RelayList],
-      })
+        kinds: [NostrKind.RelayList],
+      }),
     );
     expect(ndk.fetchEvent.mock.calls[0][0]).not.toHaveProperty('since');
     expect(ndk.fetchEvent.mock.calls[1][0]).toEqual(
       expect.objectContaining({
         authors: [USER_PUBKEY],
-        kinds: [NDKKind.DirectMessageReceiveRelayList],
-      })
+        kinds: [NostrKind.DirectMessageReceiveRelayList],
+      }),
     );
     expect(ndk.fetchEvent.mock.calls[1][0]).not.toHaveProperty('since');
+  });
+
+  it('keeps a received relay list when the separate DM relay lookup fails', async () => {
+    const { deps, ndk } = createDeps();
+    const relayList = new ClientEvent({} as never, {
+      created_at: 42,
+      id: RELAY_EVENT_ID,
+      kind: NostrKind.RelayList,
+      pubkey: USER_PUBKEY,
+      tags: [['r', DEFAULT_RELAY_URL]],
+    });
+    ndk.fetchEvent.mockImplementation(async (filter) => {
+      if (filter.kinds[0] === NostrKind.RelayList) return relayList;
+      throw new Error('DM relay lookup timed out');
+    });
+    const result = await createContactRelayRuntime(deps).fetchContactRelayList(USER_PUBKEY);
+    expect(result).toEqual({ createdAt: 42, eventId: RELAY_EVENT_ID, relayEntries: [makeRelay()] });
   });
 
   it('merges direct message receive relays into fetched contact relay entries as read relays', async () => {
@@ -166,9 +225,9 @@ describe('contactRelayRuntime', () => {
     serviceMocks.contactsService.getContactByPublicKey.mockResolvedValue(
       makeContact(USER_PUBKEY, {
         relays: [],
-      })
+      }),
     );
-    vi.spyOn(NDKRelayList, 'from').mockReturnValue({
+    vi.spyOn(NostrRelayList, 'from').mockReturnValue({
       bothRelayUrls: new Set<string>(),
       created_at: 42,
       id: RELAY_EVENT_ID,
@@ -189,20 +248,20 @@ describe('contactRelayRuntime', () => {
     ]);
     ndk.fetchEvent.mockImplementation(async (filter) => {
       const kind = Array.isArray(filter.kinds) ? filter.kinds[0] : undefined;
-      if (kind === NDKKind.RelayList) {
-        return new NDKEvent({} as never, {
+      if (kind === NostrKind.RelayList) {
+        return new ClientEvent({} as never, {
           created_at: 42,
           id: RELAY_EVENT_ID,
-          kind: NDKKind.RelayList,
+          kind: NostrKind.RelayList,
           pubkey: USER_PUBKEY,
         });
       }
 
-      if (kind === NDKKind.DirectMessageReceiveRelayList) {
-        return new NDKEvent({} as never, {
+      if (kind === NostrKind.DirectMessageReceiveRelayList) {
+        return new ClientEvent({} as never, {
           created_at: 43,
           id: DM_RELAY_EVENT_ID,
-          kind: NDKKind.DirectMessageReceiveRelayList,
+          kind: NostrKind.DirectMessageReceiveRelayList,
           pubkey: USER_PUBKEY,
           tags: [
             ['relay', 'wss://write.example'],
@@ -250,15 +309,15 @@ describe('contactRelayRuntime', () => {
             write: true,
           },
         ],
-      })
+      }),
     );
     ndk.fetchEvent.mockImplementation(async (filter) => {
       const kind = Array.isArray(filter.kinds) ? filter.kinds[0] : undefined;
-      if (kind === NDKKind.DirectMessageReceiveRelayList) {
-        return new NDKEvent({} as never, {
+      if (kind === NostrKind.DirectMessageReceiveRelayList) {
+        return new ClientEvent({} as never, {
           created_at: 43,
           id: DM_RELAY_EVENT_ID,
-          kind: NDKKind.DirectMessageReceiveRelayList,
+          kind: NostrKind.DirectMessageReceiveRelayList,
           pubkey: USER_PUBKEY,
           tags: [['relay', 'wss://dm.example']],
         });
@@ -294,18 +353,18 @@ describe('contactRelayRuntime', () => {
         meta: {
           profile_event_created_at: 321,
         },
-      })
+      }),
     );
     ndk.fetchEvent.mockResolvedValue(
-      new NDKEvent({} as never, {
+      new ClientEvent({} as never, {
         content: JSON.stringify({
           name: 'Alice',
         }),
         created_at: 400,
         id: PROFILE_EVENT_ID,
-        kind: NDKKind.Metadata,
+        kind: NostrKind.Metadata,
         pubkey: USER_PUBKEY,
-      })
+      }),
     );
 
     const runtime = createContactRelayRuntime(deps);
@@ -316,9 +375,9 @@ describe('contactRelayRuntime', () => {
     expect(ndk.fetchEvent.mock.calls[0][0]).toEqual(
       expect.objectContaining({
         authors: [USER_PUBKEY],
-        kinds: [NDKKind.Metadata],
+        kinds: [NostrKind.Metadata],
         since: 321,
-      })
+      }),
     );
   });
 
@@ -329,18 +388,18 @@ describe('contactRelayRuntime', () => {
         meta: {
           profile_event_created_at: 321,
         },
-      })
+      }),
     );
     ndk.fetchEvent.mockResolvedValue(
-      new NDKEvent({} as never, {
+      new ClientEvent({} as never, {
         content: JSON.stringify({
           name: 'Alice',
         }),
         created_at: 400,
         id: PROFILE_EVENT_ID,
-        kind: NDKKind.Metadata,
+        kind: NostrKind.Metadata,
         pubkey: USER_PUBKEY,
-      })
+      }),
     );
 
     const runtime = createContactRelayRuntime(deps);
@@ -353,8 +412,8 @@ describe('contactRelayRuntime', () => {
     expect(ndk.fetchEvent.mock.calls[0][0]).toEqual(
       expect.objectContaining({
         authors: [USER_PUBKEY],
-        kinds: [NDKKind.Metadata],
-      })
+        kinds: [NostrKind.Metadata],
+      }),
     );
     expect(ndk.fetchEvent.mock.calls[0][0]).not.toHaveProperty('since');
   });
@@ -365,18 +424,18 @@ describe('contactRelayRuntime', () => {
     serviceMocks.contactsService.getContactByPublicKey.mockResolvedValue(
       makeContact(USER_PUBKEY, {
         relays: [makeRelay('wss://stored.example/')],
-      })
+      }),
     );
     ndk.fetchEvent.mockResolvedValue(
-      new NDKEvent({} as never, {
+      new ClientEvent({} as never, {
         content: JSON.stringify({
           name: 'Alice',
         }),
         created_at: 400,
         id: PROFILE_EVENT_ID,
-        kind: NDKKind.Metadata,
+        kind: NostrKind.Metadata,
         pubkey: USER_PUBKEY,
-      })
+      }),
     );
 
     const runtime = createContactRelayRuntime(deps);
@@ -387,10 +446,10 @@ describe('contactRelayRuntime', () => {
     });
 
     expect(deps.ensureRelayConnections).toHaveBeenCalledWith(['wss://explicit.example/']);
-    expect(NDKRelaySet.fromRelayUrls).toHaveBeenCalledWith(
+    expect(NostrRelaySet.fromRelayUrls).toHaveBeenCalledWith(
       ['wss://explicit.example/'],
       deps.ndk,
-      false
+      false,
     );
   });
 
@@ -407,9 +466,9 @@ describe('contactRelayRuntime', () => {
         id,
         meta: input.meta ?? existingContact.meta,
         relays: input.relays ?? existingContact.relays,
-      })
+      }),
     );
-    vi.spyOn(NDKRelayList, 'from').mockReturnValue({
+    vi.spyOn(NostrRelayList, 'from').mockReturnValue({
       bothRelayUrls: new Set([DEFAULT_RELAY_URL]),
       created_at: 500,
       id: RELAY_EVENT_ID,
@@ -418,12 +477,12 @@ describe('contactRelayRuntime', () => {
     } as never);
     deps.relayEntriesFromRelayList.mockReturnValue(existingContact.relays);
     ndk.fetchEvent.mockResolvedValue(
-      new NDKEvent({} as never, {
+      new ClientEvent({} as never, {
         created_at: 500,
         id: RELAY_EVENT_ID,
-        kind: NDKKind.RelayList,
+        kind: NostrKind.RelayList,
         pubkey: USER_PUBKEY,
-      })
+      }),
     );
 
     const runtime = createContactRelayRuntime(deps);
@@ -437,7 +496,7 @@ describe('contactRelayRuntime', () => {
           relay_list_event_created_at: 500,
         }),
         relays: existingContact.relays,
-      })
+      }),
     );
     expect(deps.bumpContactListVersion).not.toHaveBeenCalled();
     expect(deps.markContactRelayListEventApplied).toHaveBeenCalledWith(USER_PUBKEY, {
@@ -455,8 +514,8 @@ describe('contactRelayRuntime', () => {
     expect(
       runtime.buildMuteListTags(
         [mutedPubkey, blockedPubkey, mutedPubkey],
-        [blockedPubkey, blockedPubkey]
-      )
+        [blockedPubkey, blockedPubkey],
+      ),
     ).toEqual([
       ['p', mutedPubkey],
       ['bp', blockedPubkey],

@@ -1,4 +1,4 @@
-import { createAppLifecycleRuntime } from 'src/stores/nostr/appLifecycleRuntime';
+import { createAppLifecycleRuntime } from '#src/stores/nostr/appLifecycleRuntime.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const CHAT_PUBLIC_KEY = 'a'.repeat(64);

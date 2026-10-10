@@ -1,4 +1,4 @@
-import type { ContactRecord } from 'src/types/contact';
+import type { ContactRecord } from '#src/types/contact.ts';
 
 export interface ContactListOptions {
   loggedInPubkey?: string | null;

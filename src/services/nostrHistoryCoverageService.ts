@@ -1,9 +1,10 @@
-import type { HistoryWindow } from 'src/stores/nostr/historyCoverage';
+import type { HistoryWindow } from '#src/stores/nostr/historyCoverage.ts';
 
-export function createHistoryCoverage(owner: () => string | null) {
+export function createHistoryCoverage(owner: () => string | null, persist = true) {
   const key = () => `nostr-history-coverage:${owner() ?? ''}`;
   const memory = new Map<string, HistoryWindow[]>();
   function read(recipient: string): HistoryWindow[] {
+    if (!persist) return memory.get(`${owner()}:${recipient}`) ?? [];
     try {
       const stored = JSON.parse(window.localStorage.getItem(key()) ?? '{}') as Record<
         string,
@@ -28,6 +29,7 @@ export function createHistoryCoverage(owner: () => string | null) {
       else merged.push({ ...entry });
     }
     memory.set(`${owner()}:${recipient}`, merged);
+    if (!persist) return;
     try {
       const stored = JSON.parse(globalThis.window.localStorage.getItem(key()) ?? '{}');
       stored[recipient] = merged.map((entry) => ({

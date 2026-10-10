@@ -1,4 +1,4 @@
-import { formatUnreadChatBadgeLabel, formatUnreadDocumentTitle } from 'src/utils/unreadChatBadge';
+import { formatUnreadChatBadgeLabel, formatUnreadDocumentTitle } from '#src/utils/unreadChatBadge.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('unread chat badge formatting', () => {

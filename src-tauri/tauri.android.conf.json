@@ -1,0 +1,5 @@
+{
+  "app": {
+    "windows": [{ "label": "main", "title": "Anagram", "create": false, "useHttpsScheme": true }]
+  }
+}

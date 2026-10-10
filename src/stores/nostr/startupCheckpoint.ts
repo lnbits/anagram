@@ -1,6 +1,6 @@
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { STARTUP_CHECKPOINT_STORAGE_KEY } from 'src/stores/nostr/constants';
-import { hasStorage, isPlainRecord } from 'src/stores/nostr/shared';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { STARTUP_CHECKPOINT_STORAGE_KEY } from '#src/stores/nostr/constants.ts';
+import { hasStorage, isPlainRecord } from '#src/stores/nostr/shared.ts';
 
 export const STARTUP_CHECKPOINT_VERSION = 1;
 

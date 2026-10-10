@@ -1,13 +1,17 @@
-import { chatDataService } from 'src/services/chatDataService';
-import { contactsService } from 'src/services/contactsService';
-import { developerTraceDataService } from 'src/services/developerTraceDataService';
-import { imageCacheService } from 'src/services/imageCacheService';
-import { nostrEventDataService } from 'src/services/nostrEventDataService';
-import { deleteAllIndexedDbDatabases } from 'src/utils/indexedDbStorage';
+import { privateStorageRelayService } from '#src/services/privateStorageRelayService.ts';
+import { messageInbox } from '#src/lib/nostr/inbox.ts';
+import { chatDataService } from '#src/services/chatDataService.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { developerTraceDataService } from '#src/services/developerTraceDataService.ts';
+import { imageCacheService } from '#src/services/imageCacheService.ts';
+import { nostrEventDataService } from '#src/services/nostrEventDataService.ts';
+import { deleteAllIndexedDbDatabases } from '#src/utils/indexedDbStorage.ts';
 
 const PENDING_LOGOUT_CLEANUP_SESSION_KEY = 'nostr-chat-pending-logout-cleanup';
 
 export const KNOWN_APP_INDEXED_DB_NAMES = [
+  'anagram-hydration-inbox',
+  'anagram-private-relays',
   'chat-data-indexeddb-v2',
   'contacts-indexeddb-v1',
   'developer-trace-indexeddb-v1',
@@ -45,6 +49,8 @@ function clearBrowserStorage(options: { preservePendingLogoutCleanup?: boolean }
 
 async function clearIndexedDbDatabases(): Promise<void> {
   const clearResults = await Promise.allSettled([
+    messageInbox.clearAllData(),
+    privateStorageRelayService.clearAllData(),
     chatDataService.clearAllData(),
     contactsService.clearAllData(),
     developerTraceDataService.clearAllData(),
@@ -55,18 +61,18 @@ async function clearIndexedDbDatabases(): Promise<void> {
   await deleteAllIndexedDbDatabases([...KNOWN_APP_INDEXED_DB_NAMES]);
 
   const rejectedResults = clearResults.filter(
-    (result): result is PromiseRejectedResult => result.status === 'rejected'
+    (result): result is PromiseRejectedResult => result.status === 'rejected',
   );
   if (rejectedResults.length > 0) {
     console.warn(
       'Some logout cleanup steps failed before the full IndexedDB reset completed.',
-      rejectedResults.map((result) => result.reason)
+      rejectedResults.map((result) => result.reason),
     );
   }
 }
 
 export async function clearPersistedAppState(
-  options: { preservePendingLogoutCleanup?: boolean } = {}
+  options: { preservePendingLogoutCleanup?: boolean } = {},
 ): Promise<void> {
   clearBrowserStorage(options);
   await clearIndexedDbDatabases();

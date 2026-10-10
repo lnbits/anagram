@@ -1,64 +1,68 @@
-import NDK, {
-  NDKEvent,
-  NDKKind,
-  NDKRelayList,
-  NDKSubscriptionCacheUsage,
-  type NDKUser,
-  type NDKUserProfile,
-} from '@nostr-dev-kit/ndk';
-import { chatDataService } from 'src/services/chatDataService';
-import { contactsService } from 'src/services/contactsService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import type { MuteListContent } from 'src/stores/nostr/muteListRuntime';
-import { createReadyRelaySet, fetchEventWithRelayTimeout } from 'src/stores/nostr/relayQueryUtils';
-import { isPlainRecord } from 'src/stores/nostr/shared';
+import { privateStorageRelayService } from '#src/services/privateStorageRelayService.ts';
+import NostrClient, {
+  ClientEvent,
+  NostrKind,
+  NostrRelayList,
+  NostrSubscriptionCacheUsage,
+  type NostrUser,
+  type NostrUserProfile,
+} from '#src/lib/nostr/client.ts';
+import { chatDataService } from '#src/services/chatDataService.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import type { MuteListContent } from '#src/stores/nostr/muteListRuntime.ts';
+import {
+  createReadyRelaySet,
+  fetchEventWithRelayTimeout,
+} from '#src/stores/nostr/relayQueryUtils.ts';
+import { isPlainRecord } from '#src/stores/nostr/shared.ts';
 import type {
   ContactProfileEventState,
   ContactRelayListEventState,
   ContactRelayListFetchResult,
-} from 'src/stores/nostr/types';
+} from '#src/stores/nostr/types.ts';
 import {
   mergeRelayEntriesWithDirectMessageReceiveRelayEntriesValue,
   relayEntriesFromDirectMessageReceiveRelayEventValue,
-} from 'src/stores/nostr/valueUtils';
-import type { ContactRecord, ContactRelay } from 'src/types/contact';
+} from '#src/stores/nostr/valueUtils.ts';
+import type { ContactRecord, ContactRelay } from '#src/types/contact.ts';
 
 interface ContactRelayRuntimeDeps {
   applyContactRelayListEventStateToMeta: (
     meta: ContactRecord['meta'] | undefined,
-    eventState: ContactRelayListEventState | null | undefined
+    eventState: ContactRelayListEventState | null | undefined,
   ) => ContactRecord['meta'];
   bumpContactListVersion: () => void;
   contactMetadataEqual: (
     first: ContactRecord['meta'] | undefined,
-    second: ContactRecord['meta'] | undefined
+    second: ContactRecord['meta'] | undefined,
   ) => boolean;
   contactRelayListsEqual: (
     first: ContactRelay[] | undefined,
-    second: ContactRelay[] | undefined
+    second: ContactRelay[] | undefined,
   ) => boolean;
   ensureRelayConnections: (relayUrls: string[]) => Promise<void>;
   getLoggedInPublicKeyHex: () => string | null;
-  getLoggedInSignerUser: () => Promise<NDKUser>;
+  getLoggedInSignerUser: () => Promise<NostrUser>;
   isPubkeyBlocked: (pubkeyHex: string) => boolean;
   markContactRelayListEventApplied: (
     pubkeyHex: string,
-    eventState: ContactRelayListEventState
+    eventState: ContactRelayListEventState,
   ) => void;
-  ndk: NDK;
+  ndk: NostrClient;
   normalizeRelayStatusUrls: (relayUrls: string[]) => string[];
   normalizeWritableRelayUrlsValue: (relays: ContactRelay[] | undefined) => string[];
   readContactProfileEventSince: (meta: ContactRecord['meta'] | undefined) => number | null;
   readContactRelayListEventSince: (meta: ContactRecord['meta'] | undefined) => number | null;
-  relayEntriesFromRelayList: (relayList: NDKRelayList | null | undefined) => ContactRelay[];
-  relayStore: { init: () => void; relays: string[] };
+  relayEntriesFromRelayList: (relayList: NostrRelayList | null | undefined) => ContactRelay[];
+  relayStore: { init: () => void; relays: string[]; relayEntries?: ContactRelay[] };
   resolveGroupPublishRelayUrlsValue: (
     relays: ContactRelay[] | undefined,
-    seedRelayUrls?: string[]
+    seedRelayUrls?: string[],
   ) => string[];
   shouldPreserveExistingGroupRelays: (
     contact: Pick<ContactRecord, 'type' | 'public_key' | 'relays'> | null | undefined,
-    nextRelayEntries: ContactRelay[] | undefined
+    nextRelayEntries: ContactRelay[] | undefined,
   ) => boolean;
   updateStoredEventSinceFromCreatedAt: (value: unknown) => void;
 }
@@ -93,10 +97,10 @@ export function createContactRelayRuntime({
 }: ContactRelayRuntimeDeps) {
   async function fetchContactProfile(
     pubkeyHex: string,
-    options: ContactProfileFetchOptions = {}
+    options: ContactProfileFetchOptions = {},
   ): Promise<{
     eventState: ContactProfileEventState | null;
-    profile: NDKUserProfile | null;
+    profile: NostrUserProfile | null;
   }> {
     const normalizedPubkey = inputSanitizerService.normalizeHexKey(pubkeyHex);
     if (!normalizedPubkey) {
@@ -136,14 +140,15 @@ export function createContactRelayRuntime({
     const profileEvent = await fetchEventWithRelayTimeout(
       ndk,
       {
-        kinds: [NDKKind.Metadata],
+        kinds: [NostrKind.Metadata],
         authors: [normalizedPubkey],
         ...(since !== null ? { since } : {}),
       },
       {
-        cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+        cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
+        allowPartialResults: true,
       },
-      relaySet
+      relaySet,
     );
     if (!profileEvent) {
       return {
@@ -155,7 +160,7 @@ export function createContactRelayRuntime({
     updateStoredEventSinceFromCreatedAt(profileEvent.created_at);
 
     const wrappedEvent =
-      profileEvent instanceof NDKEvent ? profileEvent : new NDKEvent(ndk, profileEvent);
+      profileEvent instanceof ClientEvent ? profileEvent : new ClientEvent(ndk, profileEvent);
 
     return {
       eventState: buildContactProfileEventState(wrappedEvent),
@@ -165,7 +170,7 @@ export function createContactRelayRuntime({
 
   async function fetchContactRelayList(
     pubkeyHex: string,
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<ContactRelayListFetchResult | null> {
     const normalizedPubkey = inputSanitizerService.normalizeHexKey(pubkeyHex);
     if (!normalizedPubkey) {
@@ -187,48 +192,57 @@ export function createContactRelayRuntime({
 
     const since = readContactRelayListEventSince(existingContact?.meta);
     const relaySet = createReadyRelaySet(ndk, relayUrls);
-    const [relayListEvent, directMessageReceiveRelayEvent] = await Promise.all([
+    const results = await Promise.allSettled([
       fetchEventWithRelayTimeout(
         ndk,
         {
-          kinds: [NDKKind.RelayList],
+          kinds: [NostrKind.RelayList],
           authors: [normalizedPubkey],
           ...(since !== null ? { since } : {}),
         },
         {
-          cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+          cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
+          allowPartialResults: true,
         },
-        relaySet
+        relaySet,
       ),
       fetchEventWithRelayTimeout(
         ndk,
         {
-          kinds: [NDKKind.DirectMessageReceiveRelayList],
+          kinds: [NostrKind.DirectMessageReceiveRelayList],
           authors: [normalizedPubkey],
         },
         {
-          cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+          cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
+          allowPartialResults: true,
         },
-        relaySet
+        relaySet,
       ),
     ]);
+    const [relayListEvent, directMessageReceiveRelayEvent] = results.map((result) =>
+      result.status === 'fulfilled' ? result.value : null,
+    );
     if (!relayListEvent && !directMessageReceiveRelayEvent) {
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed?.status === 'rejected') throw failed.reason;
       return null;
     }
 
-    let relayList: NDKRelayList | null = null;
+    let relayList: NostrRelayList | null = null;
     if (relayListEvent) {
       updateStoredEventSinceFromCreatedAt(relayListEvent.created_at);
 
-      relayList = NDKRelayList.from(
-        relayListEvent instanceof NDKEvent ? relayListEvent : new NDKEvent(ndk, relayListEvent)
+      relayList = NostrRelayList.from(
+        relayListEvent instanceof ClientEvent
+          ? relayListEvent
+          : new ClientEvent(ndk, relayListEvent),
       );
     }
 
     const wrappedDirectMessageReceiveRelayEvent = directMessageReceiveRelayEvent
-      ? directMessageReceiveRelayEvent instanceof NDKEvent
+      ? directMessageReceiveRelayEvent instanceof ClientEvent
         ? directMessageReceiveRelayEvent
-        : new NDKEvent(ndk, directMessageReceiveRelayEvent)
+        : new ClientEvent(ndk, directMessageReceiveRelayEvent)
       : null;
     if (wrappedDirectMessageReceiveRelayEvent) {
       updateStoredEventSinceFromCreatedAt(wrappedDirectMessageReceiveRelayEvent.created_at);
@@ -238,11 +252,11 @@ export function createContactRelayRuntime({
       ? relayEntriesFromRelayList(relayList)
       : inputSanitizerService.normalizeRelayListMetadataEntries(existingContact?.relays ?? []);
     const directMessageReceiveRelayEntries = relayEntriesFromDirectMessageReceiveRelayEventValue(
-      wrappedDirectMessageReceiveRelayEvent
+      wrappedDirectMessageReceiveRelayEvent,
     );
     const mergedRelayEntries = mergeRelayEntriesWithDirectMessageReceiveRelayEntriesValue(
       relayEntries,
-      directMessageReceiveRelayEntries
+      directMessageReceiveRelayEntries,
     );
 
     return {
@@ -254,7 +268,7 @@ export function createContactRelayRuntime({
 
   async function refreshContactRelayList(
     pubkeyHex: string,
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<ContactRelay[] | null> {
     const normalizedPubkey = inputSanitizerService.normalizeHexKey(pubkeyHex);
     if (!normalizedPubkey) {
@@ -285,6 +299,7 @@ export function createContactRelayRuntime({
       });
       if (!contactMetadataEqual(existingContact.meta, nextMeta)) {
         const updatedContact = await contactsService.updateContact(existingContact.id, {
+          metaBase: existingContact.meta,
           meta: nextMeta,
         });
         if (!updatedContact) {
@@ -305,6 +320,7 @@ export function createContactRelayRuntime({
     }
 
     const updatedContact = await contactsService.updateContact(existingContact.id, {
+      metaBase: existingContact.meta,
       meta: nextMeta,
       relays: nextRelayEntries,
     });
@@ -323,14 +339,14 @@ export function createContactRelayRuntime({
     await contactsService.init();
 
     const groupContacts = (await contactsService.listContacts()).filter(
-      (contact) => contact.type === 'group'
+      (contact) => contact.type === 'group',
     );
     if (groupContacts.length === 0) {
       return;
     }
 
     const knownGroupRelayUrls = groupContacts.flatMap((contact) =>
-      inputSanitizerService.normalizeReadableRelayUrls(contact.relays)
+      inputSanitizerService.normalizeReadableRelayUrls(contact.relays),
     );
     const relayUrls = normalizeRelayStatusUrls([
       ...(await resolveLoggedInReadRelayUrls(seedRelayUrls)),
@@ -358,8 +374,24 @@ export function createContactRelayRuntime({
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
     await contactsService.init();
 
+    await chatDataService.init();
+    const contacts = await contactsService.listContacts();
+    const blocked = new Set(
+      contacts.filter((contact) => contact.meta.blocked).map((contact) => contact.public_key),
+    );
     const trackedPubkeys = new Set<string>();
-    for (const contact of await contactsService.listContacts()) {
+    for (const chat of await chatDataService.listChats()) {
+      const key = inputSanitizerService.normalizeHexKey(chat.public_key);
+      if (
+        key &&
+        key !== loggedInPubkeyHex &&
+        chat.meta.inbox_state !== 'blocked' &&
+        !blocked.has(key) &&
+        !isPubkeyBlocked(key)
+      )
+        trackedPubkeys.add(key);
+    }
+    for (const contact of contacts) {
       const normalizedPubkey = inputSanitizerService.normalizeHexKey(contact.public_key);
       if (!normalizedPubkey || normalizedPubkey === loggedInPubkeyHex) {
         continue;
@@ -405,44 +437,38 @@ export function createContactRelayRuntime({
   }
 
   async function resolvePrivateMessageReadRelayUrls(
-    seedRelayUrls: string[] = []
+    _seedRelayUrls: string[] = [],
   ): Promise<string[]> {
-    const relayUrls = await resolveLoggedInReadRelayUrls(seedRelayUrls);
-
-    await Promise.all([contactsService.init(), chatDataService.init()]);
-    const contactsByPubkey = new Map(
-      (await contactsService.listContacts())
-        .map((contact) => {
-          const normalizedPubkey = inputSanitizerService.normalizeHexKey(contact.public_key);
-          return normalizedPubkey ? ([normalizedPubkey, contact] as const) : null;
-        })
-        .filter((entry): entry is readonly [string, ContactRecord] => Boolean(entry))
-    );
-    const groupRelayUrls = (await chatDataService.listChats())
-      .filter((chat) => chat.type === 'group')
-      .flatMap((chat) => {
-        const normalizedChatPublicKey = inputSanitizerService.normalizeHexKey(chat.public_key);
-        if (!normalizedChatPublicKey) {
-          return [];
-        }
-
-        return inputSanitizerService.normalizeReadableRelayUrls(
-          contactsByPubkey.get(normalizedChatPublicKey)?.relays
-        );
-      });
-
-    return normalizeRelayStatusUrls([...relayUrls, ...groupRelayUrls]);
+    relayStore.init();
+    const configured = relayStore.relayEntries
+      ? inputSanitizerService.normalizeReadableRelayUrls(relayStore.relayEntries)
+      : getAppRelayUrls();
+    const owner = getLoggedInPublicKeyHex();
+    if (!owner) return configured;
+    await contactsService.init();
+    const own = await contactsService.getContactByPublicKey(owner);
+    // Match Amethyst's receive sources: own DM inbox, own NIP-65 inbox,
+    // private storage and locally configured read relays. Contact/group discovery
+    // seeds are metadata lookup hints, never permission to widen the DM inbox.
+    return normalizeRelayStatusUrls([
+      ...inputSanitizerService.normalizeReadableRelayUrls(own?.meta?.dm_receive_relay_entries),
+      ...inputSanitizerService.normalizeReadableRelayUrls(
+        own?.meta?.general_relay_entries ?? own?.relays,
+      ),
+      ...privateStorageRelayService.urls(owner),
+      ...configured,
+    ]);
   }
 
   async function resolveTrackedContactReadRelayUrls(
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<string[]> {
     return resolveLoggedInReadRelayUrls(seedRelayUrls);
   }
 
   async function resolveContactRelayListReadRelayUrls(
     pubkeyHex: string,
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<string[]> {
     const normalizedPubkey = inputSanitizerService.normalizeHexKey(pubkeyHex);
     if (!normalizedPubkey) {
@@ -460,7 +486,7 @@ export function createContactRelayRuntime({
 
   async function resolveContactProfileReadRelayUrls(
     pubkeyHex: string,
-    options: ContactProfileFetchOptions = {}
+    options: ContactProfileFetchOptions = {},
   ): Promise<string[]> {
     const normalizedPubkey = inputSanitizerService.normalizeHexKey(pubkeyHex);
     if (!normalizedPubkey) {
@@ -468,7 +494,7 @@ export function createContactRelayRuntime({
     }
 
     const explicitRelayUrls = inputSanitizerService.normalizeReadableRelayUrls(
-      options.relayEntries
+      options.relayEntries,
     );
     if (options.onlyExplicitRelayEntries) {
       return normalizeRelayStatusUrls(explicitRelayUrls);
@@ -486,7 +512,7 @@ export function createContactRelayRuntime({
 
   function resolveGroupPublishRelayUrls(
     relays: ContactRelay[] | undefined,
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): string[] {
     return resolveGroupPublishRelayUrlsValue(relays, seedRelayUrls);
   }
@@ -511,13 +537,13 @@ export function createContactRelayRuntime({
   }
 
   async function resolvePrivateContactListReadRelayUrls(
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<string[]> {
     return resolveLoggedInReadRelayUrls(seedRelayUrls);
   }
 
   async function resolvePrivateContactListPublishRelayUrls(
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<string[]> {
     return resolveLoggedInPublishRelayUrls(seedRelayUrls);
   }
@@ -537,7 +563,7 @@ export function createContactRelayRuntime({
     const normalizedBlockedPubkeys = normalizeUniquePubkeys(blockedPubkeys);
     const blockedPubkeySet = new Set(normalizedBlockedPubkeys);
     const normalizedMutedPubkeys = normalizeUniquePubkeys(mutedPubkeys).filter(
-      (pubkey) => !blockedPubkeySet.has(pubkey)
+      (pubkey) => !blockedPubkeySet.has(pubkey),
     );
 
     return [
@@ -609,7 +635,7 @@ export function createContactRelayRuntime({
     };
   }
 
-  function parseContactProfileEvent(event: Pick<NDKEvent, 'content'>): NDKUserProfile | null {
+  function parseContactProfileEvent(event: Pick<ClientEvent, 'content'>): NostrUserProfile | null {
     const content = event.content?.trim() ?? '';
     if (!content) {
       return null;
@@ -617,14 +643,14 @@ export function createContactRelayRuntime({
 
     try {
       const parsed = JSON.parse(content);
-      return isPlainRecord(parsed) ? (parsed as NDKUserProfile) : null;
+      return isPlainRecord(parsed) ? (parsed as NostrUserProfile) : null;
     } catch {
       return null;
     }
   }
 
   function extractContactProfileEventStateFromProfile(
-    profile: NDKUserProfile | null
+    profile: NostrUserProfile | null,
   ): ContactProfileEventState | null {
     const rawProfileEvent = profile?.profileEvent;
     if (typeof rawProfileEvent !== 'string' || !rawProfileEvent.trim()) {
@@ -650,7 +676,7 @@ export function createContactRelayRuntime({
   }
 
   function buildContactRelayListEventState(
-    event: Pick<NDKEvent, 'created_at' | 'id'>
+    event: Pick<ClientEvent, 'created_at' | 'id'>,
   ): ContactRelayListEventState {
     return {
       createdAt: Number(event.created_at ?? 0),
@@ -659,7 +685,7 @@ export function createContactRelayRuntime({
   }
 
   function buildContactProfileEventState(
-    event: Pick<NDKEvent, 'created_at' | 'id'>
+    event: Pick<ClientEvent, 'created_at' | 'id'>,
   ): ContactProfileEventState {
     return {
       createdAt: Number(event.created_at ?? 0),

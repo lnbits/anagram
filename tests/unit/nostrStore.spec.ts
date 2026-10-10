@@ -1,4 +1,4 @@
-import { __nostrStoreTestUtils } from 'src/stores/nostr/testUtils';
+import { __nostrStoreTestUtils } from '#src/stores/nostr/testUtils.ts';
 import { describe, expect, it } from 'vitest';
 
 const {
@@ -57,8 +57,8 @@ describe('nostrStore logic', () => {
     expect(
       steps.every(
         (step) =>
-          step.startedAt === null && step.completedAt === null && step.internalTasks.length === 0
-      )
+          step.startedAt === null && step.completedAt === null && step.internalTasks.length === 0,
+      ),
     ).toBe(true);
   });
 
@@ -104,8 +104,8 @@ describe('nostrStore logic', () => {
           durationMs: null,
         },
         new Error('restore failed'),
-        55
-      )
+        55,
+      ),
     ).toMatchObject({
       status: 'error',
       startedAt: 30,
@@ -122,9 +122,9 @@ describe('nostrStore logic', () => {
       resolvePrivateMessagesLiveReconnectSince({
         liveCoverageAt: 1_700_200_000,
         lastEventTime: 1_600_000_000,
-        startupFloorSince: 1_500_000_000,
+        initialLiveSince: 1_500_000_000,
         lookbackSeconds: 2 * 24 * 60 * 60,
-      })
+      }),
     ).toBe(1_700_200_000 - 2 * 24 * 60 * 60);
   });
 
@@ -133,20 +133,20 @@ describe('nostrStore logic', () => {
       resolvePrivateMessagesLiveReconnectSince({
         liveCoverageAt: null,
         lastEventTime: 1_700_100_000,
-        startupFloorSince: 1_500_000_000,
+        initialLiveSince: 1_500_000_000,
         lookbackSeconds: 2 * 24 * 60 * 60,
-      })
+      }),
     ).toBe(1_700_100_000 - 2 * 24 * 60 * 60);
   });
 
-  it('falls back to the startup floor for live reconnects without coverage or events', () => {
+  it('falls back to the initial live window for live reconnects without coverage or events', () => {
     expect(
       resolvePrivateMessagesLiveReconnectSince({
         liveCoverageAt: null,
         lastEventTime: null,
-        startupFloorSince: 1_500_000_000,
+        initialLiveSince: 1_500_000_000,
         lookbackSeconds: 2 * 24 * 60 * 60,
-      })
+      }),
     ).toBe(1_500_000_000);
   });
 
@@ -174,8 +174,9 @@ describe('nostrStore logic', () => {
           epoch_public_key: EPOCH_KEY_A,
           epoch_private_key_encrypted: 'bad',
         },
-      ])
+      ]),
     ).toEqual([
+      { epoch_number: 1, epoch_public_key: EPOCH_KEY_A, epoch_private_key_encrypted: 'enc-1' },
       {
         epoch_number: 1,
         epoch_public_key: EPOCH_KEY_C,
@@ -211,7 +212,7 @@ describe('nostrStore logic', () => {
     };
 
     expect(
-      resolveGroupChatEpochEntries(groupChat as never).map((entry) => entry.epoch_number)
+      resolveGroupChatEpochEntries(groupChat as never).map((entry) => entry.epoch_number),
     ).toEqual([2, 1]);
     expect(resolveCurrentGroupChatEpochEntry(groupChat as never)).toMatchObject({
       epoch_number: 1,
@@ -221,15 +222,15 @@ describe('nostrStore logic', () => {
 
   it('normalizes startup relay urls and writable relay entries for relay restore/edit flows', () => {
     expect(
-      normalizeRelayStatusUrls([' ws://relay.example ', 'ws://relay.example/', '', 'not-a-relay'])
-    ).toEqual(['ws://relay.example/', 'http://not-a-relay/']);
+      normalizeRelayStatusUrls([' ws://relay.example ', 'ws://relay.example/', '', 'not-a-relay']),
+    ).toEqual(['ws://relay.example/']);
 
     expect(
       normalizeWritableRelayUrls([
         { url: 'wss://write.example', read: true, write: true },
         { url: 'wss://read-only.example', read: true, write: false },
         { url: 'invalid relay', read: true, write: true },
-      ] as never)
+      ] as never),
     ).toEqual(['wss://write.example/']);
   });
 
@@ -239,7 +240,7 @@ describe('nostrStore logic', () => {
         meta: {
           private_contact_list_member: true,
         },
-      } as never)
+      } as never),
     ).toBe(true);
 
     expect(
@@ -247,7 +248,7 @@ describe('nostrStore logic', () => {
         meta: {
           private_contact_list_member: false,
         },
-      } as never)
+      } as never),
     ).toBe(false);
 
     expect(isContactListedInPrivateContactList(null)).toBe(false);
@@ -269,7 +270,7 @@ describe('nostrStore logic', () => {
       },
     } as never);
 
-    expect(epochEntries[0]).toMatchObject({
+    expect(epochEntries.find((entry) => entry.epoch_public_key === EPOCH_KEY_C)).toMatchObject({
       epoch_number: 1,
       epoch_public_key: EPOCH_KEY_C,
       epoch_private_key_encrypted: 'enc-current',
@@ -298,7 +299,7 @@ describe('nostrStore logic', () => {
         },
       } as never,
       0,
-      '2026-01-03T00:00:00.000Z'
+      '2026-01-03T00:00:00.000Z',
     );
 
     expect(conflict).toMatchObject({
@@ -311,6 +312,28 @@ describe('nostrStore logic', () => {
         epoch_public_key: EPOCH_KEY_B,
       },
     });
+  });
+
+  it('keeps historical group messages in the rotation second but rejects later old-epoch messages', () => {
+    const chat = {
+      type: 'group',
+      meta: {
+        group_epoch_keys: [
+          {
+            epoch_number: 1,
+            epoch_public_key: EPOCH_KEY_B,
+            epoch_private_key_encrypted: 'enc-1',
+            invitation_created_at: '2026-01-02T00:00:00.000Z',
+          },
+        ],
+      },
+    } as never;
+    expect(
+      findHigherKnownGroupEpochConflict(chat, 0, '2026-01-02T00:00:00.000Z')?.olderHigherEpochEntry,
+    ).toBeNull();
+    expect(
+      findHigherKnownGroupEpochConflict(chat, 0, '2026-01-02T00:00:01.000Z')?.olderHigherEpochEntry,
+    ).not.toBeNull();
   });
 
   it('picks the first timestamped higher epoch when an incoming invite has no created-at value', () => {
@@ -340,7 +363,7 @@ describe('nostrStore logic', () => {
         },
       } as never,
       0,
-      null
+      null,
     );
 
     expect(conflict).toMatchObject({
@@ -371,8 +394,8 @@ describe('nostrStore logic', () => {
           },
         } as never,
         3,
-        EPOCH_KEY_B
-      )
+        EPOCH_KEY_B,
+      ),
     ).toMatchObject({
       epoch_number: 3,
       epoch_public_key: EPOCH_KEY_A,
@@ -395,8 +418,8 @@ describe('nostrStore logic', () => {
           },
         } as never,
         3,
-        EPOCH_KEY_A
-      )
+        EPOCH_KEY_A,
+      ),
     ).toBeNull();
   });
 
@@ -412,16 +435,18 @@ describe('nostrStore logic', () => {
           about: 'Updated bio',
           picture: 'https://example.com/new.png',
           display_name: 'Alice Cooper',
+          birthday: { year: 1995, month: 4, day: 7 },
           bot: true,
         } as never,
         'npub1alice',
-        'nprofile1alice'
-      )
+        'nprofile1alice',
+      ),
     ).toEqual({
       name: 'Alice',
       about: 'Updated bio',
       picture: 'https://example.com/new.png',
       display_name: 'Alice Cooper',
+      birthday: { year: 1995, month: 4, day: 7 },
       lud16: 'alice@old.example',
       bot: true,
       npub: 'npub1alice',
@@ -435,7 +460,7 @@ describe('nostrStore logic', () => {
         nip05: 'alice@example.com',
         npub: 'npub1alice',
         nprofile: 'nprofile1alice',
-      } as never)
+      } as never),
     ).toEqual(['alice@example.com', 'npub1alice', 'f'.repeat(64), 'nprofile1alice']);
 
     expect(
@@ -444,8 +469,8 @@ describe('nostrStore logic', () => {
           { url: 'wss://relay.example', read: true, write: false },
           { url: 'wss://relay.example/', read: false, write: true },
         ] as never,
-        [{ url: 'wss://relay.example/', read: true, write: true }] as never
-      )
+        [{ url: 'wss://relay.example/', read: true, write: true }] as never,
+      ),
     ).toBe(true);
 
     expect(
@@ -457,8 +482,8 @@ describe('nostrStore logic', () => {
         {
           name: 'Alice',
           owner_public_key: 'a'.repeat(64),
-        } as never
-      )
+        } as never,
+      ),
     ).toBe(true);
   });
 
@@ -470,8 +495,8 @@ describe('nostrStore logic', () => {
           public_key: 'group',
           relays: [{ url: 'wss://relay.example/', read: true, write: true }],
         } as never,
-        []
-      )
+        [],
+      ),
     ).toBe(true);
 
     expect(
@@ -481,8 +506,8 @@ describe('nostrStore logic', () => {
           public_key: 'user',
           relays: [{ url: 'wss://relay.example/', read: true, write: true }],
         } as never,
-        []
-      )
+        [],
+      ),
     ).toBe(false);
   });
 
@@ -495,7 +520,7 @@ describe('nostrStore logic', () => {
           },
         } as never,
         isAcceptedContact: false,
-      })
+      }),
     ).toBe('blocked');
 
     expect(
@@ -506,7 +531,7 @@ describe('nostrStore logic', () => {
           },
         } as never,
         isAcceptedContact: false,
-      })
+      }),
     ).toBe('accepted');
 
     expect(
@@ -515,7 +540,7 @@ describe('nostrStore logic', () => {
           meta: {},
         } as never,
         isAcceptedContact: false,
-      })
+      }),
     ).toBe('request');
   });
 
@@ -529,7 +554,7 @@ describe('nostrStore logic', () => {
           },
         } as never,
         isAcceptedContact: false,
-      })
+      }),
     ).toBe('accepted');
   });
 
@@ -540,7 +565,7 @@ describe('nostrStore logic', () => {
           meta: {},
         } as never,
         isAcceptedContact: true,
-      })
+      }),
     ).toBe('accepted');
   });
 
@@ -557,7 +582,7 @@ describe('nostrStore logic', () => {
             picture: 'https://example.com/group.png',
           },
         } as never,
-      })
+      }),
     ).toMatchObject({
       shouldCreate: true,
       nextName: 'Group Preview',
@@ -583,7 +608,7 @@ describe('nostrStore logic', () => {
           },
         } as never,
         preview: null,
-      })
+      }),
     ).toBeNull();
   });
 
@@ -607,7 +632,7 @@ describe('nostrStore logic', () => {
             picture: 'https://example.com/preview.png',
           },
         } as never,
-      })
+      }),
     ).toMatchObject({
       shouldCreate: false,
       nextName: 'Preview Display',
@@ -640,7 +665,7 @@ describe('nostrStore logic', () => {
           },
         } as never,
         acceptedAt: '2026-01-08T00:00:00.000Z',
-      })
+      }),
     ).toEqual({
       nextName: 'Accepted Group',
       nextMeta: {
@@ -666,7 +691,7 @@ describe('nostrStore logic', () => {
           },
         } as never,
         acceptedAt: '2026-01-09T00:00:00.000Z',
-      })
+      }),
     ).toEqual({
       nextName: 'Fresh Group',
       nextMeta: {
@@ -703,7 +728,7 @@ describe('nostrStore logic', () => {
           meta: firstPlan?.nextMeta ?? {},
         } as never,
         acceptedAt: '2026-01-12T00:00:00.000Z',
-      })
+      }),
     ).toEqual(firstPlan);
   });
 
@@ -731,7 +756,7 @@ describe('nostrStore logic', () => {
           },
         } as never,
         acceptedAt: '2026-01-14T00:00:00.000Z',
-      })
+      }),
     ).toEqual({
       nextName: 'Upgraded Group',
       nextMeta: {
@@ -759,8 +784,8 @@ describe('nostrStore logic', () => {
           { url: 'wss://group-write.example', read: true, write: true },
           { url: 'wss://group-read-only.example', read: true, write: false },
         ],
-        ['wss://seed.example', 'wss://group-write.example/']
-      )
+        ['wss://seed.example', 'wss://group-write.example/'],
+      ),
     ).toEqual(['wss://seed.example/', 'wss://group-write.example/']);
   });
 
@@ -770,7 +795,7 @@ describe('nostrStore logic', () => {
         readRelayUrls: new Set(['wss://read.example']),
         writeRelayUrls: new Set(['wss://write.example']),
         bothRelayUrls: new Set(['wss://both.example']),
-      } as never)
+      } as never),
     ).toEqual([
       { url: 'wss://read.example/', read: true, write: false },
       { url: 'wss://write.example/', read: false, write: true },

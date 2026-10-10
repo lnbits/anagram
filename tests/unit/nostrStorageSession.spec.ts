@@ -1,18 +1,16 @@
-import NDK, { NDKPrivateKeySigner } from '@nostr-dev-kit/ndk';
+import NostrClient, { NostrPrivateKeySigner } from '#src/lib/nostr/client.ts';
 import {
   CONTACT_CURSOR_VERSION,
   EVENT_FILTER_LOOKBACK_SECONDS,
   EVENT_SINCE_STORAGE_KEY,
-  PRIVATE_MESSAGES_BACKFILL_INITIAL_DELAY_MS,
-  PRIVATE_MESSAGES_BACKFILL_MAX_DELAY_MS,
   PRIVATE_MESSAGES_BACKFILL_STATE_STORAGE_KEY,
   PRIVATE_MESSAGES_LAST_RECEIVED_EVENT_STORAGE_KEY,
   PRIVATE_MESSAGES_STARTUP_LIVE_LOOKBACK_SECONDS,
   PRIVATE_PREFERENCES_STORAGE_KEY,
-} from 'src/stores/nostr/constants';
-import { createStorageSessionRuntime } from 'src/stores/nostr/storageSession';
+} from '#src/stores/nostr/constants.ts';
+import { createStorageSessionRuntime } from '#src/stores/nostr/storageSession.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ref } from 'vue';
+import { ref } from '#src/lib/state/reactivity.ts';
 
 const PUBKEY_A = 'a'.repeat(64);
 const EVENT_ID_A = 'b'.repeat(64);
@@ -38,11 +36,11 @@ function createMockStorage(initial: Record<string, string> = {}) {
 }
 
 function createRuntimeHarness() {
-  const ndk = new NDK();
+  const ndk = new NostrClient();
   const signer = {
     encrypt: vi.fn(async (_user, content: string) => `enc:${content}`),
     decrypt: vi.fn(async (_user, content: string) =>
-      content.startsWith('enc:') ? content.slice(4) : content
+      content.startsWith('enc:') ? content.slice(4) : content,
     ),
   };
   ndk.assertSigner = vi.fn();
@@ -101,7 +99,7 @@ describe('storageSession runtime', () => {
     }
   });
 
-  it('persists eventSince, message timestamps, and backfill resume state', () => {
+  it('persists event cursors and message timestamps', () => {
     const localStorage = createMockStorage();
     (globalThis as Record<string, unknown>).window = {
       localStorage: localStorage.api,
@@ -119,61 +117,15 @@ describe('storageSession runtime', () => {
     runtime.updateStoredPrivateMessagesLastReceivedFromCreatedAt(1200);
     runtime.updateStoredPrivateMessagesLastReceivedFromCreatedAt(1100);
     expect(runtime.readStoredPrivateMessagesLastReceivedCreatedAt()).toBe(1200);
-    expect(runtime.getPrivateMessagesStartupFloorSince(10_000)).toBe(
-      Math.max(0, 10_000 - 21 * 86400)
-    );
     expect(runtime.getPrivateMessagesStartupLiveSince(10_000)).toBe(
-      Math.max(
-        Math.max(0, 10_000 - 21 * 86400),
-        1200 - PRIVATE_MESSAGES_STARTUP_LIVE_LOOKBACK_SECONDS
-      )
+      Math.max(0, 1200 - PRIVATE_MESSAGES_STARTUP_LIVE_LOOKBACK_SECONDS),
     );
     expect(runtime.getPrivateMessagesEpochSwitchSince(10_000)).toBe(
-      Math.min(runtime.getFilterSince(), runtime.getPrivateMessagesStartupLiveSince(10_000))
+      Math.min(runtime.getFilterSince(), runtime.getPrivateMessagesStartupLiveSince(10_000)),
     );
-
-    runtime.writePrivateMessagesBackfillState({
-      pubkey: PUBKEY_A,
-      nextSince: 10,
-      nextUntil: 20,
-      floorSince: 5,
-      delayMs: PRIVATE_MESSAGES_BACKFILL_MAX_DELAY_MS * 2,
-      completed: false,
-    });
-    expect(runtime.readPrivateMessagesBackfillState()).toEqual({
-      pubkey: PUBKEY_A,
-      nextSince: 10,
-      nextUntil: 20,
-      floorSince: 5,
-      delayMs: PRIVATE_MESSAGES_BACKFILL_MAX_DELAY_MS,
-      completed: false,
-    });
-    expect(runtime.getPrivateMessagesBackfillResumeState(PUBKEY_A, 40, 15)).toEqual({
-      pubkey: PUBKEY_A,
-      nextSince: 15,
-      nextUntil: 20,
-      floorSince: 15,
-      delayMs: PRIVATE_MESSAGES_BACKFILL_MAX_DELAY_MS,
-      completed: false,
-    });
-
-    localStorage.store.set(
-      PRIVATE_MESSAGES_BACKFILL_STATE_STORAGE_KEY,
-      JSON.stringify({
-        pubkey: PUBKEY_A,
-        nextSince: 2,
-        nextUntil: 3,
-        floorSince: 1,
-        delayMs: 10,
-        completed: true,
-      })
-    );
-    expect(runtime.getPrivateMessagesBackfillResumeState(PUBKEY_A, 40, 1)).toBeNull();
 
     runtime.clearStoredPrivateMessagesLastReceivedCreatedAt();
-    runtime.clearPrivateMessagesBackfillState();
     expect(runtime.readStoredPrivateMessagesLastReceivedCreatedAt()).toBeNull();
-    expect(runtime.readPrivateMessagesBackfillState()).toBeNull();
   });
 
   it('bounds the cold-start private-message live window when no event was stored', () => {
@@ -186,89 +138,22 @@ describe('storageSession runtime', () => {
     const now = PRIVATE_MESSAGES_STARTUP_LIVE_LOOKBACK_SECONDS * 2;
 
     expect(runtime.getPrivateMessagesStartupLiveSince(now)).toBe(
-      now - PRIVATE_MESSAGES_STARTUP_LIVE_LOOKBACK_SECONDS
+      now - PRIVATE_MESSAGES_STARTUP_LIVE_LOOKBACK_SECONDS,
     );
   });
 
-  it('defaults to three weeks and accepts each onboarding history duration without storing a preference', () => {
-    const localStorage = createMockStorage();
-    (globalThis as Record<string, unknown>).window = { localStorage: localStorage.api };
-    const { runtime } = createRuntimeHarness();
-    const now = 1_800_000_000;
-    expect(runtime.getPrivateMessagesStartupFloorSince(now)).toBe(now - 21 * 86400);
-
-    for (const days of [7, 14, 21, 30, 60, 90, 365]) {
-      runtime.setMessageHistoryRestoreDays(days);
-      expect(runtime.getPrivateMessagesStartupFloorSince(now)).toBe(now - days * 86400);
-    }
-    expect(localStorage.store.size).toBe(0);
-    for (const invalid of [0, -1, 22, 366, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(() => runtime.setMessageHistoryRestoreDays(invalid)).toThrow();
-    }
-  });
-
-  it('resumes the selected history boundary after reload but resets it on fresh login or logout', () => {
-    const localStorage = createMockStorage();
-    (globalThis as Record<string, unknown>).window = { localStorage: localStorage.api };
-    const { runtime } = createRuntimeHarness();
-    const now = 1_800_000_000;
-    runtime.setMessageHistoryRestoreDays(365);
-    const floorSince = runtime.getPrivateMessagesStartupFloorSince(now);
-    const checkpoint = runtime.getPrivateMessagesBackfillResumeState(
-      PUBKEY_A,
-      now - 86400,
-      floorSince
-    );
-    if (!checkpoint) throw new Error('Expected a backfill checkpoint');
-    runtime.writePrivateMessagesBackfillState(checkpoint);
-
-    const reloaded = createRuntimeHarness().runtime;
-    expect(reloaded.getPrivateMessagesStartupFloorSince(now + 60)).toBe(floorSince);
-    expect(reloaded.getPrivateMessagesBackfillResumeState(PUBKEY_A, now, floorSince)).toEqual(
-      checkpoint
-    );
-    reloaded.resetEventSinceForFreshLogin();
-    expect(reloaded.getPrivateMessagesStartupFloorSince(now)).toBe(now - 21 * 86400);
-    expect(reloaded.readPrivateMessagesBackfillState()).toBeNull();
-
-    reloaded.setMessageHistoryRestoreDays(90);
-    reloaded.clearPrivateMessagesBackfillState();
-    expect(reloaded.getPrivateMessagesStartupFloorSince(now)).toBe(now - 21 * 86400);
-  });
-
-  it('keeps newly discovered group epoch subscriptions inside the selected history window', () => {
-    const { runtime, refs } = createRuntimeHarness();
-    const now = 1_800_000_000;
-    refs.eventSince.value = now - 90 * 86400;
-    for (const days of [7, 14, 21, 30, 60]) {
-      runtime.setMessageHistoryRestoreDays(days);
-      expect(runtime.getPrivateMessagesEpochSwitchSince(now)).toBe(now - days * 86400);
-    }
-    refs.eventSince.value = now;
-    expect(runtime.getPrivateMessagesEpochSwitchSince(now)).toBe(
-      now - PRIVATE_MESSAGES_STARTUP_LIVE_LOOKBACK_SECONDS
-    );
-  });
-
-  it('replaces an earlier completed restore boundary when confirming a new duration', () => {
-    const localStorage = createMockStorage();
-    (globalThis as Record<string, unknown>).window = { localStorage: localStorage.api };
-    const { runtime } = createRuntimeHarness();
-    const now = 1_800_000_000;
-    const oldFloor = now - 7 * 86400;
-    runtime.writePrivateMessagesBackfillState({
-      pubkey: PUBKEY_A,
-      nextSince: oldFloor,
-      nextUntil: oldFloor,
-      floorSince: oldFloor,
-      delayMs: 3000,
-      completed: true,
+  it('discards obsolete duration checkpoints and exposes no duration setter', () => {
+    const localStorage = createMockStorage({
+      [PRIVATE_MESSAGES_BACKFILL_STATE_STORAGE_KEY]: JSON.stringify({
+        floorSince: 1799900000,
+        completed: true,
+      }),
     });
-    runtime.setMessageHistoryRestoreDays(90);
-    const floorSince = runtime.getPrivateMessagesStartupFloorSince(now);
-    expect(
-      runtime.getPrivateMessagesBackfillResumeState(PUBKEY_A, now - 2 * 86400, floorSince)
-    ).toMatchObject({ floorSince: now - 90 * 86400, completed: false });
+    (globalThis as Record<string, unknown>).window = { localStorage: localStorage.api };
+    const { runtime } = createRuntimeHarness();
+    expect(localStorage.store.has(PRIVATE_MESSAGES_BACKFILL_STATE_STORAGE_KEY)).toBe(false);
+    expect('setMessageHistoryRestoreDays' in runtime).toBe(false);
+    expect('getPrivateMessagesStartupFloorSince' in runtime).toBe(false);
   });
 
   it('buffers eventSince updates during startup restore and resets storage on fresh login', () => {
@@ -280,7 +165,7 @@ describe('storageSession runtime', () => {
         nextSince: 10,
         nextUntil: 20,
         floorSince: 5,
-        delayMs: PRIVATE_MESSAGES_BACKFILL_INITIAL_DELAY_MS,
+        delayMs: 3000,
         completed: false,
       }),
     });
@@ -307,7 +192,7 @@ describe('storageSession runtime', () => {
     expect(pendingEventSinceState.pendingEventSinceUpdate).toBe(0);
     expect(localStorage.store.get(EVENT_SINCE_STORAGE_KEY)).toBeUndefined();
     expect(
-      localStorage.store.get(PRIVATE_MESSAGES_LAST_RECEIVED_EVENT_STORAGE_KEY)
+      localStorage.store.get(PRIVATE_MESSAGES_LAST_RECEIVED_EVENT_STORAGE_KEY),
     ).toBeUndefined();
     expect(localStorage.store.get(PRIVATE_MESSAGES_BACKFILL_STATE_STORAGE_KEY)).toBeUndefined();
   });
@@ -319,12 +204,12 @@ describe('storageSession runtime', () => {
     };
 
     const { ndk, runtime } = createRuntimeHarness();
-    const groupPrivateKey = NDKPrivateKeySigner.generate().privateKey;
-    const groupPubkey = new NDKPrivateKeySigner(groupPrivateKey).pubkey;
-    const epochPrivateKey = NDKPrivateKeySigner.generate().privateKey;
+    const groupPrivateKey = NostrPrivateKeySigner.generate().privateKey;
+    const groupPubkey = new NostrPrivateKeySigner(groupPrivateKey).pubkey;
+    const epochPrivateKey = NostrPrivateKeySigner.generate().privateKey;
 
     expect(runtime.normalizeTimestamp(' 2026-01-01T00:00:00.000Z ')).toBe(
-      '2026-01-01T00:00:00.000Z'
+      '2026-01-01T00:00:00.000Z',
     );
     expect(runtime.toComparableTimestamp('2026-01-01T00:00:00.000Z')).toBeGreaterThan(0);
 
@@ -361,7 +246,7 @@ describe('storageSession runtime', () => {
       JSON.stringify({
         contactSecret: groupPrivateKey,
         blossomServerUrl: 'http://insecure.example.com',
-      })
+      }),
     );
     expect(runtime.readPrivatePreferencesFromStorage()).toEqual({
       contactSecret: groupPrivateKey,
@@ -377,7 +262,7 @@ describe('storageSession runtime', () => {
         version: CONTACT_CURSOR_VERSION,
         last_seen_incoming_activity_at: cursor.at,
         last_seen_incoming_activity_event_id: cursor.eventId,
-      })}`
+      })}`,
     );
     expect(await runtime.decryptContactCursorContent(encryptedCursor)).toEqual({
       version: CONTACT_CURSOR_VERSION,
@@ -416,13 +301,13 @@ describe('storageSession runtime', () => {
     });
 
     const encryptedPrivateString = await runtime.encryptPrivateStringContent(
-      ` ${groupPrivateKey} `
+      ` ${groupPrivateKey} `,
     );
     expect(encryptedPrivateString).toBe(`enc:${groupPrivateKey}`);
     expect(await runtime.decryptPrivateStringContent(encryptedPrivateString)).toBe(groupPrivateKey);
     expect(await runtime.decryptPrivateStringContent('')).toBeNull();
     expect(await runtime.sha256Hex('sample')).toBe(
-      'af2bdbe1aa9b6ec1e2ade1d694f41fc71a831d0268e9891562113d8a62add1bf'
+      'af2bdbe1aa9b6ec1e2ade1d694f41fc71a831d0268e9891562113d8a62add1bf',
     );
 
     runtime.clearPrivatePreferencesStorage();

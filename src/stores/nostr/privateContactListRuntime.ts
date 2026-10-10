@@ -1,22 +1,22 @@
-import NDK, {
-  NDKEvent,
-  type NDKFilter,
-  NDKKind,
-  NDKRelaySet,
-  NDKSubscriptionCacheUsage,
-  type NDKSubscriptionOptions,
-  type NDKUser,
-} from '@nostr-dev-kit/ndk';
-import { type ChatRow, chatDataService, type MessageRow } from 'src/services/chatDataService';
-import { contactsService } from 'src/services/contactsService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { PRIVATE_CONTACT_LIST_D_TAG, PRIVATE_CONTACT_LIST_TITLE } from 'src/stores/nostr/constants';
+import NostrClient, {
+  ClientEvent,
+  type NostrFilter,
+  NostrKind,
+  NostrRelaySet,
+  NostrSubscriptionCacheUsage,
+  type NostrSubscriptionOptions,
+  type NostrUser,
+} from '#src/lib/nostr/client.ts';
+import { type ChatRow, chatDataService, type MessageRow } from '#src/services/chatDataService.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { PRIVATE_CONTACT_LIST_D_TAG, PRIVATE_CONTACT_LIST_TITLE } from '#src/stores/nostr/constants.ts';
 import {
   createDesiredSubscriptions,
   subscriptionSignature,
-} from 'src/stores/nostr/desiredSubscriptions';
-import { createReadyRelaySet, fetchEventWithRelayTimeout } from 'src/stores/nostr/relayQueryUtils';
-import type { Ref } from 'vue';
+} from '#src/stores/nostr/desiredSubscriptions.ts';
+import { createReadyRelaySet, fetchEventWithRelayTimeout } from '#src/stores/nostr/relayQueryUtils.ts';
+import type { Ref } from '#src/lib/state/reactivity.ts';
 
 interface PrivateContactListTarget {
   publicKey: string;
@@ -29,7 +29,7 @@ interface PrivateContactListRuntimeDeps {
   bumpContactListVersion: () => void;
   buildPrivateContactListTags: (pubkeys: string[]) => string[][];
   buildSubscriptionEventDetails: (
-    event: Pick<NDKEvent, 'id' | 'kind' | 'created_at' | 'pubkey'>
+    event: Pick<ClientEvent, 'id' | 'kind' | 'created_at' | 'pubkey'>
   ) => Record<string, unknown>;
   buildSubscriptionRelayDetails: (relayUrls: string[]) => Record<string, unknown>;
   chatStore: { init: () => Promise<void> };
@@ -52,16 +52,16 @@ interface PrivateContactListRuntimeDeps {
     didChange: boolean;
   }>;
   ensureRelayConnections: (relayUrls: string[]) => Promise<void>;
-  extractRelayUrlsFromEvent: (event: NDKEvent) => string[];
+  extractRelayUrlsFromEvent: (event: ClientEvent) => string[];
   failStartupStep: (stepId: 'private-contact-list', error: unknown) => void;
   formatSubscriptionLogValue: (value: string | null | undefined) => string | null;
   getLoggedInPublicKeyHex: () => string | null;
-  getLoggedInSignerUser: () => Promise<NDKUser>;
+  getLoggedInSignerUser: () => Promise<NostrUser>;
   getStartupStepSnapshot: (stepId: 'private-contact-list') => { status: string };
   isRestoringStartupState: Ref<boolean>;
   logSubscription: (label: string, stage: string, details?: Record<string, unknown>) => void;
-  markPrivateContactListEventApplied: (event: Pick<NDKEvent, 'created_at' | 'id'>) => void;
-  ndk: NDK;
+  markPrivateContactListEventApplied: (event: Pick<ClientEvent, 'created_at' | 'id'>) => void;
+  ndk: NostrClient;
   queueTrackedContactSubscriptionsRefresh: (seedRelayUrls?: string[], force?: boolean) => void;
   reconcileAcceptedChatFromPrivateContactList: (contactPublicKey: string) => Promise<void>;
   refreshContactByPublicKey: (
@@ -72,18 +72,18 @@ interface PrivateContactListRuntimeDeps {
   relaySignature: (relays: string[]) => string;
   resolvePrivateContactListPublishRelayUrls: (seedRelayUrls?: string[]) => Promise<string[]>;
   resolvePrivateContactListReadRelayUrls: (seedRelayUrls?: string[]) => Promise<string[]>;
-  shouldApplyPrivateContactListEvent: (event: NDKEvent) => boolean;
+  shouldApplyPrivateContactListEvent: (event: ClientEvent) => boolean;
   subscribeWithReqLogging: (
     label: string,
     requestLabel: string,
-    filters: NDKFilter | NDKFilter[],
-    options: NDKSubscriptionOptions & {
-      onEvent?: (event: NDKEvent) => void;
+    filters: NostrFilter | NostrFilter[],
+    options: NostrSubscriptionOptions & {
+      onEvent?: (event: ClientEvent) => void;
       onEose?: () => void;
       onClose?: () => void;
     },
     details?: Record<string, unknown>
-  ) => ReturnType<NDK['subscribe']>;
+  ) => ReturnType<NostrClient['subscribe']>;
   updateStoredEventSinceFromCreatedAt: (value: unknown) => void;
   updateStartupStep: (
     stepId: 'private-contact-list-restore',
@@ -121,7 +121,7 @@ export function createPrivateContactListRuntime({
   updateStartupStep,
 }: PrivateContactListRuntimeDeps) {
   let restorePrivateContactListPromise: Promise<void> | null = null;
-  let privateContactListSubscription: ReturnType<NDK['subscribe']> | null = null;
+  let privateContactListSubscription: ReturnType<NostrClient['subscribe']> | null = null;
   let privateContactListSubscriptionSignature = '';
   const desiredSubscriptions = createDesiredSubscriptions();
   let generation = 0;
@@ -348,7 +348,7 @@ export function createPrivateContactListRuntime({
   }
 
   async function applyPrivateContactListEventWithOutgoingTargets(
-    event: NDKEvent,
+    event: ClientEvent,
     outgoingTargets: PrivateContactListTarget[],
     seedRelayUrls: string[] = []
   ): Promise<void> {
@@ -374,7 +374,7 @@ export function createPrivateContactListRuntime({
     }
   }
 
-  async function applyPrivateContactListEvent(event: NDKEvent): Promise<void> {
+  async function applyPrivateContactListEvent(event: ClientEvent): Promise<void> {
     if (!shouldApplyPrivateContactListEvent(event)) {
       return;
     }
@@ -385,7 +385,7 @@ export function createPrivateContactListRuntime({
     markPrivateContactListEventApplied(event);
   }
 
-  function queuePrivateContactListEventApplication(event: NDKEvent): void {
+  function queuePrivateContactListEventApplication(event: ClientEvent): void {
     const runGeneration = generation;
     privateContactListApplyQueue = privateContactListApplyQueue
       .then(() => {
@@ -417,8 +417,8 @@ export function createPrivateContactListRuntime({
         .filter((pubkey): pubkey is string => Boolean(pubkey) && pubkey !== loggedInPubkeyHex);
       const user = await getLoggedInSignerUser();
 
-      const listEvent = new NDKEvent(ndk, {
-        kind: NDKKind.FollowSet,
+      const listEvent = new ClientEvent(ndk, {
+        kind: NostrKind.FollowSet,
         created_at: Math.floor(Date.now() / 1000),
         pubkey: user.pubkey,
         content: await encryptPrivateContactListTags(buildPrivateContactListTags(pubkeys)),
@@ -428,7 +428,7 @@ export function createPrivateContactListRuntime({
         ],
       });
 
-      const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
+      const relaySet = NostrRelaySet.fromRelayUrls(relayUrls, ndk, false);
       await listEvent.publishReplaceable(relaySet);
       updateStoredEventSinceFromCreatedAt(listEvent.created_at);
       markPrivateContactListEventApplied(listEvent);
@@ -447,7 +447,7 @@ export function createPrivateContactListRuntime({
 
     const outgoingTargets = await listOutgoingMessageContactTargets();
     const relayUrls = await resolvePrivateContactListReadRelayUrls(seedRelayUrls);
-    let listEvent: NDKEvent | null = null;
+    let listEvent: ClientEvent | null = null;
 
     if (relayUrls.length > 0) {
       await ensureRelayConnections(relayUrls);
@@ -457,20 +457,20 @@ export function createPrivateContactListRuntime({
       const fetchedEvent = await fetchEventWithRelayTimeout(
         ndk,
         {
-          kinds: [NDKKind.FollowSet],
+          kinds: [NostrKind.FollowSet],
           authors: [loggedInPubkeyHex],
           '#d': [PRIVATE_CONTACT_LIST_D_TAG],
         },
         {
-          cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+          cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
         },
         relaySet
       );
       listEvent =
-        fetchedEvent instanceof NDKEvent
+        fetchedEvent instanceof ClientEvent
           ? fetchedEvent
           : fetchedEvent
-            ? new NDKEvent(ndk, fetchedEvent)
+            ? new ClientEvent(ndk, fetchedEvent)
             : null;
     }
 
@@ -540,8 +540,8 @@ export function createPrivateContactListRuntime({
       desiredSubscriptions.stop();
       return;
     }
-    const filters: NDKFilter = {
-      kinds: [NDKKind.FollowSet],
+    const filters: NostrFilter = {
+      kinds: [NostrKind.FollowSet],
       authors: [pubkey],
       '#d': [PRIVATE_CONTACT_LIST_D_TAG],
     };
@@ -562,11 +562,11 @@ export function createPrivateContactListRuntime({
             'private-contact-list',
             filters,
             {
-              relaySet: NDKRelaySet.fromRelayUrls(relayUrls, ndk, false),
-              cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+              relaySet: NostrRelaySet.fromRelayUrls(relayUrls, ndk, false),
+              cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
               onEvent: (event) => {
                 if (runGeneration !== generation || pubkey !== getLoggedInPublicKeyHex()) return;
-                const wrappedEvent = event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
+                const wrappedEvent = event instanceof ClientEvent ? event : new ClientEvent(ndk, event);
                 updateStoredEventSinceFromCreatedAt(wrappedEvent.created_at);
                 queuePrivateContactListEventApplication(wrappedEvent);
               },

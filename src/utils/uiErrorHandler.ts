@@ -1,10 +1,11 @@
-import { Notify } from 'quasar';
+import { diagnosticText } from '#src/utils/diagnosticExport.ts';
+import { Notify } from '#src/lib/platform/ui.ts';
 
 function resolveErrorMessage(error: unknown, fallbackMessage: string): string {
-  if (error instanceof Error) {
+  if (error instanceof Error && !(error instanceof SyntaxError)) {
     const message = error.message.trim();
     if (message) {
-      return message;
+      return diagnosticText(message);
     }
   }
 
@@ -14,9 +15,9 @@ function resolveErrorMessage(error: unknown, fallbackMessage: string): string {
 export function reportUiError(
   context: string,
   error: unknown,
-  fallbackMessage = 'Something went wrong. Please try again.'
+  fallbackMessage = 'Something went wrong. Please try again.',
 ): void {
-  console.error(context, error);
+  console.error(diagnosticText(context));
 
   Notify.create({
     type: 'negative',

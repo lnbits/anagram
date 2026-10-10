@@ -1,7 +1,0 @@
-interface:
-  display_name: "Nostr Runtime"
-  short_description: "Work safely in the Nostr runtime layer"
-  default_prompt: "Use $nostr-runtime to update session, relay, DM, or group-epoch behavior in this repo."
-
-policy:
-  allow_implicit_invocation: true

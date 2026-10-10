@@ -1,10 +1,10 @@
-import { isValidPubkey, nip19, normalizeRelayUrl } from '@nostr-dev-kit/ndk';
+import { isValidPubkey, nip19, normalizeRelayUrl } from '#src/lib/nostr/client.ts';
 import type {
   ContactBirthday,
   ContactGroupMember,
   ContactMetadata,
   ContactRelay,
-} from 'src/types/contact';
+} from '#src/types/contact.ts';
 
 export interface NpubValidationResult {
   isValid: boolean;
@@ -316,6 +316,12 @@ class InputSanitizerService {
       if (Array.isArray(value[key]))
         meta[key] = this.normalizeRelayListMetadataEntries(value[key] as ContactRelay[]);
     }
+    const pinned = this.normalizeHexKey(typeof value.pinned === 'string' ? value.pinned : '');
+    if (pinned) {
+      meta.pinned = pinned;
+      if (Number.isSafeInteger(value.pinned_created_at) && Number(value.pinned_created_at) > 0)
+        meta.pinned_created_at = Number(value.pinned_created_at);
+    }
     const name = this.readOptionalString(value.name);
     const about = this.readOptionalString(value.about);
     const picture = this.readOptionalString(value.picture);
@@ -456,6 +462,13 @@ class InputSanitizerService {
 
     if (groupPrivateKeyEncrypted) {
       meta.group_private_key_encrypted = groupPrivateKeyEncrypted;
+    }
+    if (Array.isArray(value.group_recovery_conflicts)) {
+      meta.group_recovery_conflicts = [...new Set(
+        value.group_recovery_conflicts.slice(0, 4096).filter(
+          (id): id is string => typeof id === 'string' && /^[a-f0-9]{64}$/.test(id)
+        )
+      )];
     }
 
     if (ownerPublicKey) {

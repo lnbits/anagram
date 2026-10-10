@@ -1,16 +1,18 @@
-import { defineStore } from 'pinia';
-import { chatDataService } from 'src/services/chatDataService';
-import { contactsService } from 'src/services/contactsService';
-import { nostrEventDataService } from 'src/services/nostrEventDataService';
-import { CHAT_REQUEST_CLEARED_AT_META_KEY } from 'src/stores/nostr/constants';
-import { resolveLatestReadBoundaryAtValue } from 'src/stores/nostr/valueUtils';
-import type { Chat, ChatInboxState, ChatMetadata } from 'src/types/chat';
-import type { ContactGroupMember, ContactRecord } from 'src/types/contact';
-import { buildAvatarText } from 'src/utils/avatarText';
-import { isIncomingUnreadMessageActivity } from 'src/utils/messageActivity';
-import { buildImageAttachmentPreviewText } from 'src/utils/messageAttachments';
-import { formatGroupMentionsForDisplay } from 'src/utils/nostrMentions';
-import { computed, ref } from 'vue';
+import { STARTER_BOT } from '#src/constants/starterBot.ts';
+import { getPublicProfile, rememberPublicProfile } from '#src/lib/state/publicProfiles.ts';
+import { defineStore } from '#src/lib/state/store.ts';
+import { chatDataService } from '#src/services/chatDataService.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { nostrEventDataService } from '#src/services/nostrEventDataService.ts';
+import { CHAT_REQUEST_CLEARED_AT_META_KEY } from '#src/stores/nostr/constants.ts';
+import { resolveLatestReadBoundaryAtValue } from '#src/stores/nostr/valueUtils.ts';
+import type { Chat, ChatInboxState, ChatMetadata } from '#src/types/chat.ts';
+import type { ContactGroupMember, ContactRecord } from '#src/types/contact.ts';
+import { buildAvatarText } from '#src/utils/avatarText.ts';
+import { isIncomingUnreadMessageActivity } from '#src/utils/messageActivity.ts';
+import { buildImageAttachmentPreviewText } from '#src/utils/messageAttachments.ts';
+import { formatGroupMentionsForDisplay } from '#src/utils/nostrMentions.ts';
+import { computed, ref } from '#src/lib/state/reactivity.ts';
 
 interface ChatContactContext {
   picture: string;
@@ -69,7 +71,7 @@ function sortByLatest(chats: Chat[]): Chat[] {
   };
 
   return [...chats].sort(
-    (first, second) => toTimestamp(second.lastMessageAt) - toTimestamp(first.lastMessageAt)
+    (first, second) => toTimestamp(second.lastMessageAt) - toTimestamp(first.lastMessageAt),
   );
 }
 
@@ -121,7 +123,7 @@ function formatChatLastMessagePreview(
   text: string,
   chatMeta: Record<string, unknown>,
   type: Chat['type'],
-  messageMeta?: Record<string, unknown>
+  messageMeta?: Record<string, unknown>,
 ): string {
   const previewText = buildImageAttachmentPreviewText(text, messageMeta);
   return type === 'group' ? formatGroupMentionsForDisplay(previewText, chatMeta) : previewText;
@@ -183,7 +185,7 @@ function syncMetaString(meta: Record<string, unknown>, key: string, value: strin
 function syncMetaLatestTimestamp(
   meta: Record<string, unknown>,
   key: string,
-  value: string
+  value: string,
 ): boolean {
   const normalizedValue = value.trim();
   if (!normalizedValue) {
@@ -210,6 +212,7 @@ function syncMetaInboxState(meta: Record<string, unknown>, nextState: ChatInboxS
 }
 
 function resolveChatCategory(meta: Record<string, unknown>): ChatListCategory {
+  if (meta.deleted_locally === true) return 'hidden';
   const inboxState = readMetaInboxState(meta);
   if (inboxState === 'blocked') {
     return 'blocked';
@@ -249,10 +252,12 @@ function resolveDefaultSelectedChatId(chatList: Chat[]): string | null {
 function buildChatSearchText(chat: Chat): string {
   const candidates = [
     chat.name,
+    getPublicProfile(chat.publicKey)?.name ?? '',
     chat.publicKey,
     chat.lastMessage,
     readMetaString(chat.meta as Record<string, unknown>, 'given_name'),
     readMetaString(chat.meta as Record<string, unknown>, 'contact_name'),
+    readMetaString(chat.meta as Record<string, unknown>, 'nip05'),
   ];
 
   return candidates
@@ -272,7 +277,7 @@ function chatMatchesSearch(chat: Chat, query: string): boolean {
 
 function buildChatActivitySnapshotByPublicKey(
   messageRows: Awaited<ReturnType<typeof chatDataService.listAllMessages>>,
-  loggedInPublicKey: string | null
+  loggedInPublicKey: string | null,
 ): Map<string, ChatActivitySnapshot> {
   const snapshotsByPublicKey = new Map<string, ChatActivitySnapshot>();
   if (!loggedInPublicKey) {
@@ -313,7 +318,7 @@ function buildChatActivitySnapshotByPublicKey(
 
 function buildIncomingMessageTimestampsByPublicKey(
   messageRows: Awaited<ReturnType<typeof chatDataService.listAllMessages>>,
-  loggedInPublicKey: string | null
+  loggedInPublicKey: string | null,
 ): Map<string, string[]> {
   const timestampsByPublicKey = new Map<string, string[]>();
   if (!loggedInPublicKey) {
@@ -340,7 +345,7 @@ function buildIncomingMessageTimestampsByPublicKey(
 }
 
 function buildLastMessageAuthorSnapshotByPublicKey(
-  messageRows: Awaited<ReturnType<typeof chatDataService.listAllMessages>>
+  messageRows: Awaited<ReturnType<typeof chatDataService.listAllMessages>>,
 ): Map<string, ChatLastMessageAuthorSnapshot> {
   const snapshotsByPublicKey = new Map<string, ChatLastMessageAuthorSnapshot>();
 
@@ -374,7 +379,7 @@ function buildLastMessageAuthorSnapshotByPublicKey(
 
 function countUnreadMessagesAfter(
   timestamps: string[] | undefined,
-  lastSeenReceivedActivityAt: string
+  lastSeenReceivedActivityAt: string,
 ): number {
   if (!timestamps || timestamps.length === 0) {
     return 0;
@@ -388,7 +393,7 @@ function countUnreadMessagesAfter(
 
 function findLatestIncomingMessageActivity(
   messageRows: Awaited<ReturnType<typeof chatDataService.listMessages>>,
-  loggedInPublicKey: string | null
+  loggedInPublicKey: string | null,
 ): ChatReadCursor | null {
   if (!loggedInPublicKey) {
     return null;
@@ -426,7 +431,7 @@ function findLatestIncomingMessageActivity(
 
 function findLatestIncomingMessageAt(
   messageRows: Awaited<ReturnType<typeof chatDataService.listMessages>>,
-  loggedInPublicKey: string | null
+  loggedInPublicKey: string | null,
 ): string {
   return findLatestIncomingMessageActivity(messageRows, loggedInPublicKey)?.at ?? '';
 }
@@ -434,19 +439,19 @@ function findLatestIncomingMessageAt(
 function resolveEffectiveLastSeenReceivedActivityAt(
   chatLastSeenReceivedActivityAt: string,
   contactLastSeenIncomingActivityAt: string,
-  lastOutgoingMessageAt = ''
+  lastOutgoingMessageAt = '',
 ): string {
   return resolveLatestReadBoundaryAtValue(
     chatLastSeenReceivedActivityAt,
     contactLastSeenIncomingActivityAt,
-    lastOutgoingMessageAt
+    lastOutgoingMessageAt,
   );
 }
 
 function resolveMarkAsReadBoundaryAt(
   currentLastSeenReceivedActivityAt: string,
   lastIncomingMessageAt: string,
-  latestIncomingMessageAt: string
+  latestIncomingMessageAt: string,
 ): string {
   const latestIncomingBoundaryAt =
     toComparableTimestamp(latestIncomingMessageAt) > toComparableTimestamp(lastIncomingMessageAt)
@@ -461,7 +466,7 @@ function resolveMarkAsReadBoundaryAt(
 
 function syncChatActivityMeta(
   meta: Record<string, unknown>,
-  snapshot: ChatActivitySnapshot | undefined
+  snapshot: ChatActivitySnapshot | undefined,
 ): Record<string, unknown> {
   if (!snapshot) {
     return meta;
@@ -486,7 +491,7 @@ function syncChatActivityMeta(
     syncMetaLatestTimestamp(
       ensureWritableMeta(),
       CHAT_LAST_INCOMING_MESSAGE_AT_META_KEY,
-      snapshot.lastIncomingMessageAt
+      snapshot.lastIncomingMessageAt,
     );
   }
 
@@ -504,13 +509,13 @@ function syncChatActivityMeta(
     syncMetaLatestTimestamp(
       writableMeta,
       CHAT_LAST_OUTGOING_MESSAGE_AT_META_KEY,
-      snapshot.lastOutgoingMessageAt
+      snapshot.lastOutgoingMessageAt,
     );
     syncMetaInboxState(writableMeta, 'accepted');
     syncMetaLatestTimestamp(
       writableMeta,
       CHAT_ACCEPTED_AT_META_KEY,
-      snapshot.lastOutgoingMessageAt
+      snapshot.lastOutgoingMessageAt,
     );
     delete writableMeta[CHAT_BLOCKED_AT_META_KEY];
     delete writableMeta[CHAT_REQUEST_CLEARED_AT_META_KEY];
@@ -545,7 +550,7 @@ function toContactContext(contact: ContactRecord): ChatContactContext {
 
 function toContactContextFromOptions(
   options: AddContactOptions | undefined,
-  fallbackName: string
+  fallbackName: string,
 ): ChatContactContext | undefined {
   const picture = readOptionalInputString(options?.picture);
   const givenName = readOptionalInputString(options?.givenName);
@@ -566,7 +571,7 @@ function toContactContextFromOptions(
 function syncMetaJsonValue(
   meta: Record<string, unknown>,
   key: string,
-  value: unknown[] | undefined
+  value: unknown[] | undefined,
 ): boolean {
   const nextValue = Array.isArray(value) ? value : [];
   const currentValue = Array.isArray(meta[key]) ? (meta[key] as unknown[]) : [];
@@ -578,7 +583,7 @@ function syncMetaJsonValue(
     delete meta[key];
   } else {
     meta[key] = nextValue.map((entry) =>
-      entry && typeof entry === 'object' ? { ...(entry as Record<string, unknown>) } : entry
+      entry && typeof entry === 'object' ? { ...(entry as Record<string, unknown>) } : entry,
     );
   }
   return true;
@@ -587,7 +592,7 @@ function syncMetaJsonValue(
 function syncChatMeta(
   meta: Record<string, unknown>,
   contactContext: ChatContactContext | undefined,
-  avatarSeed: string
+  avatarSeed: string,
 ): Record<string, unknown> {
   let nextMeta = meta;
 
@@ -606,17 +611,17 @@ function syncChatMeta(
     const didChangeContactName = syncMetaString(
       writableMeta,
       'contact_name',
-      contactContext.contactName
+      contactContext.contactName,
     );
     const didChangeLastSeenReceivedActivityAt = syncMetaLatestTimestamp(
       writableMeta,
       LAST_SEEN_RECEIVED_ACTIVITY_AT_META_KEY,
-      contactContext.lastSeenIncomingActivityAt
+      contactContext.lastSeenIncomingActivityAt,
     );
     const didChangeGroupMembers = syncMetaJsonValue(
       writableMeta,
       'group_members',
-      contactContext.groupMembers
+      contactContext.groupMembers,
     );
 
     if (
@@ -643,14 +648,20 @@ function syncChatMeta(
 function mapChatRowToChat(
   row: Awaited<ReturnType<typeof chatDataService.listChats>>[number],
   contactContext?: ChatContactContext,
-  lastMessageAuthorSnapshot?: ChatLastMessageAuthorSnapshot
+  lastMessageAuthorSnapshot?: ChatLastMessageAuthorSnapshot,
 ): Chat {
   const nextName = contactContext?.contactName || row.name;
   const nextMeta = syncChatMeta(
     row.meta,
     contactContext,
-    contactContext?.givenName || nextName || row.public_key
+    contactContext?.givenName || nextName || row.public_key,
   );
+  if (nextMeta.inbox_state !== 'blocked')
+    rememberPublicProfile(row.public_key, {
+      name: readMetaString(nextMeta, 'name'),
+      display_name: readMetaString(nextMeta, 'display_name'),
+      picture: readMetaString(nextMeta, 'picture'),
+    });
   const avatarFromMeta = readMetaString(nextMeta, 'avatar');
   const avatar = avatarFromMeta || buildAvatarText(nextName || row.public_key);
   const lastMessage = formatChatLastMessagePreview(row.last_message || '', nextMeta, row.type);
@@ -660,7 +671,7 @@ function mapChatRowToChat(
     lastMessageAuthorSnapshot &&
     toComparableTimestamp(lastMessageAuthorSnapshot.at) === toComparableTimestamp(lastMessageAt)
       ? lastMessageAuthorSnapshot.authorPublicKey
-      : null;
+      : normalizeChatIdentifier(readMetaString(row.meta, 'last_message_author_public_key'));
 
   return {
     id: row.public_key,
@@ -680,7 +691,7 @@ function mapChatRowToChat(
 function buildAcceptedChatMeta(
   meta: Record<string, unknown>,
   acceptedAt: string,
-  lastOutgoingMessageAt = ''
+  lastOutgoingMessageAt = '',
 ): ChatMetadata {
   const nextMeta: ChatMetadata = {
     ...(meta as ChatMetadata),
@@ -696,7 +707,7 @@ function buildAcceptedChatMeta(
     syncMetaLatestTimestamp(
       nextMeta,
       LAST_SEEN_RECEIVED_ACTIVITY_AT_META_KEY,
-      lastOutgoingMessageAt
+      lastOutgoingMessageAt,
     );
   }
 
@@ -719,7 +730,7 @@ function buildUpdatedChatPreview(
   at: string,
   isVisible: boolean,
   messageMeta?: Record<string, unknown>,
-  authorPublicKey?: string | null
+  authorPublicKey?: string | null,
 ): Chat {
   return {
     ...chat,
@@ -733,7 +744,7 @@ function buildUpdatedChatPreview(
 function resolveRequestClearBoundaryAt(
   meta: Record<string, unknown>,
   messages: Array<{ created_at: string }>,
-  fallbackAt: string | null | undefined
+  fallbackAt: string | null | undefined,
 ): string {
   const candidates = [
     readMetaString(meta, CHAT_LAST_INCOMING_MESSAGE_AT_META_KEY),
@@ -744,7 +755,7 @@ function resolveRequestClearBoundaryAt(
   const latestCandidate = candidates.reduce(
     (latest, candidate) =>
       toComparableTimestamp(candidate) > toComparableTimestamp(latest) ? candidate : latest,
-    ''
+    '',
   );
 
   return latestCandidate || new Date().toISOString();
@@ -780,20 +791,20 @@ export const useChatStore = defineStore('chatStore', () => {
   let initPromise: Promise<void> | null = null;
 
   const selectedChat = computed(
-    () => chats.value.find((chat) => chat.id === selectedChatId.value) ?? null
+    () => chats.value.find((chat) => chat.id === selectedChatId.value) ?? null,
   );
   const inboxChats = computed(() =>
     chats.value.filter(
-      (chat) => resolveChatCategory(chat.meta as Record<string, unknown>) === 'chat'
-    )
+      (chat) => resolveChatCategory(chat.meta as Record<string, unknown>) === 'chat',
+    ),
   );
   const requestChats = computed(() =>
     chats.value.filter(
-      (chat) => resolveChatCategory(chat.meta as Record<string, unknown>) === 'request'
-    )
+      (chat) => resolveChatCategory(chat.meta as Record<string, unknown>) === 'request',
+    ),
   );
   const visibleChats = computed(() =>
-    inboxChats.value.filter((chat) => chatMatchesSearch(chat, searchQuery.value))
+    inboxChats.value.filter((chat) => chatMatchesSearch(chat, searchQuery.value)),
   );
   const requestCount = computed(() => requestChats.value.length);
   const unreadChatCount = computed(
@@ -801,7 +812,7 @@ export const useChatStore = defineStore('chatStore', () => {
       chats.value.filter((chat) => {
         const category = resolveChatCategory(chat.meta as Record<string, unknown>);
         return category !== 'blocked' && category !== 'hidden' && chat.unreadCount > 0;
-      }).length
+      }).length,
   );
   const unreadMessageCount = computed(() =>
     chats.value.reduce((count, chat) => {
@@ -814,107 +825,88 @@ export const useChatStore = defineStore('chatStore', () => {
         ? Math.max(0, Math.floor(chat.unreadCount))
         : 0;
       return count + unreadCount;
-    }, 0)
+    }, 0),
   );
 
   async function loadChatsIntoState(): Promise<void> {
+    const account = getLoggedInPublicKey();
+    const before = new Map(chats.value.map((chat) => [chat.id, chat]));
     await Promise.all([chatDataService.init(), contactsService.init()]);
-    const [rows, contacts, messageRows] = await Promise.all([
+    // The chat record is the materialized inbox summary, updated during ingest/send.
+    // Opening the inbox must never scan or deserialize the account's entire history.
+    const [rows, contacts] = await Promise.all([
       chatDataService.listChats(),
       contactsService.listContacts(),
-      chatDataService.listAllMessages(),
     ]);
-    const contactContextByPublicKey = new Map<string, ChatContactContext>();
-    const activitySnapshotByPublicKey = buildChatActivitySnapshotByPublicKey(
-      messageRows,
-      getLoggedInPublicKey()
+    const contexts = new Map(
+      contacts.map((contact) => [contact.public_key.toLowerCase(), toContactContext(contact)]),
     );
-    const incomingMessageTimestampsByPublicKey = buildIncomingMessageTimestampsByPublicKey(
-      messageRows,
-      getLoggedInPublicKey()
-    );
-    const lastMessageAuthorSnapshotByPublicKey =
-      buildLastMessageAuthorSnapshotByPublicKey(messageRows);
-    const metaSyncPromises: Promise<void>[] = [];
-    const unreadCountSyncPromises: Promise<void>[] = [];
+    if (getLoggedInPublicKey() !== account) return;
+    const live = new Map(chats.value.map((chat) => [chat.id, chat]));
+    const next = rows.map((row) => {
+      const mapped = mapChatRowToChat(row, contexts.get(row.public_key.toLowerCase()));
+      const current = live.get(mapped.id);
+      live.delete(mapped.id);
+      // A delete/reopen completed while this database snapshot was loading.
+      if (current && current.meta.deleted_locally !== before.get(mapped.id)?.meta.deleted_locally)
+        mapped.meta = { ...mapped.meta, deleted_locally: current.meta.deleted_locally };
 
-    for (const contact of contacts) {
-      contactContextByPublicKey.set(contact.public_key.toLowerCase(), toContactContext(contact));
-    }
+      // IndexedDB may lag the UI during hydration. Keep a message that arrived
+      // during this read, and preserve its author until its summary commits.
+      if (
+        current &&
+        current !== before.get(current.id) &&
+        current.lastMessageAt >= mapped.lastMessageAt
+      )
+        return {
+          ...mapped,
+          lastMessage: current.lastMessage,
+          lastMessageAt: current.lastMessageAt,
+          lastMessageAuthorPublicKey: current.lastMessageAuthorPublicKey,
+          unreadCount: current.unreadCount,
+        };
+      if (current?.lastMessageAt === mapped.lastMessageAt && !mapped.lastMessageAuthorPublicKey)
+        mapped.lastMessageAuthorPublicKey = current.lastMessageAuthorPublicKey;
+      return mapped;
+    });
+    for (const chat of live.values()) if (chat !== before.get(chat.id)) next.push(chat);
+    chats.value = sortByLatest(next);
 
-    chats.value = sortByLatest(
-      rows.map((row) => {
-        const contactContext = contactContextByPublicKey.get(row.public_key.toLowerCase());
-        const nextMetaWithContactContext = syncChatMeta(
-          row.meta,
-          contactContext,
-          contactContext?.givenName || contactContext?.contactName || row.name || row.public_key
-        );
-        let nextMeta = syncChatActivityMeta(
-          nextMetaWithContactContext,
-          activitySnapshotByPublicKey.get(row.public_key.toLowerCase())
-        );
-        const effectiveLastSeenReceivedActivityAt = resolveEffectiveLastSeenReceivedActivityAt(
-          readMetaString(nextMeta, LAST_SEEN_RECEIVED_ACTIVITY_AT_META_KEY),
-          contactContext?.lastSeenIncomingActivityAt ?? '',
-          readMetaString(nextMeta, CHAT_LAST_OUTGOING_MESSAGE_AT_META_KEY)
-        );
-        if (
-          toComparableTimestamp(effectiveLastSeenReceivedActivityAt) >
-          toComparableTimestamp(readMetaString(nextMeta, LAST_SEEN_RECEIVED_ACTIVITY_AT_META_KEY))
-        ) {
-          nextMeta = {
-            ...nextMeta,
-            [LAST_SEEN_RECEIVED_ACTIVITY_AT_META_KEY]: effectiveLastSeenReceivedActivityAt,
-          };
-        }
-        if (nextMeta !== row.meta) {
-          metaSyncPromises.push(
-            chatDataService.updateChatMeta(row.public_key, nextMeta).catch((error) => {
-              console.error('Failed to persist derived chat inbox metadata', error);
-            })
-          );
-        }
-
-        const normalizedUnreadCount = countUnreadMessagesAfter(
-          incomingMessageTimestampsByPublicKey.get(row.public_key.toLowerCase()),
-          effectiveLastSeenReceivedActivityAt
-        );
-        if (normalizedUnreadCount !== row.unread_count) {
-          unreadCountSyncPromises.push(
-            chatDataService
-              .updateChatUnreadCount(row.public_key, normalizedUnreadCount)
-              .catch((error) => {
-                console.error('Failed to persist derived chat unread count', error);
-              })
-          );
-        }
-
-        return mapChatRowToChat(
-          {
-            ...row,
-            unread_count: normalizedUnreadCount,
-            meta: nextMeta,
-          },
-          contactContext,
-          lastMessageAuthorSnapshotByPublicKey.get(row.public_key.toLowerCase())
-        );
-      })
-    );
-    await Promise.all([...metaSyncPromises, ...unreadCountSyncPromises]);
-
-    if (selectedChatId.value && chats.value.some((chat) => chat.id === selectedChatId.value)) {
+    if (
+      selectedChatId.value &&
+      chats.value.some(
+        (chat) => chat.id === selectedChatId.value && chat.meta.deleted_locally !== true,
+      )
+    ) {
       return;
     }
 
     selectedChatId.value = resolveDefaultSelectedChatId(chats.value);
   }
 
+  async function ensureStarterChats(account: string | null): Promise<void> {
+    if (!account || !/^[a-f0-9]{64}$/.test(account) || getLoggedInPublicKey() !== account) return;
+    const key = `anagram-starter-self-chat:${account}`;
+    if (window.localStorage.getItem(key)) return;
+    // Retain the existing setup marker: upgrades must not add new defaults to
+    // established accounts, and deleting or blocking a starter chat must stick.
+    for (const starter of [{ name: 'My Self', publicKey: account }, STARTER_BOT]) {
+      if (getLoggedInPublicKey() !== account) return;
+      if (!chats.value.some((chat) => chat.publicKey === starter.publicKey)) {
+        const chat = await addContact(starter.name, starter.publicKey);
+        if (!chat || getLoggedInPublicKey() !== account) return;
+      }
+    }
+    window.localStorage.setItem(key, '1');
+  }
+
   async function init(): Promise<void> {
     if (!initPromise) {
       initPromise = (async () => {
         try {
+          const account = getLoggedInPublicKey();
           await loadChatsIntoState();
+          await ensureStarterChats(account);
         } catch (error) {
           console.error('Failed to initialize chats', error);
           chats.value = [];
@@ -949,7 +941,10 @@ export const useChatStore = defineStore('chatStore', () => {
 
   function selectChat(chatId: string): void {
     const normalizedChatId = normalizeChatIdentifier(chatId);
-    if (!normalizedChatId) {
+    if (
+      !normalizedChatId ||
+      chats.value.some((chat) => chat.id === normalizedChatId && chat.meta.deleted_locally === true)
+    ) {
       return;
     }
 
@@ -989,7 +984,7 @@ export const useChatStore = defineStore('chatStore', () => {
               ...chat,
               meta: nextMetaToPersist ?? chat.meta,
             }
-          : chat
+          : chat,
       );
     } else {
       await chatDataService.init();
@@ -1062,7 +1057,7 @@ export const useChatStore = defineStore('chatStore', () => {
               ...chat,
               meta: nextMetaToPersist ?? chat.meta,
             }
-          : chat
+          : chat,
       );
     } else {
       await chatDataService.init();
@@ -1098,7 +1093,7 @@ export const useChatStore = defineStore('chatStore', () => {
     options: {
       acceptedAt?: string;
       lastOutgoingMessageAt?: string;
-    } = {}
+    } = {},
   ): Promise<void> {
     const normalizedChatId = normalizeChatIdentifier(chatId);
     const acceptedAt =
@@ -1112,20 +1107,13 @@ export const useChatStore = defineStore('chatStore', () => {
 
     let nextMetaToPersist: ChatMetadata | null = null;
     let nextUnreadCountToPersist: number | null = null;
-    let outgoingBoundaryMessageRows: Awaited<
-      ReturnType<typeof chatDataService.listMessages>
-    > | null = null;
-    if (lastOutgoingMessageAt) {
-      await chatDataService.init();
-      outgoingBoundaryMessageRows = await chatDataService.listMessages(normalizedChatId);
-    }
     const existingChat = chats.value.find((chat) => chat.id === normalizedChatId) ?? null;
 
     if (existingChat) {
       nextMetaToPersist = buildAcceptedChatMeta(
         existingChat.meta as Record<string, unknown>,
         acceptedAt,
-        lastOutgoingMessageAt
+        lastOutgoingMessageAt,
       );
     } else {
       await chatDataService.init();
@@ -1137,7 +1125,7 @@ export const useChatStore = defineStore('chatStore', () => {
       nextMetaToPersist = buildAcceptedChatMeta(
         existingRow.meta,
         acceptedAt,
-        lastOutgoingMessageAt
+        lastOutgoingMessageAt,
       );
     }
 
@@ -1145,18 +1133,18 @@ export const useChatStore = defineStore('chatStore', () => {
       return;
     }
 
-    if (outgoingBoundaryMessageRows) {
-      const loggedInPublicKey = getLoggedInPublicKey();
-      const incomingTimestamps = outgoingBoundaryMessageRows
-        .filter((row) => {
-          const authorPublicKey = normalizeChatIdentifier(row.author_public_key);
-          return authorPublicKey && authorPublicKey !== loggedInPublicKey;
-        })
-        .map((row) => row.created_at);
-      nextUnreadCountToPersist = countUnreadMessagesAfter(
-        incomingTimestamps,
-        readMetaString(nextMetaToPersist, LAST_SEEN_RECEIVED_ACTIVITY_AT_META_KEY)
-      );
+    if (lastOutgoingMessageAt) {
+      const own = getLoggedInPublicKey();
+      nextUnreadCountToPersist = 0;
+      for await (const batch of chatDataService.messageBatches(normalizedChatId)) {
+        const incoming = batch.filter(
+          (row) => row.author_public_key && row.author_public_key !== own,
+        );
+        nextUnreadCountToPersist += countUnreadMessagesAfter(
+          incoming.map((row) => row.created_at),
+          readMetaString(nextMetaToPersist, LAST_SEEN_RECEIVED_ACTIVITY_AT_META_KEY),
+        );
+      }
     }
 
     if (existingChat) {
@@ -1164,11 +1152,14 @@ export const useChatStore = defineStore('chatStore', () => {
         chat.id === normalizedChatId
           ? {
               ...chat,
-              meta: nextMetaToPersist ?? chat.meta,
+              meta: {
+                ...(nextMetaToPersist ?? chat.meta),
+                deleted_locally: chat.meta.deleted_locally,
+              },
               unreadCount:
                 nextUnreadCountToPersist === null ? chat.unreadCount : nextUnreadCountToPersist,
             }
-          : chat
+          : chat,
       );
     }
 
@@ -1211,21 +1202,24 @@ export const useChatStore = defineStore('chatStore', () => {
         : persistedMeta;
     const currentLastSeenReceivedActivityAt = readMetaString(
       currentMeta,
-      LAST_SEEN_RECEIVED_ACTIVITY_AT_META_KEY
+      LAST_SEEN_RECEIVED_ACTIVITY_AT_META_KEY,
     );
     const lastIncomingMessageAt = readMetaString(
       currentMeta,
-      CHAT_LAST_INCOMING_MESSAGE_AT_META_KEY
+      CHAT_LAST_INCOMING_MESSAGE_AT_META_KEY,
     );
-    const latestIncomingActivity = findLatestIncomingMessageActivity(
-      await chatDataService.listMessages(normalizedChatId),
-      getLoggedInPublicKey()
+    const latestIncomingRow = await chatDataService.findLatestIncomingMessage(
+      normalizedChatId,
+      getLoggedInPublicKey(),
     );
+    const latestIncomingActivity = latestIncomingRow
+      ? { at: latestIncomingRow.created_at, eventId: normalizeEventId(latestIncomingRow.event_id) }
+      : null;
     const latestIncomingMessageAt = latestIncomingActivity?.at ?? '';
     const nextLastSeenReceivedActivityAt = resolveMarkAsReadBoundaryAt(
       currentLastSeenReceivedActivityAt,
       lastIncomingMessageAt,
-      latestIncomingMessageAt
+      latestIncomingMessageAt,
     );
 
     if (nextLastSeenReceivedActivityAt) {
@@ -1272,7 +1266,7 @@ export const useChatStore = defineStore('chatStore', () => {
             ...chat,
             meta: nextMeta,
           }
-        : chat
+        : chat,
     );
 
     try {
@@ -1316,7 +1310,7 @@ export const useChatStore = defineStore('chatStore', () => {
 
     if (selectedChatId.value === normalizedChatId) {
       selectedChatId.value = resolveDefaultSelectedChatId(
-        chats.value.filter((chat) => chat.id !== normalizedChatId)
+        chats.value.filter((chat) => chat.id !== normalizedChatId),
       );
     }
 
@@ -1355,11 +1349,12 @@ export const useChatStore = defineStore('chatStore', () => {
         resolveChatCategory(existingMeta) === 'request' ||
         resolveChatCategory(existingMeta) === 'hidden';
 
-      if (isRequestLikeChat) {
+      const isGroup = (existingChat?.type ?? existingRow?.type) === 'group';
+      if (isRequestLikeChat && !isGroup) {
         const requestClearedAt = resolveRequestClearBoundaryAt(
           existingMeta,
           existingMessages,
-          existingChat?.lastMessageAt ?? existingRow?.last_message_at ?? null
+          existingChat?.lastMessageAt ?? existingRow?.last_message_at ?? null,
         );
         const nextMeta = {
           ...existingMeta,
@@ -1387,15 +1382,30 @@ export const useChatStore = defineStore('chatStore', () => {
             .map((message) => message.event_id)
             .filter(
               (eventId): eventId is string =>
-                typeof eventId === 'string' && eventId.trim().length > 0
-            )
+                typeof eventId === 'string' && eventId.trim().length > 0,
+            ),
         );
       } catch (error) {
         console.error('Failed to delete nostr events for chat', error);
       }
 
-      const nextChats = chats.value.filter((chat) => chat.id !== normalizedChatId);
+      const nextChats = isGroup
+        ? chats.value.map((chat) =>
+            chat.id === normalizedChatId
+              ? {
+                  ...chat,
+                  lastMessage: '',
+                  unreadCount: 0,
+                  meta: { ...chat.meta, deleted_locally: true, unseen_reaction_count: 0 },
+                }
+              : chat,
+          )
+        : chats.value.filter((chat) => chat.id !== normalizedChatId);
       chats.value = nextChats;
+      if (isGroup) {
+        const { useMessageStore } = await import('#src/stores/messageStore.ts');
+        useMessageStore().removeChatMessages(normalizedChatId);
+      }
       const nextComposerDraftsByChatId = { ...composerDraftsByChatId.value };
       delete nextComposerDraftsByChatId[normalizedChatId];
       composerDraftsByChatId.value = nextComposerDraftsByChatId;
@@ -1470,7 +1480,7 @@ export const useChatStore = defineStore('chatStore', () => {
     chatId: string,
     text: string,
     at: string,
-    options: { messageMeta?: Record<string, unknown> } = {}
+    options: { messageMeta?: Record<string, unknown> } = {},
   ): Promise<void> {
     const normalizedChatId = normalizeChatIdentifier(chatId);
     if (!normalizedChatId) {
@@ -1494,12 +1504,12 @@ export const useChatStore = defineStore('chatStore', () => {
           at,
           visibleChatId.value === normalizedChatId,
           options.messageMeta,
-          authorPublicKey
+          authorPublicKey,
         );
         previewText = nextChat.lastMessage;
         nextUnreadCount = nextChat.unreadCount;
         return nextChat;
-      })
+      }),
     );
 
     try {
@@ -1510,20 +1520,26 @@ export const useChatStore = defineStore('chatStore', () => {
           contact?.type === 'group'
             ? formatGroupMentionsForDisplay(
                 buildImageAttachmentPreviewText(text, options.messageMeta),
-                contact.meta
+                contact.meta,
               )
             : buildImageAttachmentPreviewText(text, options.messageMeta);
         if (contactPreviewText !== text && contactPreviewText !== previewText) {
           previewText = contactPreviewText;
           chats.value = sortByLatest(
             chats.value.map((chat) =>
-              chat.id === normalizedChatId ? { ...chat, lastMessage: previewText } : chat
-            )
+              chat.id === normalizedChatId ? { ...chat, lastMessage: previewText } : chat,
+            ),
           );
         }
       }
 
-      await chatDataService.updateChatPreview(normalizedChatId, previewText, at, nextUnreadCount);
+      await chatDataService.updateChatPreview(
+        normalizedChatId,
+        previewText,
+        at,
+        nextUnreadCount,
+        authorPublicKey,
+      );
     } catch (error) {
       console.error('Failed to update chat preview', error);
     }
@@ -1576,7 +1592,7 @@ export const useChatStore = defineStore('chatStore', () => {
             ...chat,
             unreadCount: normalizedCount,
           }
-        : chat
+        : chat,
     );
 
     try {
@@ -1597,6 +1613,7 @@ export const useChatStore = defineStore('chatStore', () => {
     const authorPublicKey = normalizeChatIdentifier(input.authorPublicKey);
     const nextChatId = nextPublicKey;
     const existingChat = chats.value.find((chat) => chat.id === nextChatId) ?? null;
+    if (existingChat?.meta.deleted_locally === true || input.meta?.deleted_locally === true) return;
     const currentMeta = {
       ...((existingChat?.meta as Record<string, unknown> | undefined) ?? {}),
       ...(input.meta ? { ...input.meta } : {}),
@@ -1627,7 +1644,7 @@ export const useChatStore = defineStore('chatStore', () => {
         input.messageText,
         nextMeta,
         nextType,
-        input.messageMeta
+        input.messageMeta,
       ),
       lastMessageAuthorPublicKey: authorPublicKey,
       lastMessageAt: input.at,
@@ -1635,20 +1652,37 @@ export const useChatStore = defineStore('chatStore', () => {
       meta: nextMeta,
     };
 
-    if (existingChat) {
-      chats.value = sortByLatest(
-        chats.value.map((chat) => (chat.id === nextChatId ? nextChat : chat))
-      );
+    // Preserve unrelated row identities and only reposition the changed chat.
+    // Stable ties retain the original ordering, matching sortByLatest.
+    const previousIndex = chats.value.findIndex((item) => item.id === nextChatId);
+    const timestamp = toComparableTimestamp(nextChat.lastMessageAt);
+    if (
+      previousIndex >= 0 &&
+      timestamp === toComparableTimestamp(chats.value[previousIndex]!.lastMessageAt)
+    ) {
+      chats.value[previousIndex] = nextChat;
       return;
     }
-
-    chats.value = sortByLatest([...chats.value, nextChat]);
+    if (previousIndex >= 0) chats.value.splice(previousIndex, 1);
+    let low = 0,
+      high = chats.value.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      const other = toComparableTimestamp(chats.value[middle]!.lastMessageAt);
+      if (
+        other > timestamp ||
+        (other === timestamp && (previousIndex < 0 || middle < previousIndex))
+      )
+        low = middle + 1;
+      else high = middle;
+    }
+    chats.value.splice(low, 0, nextChat);
   }
 
   async function addContact(
     nameOrIdentifier: string,
     publicKey = nameOrIdentifier,
-    options: AddContactOptions = {}
+    options: AddContactOptions = {},
   ): Promise<Chat | null> {
     const cleanName = nameOrIdentifier.trim();
     const cleanPublicKey =
@@ -1665,14 +1699,23 @@ export const useChatStore = defineStore('chatStore', () => {
       : toContactContextFromOptions(options, cleanName);
 
     const existingInStore = chats.value.find(
-      (chat) => chat.publicKey.toLowerCase() === cleanPublicKey.toLowerCase()
+      (chat) => chat.publicKey.toLowerCase() === cleanPublicKey.toLowerCase(),
     );
+    if (existingInStore?.meta.deleted_locally === true) {
+      const reopened = await chatDataService.reopenDeletedGroupChat(cleanPublicKey);
+      if (!reopened) return null;
+      const mapped = mapChatRowToChat(reopened, contactContext);
+      chats.value = sortByLatest(
+        chats.value.map((chat) => (chat.id === mapped.id ? mapped : chat)),
+      );
+      return mapped;
+    }
     if (existingInStore) {
       const nextName = contactContext?.contactName || existingInStore.name;
       const nextMeta = syncChatMeta(
         existingInStore.meta as Record<string, unknown>,
         contactContext,
-        contactContext?.givenName || nextName || cleanPublicKey
+        contactContext?.givenName || nextName || cleanPublicKey,
       );
       if (nextMeta === existingInStore.meta && nextName === existingInStore.name) {
         return existingInStore;
@@ -1696,7 +1739,9 @@ export const useChatStore = defineStore('chatStore', () => {
       return nextChat ?? existingInStore;
     }
 
-    const existingInDb = await chatDataService.getChatByPublicKey(cleanPublicKey);
+    let existingInDb = await chatDataService.getChatByPublicKey(cleanPublicKey);
+    if (existingInDb?.meta.deleted_locally === true)
+      existingInDb = await chatDataService.reopenDeletedGroupChat(cleanPublicKey);
     if (existingInDb) {
       const mapped = mapChatRowToChat(existingInDb, contactContext);
       if (!chats.value.some((chat) => chat.id === mapped.id)) {
@@ -1716,7 +1761,7 @@ export const useChatStore = defineStore('chatStore', () => {
       unread_count: 0,
       meta: {
         avatar: buildAvatarText(
-          contactContext?.givenName || contactContext?.contactName || cleanName
+          contactContext?.givenName || contactContext?.contactName || cleanName,
         ),
         ...(contactContext?.picture ? { picture: contactContext.picture } : {}),
         ...(contactContext?.givenName ? { given_name: contactContext.givenName } : {}),
@@ -1744,7 +1789,7 @@ export const useChatStore = defineStore('chatStore', () => {
 
     const existingChatRow = await chatDataService.getChatByPublicKey(normalizedPublicKey);
     const existingChatInStore = chats.value.find(
-      (chat) => chat.publicKey.trim().toLowerCase() === normalizedPublicKey
+      (chat) => chat.publicKey.trim().toLowerCase() === normalizedPublicKey,
     );
     if (!existingChatRow && !existingChatInStore) {
       return;
@@ -1765,7 +1810,7 @@ export const useChatStore = defineStore('chatStore', () => {
     const nextMeta = syncChatMeta(
       currentMeta,
       contactContext,
-      contactContext.givenName || nextName || normalizedPublicKey
+      contactContext.givenName || nextName || normalizedPublicKey,
     );
     const nextAvatar =
       readMetaString(nextMeta, 'avatar') || buildAvatarText(nextName || normalizedPublicKey);
@@ -1789,10 +1834,10 @@ export const useChatStore = defineStore('chatStore', () => {
               ...chat,
               name: nextName,
               avatar: nextAvatar,
-              meta: nextMeta,
+              meta: { ...nextMeta, deleted_locally: chat.meta.deleted_locally },
             }
-          : chat
-      )
+          : chat,
+      ),
     );
   }
 

@@ -1,6 +1,6 @@
-import type { NDKSubscription } from '@nostr-dev-kit/ndk';
-import { RELAY_QUERY_TIMEOUT_MS } from 'src/stores/nostr/constants';
-import { observeConnectedRelayEose } from 'src/stores/nostr/subscriptionEose';
+import type { NostrSubscription } from '#src/lib/nostr/client.ts';
+import { RELAY_QUERY_TIMEOUT_MS } from '#src/stores/nostr/constants.ts';
+import { observeConnectedRelayEose } from '#src/stores/nostr/subscriptionEose.ts';
 import { afterEach, expect, it, vi } from 'vitest';
 
 afterEach(() => vi.useRealTimers());
@@ -16,7 +16,7 @@ it('keeps observing a slow snapshot after the initial query wait has expired', (
     stop: vi.fn(),
   };
   const eose = vi.fn();
-  observeConnectedRelayEose(subscription as unknown as NDKSubscription, eose);
+  observeConnectedRelayEose(subscription as unknown as NostrSubscription, eose);
   vi.advanceTimersByTime(RELAY_QUERY_TIMEOUT_MS + 1000);
   expect(eose).not.toHaveBeenCalled();
   subscription.eosesSeen.add(healthy);
@@ -35,7 +35,7 @@ it.each(['eose', 'close'])('releases its observer when the subscription emits %s
     off: vi.fn(),
   };
   const eose = vi.fn();
-  observeConnectedRelayEose(subscription as unknown as NDKSubscription, eose);
+  observeConnectedRelayEose(subscription as unknown as NostrSubscription, eose);
   vi.advanceTimersByTime(RELAY_QUERY_TIMEOUT_MS + 1000);
   subscription.on.mock.calls.find(([name]) => name === event)?.[1]();
   expect(vi.getTimerCount()).toBe(0);
@@ -54,7 +54,7 @@ it('completes from every connected relay EOSE while retaining the listener for a
     stop: vi.fn(),
   };
   const eose = vi.fn();
-  observeConnectedRelayEose(subscription as unknown as NDKSubscription, eose);
+  observeConnectedRelayEose(subscription as unknown as NostrSubscription, eose);
   vi.advanceTimersByTime(100);
   expect(eose).not.toHaveBeenCalled();
   subscription.eosesSeen.add(healthy);

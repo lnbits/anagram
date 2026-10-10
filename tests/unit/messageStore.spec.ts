@@ -1,9 +1,11 @@
-import { nip19 } from '@nostr-dev-kit/ndk';
-import { __messageStoreTestUtils, MissingContactRelaysError } from 'src/stores/messageStore';
+import type { Message } from '#src/types/chat.ts';
+import { nip19 } from '#src/lib/nostr/client.ts';
+import { __messageStoreTestUtils, MissingContactRelaysError } from '#src/stores/messageStore.ts';
 import { describe, expect, it } from 'vitest';
 
 const {
   applyMessageUpsert,
+  replaceMessageInWindow,
   areReactionListsEqual,
   buildChatMetaWithUnseenReactionCount,
   buildDefaultChatMessagePaginationState,
@@ -30,6 +32,96 @@ const {
 } = __messageStoreTestUtils;
 
 describe('messageStore logic', () => {
+  it('promotes a temporary row without duplicating an already persisted copy', () => {
+    const persisted: Message = {
+      id: '3',
+      chatId: 'chat',
+      text: 'reply',
+      sender: 'them',
+      sentAt: '2026-01-01T00:00:00.000Z',
+      authorPublicKey: 'peer',
+      eventId: 'reply',
+      nostrEvent: null,
+      meta: {},
+    };
+    const temporary = { ...persisted, id: 'incoming:reply', eventId: null };
+    const unrelated = { ...temporary, id: '2', text: 'keep me' };
+    expect(
+      replaceMessageInWindow([unrelated, temporary, persisted], persisted, temporary.id),
+    ).toEqual([unrelated, persisted]);
+  });
+
+  it('merges all aliases when an edit matches both a local row ID and another row event ID', () => {
+    const original: Message = {
+      id: '3',
+      chatId: 'chat',
+      text: 'original',
+      sender: 'them',
+      sentAt: '2026-01-01T00:00:00.000Z',
+      authorPublicKey: 'peer',
+      eventId: 'original',
+      nostrEvent: null,
+      meta: {},
+    };
+    const unrelated = { ...original, id: '2', eventId: null, text: 'keep me' };
+    const replacement = { ...original, id: '1', eventId: 'replacement', text: 'edited' };
+    const edited = { ...replacement, id: original.id };
+    const pagination = buildDefaultChatMessagePaginationState();
+    const result = applyMessageUpsert([replacement, unrelated, original], pagination, edited);
+    expect(result.messages).toEqual([unrelated, edited]);
+    expect(result.paginationState).toBe(pagination);
+    expect(result.ignored).toBe(false);
+  });
+
+  it('preserves incoming history and updates arriving after a load starts, without retaining unrelated cached history', () => {
+    const old: Message = {
+      id: '1',
+      chatId: 'chat',
+      text: 'old page',
+      sender: 'them',
+      sentAt: '2020-01-01T00:00:00.000Z',
+      authorPublicKey: 'peer',
+      eventId: 'old',
+      nostrEvent: null,
+      meta: {},
+    };
+    const current: Message = {
+      ...old,
+      id: '2',
+      eventId: 'current',
+      text: 'current snapshot',
+      sentAt: '2026-01-01T00:00:00.000Z',
+    };
+    const incoming: Message = {
+      ...old,
+      id: '3',
+      eventId: 'incoming',
+      text: 'historical reply arriving now',
+      sentAt: '2025-01-01T00:00:00.000Z',
+    };
+    const edited = { ...current, text: 'new edit', meta: { edited: true } };
+    const start = new Map([old, current].map((message) => [message.id, message]));
+    expect(mergeLoadedMessagesWithLocalOutbound([current], [old, edited, incoming], start)).toEqual(
+      [incoming, edited],
+    );
+  });
+
+  it('does not duplicate a staged incoming message already present in the loaded snapshot', () => {
+    const row: Message = {
+      id: '1',
+      chatId: 'chat',
+      text: 'reply',
+      sender: 'them',
+      sentAt: '2026-01-01T00:00:00.000Z',
+      authorPublicKey: 'peer',
+      eventId: 'reply',
+      nostrEvent: null,
+      meta: {},
+    };
+    const staged = { ...row, id: 'incoming:reply' };
+    expect(mergeLoadedMessagesWithLocalOutbound([row], [staged], new Map())).toEqual([row]);
+  });
+
   it('adds and clears unseen reaction counts in chat metadata', () => {
     expect(buildChatMetaWithUnseenReactionCount({ name: 'chat' }, 3)).toEqual({
       name: 'chat',
@@ -37,7 +129,7 @@ describe('messageStore logic', () => {
     });
 
     expect(
-      buildChatMetaWithUnseenReactionCount({ unseen_reaction_count: 2, name: 'chat' }, 0)
+      buildChatMetaWithUnseenReactionCount({ unseen_reaction_count: 2, name: 'chat' }, 0),
     ).toEqual({
       name: 'chat',
     });
@@ -50,15 +142,15 @@ describe('messageStore logic', () => {
     expect(
       compareMessageCursors(
         { id: 1, created_at: '2026-01-01T00:00:00.000Z' },
-        { id: 2, created_at: '2026-01-02T00:00:00.000Z' }
-      )
+        { id: 2, created_at: '2026-01-02T00:00:00.000Z' },
+      ),
     ).toBeLessThan(0);
 
     expect(
       compareMessageCursors(
         { id: 1, created_at: '2026-01-02T00:00:00.000Z' },
-        { id: 2, created_at: '2026-01-02T00:00:00.000Z' }
-      )
+        { id: 2, created_at: '2026-01-02T00:00:00.000Z' },
+      ),
     ).toBeLessThan(0);
   });
 
@@ -113,7 +205,7 @@ describe('messageStore logic', () => {
             edited: true,
           },
         },
-      ]
+      ],
     );
 
     expect(merged.map((message) => message.id)).toEqual(['1', '2', '3']);
@@ -167,7 +259,7 @@ describe('messageStore logic', () => {
     ];
 
     expect(
-      mergeLoadedMessagesWithLocalOutbound(loaded, existing).map((message) => message.id)
+      mergeLoadedMessagesWithLocalOutbound(loaded, existing).map((message) => message.id),
     ).toEqual(['1', 'optimistic-99', '8']);
   });
 
@@ -199,8 +291,8 @@ describe('messageStore logic', () => {
 
     expect(
       mergeLoadedMessagesWithLocalOutbound(loaded, [loaded[0], newlyPublished]).map(
-        (message) => message.id
-      )
+        (message) => message.id,
+      ),
     ).toEqual(['1', '9']);
   });
 
@@ -236,7 +328,7 @@ describe('messageStore logic', () => {
             },
           ],
         },
-      })
+      }),
     ).toEqual({
       text: 'hello https://cdn.example/pic.png',
       meta: {
@@ -261,7 +353,7 @@ describe('messageStore logic', () => {
       buildForwardedMessagePayload({
         text: '   ',
         meta: {},
-      })
+      }),
     ).toBeNull();
   });
 
@@ -284,7 +376,7 @@ describe('messageStore logic', () => {
         public_key: 'user-chat',
         type: 'user',
         meta: {},
-      } as never)
+      } as never),
     ).toBe('user-chat');
 
     expect(
@@ -294,7 +386,7 @@ describe('messageStore logic', () => {
         meta: {
           current_epoch_public_key: 'ABCD',
         },
-      } as never)
+      } as never),
     ).toBe('abcd');
 
     expect(
@@ -302,7 +394,7 @@ describe('messageStore logic', () => {
         public_key: 'group-chat',
         type: 'group',
         meta: {},
-      } as never)
+      } as never),
     ).toBe('');
 
     expect(buildDeletedMessageMeta('author', 5, '2026-01-02T00:00:00.000Z', 'ABC123')).toEqual({
@@ -322,7 +414,7 @@ describe('messageStore logic', () => {
       buildMessageCursorFromMessage({
         id: '12',
         sentAt: '2026-01-02T00:00:00.000Z',
-      })
+      }),
     ).toEqual({
       id: 12,
       created_at: '2026-01-02T00:00:00.000Z',
@@ -332,7 +424,7 @@ describe('messageStore logic', () => {
       buildMessageCursorFromSearchResult({
         id: 7,
         created_at: '2026-01-03T00:00:00.000Z',
-      } as never)
+      } as never),
     ).toEqual({
       id: 7,
       created_at: '2026-01-03T00:00:00.000Z',
@@ -345,21 +437,21 @@ describe('messageStore logic', () => {
         chatPublicKey: 'chat-pubkey',
         relayUrls: [' ws://relay.example ', 'ws://relay.example/'],
         recipientRelayUrls: ['wss://ignored.example'],
-      })
+      }),
     ).toEqual(['ws://relay.example', 'ws://relay.example/']);
 
     expect(() =>
       resolveSendRelayUrls({
         chatPublicKey: 'chat-pubkey',
         relayUrls: ['   '],
-      })
+      }),
     ).toThrow('Cannot send encrypted event without application relays.');
 
     expect(() =>
       resolveSendRelayUrls({
         chatPublicKey: 'chat-pubkey',
         recipientRelayUrls: [],
-      })
+      }),
     ).toThrow(MissingContactRelaysError);
   });
 
@@ -373,8 +465,8 @@ describe('messageStore logic', () => {
         } as never,
         {
           recipientRelayUrls: ['wss://contact.example'],
-        }
-      )
+        },
+      ),
     ).toMatchObject({
       recipientPublicKey: 'user-chat',
       relayUrls: ['wss://contact.example'],
@@ -392,8 +484,8 @@ describe('messageStore logic', () => {
         } as never,
         {
           recipientRelayUrls: ['wss://group.example'],
-        }
-      )
+        },
+      ),
     ).toMatchObject({
       recipientPublicKey: 'abcd',
       relayUrls: ['wss://group.example'],
@@ -409,14 +501,14 @@ describe('messageStore logic', () => {
         } as never,
         {
           recipientRelayUrls: ['wss://group.example'],
-        }
-      )
+        },
+      ),
     ).toThrow('Group chat is missing the current epoch public key.');
 
     expect(
       resolveChatDeliveryTarget(null, {
         recipientRelayUrls: ['wss://group.example'],
-      })
+      }),
     ).toBeNull();
   });
 
@@ -442,8 +534,8 @@ describe('messageStore logic', () => {
           } as never,
           {
             recipientRelayUrls: ['wss://self.example'],
-          }
-        )
+          },
+        ),
       ).toMatchObject({
         recipientPublicKey: 'self-chat',
         relayUrls: ['wss://self.example'],
@@ -468,8 +560,8 @@ describe('messageStore logic', () => {
           messageId: '12',
           eventId: ' ABC123 ',
         } as never,
-        'def456'
-      )
+        'def456',
+      ),
     ).toBe('abc123');
 
     expect(
@@ -478,8 +570,8 @@ describe('messageStore logic', () => {
           messageId: '12',
           eventId: '   ',
         } as never,
-        ' DEF456 '
-      )
+        ' DEF456 ',
+      ),
     ).toBe('def456');
 
     expect(
@@ -488,8 +580,8 @@ describe('messageStore logic', () => {
           messageId: '0',
           eventId: null,
         } as never,
-        ' DEF456 '
-      )
+        ' DEF456 ',
+      ),
     ).toBeNull();
   });
 
@@ -527,8 +619,8 @@ describe('messageStore logic', () => {
             },
           },
         ] as never,
-        'me'
-      )
+        'me',
+      ),
     ).toBe(1);
   });
 
@@ -549,8 +641,8 @@ describe('messageStore logic', () => {
             created_at: '2026-01-03T00:00:00.000Z',
           },
         ] as never,
-        'me'
-      )
+        'me',
+      ),
     ).toBe('2026-01-03T00:00:00.000Z');
 
     expect(resolveLatestOwnMessageAt([] as never, null)).toBe('');
@@ -582,8 +674,8 @@ describe('messageStore logic', () => {
           },
         ] as never,
         'me',
-        '2026-01-01T00:00:00.000Z'
-      )
+        '2026-01-01T00:00:00.000Z',
+      ),
     ).toBe(1);
   });
 
@@ -614,7 +706,7 @@ describe('messageStore logic', () => {
             source: 'nostr',
           },
         } as never,
-        'chat'
+        'chat',
       );
 
       expect(message.meta).toEqual({
@@ -655,8 +747,8 @@ describe('messageStore logic', () => {
             },
           },
         ] as never,
-        null
-      )
+        null,
+      ),
     ).toBe(0);
   });
 
@@ -678,8 +770,8 @@ describe('messageStore logic', () => {
             },
           },
         ] as never,
-        'me'
-      )
+        'me',
+      ),
     ).toBe(0);
 
     expect(
@@ -699,8 +791,8 @@ describe('messageStore logic', () => {
             reactorPublicKey: 'alice',
             eventId: 'abc',
           },
-        ] as never
-      )
+        ] as never,
+      ),
     ).toBe(true);
 
     expect(
@@ -720,8 +812,8 @@ describe('messageStore logic', () => {
             reactorPublicKey: 'alice',
             eventId: 'abc',
           },
-        ] as never
-      )
+        ] as never,
+      ),
     ).toBe(false);
   });
 
@@ -738,8 +830,8 @@ describe('messageStore logic', () => {
           { id: 5, message: 'newer-2' },
         ] as never,
         true,
-        false
-      )
+        false,
+      ),
     ).toMatchObject({
       hasOlder: true,
       hasNewer: false,
@@ -802,7 +894,7 @@ describe('messageStore logic', () => {
       },
       {
         allowOutsideLoadedWindow: false,
-      }
+      },
     );
 
     expect(result.ignored).toBe(true);
@@ -845,7 +937,7 @@ describe('messageStore logic', () => {
       },
       {
         allowOutsideLoadedWindow: false,
-      }
+      },
     );
 
     expect(result.ignored).toBe(false);
@@ -903,7 +995,7 @@ describe('messageStore logic', () => {
       },
       {
         allowOutsideLoadedWindow: false,
-      }
+      },
     );
 
     expect(result.ignored).toBe(true);
@@ -944,7 +1036,7 @@ describe('messageStore logic', () => {
       },
       {
         allowOutsideLoadedWindow: true,
-      }
+      },
     );
 
     expect(result.ignored).toBe(false);
@@ -993,7 +1085,7 @@ describe('messageStore logic', () => {
       },
       {
         allowOutsideLoadedWindow: false,
-      }
+      },
     );
 
     expect(result.ignored).toBe(false);

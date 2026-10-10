@@ -1,0 +1,325 @@
+{
+  "date": "2026-10-05",
+  "environment": {
+    "os": "NixOS/Linux",
+    "browser": "Google Chrome 150.0.7871.114",
+    "node": "v24.16.0",
+    "mode": "Vite development server, Playwright, generated accounts"
+  },
+  "method": {
+    "cached_messages": 20000,
+    "encrypted_burst": 128,
+    "path": "Production foreground ingestion entry point, real nostr-tools NIP-59 envelopes and browser worker/IndexedDB; excludes network relay latency",
+    "firstVisibleMs": "First reactive chat preview observed by a 16 ms timer, not a paint measurement",
+    "timings": "Single-run before/after samples; background activity and machine load vary. Diagnostic timings, not cross-client rankings."
+  },
+  "before": {
+    "cachedMessages": 20000,
+    "burstMessages": 128,
+    "markRead": {
+      "ms": 1667.9000000059605,
+      "cursorSteps": 40191,
+      "transactions": 170
+    },
+    "burst": {
+      "ms": 50750.40000000596,
+      "messagesPerSecond": 2.522147608688502,
+      "firstVisibleMs": 581.3000000119209,
+      "worstHeartbeatMs": 292,
+      "transactions": 2699,
+      "cursorSteps": 58249,
+      "committed": 128,
+      "acknowledged": 128
+    }
+  },
+  "after_full_suite": {
+    "cachedMessages": 20000,
+    "burstMessages": 128,
+    "markRead": {
+      "ms": 8.900000005960464,
+      "cursorSteps": 2,
+      "transactions": 6
+    },
+    "burst": {
+      "ms": 13705,
+      "messagesPerSecond": 9.339657059467347,
+      "firstVisibleMs": 789.1000000238419,
+      "worstHeartbeatMs": 293.40000000596046,
+      "transactions": 1702,
+      "cursorSteps": 242,
+      "committed": 128,
+      "acknowledged": 128
+    },
+    "serviceTimings": {
+      "messages.getChatByPublicKey": {
+        "calls": 259,
+        "ms": 2444.9999997913837
+      },
+      "messages.updateChatMeta": {
+        "calls": 130,
+        "ms": 870.4999998509884
+      },
+      "contacts.getContactByPublicKey": {
+        "calls": 129,
+        "ms": 1609.8000000715256
+      },
+      "messages.getMessageByEventIdOrEditReference": {
+        "calls": 128,
+        "ms": 1063.3000002205372
+      },
+      "messages.findDeletedMessageInSecond": {
+        "calls": 128,
+        "ms": 375.6999998688698
+      },
+      "messages.createMessage": {
+        "calls": 128,
+        "ms": 2078.9000000953674
+      },
+      "messages.listMessagesReplyingTo": {
+        "calls": 128,
+        "ms": 787.9999999701977
+      },
+      "events.upsertEvent": {
+        "calls": 128,
+        "ms": 1612.1000000536442
+      },
+      "messages.updateChatPreview": {
+        "calls": 128,
+        "ms": 1983.700000166893
+      }
+    }
+  },
+  "changes": [
+    "Index reply references instead of reading the conversation for every received DM.",
+    "Seek the newest incoming message by author for read cursors; skip entire outgoing histories.",
+    "Read only messages after the seen boundary during unread reconciliation.",
+    "Page reaction-bearing rows through an index, including legacy reactions without event IDs.",
+    "Validate chat existence, deduplicate and insert each message in a single atomic transaction.",
+    "Resolve exact events and edit references in one transaction; avoid duplicate ingestion lookups.",
+    "Batch up to 64 encrypted inbox writes per transaction; resolve each enqueue only after commit.",
+    "Prioritize live subscriptions and preempt a historical page when new foreground traffic arrives.",
+    "Use indexed author lookups for notification eligibility and timestamp windows for edit replacement."
+  ],
+  "safety": [
+    "Signature verification, sender binding and worker decryption are unchanged.",
+    "Private-key storage policy is unchanged; benchmarks use disposable generated accounts and report no keys or contents.",
+    "UI staging precedes message persistence; ordered commits and the eight-message uncommitted bound remain.",
+    "Acknowledgements remain tied to durable commits; failed message writes keep the encrypted retry record.",
+    "Additive v5 indexes are tested against existing v2/v3 data; v3 message rows remain identical after migration.",
+    "Concurrent duplicates, aborted inserts, aborted inbox batches, retry and foreground preemption have regression tests."
+  ],
+  "limits": [
+    "No competing clients, external signers, mobile devices or production relay networks were benchmarked.",
+    "First-preview latency and worst heartbeat did not show a reliable improvement in the synthetic burst; no claim is made for those metrics.",
+    "One-time index construction can delay the first opening of an established database.",
+    "Text search, explicit chat acceptance and deletion may still traverse history; this audit concentrates on normal DM ingestion and read-state reconciliation.",
+    "Reply repair reads matching replies, and reaction reconciliation reads matching reaction rows; work grows with those matches, not unrelated messages."
+  ],
+  "validation": {
+    "unit_tests": 547,
+    "full_browser_suite_including_iroh_and_benchmark": 12,
+    "final_dm_browser_rerun": 7,
+    "svelte_check": "0 errors, 0 warnings",
+    "production_build": "Web build and Tauri release binary passed (--no-bundle); installers not built"
+  },
+  "after": {
+    "cachedMessages": 20000,
+    "burstMessages": 128,
+    "markRead": {
+      "ms": 10.700000017881393,
+      "cursorSteps": 2,
+      "transactions": 6
+    },
+    "burst": {
+      "ms": 13623.5,
+      "messagesPerSecond": 9.395529783095387,
+      "firstVisibleMs": 709.2000000178814,
+      "worstHeartbeatMs": 225.59999999403954,
+      "transactions": 1696,
+      "cursorSteps": 251,
+      "committed": 128,
+      "acknowledged": 128
+    },
+    "fullHistoryReads": 0,
+    "serviceTimings": {
+      "messages.updateChatMeta": {
+        "calls": 125,
+        "ms": 668.9000000357628
+      },
+      "messages.getChatByPublicKey": {
+        "calls": 258,
+        "ms": 2153.900000035763
+      },
+      "contacts.getContactByPublicKey": {
+        "calls": 129,
+        "ms": 1820.0000000298023
+      },
+      "messages.getMessageByEventIdOrEditReference": {
+        "calls": 128,
+        "ms": 1432.4000001847744
+      },
+      "messages.findDeletedMessageInSecond": {
+        "calls": 128,
+        "ms": 571.5000000596046
+      },
+      "messages.createMessage": {
+        "calls": 128,
+        "ms": 1433.7000001072884
+      },
+      "messages.listMessagesReplyingTo": {
+        "calls": 128,
+        "ms": 547.0000002682209
+      },
+      "events.upsertEvent": {
+        "calls": 128,
+        "ms": 982.6999996900558
+      },
+      "messages.updateChatPreview": {
+        "calls": 123,
+        "ms": 812.5000002384186
+      }
+    }
+  },
+  "improvement": {
+    "burst_throughput_factor": 3.73,
+    "mark_read_latency_factor": 155.88
+  },
+  "after_amethyst_followups": {
+    "cachedMessages": 20000,
+    "burstMessages": 128,
+    "markRead": {
+      "ms": 50.099999994039536,
+      "cursorSteps": 2,
+      "transactions": 9
+    },
+    "burst": {
+      "ms": 12779.59999999404,
+      "messagesPerSecond": 10.01596294094179,
+      "firstVisibleMs": 576.0999999940395,
+      "worstHeartbeatMs": 267.40000000596046,
+      "transactions": 1316,
+      "cursorSteps": 339,
+      "committed": 128,
+      "acknowledged": 128
+    },
+    "fullHistoryReads": 0,
+    "serviceTimings": {
+      "messages.updateChatMeta": {
+        "calls": 3,
+        "ms": 275.09999999403954
+      },
+      "messages.getIncomingMessageContext": {
+        "calls": 128,
+        "ms": 716.4000000655651
+      },
+      "contacts.getContactByPublicKey": {
+        "calls": 129,
+        "ms": 785.6999999880791
+      },
+      "messages.getChatByPublicKey": {
+        "calls": 3,
+        "ms": 177.89999997615814
+      },
+      "messages.findDeletedMessageInSecond": {
+        "calls": 128,
+        "ms": 539.5999999344349
+      },
+      "messages.createMessage": {
+        "calls": 128,
+        "ms": 4183.599999815226
+      },
+      "messages.listMessagesReplyingTo": {
+        "calls": 128,
+        "ms": 1550.9000000059605
+      },
+      "events.upsertEvent": {
+        "calls": 128,
+        "ms": 1604.3000001609325
+      }
+    },
+    "replayAfterReload": {
+      "ms": 516.9000000059605,
+      "decryptions": 0,
+      "acknowledged": 128
+    }
+  },
+  "amethyst_followups_notes": [
+    "Persistent account-scoped completion receipts skip worker decryption across reloads.",
+    "Ciphertext journaling overlaps processing; message and chat summary commit in one transaction before receipt acknowledgement.",
+    "Relay history uses bounded per-relay pages, overlapping boundary timestamps and real EOSE.",
+    "First-unread and latest-incoming lookups seek by author; no scan of outgoing history.",
+    "Single development-mode sample. Not an Amethyst comparison or a fastest-client claim. First-visible timing observes reactive state, not paint.",
+    "Full-suite sample: 17.17 s vs isolated 12.78 s, with ~1316-1318 transactions in both. Repeat timings vary; no throughput improvement is established over the previous round."
+  ],
+  "after_amethyst_followups_full_suite": {
+    "cachedMessages": 20000,
+    "burstMessages": 128,
+    "markRead": {
+      "ms": 84.5,
+      "cursorSteps": 2,
+      "transactions": 8
+    },
+    "burst": {
+      "ms": 17171.59999999404,
+      "messagesPerSecond": 7.454168510799485,
+      "firstVisibleMs": 624.4000000059605,
+      "worstHeartbeatMs": 340.19999998807907,
+      "transactions": 1318,
+      "cursorSteps": 342,
+      "committed": 128,
+      "acknowledged": 128
+    },
+    "fullHistoryReads": 0,
+    "serviceTimings": {
+      "messages.updateChatMeta": {
+        "calls": 3,
+        "ms": 253.90000000596046
+      },
+      "messages.getIncomingMessageContext": {
+        "calls": 128,
+        "ms": 3104.800000220537
+      },
+      "contacts.getContactByPublicKey": {
+        "calls": 129,
+        "ms": 3804.3000000417233
+      },
+      "messages.getChatByPublicKey": {
+        "calls": 3,
+        "ms": 293.80000001192093
+      },
+      "messages.findDeletedMessageInSecond": {
+        "calls": 128,
+        "ms": 932.4999999701977
+      },
+      "messages.createMessage": {
+        "calls": 128,
+        "ms": 5215.399999856949
+      },
+      "messages.listMessagesReplyingTo": {
+        "calls": 128,
+        "ms": 1470.0999999642372
+      },
+      "events.upsertEvent": {
+        "calls": 128,
+        "ms": 1269.8999999761581
+      }
+    },
+    "replayAfterReload": {
+      "ms": 558.4000000059605,
+      "decryptions": 0,
+      "acknowledged": 128
+    }
+  },
+  "amethyst_followups_validation": {
+    "unit_tests_passed": 558,
+    "unit_files_passed": 85,
+    "browser_full_suite_passed": 15,
+    "browser_final_chat_rerun_passed": 7,
+    "live_iroh": "Two generated accounts: audio, video, screen sharing, group rooms",
+    "svelte_check_errors": 0,
+    "svelte_check_warnings": 0,
+    "production_build": "passed; Vite reports a bundle exceeding its 500 kB advisory threshold",
+    "native_packaging": "not rerun; no native source changes",
+    "visual_review": "Compared original and rebuilt login and seeded desktop/mobile chat screens; no exhaustive pixel-difference certification"
+  }
+}

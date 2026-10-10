@@ -1,7 +1,7 @@
 import {
   getWrappedThreadSearchIndex,
   resolveThreadSearchNavigationIndex,
-} from 'src/utils/threadSearch';
+} from '#src/utils/threadSearch.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('threadSearch utils', () => {

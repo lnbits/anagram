@@ -1,6 +1,6 @@
-import { NDKKind } from '@nostr-dev-kit/ndk';
-import { createUserActions } from 'src/stores/nostr/userActions';
-import type { MessageRelayStatus } from 'src/types/chat';
+import { NostrKind } from '#src/lib/nostr/client.ts';
+import { createUserActions } from '#src/stores/nostr/userActions.ts';
+import type { MessageRelayStatus } from '#src/types/chat.ts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const ndkMocks = vi.hoisted(() => {
@@ -61,26 +61,26 @@ const serviceMocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@nostr-dev-kit/ndk', async () => {
-  const actual = await vi.importActual<typeof import('@nostr-dev-kit/ndk')>('@nostr-dev-kit/ndk');
+vi.mock('#src/lib/nostr/client.ts', async () => {
+  const actual = await vi.importActual<typeof import('#src/lib/nostr/client.ts')>('#src/lib/nostr/client.ts');
 
   return {
     ...actual,
-    NDKPrivateKeySigner: ndkMocks.MockNDKPrivateKeySigner,
-    NDKUser: ndkMocks.MockNDKUser,
+    NostrPrivateKeySigner: ndkMocks.MockNDKPrivateKeySigner,
+    NostrUser: ndkMocks.MockNDKUser,
     giftWrap: ndkMocks.giftWrap,
   };
 });
 
-vi.mock('src/services/chatDataService', () => ({
+vi.mock('#src/services/chatDataService.ts', () => ({
   chatDataService: serviceMocks.chatDataService,
 }));
 
-vi.mock('src/services/contactsService', () => ({
+vi.mock('#src/services/contactsService.ts', () => ({
   contactsService: serviceMocks.contactsService,
 }));
 
-vi.mock('src/services/nostrEventDataService', () => ({
+vi.mock('#src/services/nostrEventDataService.ts', () => ({
   nostrEventDataService: serviceMocks.nostrEventDataService,
 }));
 
@@ -98,6 +98,7 @@ function makeRelayStatus(overrides: Partial<MessageRelayStatus> = {}): MessageRe
 function createDeps() {
   const deps = {
     appendRelayStatusesToGroupMemberTicketEvent: vi.fn().mockResolvedValue(undefined),
+    prepareOutgoingPrivateMessage: vi.fn(async () => {}),
     appendRelayStatusesToMessageEvent: vi.fn().mockResolvedValue(undefined),
     buildFailedOutboundRelayStatuses: vi.fn((relayUrls, scope, detail) => {
       return relayUrls.map((relayUrl) =>
@@ -121,7 +122,7 @@ function createDeps() {
     createDirectMessageRumorEvent: vi.fn(
       (senderPubkey, recipientPubkey, message, createdAt, replyToEventId) => ({
         id: 'direct-rumor',
-        kind: NDKKind.PrivateDirectMessage,
+        kind: NostrKind.PrivateDirectMessage,
         pubkey: senderPubkey,
         recipientPubkey,
         message,
@@ -133,7 +134,7 @@ function createDeps() {
     createEventDeletionRumorEvent: vi.fn(
       (senderPubkey, recipientPubkey, targetEventId, targetKind, createdAt) => ({
         id: 'deletion-rumor',
-        kind: NDKKind.EventDeletion,
+        kind: NostrKind.EventDeletion,
         pubkey: senderPubkey,
         recipientPubkey,
         targetEventId,
@@ -153,7 +154,7 @@ function createDeps() {
         createdAt
       ) => ({
         id: 'reaction-rumor',
-        kind: NDKKind.Reaction,
+        kind: NostrKind.Reaction,
         pubkey: senderPubkey,
         recipientPubkey,
         emoji,
@@ -166,7 +167,7 @@ function createDeps() {
     ),
     createStoredDirectMessageRumorEvent: vi.fn(() => ({
       id: 'stored-direct-rumor',
-      kind: NDKKind.PrivateDirectMessage,
+      kind: NostrKind.PrivateDirectMessage,
       tags: [],
     })),
     createStoredSignedEvent: vi.fn(() => ({
@@ -183,7 +184,7 @@ function createDeps() {
       pubkey: 's'.repeat(64),
     }),
     giftWrapSignedEvent: vi.fn().mockResolvedValue({
-      kind: NDKKind.GiftWrap,
+      kind: NostrKind.GiftWrap,
     }),
     ndk: {} as never,
     normalizeEventId: vi.fn((value: unknown) =>
@@ -287,7 +288,7 @@ describe('userActions runtime', () => {
     expect(deps.sendGiftWrappedRumor).toHaveBeenCalledWith(
       'r'.repeat(64),
       ['wss://relay.example'],
-      NDKKind.PrivateDirectMessage,
+      NostrKind.PrivateDirectMessage,
       expect.any(Function),
       {
         createdAt: '2026-01-02T00:00:00.000Z',
@@ -318,7 +319,7 @@ describe('userActions runtime', () => {
       '🔥',
       'target-id',
       'b'.repeat(64),
-      NDKKind.PrivateDirectMessage,
+      NostrKind.PrivateDirectMessage,
       123456
     );
     expect(serviceMocks.nostrEventDataService.upsertEvent).toHaveBeenCalledWith({
@@ -326,6 +327,32 @@ describe('userActions runtime', () => {
       direction: 'out',
       relay_statuses: [makeRelayStatus()],
     });
+  });
+
+  it('rejects unauthorized retries before reusing or publishing a cached envelope', async () => {
+    const deps = createDeps();
+    deps.prepareOutgoingPrivateMessage.mockRejectedValue(
+      new Error('Invalid membership proof'),
+    );
+    serviceMocks.chatDataService.getMessageById.mockResolvedValue({
+      id: 7,
+      event_id: 'event-1',
+    });
+    serviceMocks.nostrEventDataService.getEventById.mockResolvedValue({
+      direction: 'out',
+      event: {
+        id: 'event-1',
+        kind: 14,
+        created_at: 1700000000,
+        pubkey: 's'.repeat(64),
+        tags: [['p', 'r'.repeat(64)]],
+      },
+    });
+    await expect(
+      createUserActions(deps).retryDirectMessageRelay(7, 'wss://relay.example', 'recipient'),
+    ).rejects.toThrow('membership proof');
+    expect(ndkMocks.giftWrap).not.toHaveBeenCalled();
+    expect(deps.publishEventWithRelayStatuses).not.toHaveBeenCalled();
   });
 
   it('marks relay retries as pending first and failed when republish errors', async () => {
@@ -347,16 +374,16 @@ describe('userActions runtime', () => {
       direction: 'out',
       event: {
         id: 'event-1',
-        kind: NDKKind.PrivateDirectMessage,
+        kind: NostrKind.PrivateDirectMessage,
         created_at: 1700000000,
         pubkey: 's'.repeat(64),
         tags: [['p', 'r'.repeat(64)]],
       },
     });
     ndkMocks.giftWrap.mockResolvedValue({
-      kind: NDKKind.GiftWrap,
+      kind: NostrKind.GiftWrap,
       toNostrEvent: async () => ({
-        kind: NDKKind.GiftWrap,
+        kind: NostrKind.GiftWrap,
         id: 'a'.repeat(64),
         sig: 'b'.repeat(128),
         tags: [],

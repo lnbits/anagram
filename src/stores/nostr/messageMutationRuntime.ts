@@ -1,35 +1,35 @@
-import NDK, { NDKEvent, NDKKind, type NostrEvent } from '@nostr-dev-kit/ndk';
-import { getEmojiEntryByValue } from 'src/data/topEmojis';
-import { chatDataService } from 'src/services/chatDataService';
-import { contactsService } from 'src/services/contactsService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { nostrEventDataService } from 'src/services/nostrEventDataService';
-import { UNKNOWN_REPLY_MESSAGE_TEXT } from 'src/stores/nostr/constants';
+import NostrClient, { ClientEvent, NostrKind, type NostrEvent } from '#src/lib/nostr/client.ts';
+import { getEmojiEntryByValue } from '#src/data/topEmojis.ts';
+import { chatDataService } from '#src/services/chatDataService.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { nostrEventDataService } from '#src/services/nostrEventDataService.ts';
+import { UNKNOWN_REPLY_MESSAGE_TEXT } from '#src/stores/nostr/constants.ts';
 import type {
   MessageRow,
   PendingIncomingDeletion,
   PendingIncomingReaction,
   QueuePrivateMessageUiRefreshOptions,
-} from 'src/stores/nostr/types';
+} from '#src/stores/nostr/types.ts';
 import type {
   MessageReaction,
   MessageRelayStatus,
   MessageReplyPreview,
   NostrEventDirection,
-} from 'src/types/chat';
-import type { ContactRecord } from 'src/types/contact';
-import { buildMessageReplyPreviewContent } from 'src/utils/messageAttachments';
+} from '#src/types/chat.ts';
+import type { ContactRecord } from '#src/types/contact.ts';
+import { buildMessageReplyPreviewContent } from '#src/utils/messageAttachments.ts';
 import {
   areMessageEditTimestampsEqual,
   messageEditReferencesEventId,
   readMessageEditPreviousEventIds,
-} from 'src/utils/messageEdits';
-import { buildMetaWithReactions, normalizeMessageReactions } from 'src/utils/messageReactions';
+} from '#src/utils/messageEdits.ts';
+import { buildMetaWithReactions, normalizeMessageReactions } from '#src/utils/messageReactions.ts';
 
 interface MessageMutationRuntimeDeps {
   buildInboundTraceDetails: (options: {
-    wrappedEvent?: NDKEvent | null;
-    rumorEvent?: NDKEvent | NostrEvent | null;
+    wrappedEvent?: ClientEvent | null;
+    rumorEvent?: ClientEvent | NostrEvent | null;
     senderPubkeyHex?: string | null;
     chatPubkey?: string | null;
     targetEventId?: string | null;
@@ -39,26 +39,28 @@ interface MessageMutationRuntimeDeps {
   formatSubscriptionLogValue: (value: string | null | undefined) => string | null;
   getLoggedInPublicKeyHex: () => string | null;
   logInboundEvent: (stage: string, details?: Record<string, unknown>) => void;
-  ndk: NDK;
+  ndk: NostrClient;
   normalizeEventId: (value: unknown) => string | null;
   normalizeThrottleMs: (value: number | undefined) => number;
   queuePendingIncomingDeletion: (
     targetEventId: string,
-    pendingDeletion: PendingIncomingDeletion
+    pendingDeletion: PendingIncomingDeletion,
   ) => void;
   queuePendingIncomingReaction: (
     targetEventId: string,
-    pendingReaction: PendingIncomingReaction
+    pendingReaction: PendingIncomingReaction,
   ) => void;
   queuePrivateMessagesUiRefresh: (options?: QueuePrivateMessageUiRefreshOptions) => void;
-  readDeletionTargetEntries: (event: NDKEvent) => Array<{ eventId: string; kind: number | null }>;
-  readReactionTargetAuthorPubkey: (event: NDKEvent) => string | null;
-  readReactionTargetEventId: (event: NDKEvent) => string | null;
+  readDeletionTargetEntries: (
+    event: ClientEvent,
+  ) => Array<{ eventId: string; kind: number | null }>;
+  readReactionTargetAuthorPubkey: (event: ClientEvent) => string | null;
+  readReactionTargetEventId: (event: ClientEvent) => string | null;
   refreshMessageInLiveState: (messageId: number) => Promise<void>;
   removePendingIncomingReaction: (
     targetEventId: string,
     reactionEventId: string,
-    reactorPublicKey: string
+    reactorPublicKey: string,
   ) => void;
   repairMissingMessageDependency: (
     chatPublicKey: string,
@@ -68,7 +70,7 @@ interface MessageMutationRuntimeDeps {
       immediate?: boolean;
       referenceCreatedAt?: number | null;
       seedRelayUrls?: string[];
-    }
+    },
   ) => Promise<boolean>;
   resolveMissingMessageDependencyRepair: (targetEventId: string) => void;
   toIsoTimestampFromUnix: (value: number | undefined) => string;
@@ -103,7 +105,7 @@ export function createMessageMutationRuntime({
     deletedByPublicKey: string,
     deletedEventKind: number,
     deletedAt: string,
-    deleteEventId?: string | null
+    deleteEventId?: string | null,
   ): Record<string, unknown> {
     return {
       deletedAt,
@@ -117,7 +119,7 @@ export function createMessageMutationRuntime({
 
   async function syncChatUnseenReactionCount(chatPublicKey: string): Promise<void> {
     try {
-      const { useMessageStore } = await import('src/stores/messageStore');
+      const { useMessageStore } = await import('#src/stores/messageStore.ts');
       await useMessageStore().syncChatUnseenReactionCount(chatPublicKey);
     } catch (error) {
       console.warn('Failed to synchronize unseen reaction count for chat', chatPublicKey, error);
@@ -131,7 +133,7 @@ export function createMessageMutationRuntime({
       reason: 'reply-target-missing' | 'reaction-target-missing' | 'deletion-target-missing';
       referenceCreatedAt?: number | null;
       seedRelayUrls?: string[];
-    }
+    },
   ): void {
     const normalizedChatPubkey = inputSanitizerService.normalizeHexKey(chatPubkey);
     const normalizedTargetEventId = normalizeEventId(targetEventId);
@@ -149,7 +151,7 @@ export function createMessageMutationRuntime({
         'Failed to queue missing message dependency repair',
         normalizedChatPubkey,
         normalizedTargetEventId,
-        error
+        error,
       );
     });
   }
@@ -170,7 +172,7 @@ export function createMessageMutationRuntime({
     targetMessage: MessageRow,
     chatPubkey: string,
     loggedInPubkeyHex: string,
-    contact?: ContactRecord | null
+    contact?: ContactRecord | null,
   ): Promise<MessageReplyPreview> {
     const targetAuthorPublicKey =
       inputSanitizerService.normalizeHexKey(targetMessage.author_public_key) ?? '';
@@ -196,10 +198,10 @@ export function createMessageMutationRuntime({
     pendingReaction: PendingIncomingReaction,
     options: {
       uiThrottleMs?: number;
-    } = {}
+    } = {},
   ): Promise<MessageRow | null> {
     const normalizedMessageChatPubkey = inputSanitizerService.normalizeHexKey(
-      messageRow.chat_public_key
+      messageRow.chat_public_key,
     );
     if (
       !normalizedMessageChatPubkey ||
@@ -209,7 +211,7 @@ export function createMessageMutationRuntime({
     }
 
     const normalizedMessageAuthorPubkey = inputSanitizerService.normalizeHexKey(
-      messageRow.author_public_key
+      messageRow.author_public_key,
     );
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
     const shouldDefaultReactionAsViewed =
@@ -270,7 +272,7 @@ export function createMessageMutationRuntime({
       nextReactions.splice(existingReactionIndex, 1, nextReaction);
       const updatedRow = await chatDataService.updateMessageMeta(
         messageRow.id,
-        buildMetaWithReactions(messageRow.meta, nextReactions)
+        buildMetaWithReactions(messageRow.meta, nextReactions),
       );
       if (!updatedRow) {
         return null;
@@ -306,7 +308,7 @@ export function createMessageMutationRuntime({
           ...pendingReaction.reaction,
           ...(defaultViewedByAuthorAt ? { viewedByAuthorAt: defaultViewedByAuthorAt } : {}),
         },
-      ])
+      ]),
     );
     if (!updatedRow) {
       return null;
@@ -334,7 +336,7 @@ export function createMessageMutationRuntime({
     reactionEmoji: string | null,
     options: {
       uiThrottleMs?: number;
-    } = {}
+    } = {},
   ): Promise<MessageRow | null> {
     const normalizedReactionEventId = normalizeEventId(reactionEventId);
     const normalizedReactorPublicKey = inputSanitizerService.normalizeHexKey(reactorPublicKey);
@@ -361,7 +363,7 @@ export function createMessageMutationRuntime({
 
     const updatedRow = await chatDataService.updateMessageMeta(
       messageRow.id,
-      buildMetaWithReactions(messageRow.meta, nextReactions)
+      buildMetaWithReactions(messageRow.meta, nextReactions),
     );
     if (!updatedRow) {
       return null;
@@ -390,7 +392,7 @@ export function createMessageMutationRuntime({
     deleteEventId: string | null,
     options: {
       uiThrottleMs?: number;
-    } = {}
+    } = {},
   ): Promise<MessageRow | null> {
     const normalizedDeletedByPublicKey = inputSanitizerService.normalizeHexKey(deletedByPublicKey);
     if (!normalizedDeletedByPublicKey) {
@@ -403,13 +405,14 @@ export function createMessageMutationRuntime({
         normalizedDeletedByPublicKey,
         deletedEventKind,
         deletedAt,
-        deleteEventId
+        deleteEventId,
       ),
     });
     if (!updatedRow) {
       return null;
     }
 
+    await refreshReplyPreviewsForTargetMessage(updatedRow, options);
     const uiThrottleMs = normalizeThrottleMs(options.uiThrottleMs);
     if (uiThrottleMs > 0) {
       queuePrivateMessagesUiRefresh({
@@ -425,9 +428,12 @@ export function createMessageMutationRuntime({
 
   async function findMessageEditReplacement(
     originalMessage: MessageRow,
-    originalEventId: string
+    originalEventId: string,
   ): Promise<MessageRow | null> {
-    const messages = await chatDataService.listMessages(originalMessage.chat_public_key);
+    const messages = await chatDataService.listMessagesInSecond(
+      originalMessage.chat_public_key,
+      originalMessage.created_at,
+    );
     const candidates = messages.filter((candidate) => {
       return (
         candidate.id !== originalMessage.id &&
@@ -435,18 +441,13 @@ export function createMessageMutationRuntime({
           originalMessage.author_public_key.trim().toLowerCase() &&
         Boolean(candidate.event_id) &&
         !candidate.meta.deleted &&
+        messageEditReferencesEventId(candidate.meta, originalEventId) &&
         areMessageEditTimestampsEqual(candidate.created_at, originalMessage.created_at)
       );
     });
-    candidates.sort((first, second) => {
-      const firstHasReference = messageEditReferencesEventId(first.meta, originalEventId);
-      const secondHasReference = messageEditReferencesEventId(second.meta, originalEventId);
-      if (firstHasReference !== secondHasReference) {
-        return firstHasReference ? -1 : 1;
-      }
-
-      return second.id - first.id;
-    });
+    // Timestamp equality alone cannot identify an edit: a sender may post
+    // several independent messages in one second. Only collapse a linked edit.
+    candidates.sort((first, second) => second.id - first.id);
     return candidates[0] ?? null;
   }
 
@@ -459,7 +460,7 @@ export function createMessageMutationRuntime({
     targetKind: number,
     options: {
       uiThrottleMs?: number;
-    } = {}
+    } = {},
   ): Promise<MessageRow | null> {
     const replacement = await findMessageEditReplacement(messageRow, messageEventId);
     if (!replacement?.event_id) {
@@ -469,7 +470,7 @@ export function createMessageMutationRuntime({
         deletedAt,
         targetKind,
         deleteEventId,
-        options
+        options,
       );
     }
 
@@ -491,7 +492,7 @@ export function createMessageMutationRuntime({
         chat.public_key,
         editedRow.message,
         chat.last_message_at,
-        chat.unread_count
+        chat.unread_count,
       );
     }
 
@@ -513,7 +514,7 @@ export function createMessageMutationRuntime({
     messageRow: MessageRow,
     options: {
       uiThrottleMs?: number;
-    } = {}
+    } = {},
   ): Promise<MessageRow> {
     const normalizedStoredEventId = normalizeEventId(messageRow.event_id);
     if (!normalizedStoredEventId) {
@@ -531,7 +532,7 @@ export function createMessageMutationRuntime({
       const updatedRow = await upsertReactionOnMessageRow(
         currentMessageRow,
         pendingReaction,
-        options
+        options,
       );
       if (!updatedRow) {
         remainingEntries.push(pendingReaction);
@@ -554,11 +555,11 @@ export function createMessageMutationRuntime({
     messageRow: MessageRow,
     options: {
       uiThrottleMs?: number;
-    } = {}
+    } = {},
   ): Promise<MessageRow> {
     const normalizedMessageEventId = normalizeEventId(messageRow.event_id);
     const normalizedMessageAuthorPublicKey = inputSanitizerService.normalizeHexKey(
-      messageRow.author_public_key
+      messageRow.author_public_key,
     );
     if (!normalizedMessageEventId || !normalizedMessageAuthorPublicKey) {
       return messageRow;
@@ -566,14 +567,14 @@ export function createMessageMutationRuntime({
 
     const previousEventIds = readMessageEditPreviousEventIds(messageRow.meta);
     const pendingDeletions = consumePendingIncomingDeletions(normalizedMessageEventId).map(
-      (entry) => ({ entry, targetEventId: normalizedMessageEventId })
+      (entry) => ({ entry, targetEventId: normalizedMessageEventId }),
     );
     for (const previousEventId of previousEventIds) {
       pendingDeletions.push(
         ...consumePendingIncomingDeletions(previousEventId).map((entry) => ({
           entry,
           targetEventId: previousEventId,
-        }))
+        })),
       );
     }
     if (pendingDeletions.length === 0) {
@@ -585,7 +586,7 @@ export function createMessageMutationRuntime({
       if (
         pendingDeletion.deletionAuthorPublicKey !== normalizedMessageAuthorPublicKey ||
         (pendingDeletion.targetKind !== null &&
-          pendingDeletion.targetKind !== NDKKind.PrivateDirectMessage)
+          pendingDeletion.targetKind !== NostrKind.PrivateDirectMessage)
       ) {
         continue;
       }
@@ -601,8 +602,8 @@ export function createMessageMutationRuntime({
         pendingDeletion.deletionAuthorPublicKey,
         pendingDeletion.deleteEventId,
         pendingDeletion.deletedAt,
-        NDKKind.PrivateDirectMessage,
-        options
+        NostrKind.PrivateDirectMessage,
+        options,
       );
       if (updatedRow) {
         currentMessageRow = updatedRow;
@@ -614,7 +615,7 @@ export function createMessageMutationRuntime({
 
   function consumePendingIncomingDeletionForReaction(
     reactionEventId: string,
-    reactorPublicKey: string
+    reactorPublicKey: string,
   ): PendingIncomingDeletion | null {
     const normalizedReactionEventId = normalizeEventId(reactionEventId);
     const normalizedReactorPublicKey = inputSanitizerService.normalizeHexKey(reactorPublicKey);
@@ -627,14 +628,14 @@ export function createMessageMutationRuntime({
       pendingDeletions.find((entry) => {
         return (
           entry.deletionAuthorPublicKey === normalizedReactorPublicKey &&
-          (entry.targetKind === null || entry.targetKind === NDKKind.Reaction)
+          (entry.targetKind === null || entry.targetKind === NostrKind.Reaction)
         );
       }) ?? null
     );
   }
 
   async function processIncomingReactionRumorEvent(
-    rumorEvent: NDKEvent,
+    rumorEvent: ClientEvent,
     chatPubkey: string,
     senderPubkeyHex: string,
     options: {
@@ -642,7 +643,7 @@ export function createMessageMutationRuntime({
       direction: NostrEventDirection;
       rumorNostrEvent: NostrEvent | null;
       relayStatuses: MessageRelayStatus[];
-    }
+    },
   ): Promise<void> {
     const reactionEmoji = rumorEvent.content.trim();
     const targetEventId = readReactionTargetEventId(rumorEvent);
@@ -678,7 +679,7 @@ export function createMessageMutationRuntime({
     if (reactionEventId) {
       const pendingDeletion = consumePendingIncomingDeletionForReaction(
         reactionEventId,
-        senderPubkeyHex
+        senderPubkeyHex,
       );
       if (pendingDeletion) {
         logInboundEvent('reaction-drop', {
@@ -765,7 +766,7 @@ export function createMessageMutationRuntime({
     options: {
       referenceCreatedAt?: number | null;
       seedRelayUrls?: string[];
-    } = {}
+    } = {},
   ): Promise<MessageReplyPreview> {
     const normalizedTargetEventId = normalizeEventId(targetEventId);
     if (!normalizedTargetEventId) {
@@ -774,7 +775,7 @@ export function createMessageMutationRuntime({
 
     const targetMessage =
       await chatDataService.getMessageByEventIdOrEditReference(normalizedTargetEventId);
-    if (!targetMessage) {
+    if (!targetMessage || targetMessage.chat_public_key !== chatPubkey) {
       queueMissingMessageDependencyRepair(chatPubkey, normalizedTargetEventId, {
         reason: 'reply-target-missing',
         referenceCreatedAt: options.referenceCreatedAt,
@@ -790,11 +791,11 @@ export function createMessageMutationRuntime({
     targetMessage: MessageRow,
     options: {
       uiThrottleMs?: number;
-    } = {}
+    } = {},
   ): Promise<number> {
     const normalizedTargetEventId = normalizeEventId(targetMessage.event_id);
     const normalizedChatPubkey = inputSanitizerService.normalizeHexKey(
-      targetMessage.chat_public_key
+      targetMessage.chat_public_key,
     );
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
     if (!normalizedTargetEventId || !normalizedChatPubkey || !loggedInPubkeyHex) {
@@ -808,16 +809,19 @@ export function createMessageMutationRuntime({
     for (const targetEventId of targetEventIds) {
       resolveMissingMessageDependencyRepair(targetEventId);
     }
-    await Promise.all([chatDataService.init(), contactsService.init()]);
+    const chatMessages = await chatDataService.listMessagesReplyingTo(normalizedChatPubkey, [
+      ...targetEventIds,
+    ]);
+    if (!chatMessages.length) return 0;
+    await contactsService.init();
     const replyContact = await contactsService.getContactByPublicKey(normalizedChatPubkey);
     const nextReplyPreview = await buildReplyPreviewFromMessageRow(
       targetMessage,
       normalizedChatPubkey,
       loggedInPubkeyHex,
-      replyContact
+      replyContact,
     );
     const uiThrottleMs = normalizeThrottleMs(options.uiThrottleMs);
-    const chatMessages = await chatDataService.listMessages(normalizedChatPubkey);
     let updatedCount = 0;
 
     for (const messageRow of chatMessages) {
@@ -887,7 +891,7 @@ export function createMessageMutationRuntime({
     deletionAuthorPublicKey: string,
     options: {
       uiThrottleMs?: number;
-    } = {}
+    } = {},
   ): Promise<boolean> {
     await Promise.all([chatDataService.init(), nostrEventDataService.init()]);
 
@@ -901,7 +905,7 @@ export function createMessageMutationRuntime({
     const storedReactionEvent = await nostrEventDataService.getEventById(normalizedReactionEventId);
     if (storedReactionEvent) {
       const reactionAuthorPublicKey = inputSanitizerService.normalizeHexKey(
-        storedReactionEvent.event.pubkey
+        storedReactionEvent.event.pubkey,
       );
       if (
         reactionAuthorPublicKey &&
@@ -915,7 +919,7 @@ export function createMessageMutationRuntime({
       await chatDataService.findMessageByReactionEventId(normalizedReactionEventId);
     const reactionEmoji = storedReactionEvent?.event.content.trim() || null;
     if (!targetMessage && storedReactionEvent) {
-      const reactionEvent = new NDKEvent(ndk, storedReactionEvent.event);
+      const reactionEvent = new ClientEvent(ndk, storedReactionEvent.event);
       const targetMessageEventId = readReactionTargetEventId(reactionEvent);
       if (targetMessageEventId) {
         targetMessage =
@@ -925,13 +929,13 @@ export function createMessageMutationRuntime({
 
     if (!targetMessage) {
       if (storedReactionEvent) {
-        const reactionEvent = new NDKEvent(ndk, storedReactionEvent.event);
+        const reactionEvent = new ClientEvent(ndk, storedReactionEvent.event);
         const targetMessageEventId = readReactionTargetEventId(reactionEvent);
         if (targetMessageEventId) {
           removePendingIncomingReaction(
             targetMessageEventId,
             normalizedReactionEventId,
-            normalizedDeletionAuthorPublicKey
+            normalizedDeletionAuthorPublicKey,
           );
         }
 
@@ -945,7 +949,7 @@ export function createMessageMutationRuntime({
     const matchingReaction = normalizeMessageReactions(targetMessage.meta.reactions).find(
       (reaction) => {
         return normalizeEventId(reaction.eventId) === normalizedReactionEventId;
-      }
+      },
     );
     if (
       matchingReaction &&
@@ -959,7 +963,7 @@ export function createMessageMutationRuntime({
       normalizedReactionEventId,
       normalizedDeletionAuthorPublicKey,
       reactionEmoji,
-      options
+      options,
     );
     await nostrEventDataService.deleteEventsByIds([normalizedReactionEventId]);
     return true;
@@ -973,7 +977,7 @@ export function createMessageMutationRuntime({
     targetKind: number,
     options: {
       uiThrottleMs?: number;
-    } = {}
+    } = {},
   ): Promise<boolean> {
     await chatDataService.init();
 
@@ -982,12 +986,12 @@ export function createMessageMutationRuntime({
       const editedMessage =
         await chatDataService.getMessageByEventIdOrEditReference(messageEventId);
       return Boolean(
-        editedMessage && messageEditReferencesEventId(editedMessage.meta, messageEventId)
+        editedMessage && messageEditReferencesEventId(editedMessage.meta, messageEventId),
       );
     }
 
     const normalizedMessageAuthorPublicKey = inputSanitizerService.normalizeHexKey(
-      targetMessage.author_public_key
+      targetMessage.author_public_key,
     );
     const normalizedDeletionAuthorPublicKey =
       inputSanitizerService.normalizeHexKey(deletionAuthorPublicKey);
@@ -1006,19 +1010,19 @@ export function createMessageMutationRuntime({
       deleteEventId,
       deletedAt,
       targetKind,
-      options
+      options,
     );
     return true;
   }
 
   async function processIncomingDeletionRumorEvent(
-    rumorEvent: NDKEvent,
+    rumorEvent: ClientEvent,
     chatPubkey: string,
     senderPubkeyHex: string,
     options: {
       uiThrottleMs?: number;
       seedRelayUrls?: string[];
-    } = {}
+    } = {},
   ): Promise<void> {
     await Promise.all([chatDataService.init(), nostrEventDataService.init()]);
 
@@ -1033,16 +1037,16 @@ export function createMessageMutationRuntime({
       const targetKind = target.kind ?? null;
       let handled = false;
 
-      if (targetKind === NDKKind.Reaction) {
+      if (targetKind === NostrKind.Reaction) {
         handled = await processIncomingReactionDeletion(target.eventId, senderPubkeyHex, options);
-      } else if (targetKind === NDKKind.PrivateDirectMessage) {
+      } else if (targetKind === NostrKind.PrivateDirectMessage) {
         handled = await processIncomingMessageDeletion(
           target.eventId,
           senderPubkeyHex,
           deleteEventId,
           deletedAt,
-          NDKKind.PrivateDirectMessage,
-          options
+          NostrKind.PrivateDirectMessage,
+          options,
         );
       } else {
         const matchingMessage = await chatDataService.getMessageByEventId(target.eventId);
@@ -1052,8 +1056,8 @@ export function createMessageMutationRuntime({
             senderPubkeyHex,
             deleteEventId,
             deletedAt,
-            NDKKind.PrivateDirectMessage,
-            options
+            NostrKind.PrivateDirectMessage,
+            options,
           );
         } else {
           handled = await processIncomingReactionDeletion(target.eventId, senderPubkeyHex, options);

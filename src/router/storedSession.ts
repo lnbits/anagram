@@ -2,7 +2,7 @@ import {
   AUTH_METHOD_STORAGE_KEY,
   PRIVATE_KEY_STORAGE_KEY,
   PUBLIC_KEY_STORAGE_KEY,
-} from 'src/stores/nostr/constants';
+} from '#src/stores/nostr/constants.ts';
 
 interface StoredSessionCheckerDeps {
   clearAndroidSessionMetadata: () => void;

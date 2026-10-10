@@ -1,8 +1,9 @@
-import { NDKPrivateKeySigner, type NostrEvent } from '@nostr-dev-kit/ndk';
-import { type ChatRow, chatDataService } from 'src/services/chatDataService';
-import { contactsService } from 'src/services/contactsService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { nostrEventDataService } from 'src/services/nostrEventDataService';
+import { preferGroupEpochInvitation } from '#src/utils/groupEpochMetadata.ts';
+import { NostrPrivateKeySigner, type NostrEvent } from '#src/lib/nostr/client.ts';
+import { type ChatRow, chatDataService } from '#src/services/chatDataService.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { nostrEventDataService } from '#src/services/nostrEventDataService.ts';
 import {
   GROUP_CHAT_EPOCH_PUBLIC_KEY_META_KEY,
   GROUP_CURRENT_EPOCH_PRIVATE_KEY_ENCRYPTED_CHAT_META_KEY,
@@ -11,12 +12,12 @@ import {
   GROUP_MEMBER_TICKET_DELIVERIES_CHAT_META_KEY,
   GROUP_OWNER_PUBLIC_KEY_CONTACT_META_KEY,
   GROUP_PRIVATE_KEY_CONTACT_META_KEY,
-} from 'src/stores/nostr/constants';
+} from '#src/stores/nostr/constants.ts';
 import type {
   GroupIdentitySecretContent,
   RelaySaveStatus,
   SubscribePrivateMessagesOptions,
-} from 'src/stores/nostr/types';
+} from '#src/stores/nostr/types.ts';
 import {
   buildAvatarFallbackValue,
   findConflictingKnownGroupEpochNumberValue,
@@ -24,20 +25,20 @@ import {
   resolveCurrentGroupChatEpochEntryValue,
   resolveGroupChatEpochEntriesValue,
   resolveGroupDisplayNameValue,
-} from 'src/stores/nostr/valueUtils';
+} from '#src/stores/nostr/valueUtils.ts';
 import type {
   ChatGroupEpochKey,
   ChatMetadata,
   GroupMemberTicketDelivery,
   MessageRelayStatus,
   NostrEventDirection,
-} from 'src/types/chat';
-import type { ContactMetadata, ContactRecord } from 'src/types/contact';
+} from '#src/types/chat.ts';
+import type { ContactMetadata, ContactRecord } from '#src/types/contact.ts';
 import {
   mergeGroupMemberTicketDeliveries,
   normalizeGroupMemberTicketDeliveries,
-} from 'src/utils/groupMemberTicketDelivery';
-import { normalizeMessageRelayStatuses } from 'src/utils/messageRelayStatus';
+} from '#src/utils/groupMemberTicketDelivery.ts';
+import { normalizeMessageRelayStatuses } from '#src/utils/messageRelayStatus.ts';
 
 interface GroupEpochStateRuntimeDeps {
   bumpContactListVersion: () => void;
@@ -245,7 +246,7 @@ export function createGroupEpochStateRuntime({
     const groupRecipientPubkeys = new Set<string>();
     const chats = await chatDataService.listChats();
     for (const chat of chats) {
-      if (chat.type !== 'group') {
+      if (chat.type !== 'group' || chat.meta.deleted_locally === true) {
         continue;
       }
 
@@ -316,6 +317,7 @@ export function createGroupEpochStateRuntime({
 
       if (shouldUpdateType || shouldUpdateName || shouldUpdateMeta) {
         await contactsService.updateContact(existingContact.id, {
+          metaBase: existingContact.meta,
           type: 'group',
           ...(shouldUpdateName ? { name: fallbackName } : {}),
           ...(shouldUpdateMeta ? { meta: nextContactMeta } : {}),
@@ -409,38 +411,7 @@ export function createGroupEpochStateRuntime({
       };
     }
 
-    const nextSecret: GroupIdentitySecretContent = {
-      ...decryptedSecret,
-      epoch_number: 0,
-      epoch_privkey: NDKPrivateKeySigner.generate().privateKey,
-    };
-    const nextEncryptedSecret = await encryptGroupIdentitySecretContent(nextSecret);
-    const nextMeta: ContactMetadata = {
-      ...(groupContact.meta ?? {}),
-      [GROUP_PRIVATE_KEY_CONTACT_META_KEY]: nextEncryptedSecret,
-    };
-    const updatedContact = await contactsService.updateContact(groupContact.id, {
-      meta: nextMeta,
-    });
-    if (!updatedContact) {
-      throw new Error('Failed to persist initial group epoch state.');
-    }
-
-    bumpContactListVersion();
-    try {
-      await publishGroupIdentitySecret(
-        normalizedGroupPublicKey,
-        nextEncryptedSecret,
-        seedRelayUrls
-      );
-    } catch (error) {
-      console.warn('Failed to publish updated group epoch secret', error);
-    }
-
-    return {
-      contact: updatedContact,
-      secret: nextSecret,
-    };
+    throw new Error('Group epoch state is missing. Restore the group recovery phrase instead of generating a replacement key.');
   }
 
   async function persistIncomingGroupEpochTicket(
@@ -448,9 +419,12 @@ export function createGroupEpochStateRuntime({
     epochNumber: number,
     epochPrivateKey: string,
     options: {
+      allowRecoveryFork?: boolean;
       fallbackName?: string;
       accepted?: boolean;
       invitationCreatedAt?: string;
+      invitationProof?: string;
+      invitationEventId?: string;
       seedRelayUrls?: string[];
     } = {}
   ): Promise<void> {
@@ -483,7 +457,10 @@ export function createGroupEpochStateRuntime({
       epochNumber,
       normalizedEpochPublicKey
     );
-    if (conflictingEpochNumber) {
+    if (conflictingEpochNumber && !options.allowRecoveryFork) {
+      if (existingChat) await chatDataService.updateChat(normalizedGroupPublicKey, { meta: {
+        ...existingChat.meta, group_conflicting_epoch: Math.max(Number(existingChat.meta.group_conflicting_epoch ?? -1), epochNumber),
+      } });
       logConflictingIncomingEpochNumber(
         normalizedGroupPublicKey,
         epochNumber,
@@ -499,21 +476,38 @@ export function createGroupEpochStateRuntime({
         (entry) =>
           entry.epoch_number === epochNumber && entry.epoch_public_key === normalizedEpochPublicKey
       ) ?? null;
-    const entriesByEpoch = new Map<number, ChatGroupEpochKey>(
-      existingGroupEpochKeys.map((entry) => [entry.epoch_number, entry])
+    const entriesByEpoch = new Map<string, ChatGroupEpochKey>(
+      existingGroupEpochKeys.map((entry) => [`${entry.epoch_number}:${entry.epoch_public_key}`, entry])
     );
     if (existingEpochEntry) {
-      entriesByEpoch.set(epochNumber, {
-        ...existingEpochEntry,
-        ...(invitationCreatedAt ? { invitation_created_at: invitationCreatedAt } : {}),
-      });
+      entriesByEpoch.set(
+        `${epochNumber}:${normalizedEpochPublicKey}`,
+        preferGroupEpochInvitation(existingEpochEntry, {
+          ...existingEpochEntry,
+          ...(invitationCreatedAt
+            ? {
+                invitation_created_at: invitationCreatedAt,
+                invitation_proof: options.invitationProof,
+                invitation_event_id: options.invitationEventId,
+              }
+            : {}),
+        }),
+      );
     } else {
-      const encryptedEpochPrivateKey = await encryptPrivateStringContent(normalizedEpochPrivateKey);
-      entriesByEpoch.set(epochNumber, {
+      const encryptedEpochPrivateKey = await encryptPrivateStringContent(
+        normalizedEpochPrivateKey,
+      );
+      entriesByEpoch.set(`${epochNumber}:${normalizedEpochPublicKey}`, {
         epoch_number: epochNumber,
         epoch_public_key: normalizedEpochPublicKey,
         epoch_private_key_encrypted: encryptedEpochPrivateKey,
-        ...(invitationCreatedAt ? { invitation_created_at: invitationCreatedAt } : {}),
+        ...(invitationCreatedAt
+          ? {
+              invitation_created_at: invitationCreatedAt,
+              invitation_proof: options.invitationProof,
+              invitation_event_id: options.invitationEventId,
+            }
+          : {}),
       });
     }
 

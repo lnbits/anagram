@@ -7,7 +7,7 @@ export type ForceRefreshResult =
   | { ok: true }
   | { ok: false; reason: 'server-unreachable' | 'browser-unsupported' | 'refresh-in-progress' };
 
-export const APP_SHELL_CACHE_PREFIX = 'nostr-chat-app-shell-';
+export const APP_SHELL_CACHE_PREFIX = 'anagram-shell-';
 export const CURRENT_APP_BUILD_INFO: AppBuildInfo = {
   appVersion: readStringEnv(process.env.APP_VERSION, '0.0.0'),
   bundleId: readStringEnv(process.env.APP_BUNDLE_ID, 'dev'),
@@ -49,7 +49,11 @@ function resolveFetchImpl(fetchImpl?: typeof fetch): typeof fetch | null {
 }
 
 export function isAppShellRuntimeEnabled(): boolean {
-  if (!readBooleanEnv(process.env.APP_ENABLE_APP_SHELL) || !canUseWindow()) {
+  if (
+    !readBooleanEnv(process.env.APP_ENABLE_APP_SHELL) ||
+    !canUseWindow() ||
+    '__TAURI_INTERNALS__' in window
+  ) {
     return false;
   }
 
@@ -89,7 +93,7 @@ export function normalizeAppBuildInfo(value: unknown): AppBuildInfo | null {
 
 export function hasDifferentBundle(
   currentBuildInfo: AppBuildInfo,
-  serverBuildInfo: AppBuildInfo | null
+  serverBuildInfo: AppBuildInfo | null,
 ): boolean {
   return Boolean(serverBuildInfo && serverBuildInfo.bundleId !== currentBuildInfo.bundleId);
 }
@@ -111,13 +115,14 @@ function buildRuntimeUrl(pathname: string, currentHref?: string): URL {
     return new URL(resolveAppShellUrl(pathname, currentHref));
   }
 
-  return new URL(resolveAppShellUrl(pathname, window.location.href));
+  // The Svelte static app is hosted at the origin root; /chats/:id is a route.
+  return new URL(pathname, new URL('/', window.location.href));
 }
 
 async function fetchWithTimeout(
   fetchImpl: typeof fetch,
   url: URL,
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = globalThis.setTimeout(() => controller.abort(), timeoutMs);
@@ -138,7 +143,7 @@ async function fetchWithTimeout(
 }
 
 export async function fetchServerBuildInfo(
-  options: FetchOptions = {}
+  options: FetchOptions = {},
 ): Promise<AppBuildInfo | null> {
   const fetchImpl = resolveFetchImpl(options.fetchImpl);
   if (!fetchImpl) {
@@ -152,7 +157,7 @@ export async function fetchServerBuildInfo(
     const response = await fetchWithTimeout(
       fetchImpl,
       url,
-      options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS
+      options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
     );
     if (!response.ok) {
       return null;
@@ -177,7 +182,7 @@ export async function canReachAppServer(options: FetchOptions = {}): Promise<boo
     const response = await fetchWithTimeout(
       fetchImpl,
       url,
-      options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS
+      options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
     );
     return response.ok;
   } catch {
@@ -191,7 +196,10 @@ export async function registerAppShellServiceWorker(): Promise<ServiceWorkerRegi
   }
 
   const serviceWorkerUrl = buildRuntimeUrl(SERVICE_WORKER_FILENAME);
-  const registration = await navigator.serviceWorker.register(serviceWorkerUrl.toString());
+  const registration = await navigator.serviceWorker.register(serviceWorkerUrl.toString(), {
+    type: 'module',
+    updateViaCache: 'none',
+  });
   void registration.update().catch((error) => {
     console.warn('Failed to check for an app shell service worker update.', error);
   });
@@ -207,7 +215,7 @@ export async function clearAppShellCaches(): Promise<void> {
   await Promise.all(
     cacheNames
       .filter((name) => name.startsWith(APP_SHELL_CACHE_PREFIX))
-      .map((name) => caches.delete(name))
+      .map((name) => caches.delete(name)),
   );
 }
 
@@ -221,6 +229,6 @@ export async function unregisterAppShellServiceWorkers(): Promise<void> {
   await Promise.all(
     registrations
       .filter((registration) => registration.scope === appBaseUrl.toString())
-      .map((registration) => registration.unregister())
+      .map((registration) => registration.unregister()),
   );
 }

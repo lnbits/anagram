@@ -1,24 +1,24 @@
-import NDK, {
+import NostrClient, {
   giftWrap,
   isValidNip05,
   isValidPubkey,
-  NDKEvent,
-  NDKKind,
-  NDKPrivateKeySigner,
-  type NDKSigner,
-  NDKUser,
+  ClientEvent,
+  NostrKind,
+  NostrPrivateKeySigner,
+  type NostrSigner,
+  NostrUser,
   type NostrEvent,
-} from '@nostr-dev-kit/ndk';
-import { chatDataService } from 'src/services/chatDataService';
-import { contactsService } from 'src/services/contactsService';
+} from '#src/lib/nostr/client.ts';
+import { chatDataService } from '#src/services/chatDataService.ts';
+import { contactsService } from '#src/services/contactsService.ts';
 import {
   inputSanitizerService,
   type NpubValidationResult,
   type NsecValidationResult,
   type PrivateKeyValidationResult,
-} from 'src/services/inputSanitizerService';
-import { nostrEventDataService } from 'src/services/nostrEventDataService';
-import { getOrCreateOutboundGiftWrap } from 'src/stores/nostr/outboundGiftWrap';
+} from '#src/services/inputSanitizerService.ts';
+import { nostrEventDataService } from '#src/services/nostrEventDataService.ts';
+import { getOrCreateOutboundGiftWrap } from '#src/stores/nostr/outboundGiftWrap.ts';
 import type {
   GiftWrappedRumorPublishResult,
   NostrIdentifierResolutionResult,
@@ -26,10 +26,11 @@ import type {
   SendDirectMessageDeletionOptions,
   SendDirectMessageOptions,
   SendDirectMessageReactionOptions,
-} from 'src/stores/nostr/types';
-import type { MessageRelayStatus } from 'src/types/chat';
+} from '#src/stores/nostr/types.ts';
+import type { MessageRelayStatus } from '#src/types/chat.ts';
 
 interface UserActionsDeps {
+  prepareOutgoingPrivateMessage: (rumor: ClientEvent, recipient: string, retry?: boolean) => Promise<void>;
   appendRelayStatusesToGroupMemberTicketEvent: (
     groupPublicKey: string,
     memberPublicKey: string,
@@ -40,7 +41,7 @@ interface UserActionsDeps {
       direction?: 'in' | 'out';
       eventId?: string;
       createdAt?: string;
-    }
+    },
   ) => Promise<void>;
   appendRelayStatusesToMessageEvent: (
     messageId: number,
@@ -49,16 +50,16 @@ interface UserActionsDeps {
       event?: NostrEvent;
       direction?: 'in' | 'out';
       eventId?: string;
-    }
+    },
   ) => Promise<void>;
   buildFailedOutboundRelayStatuses: (
     relayUrls: string[],
     scope: 'recipient' | 'self',
-    detail: string
+    detail: string,
   ) => MessageRelayStatus[];
   buildPendingOutboundRelayStatuses: (
     relayUrls: string[],
-    scope: 'recipient' | 'self'
+    scope: 'recipient' | 'self',
   ) => MessageRelayStatus[];
   createDirectMessageRumorEvent: (
     senderPubkey: string,
@@ -66,15 +67,15 @@ interface UserActionsDeps {
     message: string,
     createdAt?: number,
     replyToEventId?: string | null,
-    additionalTags?: string[][]
-  ) => NDKEvent;
+    additionalTags?: string[][],
+  ) => ClientEvent;
   createEventDeletionRumorEvent: (
     senderPubkey: string,
     recipientPubkey: string,
     targetEventId: string,
     targetKind: number,
-    createdAt?: number
-  ) => NDKEvent;
+    createdAt?: number,
+  ) => ClientEvent;
   createReactionRumorEvent: (
     senderPubkey: string,
     recipientPubkey: string,
@@ -82,35 +83,35 @@ interface UserActionsDeps {
     targetEventId: string,
     targetAuthorPublicKey: string,
     targetKind: number,
-    createdAt?: number
-  ) => NDKEvent;
-  createStoredDirectMessageRumorEvent: (event: NostrEvent) => NDKEvent | null;
-  createStoredSignedEvent: (event: NostrEvent) => NDKEvent | null;
+    createdAt?: number,
+  ) => ClientEvent;
+  createStoredDirectMessageRumorEvent: (event: NostrEvent) => ClientEvent | null;
+  createStoredSignedEvent: (event: NostrEvent) => ClientEvent | null;
   ensureGroupIdentitySecretEpochState: (
     groupContact: Awaited<ReturnType<typeof contactsService.getContactByPublicKey>>,
-    seedRelayUrls?: string[]
+    seedRelayUrls?: string[],
   ) => Promise<{ secret: { group_privkey: string } }>;
-  ensureRelayConnections: (relayUrls: string[]) => Promise<void>;
+  ensureRelayConnections: (relayUrls: string[], options?: { force?: boolean }) => Promise<void>;
   getLoggedInPublicKeyHex: () => string | null;
-  getOrCreateSigner: () => Promise<NDKSigner & { pubkey: string }>;
+  getOrCreateSigner: () => Promise<NostrSigner & { pubkey: string }>;
   giftWrapSignedEvent: (
-    signedEvent: NDKEvent,
-    recipient: NDKUser,
-    signer: NDKSigner
-  ) => Promise<NDKEvent>;
-  ndk: NDK;
+    signedEvent: ClientEvent,
+    recipient: NostrUser,
+    signer: NostrSigner,
+  ) => Promise<ClientEvent>;
+  ndk: NostrClient;
   normalizeEventId: (value: unknown) => string | null;
   normalizeRelayStatusUrl: (value: string) => string | null;
   logMessageRelayDiagnostics: (
     phase: string,
     details: Record<string, unknown>,
-    level?: 'info' | 'warn' | 'error'
+    level?: 'info' | 'warn' | 'error',
   ) => void;
   pendingDirectMessageRelayRetryPromises: Map<string, Promise<void>>;
   publishEventWithRelayStatuses: (
     event: { kind: number },
     relayUrls: string[],
-    scope?: 'recipient' | 'self'
+    scope?: 'recipient' | 'self',
   ) => Promise<{ relayStatuses: MessageRelayStatus[]; error: Error | null }>;
   readDirectMessageRecipientPubkey: (event: NostrEvent) => string | null;
   readEpochNumberTag: (tags: string[][]) => number | null;
@@ -123,13 +124,13 @@ interface UserActionsDeps {
     rumorFactory: (
       senderPubkey: string,
       normalizedRecipientPubkey: string,
-      createdAt?: number
-    ) => NDKEvent,
+      createdAt?: number,
+    ) => ClientEvent,
     options?: {
       localMessageId?: number;
       createdAt?: string;
       publishSelfCopy?: boolean;
-    }
+    },
   ) => Promise<GiftWrappedRumorPublishResult>;
   toIsoTimestampFromUnix: (value: number | undefined) => string;
 }
@@ -140,6 +141,7 @@ interface RetryDirectMessageRelayOptions {
 
 export function createUserActions({
   appendRelayStatusesToGroupMemberTicketEvent,
+  prepareOutgoingPrivateMessage,
   appendRelayStatusesToMessageEvent,
   buildFailedOutboundRelayStatuses,
   buildPendingOutboundRelayStatuses,
@@ -211,7 +213,7 @@ export function createUserActions({
     }
 
     try {
-      const user = await NDKUser.fromNip05(value, ndk, true);
+      const user = await NostrUser.fromNip05(value, ndk, true);
       const normalizedPubkey = user?.pubkey?.toLowerCase() ?? null;
 
       if (!normalizedPubkey || !isValidPubkey(normalizedPubkey)) {
@@ -295,7 +297,7 @@ export function createUserActions({
     recipientPublicKey: string,
     textMessage: string,
     relays: string[],
-    options: SendDirectMessageOptions = {}
+    options: SendDirectMessageOptions = {},
   ): Promise<NostrEvent> {
     const message = textMessage.trim();
     if (!message) {
@@ -307,7 +309,7 @@ export function createUserActions({
     const publishResult = await sendGiftWrappedRumor(
       recipientPublicKey,
       relays,
-      NDKKind.PrivateDirectMessage,
+      NostrKind.PrivateDirectMessage,
       (senderPubkey, normalizedRecipientPubkey, createdAt) => {
         return createDirectMessageRumorEvent(
           senderPubkey,
@@ -315,10 +317,10 @@ export function createUserActions({
           message,
           createdAt,
           replyTargetEventId,
-          options.additionalTags
+          options.additionalTags,
         );
       },
-      options
+      options,
     );
     return publishResult.giftWrapEvent;
   }
@@ -329,7 +331,7 @@ export function createUserActions({
     targetEventId: string,
     targetAuthorPublicKey: string,
     relays: string[],
-    options: SendDirectMessageReactionOptions = {}
+    options: SendDirectMessageReactionOptions = {},
   ): Promise<NostrEvent | null> {
     const normalizedEmoji = emoji.trim();
     const normalizedTargetEventId = normalizeEventId(targetEventId);
@@ -350,12 +352,12 @@ export function createUserActions({
     const targetKind =
       Number.isInteger(options.targetKind) && Number(options.targetKind) > 0
         ? Number(options.targetKind)
-        : NDKKind.PrivateDirectMessage;
+        : NostrKind.PrivateDirectMessage;
 
     const publishResult = await sendGiftWrappedRumor(
       recipientPublicKey,
       relays,
-      NDKKind.Reaction,
+      NostrKind.Reaction,
       (senderPubkey, normalizedRecipientPubkey, createdAt) => {
         return createReactionRumorEvent(
           senderPubkey,
@@ -364,13 +366,13 @@ export function createUserActions({
           normalizedTargetEventId,
           normalizedTargetAuthorPublicKey,
           targetKind,
-          createdAt
+          createdAt,
         );
       },
       {
         createdAt: options.createdAt,
         publishSelfCopy: options.publishSelfCopy,
-      }
+      },
     );
     if (publishResult.rumorEvent) {
       await nostrEventDataService.upsertEvent({
@@ -388,7 +390,7 @@ export function createUserActions({
     targetEventId: string,
     targetKind: number,
     relays: string[],
-    options: SendDirectMessageDeletionOptions = {}
+    options: SendDirectMessageDeletionOptions = {},
   ): Promise<NostrEvent | null> {
     const normalizedTargetEventId = normalizeEventId(targetEventId);
     if (!normalizedTargetEventId) {
@@ -402,20 +404,20 @@ export function createUserActions({
     const publishResult = await sendGiftWrappedRumor(
       recipientPublicKey,
       relays,
-      NDKKind.EventDeletion,
+      NostrKind.EventDeletion,
       (senderPubkey, normalizedRecipientPubkey, createdAt) => {
         return createEventDeletionRumorEvent(
           senderPubkey,
           normalizedRecipientPubkey,
           normalizedTargetEventId,
           Number(targetKind),
-          createdAt
+          createdAt,
         );
       },
       {
         createdAt: options.createdAt,
         publishSelfCopy: options.publishSelfCopy,
-      }
+      },
     );
 
     return publishResult.rumorEvent;
@@ -425,7 +427,7 @@ export function createUserActions({
     messageId: number,
     relayUrl: string,
     scope: 'recipient' | 'self',
-    options: RetryDirectMessageRelayOptions = {}
+    options: RetryDirectMessageRelayOptions = {},
   ): Promise<void> {
     const normalizedMessageId = Number(messageId);
     const normalizedRelayUrl = normalizeRelayStatusUrl(relayUrl);
@@ -475,6 +477,8 @@ export function createUserActions({
         throw new Error('Stored direct message event is missing a recipient.');
       }
 
+      await prepareOutgoingPrivateMessage(rumorEvent, recipientPubkey, true);
+
       logMessageRelayDiagnostics('retry-start', {
         messageId: normalizedMessageId,
         eventId: message.event_id,
@@ -490,27 +494,28 @@ export function createUserActions({
           event: storedEvent.event,
           direction: 'out',
           eventId: message.event_id,
-        }
+        },
       );
 
       try {
         await ensureRelayConnections([normalizedRelayUrl]);
         const recipient =
           scope === 'self'
-            ? new NDKUser({ pubkey: signer.pubkey })
-            : new NDKUser({ pubkey: recipientPubkey });
-        const giftWrapEvent = new NDKEvent(
+            ? new NostrUser({ pubkey: signer.pubkey })
+            : new NostrUser({ pubkey: recipientPubkey });
+        const giftWrapEvent = new ClientEvent(
           ndk,
           await getOrCreateOutboundGiftWrap(storedEvent.event, scope, () =>
             giftWrap(rumorEvent, recipient, signer as any, {
-              rumorKind: NDKKind.PrivateDirectMessage,
-            })
-          )
+              rumorKind: NostrKind.PrivateDirectMessage,
+            }),
+          ),
         );
+        await prepareOutgoingPrivateMessage(rumorEvent, recipientPubkey, true);
         const publishResult = await publishEventWithRelayStatuses(
           giftWrapEvent as { kind: number },
           [normalizedRelayUrl],
-          scope
+          scope,
         );
 
         await appendRelayStatusesToMessageEvent(normalizedMessageId, publishResult.relayStatuses, {
@@ -522,7 +527,7 @@ export function createUserActions({
         if (publishResult.error) {
           const failedRelayStatus = publishResult.relayStatuses.find(
             (relayStatus) =>
-              relayStatus.relay_url === normalizedRelayUrl && relayStatus.status === 'failed'
+              relayStatus.relay_url === normalizedRelayUrl && relayStatus.status === 'failed',
           );
           const detail = failedRelayStatus?.detail?.trim();
           if (detail) {
@@ -552,7 +557,7 @@ export function createUserActions({
             event: storedEvent.event,
             direction: 'out',
             eventId: message.event_id,
-          }
+          },
         );
 
         logMessageRelayDiagnostics(
@@ -565,7 +570,7 @@ export function createUserActions({
             trigger,
             error: retryFailureDetail,
           },
-          'warn'
+          'warn',
         );
 
         throw error;
@@ -603,7 +608,7 @@ export function createUserActions({
 
     const groupPublicKey = inputSanitizerService.normalizeHexKey(storedEvent.event.pubkey);
     const memberPublicKey = inputSanitizerService.normalizeHexKey(
-      readFirstTagValue(storedEvent.event.tags, 'p') ?? ''
+      readFirstTagValue(storedEvent.event.tags, 'p') ?? '',
     );
     const epochNumber = readEpochNumberTag(storedEvent.event.tags);
     const createdAt = toIsoTimestampFromUnix(storedEvent.event.created_at);
@@ -618,7 +623,7 @@ export function createUserActions({
 
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
     const normalizedOwnerPublicKey = inputSanitizerService.normalizeHexKey(
-      groupContact.meta.owner_public_key ?? ''
+      groupContact.meta.owner_public_key ?? '',
     );
     if (
       !loggedInPubkeyHex ||
@@ -629,7 +634,7 @@ export function createUserActions({
     }
 
     const { secret } = await ensureGroupIdentitySecretEpochState(groupContact, []);
-    const groupSigner = new NDKPrivateKeySigner(secret.group_privkey, ndk);
+    const groupSigner = new NostrPrivateKeySigner(secret.group_privkey, ndk);
     const signerUser = await groupSigner.user();
     if (inputSanitizerService.normalizeHexKey(signerUser.pubkey) !== groupPublicKey) {
       throw new Error('Decrypted group private key does not match the group public key.');
@@ -645,21 +650,21 @@ export function createUserActions({
         direction: 'out',
         eventId: normalizedEventId,
         createdAt,
-      }
+      },
     );
 
     try {
-      await ensureRelayConnections([normalizedRelayUrl]);
-      const recipient = new NDKUser({ pubkey: memberPublicKey });
+      await ensureRelayConnections([normalizedRelayUrl], { force: true });
+      const recipient = new NostrUser({ pubkey: memberPublicKey });
       const giftWrapEvent = await giftWrapSignedEvent(
         signedEpochTicketEvent,
         recipient,
-        groupSigner
+        groupSigner,
       );
       const publishResult = await publishEventWithRelayStatuses(
         giftWrapEvent as { kind: number },
         [normalizedRelayUrl],
-        'recipient'
+        'recipient',
       );
 
       await appendRelayStatusesToGroupMemberTicketEvent(
@@ -672,13 +677,13 @@ export function createUserActions({
           direction: 'out',
           eventId: normalizedEventId,
           createdAt,
-        }
+        },
       );
 
       if (publishResult.error) {
         const failedRelayStatus = publishResult.relayStatuses.find(
           (relayStatus) =>
-            relayStatus.relay_url === normalizedRelayUrl && relayStatus.status === 'failed'
+            relayStatus.relay_url === normalizedRelayUrl && relayStatus.status === 'failed',
         );
         const detail = failedRelayStatus?.detail?.trim();
         if (detail) {
@@ -703,7 +708,7 @@ export function createUserActions({
           direction: 'out',
           eventId: normalizedEventId,
           createdAt,
-        }
+        },
       );
 
       throw error;

@@ -1,4 +1,4 @@
-import { type WatchStopHandle, watch } from 'vue';
+import { type WatchStopHandle, watch } from '#src/lib/state/reactivity.ts';
 
 export function watchRelaySettingsSubscriptions(options: {
   hydrate: () => void;
@@ -14,6 +14,6 @@ export function watchRelaySettingsSubscriptions(options: {
     () => {
       if (!options.isRestoring() && options.hasSessionSubscriptions()) options.refresh();
     },
-    { flush: 'sync' }
+    {}
   );
 }

@@ -1,8 +1,14 @@
-import type { NDKEvent, NDKSigner, NostrEvent } from '@nostr-dev-kit/ndk';
-import type { ChatRow } from 'src/services/chatDataService';
-import type { MessageRow } from 'src/stores/nostr/types';
-import type { MessageRelayStatus, MessageReplyPreview, NostrEventDirection } from 'src/types/chat';
-import type { ContactRecord } from 'src/types/contact';
+import type { ClientEvent, NostrSigner, NostrEvent } from '#src/lib/nostr/client.ts';
+import type { ChatRow } from '#src/services/chatDataService.ts';
+import type { MessageRow } from '#src/stores/nostr/types.ts';
+import type { CallSignal } from '#src/types/call.ts';
+import type { CallRoomSignal } from '#src/types/callRoom.ts';
+import type {
+  MessageRelayStatus,
+  MessageReplyPreview,
+  NostrEventDirection,
+} from '#src/types/chat.ts';
+import type { ContactRecord } from '#src/types/contact.ts';
 
 export interface GroupEpochEntryLike {
   epoch_number: number;
@@ -49,6 +55,9 @@ export interface InboundTraceOptions {
 }
 
 export interface PrivateMessagesIngestRuntimeDeps {
+  verifyIncomingGroupMessage: (rumor: ClientEvent, recipient: string) => Promise<boolean>;
+  processIncomingRoomSignal?: (senderPubkey: string, signal: CallRoomSignal) => Promise<void>;
+  processIncomingCallSignal?: (senderPubkey: string, signal: CallSignal) => Promise<void>;
   appendRelayStatusesToMessageEvent: (
     messageId: number,
     relayStatuses: MessageRelayStatus[],
@@ -57,25 +66,25 @@ export interface PrivateMessagesIngestRuntimeDeps {
       direction?: NostrEventDirection;
       eventId?: string;
       uiThrottleMs?: number;
-    }
+    },
   ) => Promise<void>;
   applyPendingIncomingDeletionsForMessage: (
     messageRow: MessageRow,
     options?: {
       uiThrottleMs?: number;
-    }
+    },
   ) => Promise<MessageRow>;
   applyPendingIncomingReactionsForMessage: (
     messageRow: MessageRow,
     options?: {
       uiThrottleMs?: number;
-    }
+    },
   ) => Promise<MessageRow>;
   buildInboundRelayStatuses: (relayUrls: string[]) => MessageRelayStatus[];
   buildInboundTraceDetails: (options?: InboundTraceOptions) => Record<string, unknown>;
   buildLoggedNostrEvent: (
-    event: Pick<NDKEvent, 'id' | 'kind' | 'created_at' | 'pubkey' | 'content' | 'tags'>,
-    storedEvent?: NostrEvent | null
+    event: Pick<ClientEvent, 'id' | 'kind' | 'created_at' | 'pubkey' | 'content' | 'tags'>,
+    storedEvent?: NostrEvent | null,
   ) => Record<string, unknown>;
   buildReplyPreviewFromTargetEvent: (
     targetEventId: string,
@@ -85,32 +94,32 @@ export interface PrivateMessagesIngestRuntimeDeps {
     options?: {
       referenceCreatedAt?: number | null;
       seedRelayUrls?: string[];
-    }
+    },
   ) => Promise<MessageReplyPreview>;
   buildSubscriptionEventDetails: (
-    event: Pick<NDKEvent, 'id' | 'kind' | 'created_at' | 'pubkey'>
+    event: Pick<ClientEvent, 'id' | 'kind' | 'created_at' | 'pubkey'>,
   ) => Record<string, unknown>;
   chatStore: ChatStoreRuntime;
   deriveChatName: (contact: ContactRecord | null, publicKey: string) => string;
   derivePublicKeyFromPrivateKey: (privateKey: string) => string | null;
-  extractRelayUrlsFromEvent: (event: NDKEvent) => string[];
+  extractRelayUrlsFromEvent: (event: ClientEvent) => string[];
   findConflictingKnownGroupEpochNumber: (
     existingChat: ChatRow | null | undefined,
     epochNumber: number,
-    epochPublicKey: string
+    epochPublicKey: string,
   ) => GroupEpochEntryLike | null;
   findGroupChatEpochContextByRecipientPubkey: (
-    epochPublicKey: string
+    epochPublicKey: string,
   ) => Promise<GroupEpochContext | null>;
   findHigherKnownGroupEpochConflict: (
     existingChat: ChatRow | null | undefined,
     epochNumber: number,
-    incomingEpochCreatedAt: string | null
+    incomingEpochCreatedAt: string | null,
   ) => HigherKnownGroupEpochConflict | null;
   formatSubscriptionLogValue: (value: string | null | undefined) => string | null;
   getPrivateMessagesRestoreThrottleMs: () => number;
   isContactListedInPrivateContactList: (
-    contact: Pick<ContactRecord, 'meta'> | null | undefined
+    contact: Pick<ContactRecord, 'meta'> | null | undefined,
   ) => boolean;
   isPubkeyBlocked: (pubkeyHex: string) => boolean;
   lastSeenReceivedActivityAtMetaKey: string;
@@ -119,13 +128,13 @@ export interface PrivateMessagesIngestRuntimeDeps {
     epochNumber: number,
     epochPublicKey: string,
     invitationCreatedAt: string | null,
-    conflictingEpochNumber: GroupEpochEntryLike
+    conflictingEpochNumber: GroupEpochEntryLike,
   ) => void;
   logDeveloperTrace: (
     level: string,
     scope: string,
     phase: string,
-    details?: Record<string, unknown>
+    details?: Record<string, unknown>,
   ) => void;
   logInboundEvent: (stage: string, details?: Record<string, unknown>) => void;
   logInvalidIncomingEpochNumber: (
@@ -133,12 +142,12 @@ export interface PrivateMessagesIngestRuntimeDeps {
     epochNumber: number,
     epochPublicKey: string,
     invitationCreatedAt: string | null,
-    higherEpochConflict: HigherKnownGroupEpochConflict
+    higherEpochConflict: HigherKnownGroupEpochConflict,
   ) => void;
   logSubscription: (
     label: 'private-messages',
     stage: string,
-    details?: Record<string, unknown>
+    details?: Record<string, unknown>,
   ) => void;
   normalizeEventId: (value: unknown) => string | null;
   normalizeThrottleMs: (value: number | undefined) => number;
@@ -151,20 +160,22 @@ export interface PrivateMessagesIngestRuntimeDeps {
       fallbackName?: string;
       accepted?: boolean;
       invitationCreatedAt?: string;
+      invitationProof?: string;
+      invitationEventId?: string;
       seedRelayUrls?: string[];
-    }
+    },
   ) => Promise<void>;
   processIncomingDeletionRumorEvent: (
-    rumorEvent: NDKEvent,
+    rumorEvent: ClientEvent,
     chatPubkey: string,
     senderPubkeyHex: string,
     options?: {
       uiThrottleMs?: number;
       seedRelayUrls?: string[];
-    }
+    },
   ) => Promise<void>;
   processIncomingReactionRumorEvent: (
-    rumorEvent: NDKEvent,
+    rumorEvent: ClientEvent,
     chatPubkey: string,
     senderPubkeyHex: string,
     options: {
@@ -172,27 +183,28 @@ export interface PrivateMessagesIngestRuntimeDeps {
       direction: NostrEventDirection;
       rumorNostrEvent: NostrEvent | null;
       relayStatuses: MessageRelayStatus[];
-    }
+    },
   ) => Promise<void>;
   refreshReplyPreviewsForTargetMessage: (
     messageRow: MessageRow,
     options?: {
       uiThrottleMs?: number;
-    }
+    },
   ) => Promise<number>;
+  queueChatProfileRefresh?: () => void;
   queueBackgroundGroupContactRefresh: (
     groupPublicKey: string,
     fallbackName: string,
-    seedRelayUrls?: string[]
+    seedRelayUrls?: string[],
   ) => void;
   queuePrivateMessagesUiRefresh: (options: {
     throttleMs?: number;
     reloadChats?: boolean;
     reloadMessages?: boolean;
   }) => void;
-  readReplyTargetEventId: (event: NDKEvent) => string | null;
+  readReplyTargetEventId: (event: ClientEvent) => string | null;
   resolveCurrentGroupChatEpochEntry: (
-    chat: Pick<ChatRow, 'meta' | 'type'>
+    chat: Pick<ChatRow, 'meta' | 'type'>,
   ) => GroupEpochEntryLike | null;
   resolveGroupDisplayName: (groupPublicKey: string) => string;
   resolveIncomingChatInboxStateValue: (options: {
@@ -200,16 +212,16 @@ export interface PrivateMessagesIngestRuntimeDeps {
     isAcceptedContact: boolean;
   }) => string;
   resolveIncomingPrivateMessageRecipientContext: (
-    wrappedEvent: NDKEvent,
-    loggedInPubkeyHex: string
+    wrappedEvent: ClientEvent,
+    loggedInPubkeyHex: string,
   ) => Promise<{
     recipientPubkey: string;
-    unwrapSigner: NDKSigner;
+    unwrapSigner: NostrSigner;
     groupChatPublicKey: string | null;
   } | null>;
   shouldNotifyForAcceptedChatOnly: (
     chatPubkey: string,
-    chatMeta: Record<string, unknown> | null | undefined
+    chatMeta: Record<string, unknown> | null | undefined,
   ) => Promise<boolean>;
   showIncomingMessageBrowserNotification: (options: {
     chatPubkey: string;
@@ -219,16 +231,16 @@ export interface PrivateMessagesIngestRuntimeDeps {
   }) => void;
   toComparableTimestamp: (value: string | null | undefined) => number;
   toIsoTimestampFromUnix: (value: number | undefined) => string;
-  toStoredNostrEvent: (event: NDKEvent) => Promise<NostrEvent | null>;
-  unwrapGiftWrapSealEvent: (wrappedEvent: NDKEvent) => Promise<NostrEvent | null>;
+  toStoredNostrEvent: (event: ClientEvent) => Promise<NostrEvent | null>;
+  unwrapGiftWrapSealEvent: (wrappedEvent: ClientEvent) => Promise<NostrEvent | null>;
   upsertIncomingGroupInviteRequestChat: (
     groupPublicKey: string,
     createdAt: string,
-    preview?: Pick<ContactRecord, 'name' | 'meta'> | null
+    preview?: Pick<ContactRecord, 'name' | 'meta'> | null,
   ) => Promise<void>;
   verifyIncomingGroupEpochTicket: (
-    rumorEvent: NDKEvent,
-    sealEvent: NostrEvent | null
+    rumorEvent: ClientEvent,
+    sealEvent: NostrEvent | null,
   ) => Promise<{
     isValid: boolean;
     signedEvent: NostrEvent | null;

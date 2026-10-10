@@ -1,4 +1,4 @@
-import type { MessageRelayStatus } from 'src/types/chat';
+import type { MessageRelayStatus } from '#src/types/chat.ts';
 
 export function isMessageRelayStatus(value: unknown): value is MessageRelayStatus {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {

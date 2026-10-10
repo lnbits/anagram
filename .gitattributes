@@ -1,0 +1,2 @@
+# Keep text bytes consistent across platforms, including checksummed Iroh assets.
+* text=auto eol=lf

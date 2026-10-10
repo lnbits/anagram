@@ -1,27 +1,33 @@
-import NDK, {
-  NDKEvent,
-  type NDKFilter,
-  NDKKind,
-  NDKRelayList,
-  NDKRelaySet,
-  NDKSubscriptionCacheUsage,
-  type NDKSubscriptionOptions,
-  type NDKUser,
-} from '@nostr-dev-kit/ndk';
-import { contactsService } from 'src/services/contactsService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { useNip65RelayStore } from 'src/stores/nip65RelayStore';
+import { privateStorageRelayService } from '#src/services/privateStorageRelayService.ts';
+import type { Event } from 'nostr-tools';
+import NostrClient, {
+  ClientEvent,
+  type NostrFilter,
+  NostrKind,
+  NostrRelayList,
+  NostrRelaySet,
+  NostrSubscriptionCacheUsage,
+  type NostrSubscriptionOptions,
+  type NostrUser,
+} from '#src/lib/nostr/client.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { useNip65RelayStore } from '#src/stores/nip65RelayStore.ts';
 import {
   createDesiredSubscriptions,
   subscriptionSignature,
-} from 'src/stores/nostr/desiredSubscriptions';
-import { createReadyRelaySet, fetchEventWithRelayTimeout } from 'src/stores/nostr/relayQueryUtils';
-import type { AuthMethod, RelayListMetadataEntry } from 'src/stores/nostr/types';
+} from '#src/stores/nostr/desiredSubscriptions.ts';
+import {
+  createReadyRelaySet,
+  fetchEventWithRelayTimeout,
+} from '#src/stores/nostr/relayQueryUtils.ts';
+import type { AuthMethod, RelayListMetadataEntry } from '#src/stores/nostr/types.ts';
 import {
   contactRelayListsEqualValue,
   mergeRelayEntriesWithDirectMessageReceiveRelayEntriesValue,
-} from 'src/stores/nostr/valueUtils';
-import type { ContactRelay } from 'src/types/contact';
+  relayEntriesFromDirectMessageReceiveRelayEventValue,
+} from '#src/stores/nostr/valueUtils.ts';
+import type { ContactRelay } from '#src/types/contact.ts';
 
 const DIRECT_MESSAGE_RECEIVE_RELAY_TAG = 'relay';
 
@@ -29,23 +35,23 @@ interface MyRelayListRuntimeDeps {
   beginStartupStep: (stepId: 'my-relay-list') => void;
   bumpContactListVersion: () => void;
   buildSubscriptionEventDetails: (
-    event: Pick<NDKEvent, 'id' | 'kind' | 'created_at' | 'pubkey'>
+    event: Pick<ClientEvent, 'id' | 'kind' | 'created_at' | 'pubkey'>,
   ) => Record<string, unknown>;
   buildSubscriptionRelayDetails: (relayUrls: string[]) => Record<string, unknown>;
   completeStartupStep: (stepId: 'my-relay-list') => void;
   ensureRelayConnections: (relayUrls: string[]) => Promise<void>;
-  extractRelayUrlsFromEvent: (event: NDKEvent) => string[];
+  extractRelayUrlsFromEvent: (event: ClientEvent) => string[];
   failStartupStep: (stepId: 'my-relay-list', error: unknown) => void;
   formatSubscriptionLogValue: (value: string | null | undefined) => string | null;
   getFilterSince: () => number;
   getLoggedInPublicKeyHex: () => string | null;
-  getLoggedInSignerUser: () => Promise<NDKUser>;
+  getLoggedInSignerUser: () => Promise<NostrUser>;
   getRelaySnapshots: (relayUrls: string[]) => unknown[];
   getStoredAuthMethod: () => AuthMethod | null;
   logSubscription: (label: string, stage: string, details?: Record<string, unknown>) => void;
-  ndk: NDK;
+  ndk: NostrClient;
   queueTrackedContactSubscriptionsRefresh: (seedRelayUrls?: string[], force?: boolean) => void;
-  relayEntriesFromRelayList: (relayList: NDKRelayList | null | undefined) => ContactRelay[];
+  relayEntriesFromRelayList: (relayList: NostrRelayList | null | undefined) => ContactRelay[];
   relaySignature: (relays: string[]) => string;
   resolveLoggedInPublishRelayUrls: (seedRelayUrls?: string[]) => Promise<string[]>;
   resolveLoggedInReadRelayUrls: (seedRelayUrls?: string[]) => Promise<string[]>;
@@ -53,14 +59,14 @@ interface MyRelayListRuntimeDeps {
   subscribeWithReqLogging: (
     label: string,
     requestLabel: string,
-    filters: NDKFilter | NDKFilter[],
-    options: NDKSubscriptionOptions & {
-      onEvent?: (event: NDKEvent) => void;
+    filters: NostrFilter | NostrFilter[],
+    options: NostrSubscriptionOptions & {
+      onEvent?: (event: ClientEvent) => void;
       onEose?: () => void;
       onClose?: () => void;
     },
-    details?: Record<string, unknown>
-  ) => ReturnType<NDK['subscribe']>;
+    details?: Record<string, unknown>,
+  ) => ReturnType<NostrClient['subscribe']>;
   updateStoredEventSinceFromCreatedAt: (value: unknown) => void;
 }
 
@@ -89,16 +95,48 @@ export function createMyRelayListRuntime({
   updateStoredEventSinceFromCreatedAt,
 }: MyRelayListRuntimeDeps) {
   let restoreMyRelayListPromise: Promise<void> | null = null;
-  let myRelayListSubscription: ReturnType<NDK['subscribe']> | null = null;
+  let myRelayListSubscription: ReturnType<NostrClient['subscribe']> | null = null;
   let myRelayListSubscriptionSignature = '';
   const desiredSubscriptions = createDesiredSubscriptions();
   let generation = 0;
   let myRelayListApplyQueue = Promise.resolve();
-  let latestRelaySnapshot: { createdAt: number; id: string } | null = null;
+  let privateRelayRestore:
+    { owner: string; generation: number; promise: Promise<void> } | undefined;
+  const latestRelaySnapshots = new Map<number, { createdAt: number; id: string }>();
+
+  function applyOwnPrivateRelayList(event: ClientEvent): Promise<void> {
+    const owner = getLoggedInPublicKeyHex(),
+      runGeneration = generation;
+    if (!owner || event.pubkey !== owner || event.kind !== NostrKind.PrivateStorageRelayList)
+      return Promise.resolve();
+    const current = () => generation === runGeneration && getLoggedInPublicKeyHex() === owner;
+    // Share the application queue with the public relay lists. A malformed list
+    // must not poison later list updates or interrupt message hydration.
+    myRelayListApplyQueue = myRelayListApplyQueue
+      .catch(() => {})
+      .then(async () => {
+        if (!current()) return;
+        await getLoggedInSignerUser();
+        if (!current() || !ndk.signer) return;
+        const changed = await privateStorageRelayService.apply(
+          event.rawEvent() as Event,
+          ndk.signer,
+          current,
+        );
+        if (changed && current()) {
+          bumpContactListVersion();
+          await subscribePrivateMessagesForLoggedInUser();
+        }
+      })
+      .catch(() => {
+        /* Keep the last usable private relay list; retry on discovery. */
+      });
+    return myRelayListApplyQueue;
+  }
 
   async function publishMyRelayList(
     relayEntries: RelayListMetadataEntry[],
-    publishRelayUrls: string[] = []
+    publishRelayUrls: string[] = [],
   ): Promise<void> {
     const normalizedRelayEntries =
       inputSanitizerService.normalizeRelayListMetadataEntries(relayEntries);
@@ -116,7 +154,7 @@ export function createMyRelayListRuntime({
     await ensureRelayConnections(relayUrls);
     await getLoggedInSignerUser();
 
-    const relayListEvent = new NDKRelayList(ndk);
+    const relayListEvent = new NostrRelayList(ndk);
     relayListEvent.content = '';
     relayListEvent.tags = [];
     relayListEvent.bothRelayUrls = normalizedRelayEntries
@@ -129,12 +167,12 @@ export function createMyRelayListRuntime({
       .filter((relay) => !relay.read && relay.write)
       .map((relay) => relay.url);
 
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
+    const relaySet = NostrRelaySet.fromRelayUrls(relayUrls, ndk, false);
     await relayListEvent.publishReplaceable(relaySet);
     updateStoredEventSinceFromCreatedAt(relayListEvent.created_at);
 
-    const directMessageRelayListEvent = new NDKEvent(ndk);
-    directMessageRelayListEvent.kind = NDKKind.DirectMessageReceiveRelayList;
+    const directMessageRelayListEvent = new ClientEvent(ndk);
+    directMessageRelayListEvent.kind = NostrKind.DirectMessageReceiveRelayList;
     directMessageRelayListEvent.content = '';
     directMessageRelayListEvent.tags = directMessageReceiveRelayUrls.map((relayUrl) => [
       DIRECT_MESSAGE_RECEIVE_RELAY_TAG,
@@ -147,7 +185,7 @@ export function createMyRelayListRuntime({
 
   async function updateLoggedInUserRelayList(
     relayEntries: RelayListMetadataEntry[],
-    options: ApplyMyRelayListEntriesOptions = {}
+    options: ApplyMyRelayListEntriesOptions = {},
   ): Promise<void> {
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
     if (!loggedInPubkeyHex) {
@@ -183,16 +221,17 @@ export function createMyRelayListRuntime({
     if (
       contactRelayListsEqualValue(
         existingContact.meta?.general_relay_entries ?? existingContact.relays,
-        normalizedRelayEntries
+        normalizedRelayEntries,
       )
     )
       return;
 
     await contactsService.updateContact(existingContact.id, {
+      metaBase: existingContact.meta,
       meta: { ...existingContact.meta, general_relay_entries: normalizedRelayEntries },
       relays: mergeRelayEntriesWithDirectMessageReceiveRelayEntriesValue(
         normalizedRelayEntries,
-        existingContact.meta?.dm_receive_relay_entries ?? []
+        existingContact.meta?.dm_receive_relay_entries ?? [],
       ),
     });
     bumpContactListVersion();
@@ -203,7 +242,7 @@ export function createMyRelayListRuntime({
   }
 
   async function fetchMyRelayListEntries(
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<ContactRelay[] | null> {
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
     if (!loggedInPubkeyHex || !getStoredAuthMethod()) {
@@ -222,13 +261,13 @@ export function createMyRelayListRuntime({
     const relayListEvent = await fetchEventWithRelayTimeout(
       ndk,
       {
-        kinds: [NDKKind.RelayList],
+        kinds: [NostrKind.RelayList],
         authors: [user.pubkey],
       },
       {
-        cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+        cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
       },
-      relaySet
+      relaySet,
     );
     if (!relayListEvent) {
       return null;
@@ -236,8 +275,8 @@ export function createMyRelayListRuntime({
 
     updateStoredEventSinceFromCreatedAt(relayListEvent.created_at);
 
-    const parsedRelayList = NDKRelayList.from(
-      relayListEvent instanceof NDKEvent ? relayListEvent : new NDKEvent(ndk, relayListEvent)
+    const parsedRelayList = NostrRelayList.from(
+      relayListEvent instanceof ClientEvent ? relayListEvent : new ClientEvent(ndk, relayListEvent),
     );
 
     return relayEntriesFromRelayList(parsedRelayList);
@@ -254,7 +293,7 @@ export function createMyRelayListRuntime({
 
   async function applyMyRelayListEntries(
     relayEntries: RelayListMetadataEntry[],
-    options: ApplyMyRelayListEntriesOptions = {}
+    options: ApplyMyRelayListEntriesOptions = {},
   ): Promise<void> {
     const normalizedRelayEntries =
       inputSanitizerService.normalizeRelayListMetadataEntries(relayEntries);
@@ -300,9 +339,76 @@ export function createMyRelayListRuntime({
     myRelayListSubscriptionSignature = '';
   }
 
+  // Inbox discoveries from indexers and live account subscriptions share one
+  // ordered application queue, so stale snapshots cannot race newer routes.
+  function applyOwnRelayList(wrappedEvent: ClientEvent): Promise<void> {
+    const pubkey = getLoggedInPublicKeyHex(),
+      runGeneration = generation;
+    if (
+      !pubkey ||
+      wrappedEvent.pubkey !== pubkey ||
+      (wrappedEvent.kind !== NostrKind.RelayList &&
+        wrappedEvent.kind !== NostrKind.DirectMessageReceiveRelayList)
+    )
+      return Promise.resolve();
+    updateStoredEventSinceFromCreatedAt(wrappedEvent.created_at);
+    myRelayListApplyQueue = myRelayListApplyQueue
+      .catch(() => {})
+      .then(async () => {
+        if (runGeneration !== generation) return;
+        const next = {
+          createdAt: wrappedEvent.created_at ?? 0,
+          id: wrappedEvent.id ?? '',
+        };
+        const latestRelaySnapshot = latestRelaySnapshots.get(wrappedEvent.kind);
+        if (
+          latestRelaySnapshot &&
+          (latestRelaySnapshot.createdAt > next.createdAt ||
+            (latestRelaySnapshot.createdAt === next.createdAt && latestRelaySnapshot.id <= next.id))
+        )
+          return;
+        if (wrappedEvent.kind === NostrKind.DirectMessageReceiveRelayList) {
+          await contactsService.init();
+          let contact = await contactsService.getContactByPublicKey(pubkey);
+          if (!contact) {
+            await updateLoggedInUserRelayList([], { refreshSubscriptions: false });
+            contact = await contactsService.getContactByPublicKey(pubkey);
+          }
+          if (!contact) throw new Error('Unable to restore account DM relays');
+          if ((contact.meta.dm_receive_relay_event_created_at ?? 0) > next.createdAt) return;
+          const general = contact.meta.general_relay_entries ?? contact.relays;
+          const dm = relayEntriesFromDirectMessageReceiveRelayEventValue(wrappedEvent);
+          await contactsService.updateContact(contact.id, {
+            metaBase: contact.meta,
+            meta: {
+              ...contact.meta,
+              general_relay_entries: general,
+              dm_receive_relay_entries: dm,
+              dm_receive_relay_event_created_at: next.createdAt,
+            },
+            relays: mergeRelayEntriesWithDirectMessageReceiveRelayEntriesValue(general, dm),
+          });
+          bumpContactListVersion();
+          if (!restoreMyRelayListPromise) await subscribePrivateMessagesForLoggedInUser();
+          if (runGeneration === generation) latestRelaySnapshots.set(wrappedEvent.kind, next);
+          return;
+        }
+        await applyMyRelayListEntries(
+          relayEntriesFromRelayList(NostrRelayList.from(wrappedEvent)),
+          { refreshSubscriptions: !restoreMyRelayListPromise },
+        );
+        if (runGeneration === generation) latestRelaySnapshots.set(wrappedEvent.kind, next);
+      })
+      .catch(() => {
+        // A failed write must not poison all later inbox lists, or mark
+        // this snapshot applied before it can be retried.
+      });
+    return myRelayListApplyQueue;
+  }
+
   async function subscribeMyRelayListUpdates(
     seedRelayUrls: string[] = [],
-    _force = false
+    _force = false,
   ): Promise<void> {
     const runGeneration = generation;
     const pubkey = getLoggedInPublicKeyHex();
@@ -310,13 +416,33 @@ export function createMyRelayListRuntime({
       desiredSubscriptions.stop();
       return;
     }
+    // Fast startup skips the full relay-list restore, but must still restore
+    // encrypted backup routes before opening the personal DM subscriptions.
+    if (privateRelayRestore?.owner !== pubkey || privateRelayRestore.generation !== runGeneration) {
+      const current = () => generation === runGeneration && getLoggedInPublicKeyHex() === pubkey;
+      privateRelayRestore = {
+        owner: pubkey,
+        generation: runGeneration,
+        promise: (async () => {
+          await getLoggedInSignerUser();
+          if (current() && ndk.signer)
+            await privateStorageRelayService.restore(ndk.signer, current);
+        })().catch(() => {}),
+      };
+    }
+    await privateRelayRestore.promise;
+    if (runGeneration !== generation || pubkey !== getLoggedInPublicKeyHex()) return;
     const relayUrls = await resolveLoggedInReadRelayUrls(seedRelayUrls);
     if (runGeneration !== generation || pubkey !== getLoggedInPublicKeyHex()) return;
     if (!relayUrls.length) {
       desiredSubscriptions.stop();
       return;
     }
-    const filters: NDKFilter = { kinds: [NDKKind.RelayList], authors: [pubkey] };
+    const filters: NostrFilter[] = [
+      NostrKind.RelayList,
+      NostrKind.DirectMessageReceiveRelayList,
+      NostrKind.PrivateStorageRelayList,
+    ].map((kind) => ({ kinds: [kind], authors: [pubkey], limit: 1 }));
     const signature = subscriptionSignature(filters, relayUrls);
     await desiredSubscriptions.reconcile([
       {
@@ -334,36 +460,22 @@ export function createMyRelayListRuntime({
             'my-relay-list',
             filters,
             {
-              relaySet: NDKRelaySet.fromRelayUrls(relayUrls, ndk, false),
-              cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+              relaySet: NostrRelaySet.fromRelayUrls(relayUrls, ndk, false),
+              cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
               onEvent: (event) => {
                 if (runGeneration !== generation || pubkey !== getLoggedInPublicKeyHex()) return;
-                const wrappedEvent = event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
-                updateStoredEventSinceFromCreatedAt(wrappedEvent.created_at);
-                myRelayListApplyQueue = myRelayListApplyQueue.then(async () => {
-                  if (runGeneration !== generation) return;
-                  const next = {
-                    createdAt: wrappedEvent.created_at ?? 0,
-                    id: wrappedEvent.id ?? '',
-                  };
-                  if (
-                    latestRelaySnapshot &&
-                    (latestRelaySnapshot.createdAt > next.createdAt ||
-                      (latestRelaySnapshot.createdAt === next.createdAt &&
-                        latestRelaySnapshot.id <= next.id))
-                  )
-                    return;
-                  latestRelaySnapshot = next;
-                  await applyMyRelayListEntries(
-                    relayEntriesFromRelayList(NDKRelayList.from(wrappedEvent)),
-                    { refreshSubscriptions: !restoreMyRelayListPromise }
-                  );
-                });
+                const wrappedEvent =
+                  event instanceof ClientEvent ? event : new ClientEvent(ndk, event);
+                if (wrappedEvent.kind === NostrKind.PrivateStorageRelayList) {
+                  void applyOwnPrivateRelayList(wrappedEvent);
+                  return;
+                }
+                void applyOwnRelayList(wrappedEvent);
               },
               onEose,
               onClose,
             },
-            { signature, ...buildSubscriptionRelayDetails(relayUrls) }
+            { signature, ...buildSubscriptionRelayDetails(relayUrls) },
           );
           return myRelayListSubscription;
         },
@@ -373,12 +485,16 @@ export function createMyRelayListRuntime({
 
   function resetMyRelayListRuntimeState(reason = 'replace'): void {
     stopMyRelayListSubscription(reason);
+    privateStorageRelayService.reset();
+    privateRelayRestore = undefined;
     restoreMyRelayListPromise = null;
     myRelayListApplyQueue = Promise.resolve();
-    latestRelaySnapshot = null;
+    latestRelaySnapshots.clear();
   }
 
   return {
+    applyOwnPrivateRelayList,
+    applyOwnRelayList,
     applyMyRelayListEntries,
     fetchMyRelayList,
     fetchMyRelayListEntries,

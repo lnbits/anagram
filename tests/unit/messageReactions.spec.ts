@@ -2,7 +2,7 @@ import {
   buildMetaWithReactions,
   markReactionsViewedByAuthor,
   normalizeMessageReactions,
-} from 'src/utils/messageReactions';
+} from '#src/utils/messageReactions.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 describe('messageReactions helpers', () => {

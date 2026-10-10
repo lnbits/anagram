@@ -4,7 +4,7 @@ import {
   createInitialStartupStepSnapshots,
   failStartupStepSnapshotValue,
   resetStartupStepSnapshotsValue,
-} from 'src/stores/nostr/startupState';
+} from '#src/stores/nostr/startupState.ts';
 import {
   buildAcceptedGroupInviteChatPlanValue,
   buildAvatarFallbackValue,
@@ -27,7 +27,7 @@ import {
   resolveIncomingChatInboxStateValue,
   resolvePrivateMessagesLiveReconnectSinceValue,
   shouldPreserveExistingGroupRelaysValue,
-} from 'src/stores/nostr/valueUtils';
+} from '#src/stores/nostr/valueUtils.ts';
 
 export const __nostrStoreTestUtils = {
   buildAcceptedGroupInviteChatPlan: buildAcceptedGroupInviteChatPlanValue,

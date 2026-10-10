@@ -1,14 +1,15 @@
 import {
   createReconnectHealingRuntime,
   type ReconnectHealingChatTarget,
-} from 'src/stores/nostr/reconnectHealingRuntime';
+} from '#src/stores/nostr/reconnectHealingRuntime.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ref } from 'vue';
+import { ref } from '#src/lib/state/reactivity.ts';
 
 const GROUP_PUBLIC_KEY = 'a'.repeat(64);
 const GROUP_EPOCH_PUBLIC_KEY = 'b'.repeat(64);
 const LOGGED_IN_PUBLIC_KEY = 'f'.repeat(64);
 const MIN_STATUS_VISIBLE_MS = 500;
+const logReconnectHealing = vi.fn();
 
 type StatusLabelUpdate = {
   at: number;
@@ -63,6 +64,7 @@ describe('reconnectHealingRuntime', () => {
     const isRestoringStartupState = ref(options.isRestoringStartupState ?? false);
 
     const runtime = createReconnectHealingRuntime({
+      logReconnectHealing,
       getLoggedInPublicKeyHex: () => LOGGED_IN_PUBLIC_KEY,
       getPrivateMessagesLiveEoseAt: () => privateMessagesLiveEoseAt,
       getVisibleChatTarget: () => options.visibleChat ?? null,
@@ -176,8 +178,7 @@ describe('reconnectHealingRuntime', () => {
       sinceMode: 'reconnect',
     });
     expect(refreshDeveloperPendingQueues).toHaveBeenCalledTimes(1);
-    expect(console.log).toHaveBeenCalledWith(
-      '[anagram][reconnect-healing]',
+    expect(logReconnectHealing).toHaveBeenCalledWith(
       'start',
       expect.objectContaining({
         reason: 'relay-connected',
@@ -185,8 +186,7 @@ describe('reconnectHealingRuntime', () => {
         directMessageRecipientPubkey: LOGGED_IN_PUBLIC_KEY,
       })
     );
-    expect(console.log).toHaveBeenCalledWith(
-      '[anagram][reconnect-healing]',
+    expect(logReconnectHealing).toHaveBeenCalledWith(
       'complete',
       expect.objectContaining({
         reason: 'relay-connected',
@@ -306,8 +306,7 @@ describe('reconnectHealingRuntime', () => {
     expect(statusLabelUpdates.map((entry) => entry.value)).not.toContain(
       'Checking session and network'
     );
-    expect(console.log).toHaveBeenCalledWith(
-      '[anagram][reconnect-healing]',
+    expect(logReconnectHealing).toHaveBeenCalledWith(
       'deferred',
       expect.objectContaining({
         reason: 'relay-list-changed',
@@ -422,8 +421,7 @@ describe('reconnectHealingRuntime', () => {
 
     expect(refreshDirectMessages).toHaveBeenCalledTimes(2);
     expect(refreshDeveloperPendingQueues).toHaveBeenCalledTimes(2);
-    expect(console.log).toHaveBeenCalledWith(
-      '[anagram][reconnect-healing]',
+    expect(logReconnectHealing).toHaveBeenCalledWith(
       'start',
       expect.objectContaining({
         reason: 'manual-refresh',

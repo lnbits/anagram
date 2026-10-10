@@ -1,4 +1,4 @@
-import { __chatDataServiceTestUtils } from 'src/services/chatDataService';
+import { __chatDataServiceTestUtils } from '#src/services/chatDataService.ts';
 import { describe, expect, it } from 'vitest';
 
 const { isDeletedMessageMeta, messageRecordMatchesSearchQuery, normalizeMessageSearchText } =

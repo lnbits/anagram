@@ -2,7 +2,7 @@ import {
   type LoadedMessageIdentity,
   type MessageWindowRow,
   resolveMessageWindowMerge,
-} from 'src/utils/messageWindowRange';
+} from '#src/utils/messageWindowRange.ts';
 import { describe, expect, it } from 'vitest';
 
 function buildRow(id: number): MessageWindowRow {

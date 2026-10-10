@@ -1,0 +1,7 @@
+{
+  "identifier": "android-notifications",
+  "description": "Main Android window can manage its native relay notification listener",
+  "platforms": ["android"],
+  "windows": ["main"],
+  "permissions": ["allow-android-notification-command"]
+}

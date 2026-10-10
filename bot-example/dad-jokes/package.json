@@ -1,0 +1,19 @@
+{
+  "name": "anagram-dad-jokes-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A standalone Anagram bot: DMs, private groups and public groups.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env bot.js",
+    "test": "node --test test/*.test.js",
+    "check": "node --check bot.js && node --check runtime.js && node --check direct-messages.js && node --check private-groups.js && node --check public-groups.js"
+  },
+  "dependencies": {
+    "nostr-tools": "2.25.2",
+    "ws": "8.22.0"
+  }
+}

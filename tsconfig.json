@@ -1,10 +1,16 @@
 {
-  "extends": "./.quasar/tsconfig.json",
-  "exclude": [
-    "dist",
-    "node_modules",
-    "src-capacitor",
-    "src-cordova",
-    "quasar.config.*.temporary.compiled*"
-  ]
+  "extends": "$app/tsconfig",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "strict": false,
+    "moduleResolution": "bundler"
+  },
+  "exclude": ["node_modules", "tests", "e2e", "src/service-worker"],
+  "include": ["src", "*.ts", ".svelte-kit/ambient.d.ts", ".svelte-kit/non-ambient.d.ts"]
 }

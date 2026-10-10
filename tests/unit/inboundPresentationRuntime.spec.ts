@@ -1,10 +1,10 @@
 import {
   FOREGROUND_MESSAGE_ACTIVITY_EVENT,
   readForegroundMessageActivityDetail,
-} from 'src/services/foregroundMessageActivityService';
-import { createInboundPresentationRuntime } from 'src/stores/nostr/inboundPresentationRuntime';
+} from '#src/services/foregroundMessageActivityService.ts';
+import { createInboundPresentationRuntime } from '#src/stores/nostr/inboundPresentationRuntime.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ref } from 'vue';
+import { ref } from '#src/lib/state/reactivity.ts';
 
 class TestCustomEvent<T = unknown> extends Event {
   readonly detail: T;

@@ -1,31 +1,30 @@
-import type NDK from '@nostr-dev-kit/ndk';
+import type NostrClient from '#src/lib/nostr/client.ts';
 import {
-  NDKEvent,
-  NDKKind,
-  NDKPrivateKeySigner,
-  NDKRelaySet,
-  NDKSubscriptionCacheUsage,
-  NDKUser,
-} from '@nostr-dev-kit/ndk';
-import { chatDataService } from 'src/services/chatDataService';
-import { contactsService } from 'src/services/contactsService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
+  ClientEvent,
+  NostrKind,
+  NostrPrivateKeySigner,
+  NostrRelaySet,
+  NostrSubscriptionCacheUsage,
+  NostrUser,
+} from '#src/lib/nostr/client.ts';
+import { chatDataService } from '#src/services/chatDataService.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
 import {
   CONTACT_CURSOR_FETCH_BATCH_SIZE,
   CONTACT_CURSOR_PUBLISH_DELAY_MS,
   GROUP_IDENTITY_SECRET_TAG,
-  GROUP_IDENTITY_SECRET_VERSION,
   GROUP_MEMBERS_FOLLOW_SET_D_TAG,
   GROUP_SHARED_ROSTER_FOLLOW_SET_D_TAG,
   LAST_SEEN_RECEIVED_ACTIVITY_AT_META_KEY,
   PRIVATE_PREFERENCES_D_TAG,
   PRIVATE_PREFERENCES_KIND,
-} from 'src/stores/nostr/constants';
+} from '#src/stores/nostr/constants.ts';
 import {
   createReadyRelaySet,
   fetchEventsWithRelayTimeout,
   fetchEventWithRelayTimeout,
-} from 'src/stores/nostr/relayQueryUtils';
+} from '#src/stores/nostr/relayQueryUtils.ts';
 import type {
   ContactCursorContent,
   ContactCursorState,
@@ -34,25 +33,26 @@ import type {
   GroupIdentitySecretContent,
   PrivatePreferences,
   RelaySaveStatus,
-} from 'src/stores/nostr/types';
+} from '#src/stores/nostr/types.ts';
 import {
   resolveCurrentGroupChatEpochEntryValue,
   resolveGroupPublishRelayUrlsValue,
+  resolveGroupReadRelayUrlsValue,
   resolveLatestReadBoundaryAtValue,
-} from 'src/stores/nostr/valueUtils';
-import type { ContactMetadata, ContactRecord, ContactRelay } from 'src/types/contact';
+} from '#src/stores/nostr/valueUtils.ts';
+import type { ContactMetadata, ContactRecord, ContactRelay } from '#src/types/contact.ts';
 import {
   buildGroupMembershipFollowSetPrivateTags,
   normalizeGroupMembershipSnapshotPubkeys,
   parseGroupMembershipFollowSetPrivateTags,
-} from 'src/utils/groupMembershipFollowSet';
+} from '#src/utils/groupMembershipFollowSet.ts';
 import {
   areMessageReactionsEqual,
   buildMetaWithReactions,
   countUnseenReactionsForAuthor,
   normalizeMessageReactions,
-} from 'src/utils/messageReactions';
-import type { Ref } from 'vue';
+} from '#src/utils/messageReactions.ts';
+import type { Ref } from '#src/lib/state/reactivity.ts';
 
 interface RestoreRuntimeState {
   restoreContactCursorStatePromise: Promise<void> | null;
@@ -72,6 +72,7 @@ const GROUP_MEMBER_PROFILE_REFRESH_RETRY_DELAY_MS = 500;
 const GROUP_MEMBER_PROFILE_REFRESH_RETRY_ATTEMPTS = 4;
 
 interface PrivateStateRuntimeDeps {
+  createRecoverableGroup: (phrase: string, name: string, about: string, relays: string[]) => Promise<GroupIdentitySecretContent>;
   beginStartupStep: (stepId: any) => void;
   buildFreshPrivatePreferences: (existing?: Record<string, unknown>) => PrivatePreferences;
   buildRelaySaveStatus: (relayStatuses: any[]) => RelaySaveStatus;
@@ -79,18 +80,14 @@ interface PrivateStateRuntimeDeps {
   chatStore: { reload: () => Promise<void> };
   chunkValues: <T>(values: T[], chunkSize: number) => T[][];
   compareReplaceableEventState: (
-    first: Pick<NDKEvent, 'created_at' | 'id'> | null | undefined,
-    second: Pick<NDKEvent, 'created_at' | 'id'> | null | undefined
+    first: Pick<ClientEvent, 'created_at' | 'id'> | null | undefined,
+    second: Pick<ClientEvent, 'created_at' | 'id'> | null | undefined,
   ) => number;
   completeStartupStep: (stepId: any) => void;
   contactRelayListsEqual: (
     first: ContactRelay[] | undefined,
-    second: ContactRelay[] | undefined
+    second: ContactRelay[] | undefined,
   ) => boolean;
-  createInitialGroupEpochSecretState: () => Pick<
-    GroupIdentitySecretContent,
-    'epoch_number' | 'epoch_privkey'
-  >;
   createStartupBatchTracker: (stepId: any) => {
     beginItem: () => void;
     finishItem: (error?: unknown) => void;
@@ -98,7 +95,7 @@ interface PrivateStateRuntimeDeps {
   };
   decryptContactCursorContent: (content: string) => Promise<ContactCursorContent | null>;
   decryptGroupIdentitySecretContent: (
-    content: string
+    content: string,
   ) => Promise<GroupIdentitySecretContent | null>;
   decryptPrivatePreferencesContent: (content: string) => Promise<PrivatePreferences | null>;
   decryptPrivateStringContent: (content: string) => Promise<string | null>;
@@ -109,7 +106,7 @@ interface PrivateStateRuntimeDeps {
   ensureGroupContactAndChat: (
     groupPublicKey: string,
     encryptedPrivateKey: string,
-    profile?: { name?: string; about?: string }
+    profile?: { name?: string; about?: string },
   ) => Promise<boolean>;
   ensureLoggedInSignerUser: () => Promise<any>;
   ensurePrivatePreferences: (options?: {
@@ -123,13 +120,13 @@ interface PrivateStateRuntimeDeps {
     options?: {
       relayEntries?: ContactRelay[];
       seedRelayUrls?: string[];
-    }
+    },
   ) => Promise<Pick<ContactRecord, 'public_key' | 'name' | 'given_name' | 'meta'> | null>;
   getFilterSince: () => number;
   getLoggedInPublicKeyHex: () => string | null;
   getStartupStepSnapshot: (stepId: any) => { status: string };
   isRestoringStartupState: Ref<boolean>;
-  ndk: NDK;
+  ndk: NostrClient;
   normalizeEventId: (value: unknown) => string | null;
   normalizeTimestamp: (value: unknown) => string | null;
   pendingContactCursorPublishStates: Map<string, ContactCursorState>;
@@ -143,36 +140,36 @@ interface PrivateStateRuntimeDeps {
       accepted?: boolean;
       invitationCreatedAt?: string | null;
       seedRelayUrls?: string[];
-    }
+    },
   ) => Promise<void>;
   publishGroupRelayList: (
     groupPublicKey: string,
     relayEntries: ContactRelay[],
-    seedRelayUrls?: string[]
+    seedRelayUrls?: string[],
   ) => Promise<RelaySaveStatus>;
   publishPrivateContactList: (seedRelayUrls?: string[]) => Promise<void>;
   publishEventWithRelayStatuses: (
-    event: NDKEvent,
+    event: ClientEvent,
     relayUrls: string[],
-    scope?: 'recipient' | 'self'
+    scope?: 'recipient' | 'self',
   ) => Promise<{ relayStatuses: any[]; error: Error | null }>;
   publishReplaceableEventWithRelayStatuses: (
-    event: NDKEvent,
+    event: ClientEvent,
     relayUrls: string[],
-    scope?: 'recipient' | 'self'
+    scope?: 'recipient' | 'self',
   ) => Promise<{ relayStatuses: any[]; error: Error | null }>;
   queueTrackedContactSubscriptionsRefresh: () => void;
   readPrivatePreferencesFromStorage: () => PrivatePreferences | null;
   refreshContactRelayList: (
     pubkeyHex: string,
-    seedRelayUrls?: string[]
+    seedRelayUrls?: string[],
   ) => Promise<ContactRelay[] | null>;
   resolveLoggedInPublishRelayUrls: (seedRelayUrls?: string[]) => Promise<string[]>;
   resolveLoggedInReadRelayUrls: (seedRelayUrls?: string[]) => Promise<string[]>;
   restoreState: RestoreRuntimeState;
   scheduleChatChecks: (chatIds?: string[], options?: { allChats?: boolean }) => void;
   sha256Hex: (value: string) => Promise<string>;
-  shouldApplyPrivateContactListEvent: (event: NDKEvent) => boolean;
+  shouldApplyPrivateContactListEvent: (event: ClientEvent) => boolean;
   toComparableTimestamp: (value: string | null | undefined) => number;
   toIsoTimestampFromUnix: (value: number | undefined) => string;
   updateStoredEventSinceFromCreatedAt: (value: unknown) => void;
@@ -180,6 +177,7 @@ interface PrivateStateRuntimeDeps {
 }
 
 export function createPrivateStateRuntime({
+  createRecoverableGroup,
   beginStartupStep,
   buildRelaySaveStatus,
   bumpContactListVersion,
@@ -188,7 +186,6 @@ export function createPrivateStateRuntime({
   compareReplaceableEventState,
   completeStartupStep,
   contactRelayListsEqual,
-  createInitialGroupEpochSecretState,
   decryptContactCursorContent,
   decryptGroupIdentitySecretContent,
   decryptPrivatePreferencesContent,
@@ -229,19 +226,19 @@ export function createPrivateStateRuntime({
   updateStoredEventSinceFromCreatedAt,
   writePrivatePreferencesToStorage,
 }: PrivateStateRuntimeDeps) {
-  const lastReplaceableFollowSetCreatedAtByStream = new Map<string, number>();
+  const lastReplaceableCreatedAtByStream = new Map<string, number>();
 
-  function allocateReplaceableFollowSetCreatedAt(streamKey: string): number {
+  function allocateReplaceableCreatedAt(streamKey: string): number {
     const nowInSeconds = Math.floor(Date.now() / 1000);
-    const lastCreatedAt = lastReplaceableFollowSetCreatedAtByStream.get(streamKey) ?? 0;
+    const lastCreatedAt = lastReplaceableCreatedAtByStream.get(streamKey) ?? 0;
     const nextCreatedAt = Math.max(nowInSeconds, lastCreatedAt + 1);
-    lastReplaceableFollowSetCreatedAtByStream.set(streamKey, nextCreatedAt);
+    lastReplaceableCreatedAtByStream.set(streamKey, nextCreatedAt);
     return nextCreatedAt;
   }
 
   function compareContactCursorState(
     first: ContactCursorState | ContactCursorContent | null | undefined,
-    second: ContactCursorState | ContactCursorContent | null | undefined
+    second: ContactCursorState | ContactCursorContent | null | undefined,
   ): number {
     const firstTimestamp =
       first && 'last_seen_incoming_activity_at' in first
@@ -267,7 +264,7 @@ export function createPrivateStateRuntime({
           ? first.last_seen_incoming_activity_event_id
           : first && 'eventId' in first
             ? first.eventId
-            : null
+            : null,
       ) ?? '';
     const secondEventId =
       normalizeEventId(
@@ -275,7 +272,7 @@ export function createPrivateStateRuntime({
           ? second.last_seen_incoming_activity_event_id
           : second && 'eventId' in second
             ? second.eventId
-            : null
+            : null,
       ) ?? '';
 
     return firstEventId.localeCompare(secondEventId);
@@ -283,7 +280,7 @@ export function createPrivateStateRuntime({
 
   function buildChatMetaWithUnseenReactionCount(
     meta: Record<string, unknown>,
-    unseenReactionCount: number
+    unseenReactionCount: number,
   ): Record<string, unknown> {
     const normalizedCount = Math.max(0, Math.floor(Number(unseenReactionCount) || 0));
     const nextMeta = { ...meta };
@@ -310,7 +307,7 @@ export function createPrivateStateRuntime({
 
   async function publishPrivatePreferences(
     preferences: PrivatePreferences,
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<void> {
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
     if (!loggedInPubkeyHex) {
@@ -325,16 +322,17 @@ export function createPrivateStateRuntime({
     await ensureRelayConnections(relayUrls);
     const user = await ensureLoggedInSignerUser();
 
-    const preferencesEvent = new NDKEvent(ndk, {
+    const preferencesEvent = new ClientEvent(ndk, {
       kind: PRIVATE_PREFERENCES_KIND,
-      created_at: Math.floor(Date.now() / 1000),
+      created_at: allocateReplaceableCreatedAt(`preferences:${user.pubkey}`),
       pubkey: user.pubkey,
       content: await encryptPrivatePreferencesContent(preferences),
       tags: [['d', PRIVATE_PREFERENCES_D_TAG]],
     });
 
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
-    await preferencesEvent.publishReplaceable(relaySet);
+    const relaySet = NostrRelaySet.fromRelayUrls(relayUrls, ndk, false);
+    // publishReplaceable resets created_at to the current second, losing rapid edits.
+    await preferencesEvent.publish(relaySet);
     updateStoredEventSinceFromCreatedAt(preferencesEvent.created_at);
   }
 
@@ -370,9 +368,9 @@ export function createPrivateStateRuntime({
             '#d': [PRIVATE_PREFERENCES_D_TAG],
           },
           {
-            cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+            cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
           },
-          relaySet
+          relaySet,
         );
         if (!preferencesEvent) {
           completeStartupStep('private-preferences');
@@ -393,6 +391,14 @@ export function createPrivateStateRuntime({
           return;
         }
 
+        const streamKey = `preferences:${loggedInPubkeyHex}`;
+        lastReplaceableCreatedAtByStream.set(
+          streamKey,
+          Math.max(
+            lastReplaceableCreatedAtByStream.get(streamKey) ?? 0,
+            preferencesEvent.created_at ?? 0,
+          ),
+        );
         writePrivatePreferencesToStorage(decryptedPreferences);
         completeStartupStep('private-preferences');
       } catch (error) {
@@ -409,7 +415,7 @@ export function createPrivateStateRuntime({
   async function publishGroupIdentitySecret(
     groupPublicKey: string,
     encryptedPrivateKey: string,
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<RelaySaveStatus> {
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
     const normalizedEncryptedPrivateKey = encryptedPrivateKey.trim();
@@ -430,9 +436,9 @@ export function createPrivateStateRuntime({
     await ensureRelayConnections(relayUrls);
     const user = await ensureLoggedInSignerUser();
 
-    const groupSecretEvent = new NDKEvent(ndk, {
+    const groupSecretEvent = new ClientEvent(ndk, {
       kind: PRIVATE_PREFERENCES_KIND,
-      created_at: Math.floor(Date.now() / 1000),
+      created_at: allocateReplaceableCreatedAt(`group-secret:${user.pubkey}:${normalizedGroupPublicKey}`),
       pubkey: user.pubkey,
       content: normalizedEncryptedPrivateKey,
       tags: [
@@ -444,11 +450,11 @@ export function createPrivateStateRuntime({
     const publishResult = await publishReplaceableEventWithRelayStatuses(
       groupSecretEvent,
       relayUrls,
-      'self'
+      'self',
     );
     if (
       publishResult.relayStatuses.some(
-        (entry) => entry.direction === 'outbound' && entry.status === 'published'
+        (entry) => entry.direction === 'outbound' && entry.status === 'published',
       )
     ) {
       updateStoredEventSinceFromCreatedAt(groupSecretEvent.created_at);
@@ -466,7 +472,7 @@ export function createPrivateStateRuntime({
     groupPrivateKey: string,
     groupPublicKey: string,
     memberPublicKeys: string[],
-    excludedPubkeys: string[] = []
+    excludedPubkeys: string[] = [],
   ): Promise<string> {
     const normalizedGroupPrivateKey = inputSanitizerService.normalizeHexKey(groupPrivateKey);
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
@@ -474,7 +480,7 @@ export function createPrivateStateRuntime({
       throw new Error('A valid group identity is required.');
     }
 
-    const groupSigner = new NDKPrivateKeySigner(normalizedGroupPrivateKey, ndk);
+    const groupSigner = new NostrPrivateKeySigner(normalizedGroupPrivateKey, ndk);
     const signerUser = await groupSigner.user();
     if (inputSanitizerService.normalizeHexKey(signerUser.pubkey) !== normalizedGroupPublicKey) {
       throw new Error('Decrypted group private key does not match the group public key.');
@@ -486,9 +492,9 @@ export function createPrivateStateRuntime({
         buildGroupMembershipFollowSetPrivateTags(memberPublicKeys, [
           normalizedGroupPublicKey,
           ...excludedPubkeys,
-        ])
+        ]),
       ),
-      'nip44'
+      'nip44',
     );
   }
 
@@ -496,7 +502,7 @@ export function createPrivateStateRuntime({
     groupPrivateKey: string,
     groupPublicKey: string,
     content: string,
-    excludedPubkeys: string[] = []
+    excludedPubkeys: string[] = [],
   ): Promise<string[]> {
     const normalizedGroupPrivateKey = inputSanitizerService.normalizeHexKey(groupPrivateKey);
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
@@ -509,7 +515,7 @@ export function createPrivateStateRuntime({
       return [];
     }
 
-    const groupSigner = new NDKPrivateKeySigner(normalizedGroupPrivateKey, ndk);
+    const groupSigner = new NostrPrivateKeySigner(normalizedGroupPrivateKey, ndk);
     const signerUser = await groupSigner.user();
     if (inputSanitizerService.normalizeHexKey(signerUser.pubkey) !== normalizedGroupPublicKey) {
       throw new Error('Decrypted group private key does not match the group public key.');
@@ -535,7 +541,7 @@ export function createPrivateStateRuntime({
     groupPublicKey: string,
     epochPublicKey: string,
     memberPublicKeys: string[],
-    excludedPubkeys: string[] = []
+    excludedPubkeys: string[] = [],
   ): Promise<string> {
     const normalizedGroupPrivateKey = inputSanitizerService.normalizeHexKey(groupPrivateKey);
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
@@ -544,21 +550,21 @@ export function createPrivateStateRuntime({
       throw new Error('A valid group identity and epoch identity are required.');
     }
 
-    const groupSigner = new NDKPrivateKeySigner(normalizedGroupPrivateKey, ndk);
+    const groupSigner = new NostrPrivateKeySigner(normalizedGroupPrivateKey, ndk);
     const signerUser = await groupSigner.user();
     if (inputSanitizerService.normalizeHexKey(signerUser.pubkey) !== normalizedGroupPublicKey) {
       throw new Error('Decrypted group private key does not match the group public key.');
     }
 
     return groupSigner.encrypt(
-      new NDKUser({ pubkey: normalizedEpochPublicKey }),
+      new NostrUser({ pubkey: normalizedEpochPublicKey }),
       JSON.stringify(
         buildGroupMembershipFollowSetPrivateTags(memberPublicKeys, [
           normalizedGroupPublicKey,
           ...excludedPubkeys,
-        ])
+        ]),
       ),
-      'nip44'
+      'nip44',
     );
   }
 
@@ -567,7 +573,7 @@ export function createPrivateStateRuntime({
     epochPublicKey: string,
     groupPublicKey: string,
     content: string,
-    excludedPubkeys: string[] = []
+    excludedPubkeys: string[] = [],
   ): Promise<string[]> {
     const normalizedEpochPrivateKey = inputSanitizerService.normalizeHexKey(epochPrivateKey);
     const normalizedEpochPublicKey = inputSanitizerService.normalizeHexKey(epochPublicKey);
@@ -581,16 +587,16 @@ export function createPrivateStateRuntime({
       return [];
     }
 
-    const epochSigner = new NDKPrivateKeySigner(normalizedEpochPrivateKey, ndk);
+    const epochSigner = new NostrPrivateKeySigner(normalizedEpochPrivateKey, ndk);
     const signerUser = await epochSigner.user();
     if (inputSanitizerService.normalizeHexKey(signerUser.pubkey) !== normalizedEpochPublicKey) {
       throw new Error('Decrypted epoch private key does not match the current epoch public key.');
     }
 
     const decryptedContent = await epochSigner.decrypt(
-      new NDKUser({ pubkey: normalizedGroupPublicKey }),
+      new NostrUser({ pubkey: normalizedGroupPublicKey }),
       normalizedContent,
-      'nip44'
+      'nip44',
     );
     let parsed: unknown;
 
@@ -611,7 +617,7 @@ export function createPrivateStateRuntime({
     seedRelayUrls: string[] = [],
     options: {
       refreshRelayList?: boolean;
-    } = {}
+    } = {},
   ): Promise<{
     currentEpochPrivateKey: string;
     currentEpochPublicKey: string;
@@ -638,7 +644,7 @@ export function createPrivateStateRuntime({
         console.warn(
           'Failed to refresh group relay list before reading shared roster',
           normalizedGroupPublicKey,
-          error
+          error,
         );
       }
     }
@@ -655,7 +661,7 @@ export function createPrivateStateRuntime({
 
     const currentEpochEntry = resolveCurrentGroupChatEpochEntryValue(groupChat);
     const currentEpochPublicKey = inputSanitizerService.normalizeHexKey(
-      currentEpochEntry?.epoch_public_key ?? ''
+      currentEpochEntry?.epoch_public_key ?? '',
     );
     const encryptedCurrentEpochPrivateKey =
       currentEpochEntry?.epoch_private_key_encrypted?.trim() ?? '';
@@ -664,18 +670,18 @@ export function createPrivateStateRuntime({
     }
 
     const currentEpochPrivateKey = await decryptPrivateStringContent(
-      encryptedCurrentEpochPrivateKey
+      encryptedCurrentEpochPrivateKey,
     );
     if (!currentEpochPrivateKey) {
       throw new Error('Failed to decrypt the current epoch private key.');
     }
-    const currentEpochSigner = new NDKPrivateKeySigner(currentEpochPrivateKey, ndk);
+    const currentEpochSigner = new NostrPrivateKeySigner(currentEpochPrivateKey, ndk);
     const currentEpochUser = await currentEpochSigner.user();
     if (inputSanitizerService.normalizeHexKey(currentEpochUser.pubkey) !== currentEpochPublicKey) {
       throw new Error('Decrypted epoch private key does not match the current epoch public key.');
     }
 
-    const relayUrls = resolveGroupPublishRelayUrlsValue(groupContact.relays, seedRelayUrls);
+    const relayUrls = resolveGroupReadRelayUrlsValue(groupContact.relays, seedRelayUrls);
     if (relayUrls.length === 0) {
       throw new Error('Cannot read the shared roster without at least one group relay.');
     }
@@ -685,14 +691,14 @@ export function createPrivateStateRuntime({
       currentEpochPublicKey,
       groupContact,
       ownerPublicKey: inputSanitizerService.normalizeHexKey(
-        groupContact.meta.owner_public_key ?? ''
+        groupContact.meta.owner_public_key ?? '',
       ),
       relayUrls,
     };
   }
 
   async function listGroupMembershipRosterSubscriptionContexts(
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<
     Array<{
       currentEpochPublicKey: string;
@@ -725,7 +731,7 @@ export function createPrivateStateRuntime({
 
       const currentEpochEntry = resolveCurrentGroupChatEpochEntryValue(chat);
       const currentEpochPublicKey = inputSanitizerService.normalizeHexKey(
-        currentEpochEntry?.epoch_public_key ?? ''
+        currentEpochEntry?.epoch_public_key ?? '',
       );
       if (!currentEpochPublicKey) {
         continue;
@@ -736,7 +742,7 @@ export function createPrivateStateRuntime({
         continue;
       }
 
-      const relayUrls = resolveGroupPublishRelayUrlsValue(groupContact.relays, seedRelayUrls);
+      const relayUrls = resolveGroupReadRelayUrlsValue(groupContact.relays, seedRelayUrls);
       if (relayUrls.length === 0) {
         continue;
       }
@@ -749,13 +755,13 @@ export function createPrivateStateRuntime({
     }
 
     return contexts.sort((first, second) =>
-      first.groupPublicKey.localeCompare(second.groupPublicKey)
+      first.groupPublicKey.localeCompare(second.groupPublicKey),
     );
   }
 
   async function fetchGroupMembershipFollowSetPubkeys(
     groupPublicKey: string,
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<string[]> {
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
@@ -775,7 +781,7 @@ export function createPrivateStateRuntime({
     }
 
     const normalizedOwnerPublicKey = inputSanitizerService.normalizeHexKey(
-      existingGroupContact.meta.owner_public_key ?? ''
+      existingGroupContact.meta.owner_public_key ?? '',
     );
     if (!normalizedOwnerPublicKey || normalizedOwnerPublicKey !== loggedInPubkeyHex) {
       throw new Error('Only the owner can refresh the group member list.');
@@ -802,7 +808,7 @@ export function createPrivateStateRuntime({
       console.warn(
         'Failed to refresh group relay list before refreshing group members',
         normalizedGroupPublicKey,
-        error
+        error,
       );
     }
 
@@ -822,14 +828,14 @@ export function createPrivateStateRuntime({
     const listEvent = await fetchEventWithRelayTimeout(
       ndk,
       {
-        kinds: [NDKKind.FollowSet],
+        kinds: [NostrKind.FollowSet],
         authors: [normalizedGroupPublicKey],
         '#d': [GROUP_MEMBERS_FOLLOW_SET_D_TAG],
       },
       {
-        cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+        cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
       },
-      relaySet
+      relaySet,
     );
     if (!listEvent) {
       throw new Error('Published group member list not found on relays.');
@@ -841,13 +847,13 @@ export function createPrivateStateRuntime({
       decryptedSecret.group_privkey,
       normalizedGroupPublicKey,
       listEvent.content,
-      [normalizedOwnerPublicKey]
+      [normalizedOwnerPublicKey],
     );
   }
 
   async function fetchGroupMembershipRosterPubkeys(
     groupPublicKey: string,
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<string[]> {
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
     if (!getLoggedInPublicKeyHex()) {
@@ -860,7 +866,7 @@ export function createPrivateStateRuntime({
 
     const context = await resolveReadableGroupMembershipRosterContext(
       normalizedGroupPublicKey,
-      seedRelayUrls
+      seedRelayUrls,
     );
     await ensureRelayConnections(context.relayUrls);
 
@@ -868,14 +874,14 @@ export function createPrivateStateRuntime({
     const listEvent = await fetchEventWithRelayTimeout(
       ndk,
       {
-        kinds: [NDKKind.FollowSet],
+        kinds: [NostrKind.FollowSet],
         authors: [normalizedGroupPublicKey],
         '#d': [GROUP_SHARED_ROSTER_FOLLOW_SET_D_TAG],
       },
       {
-        cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+        cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
       },
-      relaySet
+      relaySet,
     );
     if (!listEvent) {
       throw new Error('Published group roster not found on relays.');
@@ -887,14 +893,14 @@ export function createPrivateStateRuntime({
       context.currentEpochPrivateKey,
       context.currentEpochPublicKey,
       normalizedGroupPublicKey,
-      listEvent.content
+      listEvent.content,
     );
   }
 
   async function publishGroupMembershipFollowSet(
     groupPublicKey: string,
     memberPublicKeys: string[],
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<RelaySaveStatus> {
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
@@ -913,7 +919,7 @@ export function createPrivateStateRuntime({
     }
 
     const normalizedOwnerPublicKey = inputSanitizerService.normalizeHexKey(
-      groupContact.meta.owner_public_key ?? ''
+      groupContact.meta.owner_public_key ?? '',
     );
     if (!normalizedOwnerPublicKey || normalizedOwnerPublicKey !== loggedInPubkeyHex) {
       throw new Error('Only the owner can publish the group member list.');
@@ -940,29 +946,29 @@ export function createPrivateStateRuntime({
 
     await ensureRelayConnections(relayUrls);
 
-    const createdAt = allocateReplaceableFollowSetCreatedAt(
-      `${normalizedGroupPublicKey}:${GROUP_MEMBERS_FOLLOW_SET_D_TAG}`
+    const createdAt = allocateReplaceableCreatedAt(
+      `${normalizedGroupPublicKey}:${GROUP_MEMBERS_FOLLOW_SET_D_TAG}`,
     );
-    const listEvent = new NDKEvent(ndk, {
-      kind: NDKKind.FollowSet,
+    const listEvent = new ClientEvent(ndk, {
+      kind: NostrKind.FollowSet,
       created_at: createdAt,
       pubkey: normalizedGroupPublicKey,
       content: await encryptGroupMembershipFollowSetContent(
         decryptedSecret.group_privkey,
         normalizedGroupPublicKey,
         memberPublicKeys,
-        [normalizedOwnerPublicKey]
+        [normalizedOwnerPublicKey],
       ),
       tags: [['d', GROUP_MEMBERS_FOLLOW_SET_D_TAG]],
     });
 
-    const groupSigner = new NDKPrivateKeySigner(decryptedSecret.group_privkey, ndk);
+    const groupSigner = new NostrPrivateKeySigner(decryptedSecret.group_privkey, ndk);
     await listEvent.sign(groupSigner);
 
     const publishResult = await publishEventWithRelayStatuses(listEvent, relayUrls, 'self');
     if (
       publishResult.relayStatuses.some(
-        (entry) => entry.direction === 'outbound' && entry.status === 'published'
+        (entry) => entry.direction === 'outbound' && entry.status === 'published',
       )
     ) {
       updateStoredEventSinceFromCreatedAt(listEvent.created_at);
@@ -983,7 +989,7 @@ export function createPrivateStateRuntime({
   async function publishGroupMembershipRosterFollowSet(
     groupPublicKey: string,
     memberPublicKeys: string[],
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<RelaySaveStatus> {
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
@@ -1002,7 +1008,7 @@ export function createPrivateStateRuntime({
     }
 
     const normalizedOwnerPublicKey = inputSanitizerService.normalizeHexKey(
-      groupContact.meta.owner_public_key ?? ''
+      groupContact.meta.owner_public_key ?? '',
     );
     if (!normalizedOwnerPublicKey || normalizedOwnerPublicKey !== loggedInPubkeyHex) {
       throw new Error('Only the owner can publish the group roster.');
@@ -1023,13 +1029,13 @@ export function createPrivateStateRuntime({
     }
 
     const currentEpochPrivateKey = inputSanitizerService.normalizeHexKey(
-      decryptedSecret.epoch_privkey ?? ''
+      decryptedSecret.epoch_privkey ?? '',
     );
     if (!currentEpochPrivateKey) {
       throw new Error('Current epoch private key not found.');
     }
 
-    const currentEpochSigner = new NDKPrivateKeySigner(currentEpochPrivateKey, ndk);
+    const currentEpochSigner = new NostrPrivateKeySigner(currentEpochPrivateKey, ndk);
     const currentEpochUser = await currentEpochSigner.user();
     const currentEpochPublicKey = inputSanitizerService.normalizeHexKey(currentEpochUser.pubkey);
     if (!currentEpochPublicKey) {
@@ -1044,29 +1050,29 @@ export function createPrivateStateRuntime({
     await ensureRelayConnections(relayUrls);
 
     const rosterPubkeys = Array.from(new Set([normalizedOwnerPublicKey, ...memberPublicKeys]));
-    const createdAt = allocateReplaceableFollowSetCreatedAt(
-      `${normalizedGroupPublicKey}:${GROUP_SHARED_ROSTER_FOLLOW_SET_D_TAG}`
+    const createdAt = allocateReplaceableCreatedAt(
+      `${normalizedGroupPublicKey}:${GROUP_SHARED_ROSTER_FOLLOW_SET_D_TAG}`,
     );
-    const listEvent = new NDKEvent(ndk, {
-      kind: NDKKind.FollowSet,
+    const listEvent = new ClientEvent(ndk, {
+      kind: NostrKind.FollowSet,
       created_at: createdAt,
       pubkey: normalizedGroupPublicKey,
       content: await encryptGroupMembershipRosterContent(
         decryptedSecret.group_privkey,
         normalizedGroupPublicKey,
         currentEpochPublicKey,
-        rosterPubkeys
+        rosterPubkeys,
       ),
       tags: [['d', GROUP_SHARED_ROSTER_FOLLOW_SET_D_TAG]],
     });
 
-    const groupSigner = new NDKPrivateKeySigner(decryptedSecret.group_privkey, ndk);
+    const groupSigner = new NostrPrivateKeySigner(decryptedSecret.group_privkey, ndk);
     await listEvent.sign(groupSigner);
 
     const publishResult = await publishEventWithRelayStatuses(listEvent, relayUrls, 'self');
     if (
       publishResult.relayStatuses.some(
-        (entry) => entry.direction === 'outbound' && entry.status === 'published'
+        (entry) => entry.direction === 'outbound' && entry.status === 'published',
       )
     ) {
       updateStoredEventSinceFromCreatedAt(listEvent.created_at);
@@ -1087,7 +1093,7 @@ export function createPrivateStateRuntime({
   function buildStoredGroupMemberFromContact(
     memberPublicKey: string,
     storedContact: Pick<ContactRecord, 'public_key' | 'name' | 'given_name' | 'meta'> | null,
-    existingMember: NonNullable<ContactMetadata['group_members']>[number] | null
+    existingMember: NonNullable<ContactMetadata['group_members']>[number] | null,
   ): NonNullable<ContactMetadata['group_members']>[number] {
     const fallbackName =
       existingMember?.name?.trim() || storedContact?.name?.trim() || memberPublicKey.slice(0, 16);
@@ -1127,7 +1133,7 @@ export function createPrivateStateRuntime({
 
   function hasResolvedGroupMemberPreview(
     previewContact: Pick<ContactRecord, 'public_key' | 'name' | 'given_name' | 'meta'>,
-    fallbackName: string
+    fallbackName: string,
   ): boolean {
     if (
       previewContact.meta?.display_name?.trim() ||
@@ -1148,7 +1154,7 @@ export function createPrivateStateRuntime({
   async function fetchGroupMemberPreviewWithRetry(
     memberPublicKey: string,
     fallbackName: string,
-    seedRelayUrls: string[]
+    seedRelayUrls: string[],
   ): Promise<Pick<ContactRecord, 'public_key' | 'name' | 'given_name' | 'meta'> | null> {
     for (let attempt = 0; attempt < GROUP_MEMBER_PROFILE_REFRESH_RETRY_ATTEMPTS; attempt += 1) {
       const previewContact = await fetchContactPreviewByPublicKey(memberPublicKey, fallbackName, {
@@ -1176,7 +1182,7 @@ export function createPrivateStateRuntime({
 
   async function persistGroupContactMetaWithRetry(
     groupPublicKey: string,
-    buildNextMeta: (groupContact: ContactRecord) => ContactMetadata
+    buildNextMeta: (groupContact: ContactRecord) => ContactMetadata,
   ): Promise<ContactRecord | null> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const groupContact = await readStoredGroupContact(groupPublicKey);
@@ -1185,6 +1191,7 @@ export function createPrivateStateRuntime({
       }
 
       const updatedContact = await contactsService.updateContact(groupContact.id, {
+        metaBase: groupContact.meta,
         meta: buildNextMeta(groupContact),
       });
       if (updatedContact) {
@@ -1201,7 +1208,7 @@ export function createPrivateStateRuntime({
     options: {
       refreshMemberProfiles?: boolean;
       seedRelayUrls?: string[];
-    } = {}
+    } = {},
   ): Promise<GroupMembershipRosterRefreshResult> {
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
     if (!normalizedGroupPublicKey) {
@@ -1215,27 +1222,27 @@ export function createPrivateStateRuntime({
     }
 
     const normalizedOwnerPublicKey = inputSanitizerService.normalizeHexKey(
-      groupContact.meta.owner_public_key ?? ''
+      groupContact.meta.owner_public_key ?? '',
     );
     const normalizedRosterPubkeys = normalizeGroupMembershipSnapshotPubkeys(memberPubkeys, [
       normalizedGroupPublicKey,
     ]);
     const ownerIncluded = Boolean(
-      normalizedOwnerPublicKey && normalizedRosterPubkeys.includes(normalizedOwnerPublicKey)
+      normalizedOwnerPublicKey && normalizedRosterPubkeys.includes(normalizedOwnerPublicKey),
     );
     const nonOwnerMemberPubkeys = normalizedRosterPubkeys.filter(
-      (memberPublicKey) => memberPublicKey !== normalizedOwnerPublicKey
+      (memberPublicKey) => memberPublicKey !== normalizedOwnerPublicKey,
     );
 
     const existingMembers = inputSanitizerService.normalizeContactGroupMembers(
-      groupContact.meta.group_members
+      groupContact.meta.group_members,
     );
     const existingMembersByPubkey = new Map(
-      existingMembers.map((member) => [member.public_key, member] as const)
+      existingMembers.map((member) => [member.public_key, member] as const),
     );
     const previewSeedRelayUrls = resolveGroupPublishRelayUrlsValue(
       groupContact.relays,
-      options.seedRelayUrls
+      options.seedRelayUrls,
     );
 
     let refreshedProfileCount = 0;
@@ -1253,7 +1260,7 @@ export function createPrivateStateRuntime({
             previewContact = await fetchGroupMemberPreviewWithRetry(
               memberPublicKey,
               memberPublicKey.slice(0, 16),
-              previewSeedRelayUrls
+              previewSeedRelayUrls,
             );
             if (previewContact) {
               refreshedProfileCount += 1;
@@ -1273,7 +1280,7 @@ export function createPrivateStateRuntime({
         const storedContact =
           previewContact ?? (await contactsService.getContactByPublicKey(memberPublicKey));
         return buildStoredGroupMemberFromContact(memberPublicKey, storedContact, existingMember);
-      })
+      }),
     );
 
     if (JSON.stringify(existingMembers) === JSON.stringify(nextMembers)) {
@@ -1299,7 +1306,7 @@ export function createPrivateStateRuntime({
         }
 
         return nextMeta;
-      }
+      },
     );
     if (!updatedContact) {
       throw new Error('Failed to persist refreshed group members.');
@@ -1319,7 +1326,7 @@ export function createPrivateStateRuntime({
 
   async function refreshGroupMembershipRoster(
     groupPublicKey: string,
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<GroupMembershipRosterRefreshResult> {
     const memberPublicKeys = await fetchGroupMembershipRosterPubkeys(groupPublicKey, seedRelayUrls);
     return applyGroupMembershipRosterPubkeys(groupPublicKey, memberPublicKeys, {
@@ -1330,12 +1337,12 @@ export function createPrivateStateRuntime({
 
   async function restoreGroupMembershipRoster(
     groupPublicKey: string,
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<boolean> {
     try {
       const memberPublicKeys = await fetchGroupMembershipRosterPubkeys(
         groupPublicKey,
-        seedRelayUrls
+        seedRelayUrls,
       );
       const result = await applyGroupMembershipRosterPubkeys(groupPublicKey, memberPublicKeys, {
         seedRelayUrls,
@@ -1357,20 +1364,20 @@ export function createPrivateStateRuntime({
       message.includes('Current epoch key is not available for this group.') ||
       message.includes('Failed to decrypt the current epoch private key.') ||
       message.includes(
-        'Decrypted epoch private key does not match the current epoch public key.'
+        'Decrypted epoch private key does not match the current epoch public key.',
       ) ||
       message.includes('Failed to persist refreshed group members.')
     );
   }
 
   async function applyGroupMembershipRosterEvent(
-    event: NDKEvent,
+    event: ClientEvent,
     options: {
       refreshMemberProfiles?: boolean;
       seedRelayUrls?: string[];
-    } = {}
+    } = {},
   ): Promise<boolean> {
-    if (event.kind !== NDKKind.FollowSet) {
+    if (event.kind !== NostrKind.FollowSet) {
       return false;
     }
 
@@ -1386,13 +1393,13 @@ export function createPrivateStateRuntime({
         options.seedRelayUrls ?? [],
         {
           refreshRelayList: false,
-        }
+        },
       );
       const memberPublicKeys = await decryptGroupMembershipRosterContent(
         context.currentEpochPrivateKey,
         context.currentEpochPublicKey,
         normalizedGroupPublicKey,
-        event.content
+        event.content,
       );
       updateStoredEventSinceFromCreatedAt(event.created_at);
       const result = await applyGroupMembershipRosterPubkeys(
@@ -1401,7 +1408,7 @@ export function createPrivateStateRuntime({
         {
           refreshMemberProfiles: options.refreshMemberProfiles,
           seedRelayUrls: options.seedRelayUrls,
-        }
+        },
       );
 
       return result.didChange;
@@ -1421,12 +1428,12 @@ export function createPrivateStateRuntime({
 
   function buildRestoredGroupMembers(
     memberPubkeys: string[],
-    existingMembers: ContactMetadata['group_members']
+    existingMembers: ContactMetadata['group_members'],
   ): NonNullable<ContactMetadata['group_members']> {
     const existingMembersByPubkey = new Map(
       inputSanitizerService
         .normalizeContactGroupMembers(existingMembers)
-        .map((member) => [member.public_key, member] as const)
+        .map((member) => [member.public_key, member] as const),
     );
 
     return memberPubkeys.map((memberPublicKey) => {
@@ -1443,7 +1450,7 @@ export function createPrivateStateRuntime({
     groupPublicKey: string,
     groupPrivateKey: string,
     ownerPublicKey: string,
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<boolean> {
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
     const normalizedGroupPrivateKey = inputSanitizerService.normalizeHexKey(groupPrivateKey);
@@ -1464,7 +1471,7 @@ export function createPrivateStateRuntime({
       return false;
     }
 
-    const relayUrls = resolveGroupPublishRelayUrlsValue(groupContact.relays, seedRelayUrls);
+    const relayUrls = resolveGroupReadRelayUrlsValue(groupContact.relays, seedRelayUrls);
     if (relayUrls.length === 0) {
       return false;
     }
@@ -1475,14 +1482,14 @@ export function createPrivateStateRuntime({
     const listEvent = await fetchEventWithRelayTimeout(
       ndk,
       {
-        kinds: [NDKKind.FollowSet],
+        kinds: [NostrKind.FollowSet],
         authors: [normalizedGroupPublicKey],
         '#d': [GROUP_MEMBERS_FOLLOW_SET_D_TAG],
       },
       {
-        cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+        cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
       },
-      relaySet
+      relaySet,
     );
     if (!listEvent) {
       return false;
@@ -1493,10 +1500,10 @@ export function createPrivateStateRuntime({
       normalizedGroupPrivateKey,
       normalizedGroupPublicKey,
       listEvent.content,
-      [normalizedOwnerPublicKey]
+      [normalizedOwnerPublicKey],
     );
     const existingMembers = inputSanitizerService.normalizeContactGroupMembers(
-      groupContact.meta.group_members
+      groupContact.meta.group_members,
     );
     const nextMembers = buildRestoredGroupMembers(memberPubkeys, existingMembers);
     if (JSON.stringify(existingMembers) === JSON.stringify(nextMembers)) {
@@ -1525,7 +1532,7 @@ export function createPrivateStateRuntime({
         }
 
         return updatedMeta;
-      }
+      },
     );
     if (!updatedContact) {
       throw new Error('Failed to persist restored group members.');
@@ -1535,16 +1542,16 @@ export function createPrivateStateRuntime({
   }
 
   async function fetchGroupIdentitySecretEvents(
-    seedRelayUrls: string[] = []
-  ): Promise<Map<string, NDKEvent>> {
+    seedRelayUrls: string[] = [],
+  ): Promise<Map<string, ClientEvent>> {
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
     if (!loggedInPubkeyHex) {
-      return new Map<string, NDKEvent>();
+      return new Map<string, ClientEvent>();
     }
 
     const relayUrls = await resolveLoggedInReadRelayUrls(seedRelayUrls);
     if (relayUrls.length === 0) {
-      return new Map<string, NDKEvent>();
+      return new Map<string, ClientEvent>();
     }
 
     await ensureRelayConnections(relayUrls);
@@ -1559,17 +1566,17 @@ export function createPrivateStateRuntime({
         '#t': [GROUP_IDENTITY_SECRET_TAG],
       },
       {
-        cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+        cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
       },
-      relaySet
+      relaySet,
     );
 
-    const eventsByGroupPubkey = new Map<string, NDKEvent>();
+    const eventsByGroupPubkey = new Map<string, ClientEvent>();
 
     for (const event of events) {
       updateStoredEventSinceFromCreatedAt(event.created_at);
       const dTag = inputSanitizerService.normalizeHexKey(
-        event.getMatchingTags('d')[0]?.[1]?.trim() ?? ''
+        event.getMatchingTags('d')[0]?.[1]?.trim() ?? '',
       );
       if (!dTag) {
         continue;
@@ -1633,7 +1640,7 @@ export function createPrivateStateRuntime({
                 fallbackName: decryptedSecret.name,
                 accepted: true,
                 invitationCreatedAt: toIsoTimestampFromUnix(event.created_at),
-              }
+              },
             );
           }
 
@@ -1644,13 +1651,13 @@ export function createPrivateStateRuntime({
                   groupPublicKey,
                   decryptedSecret.group_privkey,
                   loggedInPubkeyHex,
-                  seedRelayUrls
+                  seedRelayUrls,
                 )) || didChange;
             } catch (error) {
               console.warn(
                 'Failed to restore group members from follow set',
                 groupPublicKey,
-                error
+                error,
               );
             }
           }
@@ -1674,29 +1681,16 @@ export function createPrivateStateRuntime({
   }
 
   async function createGroupChat(
-    options: CreateGroupChatInput = {}
+    options: CreateGroupChatInput = {},
   ): Promise<CreateGroupChatResult> {
-    const relayUrls = Array.isArray(options.relayUrls) ? options.relayUrls : [];
+    const candidateRelayUrls = Array.isArray(options.relayUrls) ? options.relayUrls : [];
+    if (!options.recoveryPhrase) throw new Error('Back up and verify the group recovery phrase before creating the group.');
+    const recovered = await createRecoverableGroup(options.recoveryPhrase, options.name?.trim() ?? '', options.about?.trim() ?? '', candidateRelayUrls);
+    const relayUrls = recovered.recovery_state?.relays ?? candidateRelayUrls;
     const relayEntries = inputSanitizerService.normalizeRelayEntriesFromUrls(relayUrls);
-    const groupSigner = NDKPrivateKeySigner.generate();
-    const initialEpochState = createInitialGroupEpochSecretState();
-    const groupPublicKey = inputSanitizerService.normalizeHexKey(groupSigner.pubkey);
-    if (!groupPublicKey) {
-      throw new Error('Failed to generate a valid group identity.');
-    }
-
-    const encryptedPrivateKey = await encryptGroupIdentitySecretContent({
-      version: GROUP_IDENTITY_SECRET_VERSION,
-      group_pubkey: groupPublicKey,
-      group_privkey: groupSigner.privateKey,
-      ...initialEpochState,
-      ...(typeof options.name === 'string' && options.name.trim()
-        ? { name: options.name.trim() }
-        : {}),
-      ...(typeof options.about === 'string' && options.about.trim()
-        ? { about: options.about.trim() }
-        : {}),
-    });
+    const initialEpochState = { epoch_number: recovered.epoch_number!, epoch_privkey: recovered.epoch_privkey! };
+    const groupPublicKey = recovered.group_pubkey;
+    const encryptedPrivateKey = await encryptGroupIdentitySecretContent(recovered);
 
     const didChange = await ensureGroupContactAndChat(groupPublicKey, encryptedPrivateKey, {
       name: options.name,
@@ -1710,7 +1704,7 @@ export function createPrivateStateRuntime({
         fallbackName: options.name,
         accepted: true,
         invitationCreatedAt: new Date().toISOString(),
-      }
+      },
     );
     if (didChange) {
       bumpContactListVersion();
@@ -1735,7 +1729,7 @@ export function createPrivateStateRuntime({
       groupSecretSave = await publishGroupIdentitySecret(
         groupPublicKey,
         encryptedPrivateKey,
-        relayUrls
+        relayUrls,
       );
     } catch (error) {
       groupSecretSave = {
@@ -1760,14 +1754,14 @@ export function createPrivateStateRuntime({
       await publishGroupMembershipFollowSet(groupPublicKey, [], relayUrls);
     } catch (error) {
       memberListSyncErrors.push(
-        error instanceof Error ? error.message : 'Failed to publish group member list.'
+        error instanceof Error ? error.message : 'Failed to publish group member list.',
       );
     }
     try {
       await publishGroupMembershipRosterFollowSet(groupPublicKey, [], relayUrls);
     } catch (error) {
       memberListSyncErrors.push(
-        error instanceof Error ? error.message : 'Failed to publish shared group roster.'
+        error instanceof Error ? error.message : 'Failed to publish shared group roster.',
       );
     }
     const memberListSyncError =
@@ -1783,6 +1777,7 @@ export function createPrivateStateRuntime({
 
     return {
       groupPublicKey,
+      relayUrls,
       encryptedPrivateKey,
       groupSecretSave,
       memberListSyncError,
@@ -1792,13 +1787,13 @@ export function createPrivateStateRuntime({
 
   async function fetchContactCursorEvents(
     contacts: ContactRecord[],
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<Map<string, ContactCursorContent>> {
     const contactDTagEntries = await Promise.all(
       contacts.map(async (contact) => {
         const dTag = await deriveContactCursorDTag(contact.public_key);
         return dTag ? ([dTag, contact.public_key] as const) : null;
-      })
+      }),
     );
 
     const normalizedContactDTags = contactDTagEntries
@@ -1833,9 +1828,9 @@ export function createPrivateStateRuntime({
           '#d': dTagBatch,
         },
         {
-          cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+          cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
         },
-        relaySet
+        relaySet,
       );
 
       for (const event of events) {
@@ -1870,7 +1865,7 @@ export function createPrivateStateRuntime({
 
   async function applyContactCursorStateToContact(
     contact: ContactRecord,
-    cursor: ContactCursorContent
+    cursor: ContactCursorContent,
   ): Promise<boolean> {
     const normalizedContactPubkey = inputSanitizerService.normalizeHexKey(contact.public_key);
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
@@ -1884,7 +1879,7 @@ export function createPrivateStateRuntime({
         ? (contact.meta as ContactMetadata)
         : {};
     const existingContactCursor: ContactCursorContent | null = normalizeTimestamp(
-      contactMeta.last_seen_incoming_activity_at
+      contactMeta.last_seen_incoming_activity_at,
     )
       ? {
           version: '0.1',
@@ -1915,6 +1910,7 @@ export function createPrivateStateRuntime({
 
     if (didChangeLastSeenIncomingActivityAt) {
       await contactsService.updateContact(contact.id, {
+        metaBase: contact.meta,
         meta: nextContactMeta,
       });
       didChange = true;
@@ -1925,7 +1921,6 @@ export function createPrivateStateRuntime({
       return didChange;
     }
 
-    const messageRows = await chatDataService.listMessages(normalizedContactPubkey);
     const currentChatLastSeenReceivedActivityAt =
       typeof chatRow.meta?.[LAST_SEEN_RECEIVED_ACTIVITY_AT_META_KEY] === 'string'
         ? chatRow.meta[LAST_SEEN_RECEIVED_ACTIVITY_AT_META_KEY].trim()
@@ -1934,97 +1929,96 @@ export function createPrivateStateRuntime({
       typeof chatRow.meta?.last_outgoing_message_at === 'string'
         ? chatRow.meta.last_outgoing_message_at.trim()
         : '';
-    const latestOwnMessageAt = messageRows.reduce((latest, messageRow) => {
-      if (
-        inputSanitizerService.normalizeHexKey(messageRow.author_public_key) !== loggedInPubkeyHex
-      ) {
-        return latest;
-      }
-
-      return toComparableTimestamp(messageRow.created_at) > toComparableTimestamp(latest)
-        ? messageRow.created_at
-        : latest;
-    }, '');
+    const latestOwnMessageAt =
+      (await chatDataService.findLatestMessageByAuthor(normalizedContactPubkey, loggedInPubkeyHex))
+        ?.created_at ?? '';
     const effectiveCursorAt = resolveLatestReadBoundaryAtValue(
       cursor.last_seen_incoming_activity_at,
       contactMeta.last_seen_incoming_activity_at,
       currentChatLastSeenReceivedActivityAt,
       currentChatLastOutgoingMessageAt,
-      latestOwnMessageAt
+      latestOwnMessageAt,
     );
     const cursorTimestamp = toComparableTimestamp(effectiveCursorAt);
-    const nextUnreadMessageCount = messageRows.reduce((count, messageRow) => {
-      if (
-        inputSanitizerService.normalizeHexKey(messageRow.author_public_key) === loggedInPubkeyHex
-      ) {
-        return count;
+    let nextUnreadMessageCount = 0;
+    for await (const batch of chatDataService.messageBatches(
+      normalizedContactPubkey,
+      250,
+      effectiveCursorAt,
+    )) {
+      for (const messageRow of batch) {
+        if (
+          inputSanitizerService.normalizeHexKey(messageRow.author_public_key) !==
+            loggedInPubkeyHex &&
+          toComparableTimestamp(messageRow.created_at) > cursorTimestamp
+        )
+          nextUnreadMessageCount++;
       }
-
-      return count + (toComparableTimestamp(messageRow.created_at) > cursorTimestamp ? 1 : 0);
-    }, 0);
+    }
 
     let nextUnseenReactionCount = 0;
-    for (const messageRow of messageRows) {
-      if (
-        inputSanitizerService.normalizeHexKey(messageRow.author_public_key) !== loggedInPubkeyHex
-      ) {
-        continue;
-      }
-
-      const currentReactions = normalizeMessageReactions(messageRow.meta.reactions);
-      const nextReactions = currentReactions.map((reaction) => {
-        const normalizedReactionAt = normalizeTimestamp(reaction.createdAt);
+    for await (const batch of chatDataService.reactionMessageBatches(normalizedContactPubkey))
+      for (const messageRow of batch) {
         if (
-          !normalizedReactionAt ||
-          inputSanitizerService.normalizeHexKey(reaction.reactorPublicKey) === loggedInPubkeyHex
+          inputSanitizerService.normalizeHexKey(messageRow.author_public_key) !== loggedInPubkeyHex
         ) {
-          return reaction;
+          continue;
         }
 
-        if (toComparableTimestamp(normalizedReactionAt) <= cursorTimestamp) {
-          if (reaction.viewedByAuthorAt) {
+        const currentReactions = normalizeMessageReactions(messageRow.meta.reactions);
+        const nextReactions = currentReactions.map((reaction) => {
+          const normalizedReactionAt = normalizeTimestamp(reaction.createdAt);
+          if (
+            !normalizedReactionAt ||
+            inputSanitizerService.normalizeHexKey(reaction.reactorPublicKey) === loggedInPubkeyHex
+          ) {
             return reaction;
           }
 
-          return {
-            ...reaction,
-            viewedByAuthorAt: effectiveCursorAt,
-          };
-        }
+          if (toComparableTimestamp(normalizedReactionAt) <= cursorTimestamp) {
+            if (reaction.viewedByAuthorAt) {
+              return reaction;
+            }
 
-        if (!reaction.viewedByAuthorAt) {
-          return reaction;
-        }
+            return {
+              ...reaction,
+              viewedByAuthorAt: effectiveCursorAt,
+            };
+          }
 
-        const { viewedByAuthorAt: _viewedByAuthorAt, ...reactionWithoutViewedAt } = reaction;
-        return reactionWithoutViewedAt;
-      });
+          if (!reaction.viewedByAuthorAt) {
+            return reaction;
+          }
 
-      nextUnseenReactionCount += countUnseenReactionsForAuthor(nextReactions, loggedInPubkeyHex);
-
-      const didChangeReactions =
-        currentReactions.length !== nextReactions.length ||
-        currentReactions.some((reaction, index) => {
-          const nextReaction = nextReactions[index];
-          return nextReaction ? !areMessageReactionsEqual(reaction, nextReaction) : true;
+          const { viewedByAuthorAt: _viewedByAuthorAt, ...reactionWithoutViewedAt } = reaction;
+          return reactionWithoutViewedAt;
         });
-      if (!didChangeReactions) {
-        continue;
-      }
 
-      await chatDataService.updateMessageMeta(
-        messageRow.id,
-        buildMetaWithReactions(messageRow.meta, nextReactions)
-      );
-      didChange = true;
-    }
+        nextUnseenReactionCount += countUnseenReactionsForAuthor(nextReactions, loggedInPubkeyHex);
+
+        const didChangeReactions =
+          currentReactions.length !== nextReactions.length ||
+          currentReactions.some((reaction, index) => {
+            const nextReaction = nextReactions[index];
+            return nextReaction ? !areMessageReactionsEqual(reaction, nextReaction) : true;
+          });
+        if (!didChangeReactions) {
+          continue;
+        }
+
+        await chatDataService.updateMessageMeta(
+          messageRow.id,
+          buildMetaWithReactions(messageRow.meta, nextReactions),
+        );
+        didChange = true;
+      }
 
     const nextChatMeta = buildChatMetaWithUnseenReactionCount(
       {
         ...chatRow.meta,
         [LAST_SEEN_RECEIVED_ACTIVITY_AT_META_KEY]: effectiveCursorAt,
       },
-      nextUnseenReactionCount
+      nextUnseenReactionCount,
     );
 
     if (JSON.stringify(chatRow.meta) !== JSON.stringify(nextChatMeta)) {
@@ -2098,10 +2092,10 @@ export function createPrivateStateRuntime({
           return;
         }
 
-        const { useMessageStore } = await import('src/stores/messageStore');
+        const { useMessageStore } = await import('#src/stores/messageStore.ts');
         const messageStore = useMessageStore();
         const readStateSyncSummary = await messageStore.syncChatsReadStateFromSeenBoundary(
-          contacts.map((contact) => contact.public_key)
+          contacts.map((contact) => contact.public_key),
         );
         const didSyncReadState =
           Number(readStateSyncSummary?.boundaryAdvancedCount ?? 0) > 0 ||
@@ -2129,7 +2123,7 @@ export function createPrivateStateRuntime({
   async function publishContactCursor(
     contactPublicKey: string,
     cursor: ContactCursorState,
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<void> {
     const normalizedContactPublicKey = inputSanitizerService.normalizeHexKey(contactPublicKey);
     if (!normalizedContactPublicKey || !normalizeTimestamp(cursor.at)) {
@@ -2148,7 +2142,7 @@ export function createPrivateStateRuntime({
     await ensureRelayConnections(relayUrls);
     const user = await ensureLoggedInSignerUser();
 
-    const cursorEvent = new NDKEvent(ndk, {
+    const cursorEvent = new ClientEvent(ndk, {
       kind: PRIVATE_PREFERENCES_KIND,
       created_at: Math.floor(Date.now() / 1000),
       pubkey: user.pubkey,
@@ -2156,14 +2150,14 @@ export function createPrivateStateRuntime({
       tags: [['d', dTag]],
     });
 
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk, false);
+    const relaySet = NostrRelaySet.fromRelayUrls(relayUrls, ndk, false);
     await cursorEvent.publishReplaceable(relaySet);
     updateStoredEventSinceFromCreatedAt(cursorEvent.created_at);
   }
 
   function scheduleContactCursorPublish(
     contactPublicKey: string,
-    cursor: ContactCursorState
+    cursor: ContactCursorState,
   ): void {
     const normalizedContactPublicKey = inputSanitizerService.normalizeHexKey(contactPublicKey);
     const normalizedCursorAt = normalizeTimestamp(cursor.at);

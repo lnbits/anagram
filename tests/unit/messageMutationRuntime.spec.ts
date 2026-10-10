@@ -1,6 +1,6 @@
-import NDK, { type NDKEvent, NDKKind } from '@nostr-dev-kit/ndk';
-import { createMessageMutationRuntime } from 'src/stores/nostr/messageMutationRuntime';
-import type { MessageRelayStatus } from 'src/types/chat';
+import NostrClient, { type ClientEvent, NostrKind } from '#src/lib/nostr/client.ts';
+import { createMessageMutationRuntime } from '#src/stores/nostr/messageMutationRuntime.ts';
+import type { MessageRelayStatus } from '#src/types/chat.ts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const serviceMocks = vi.hoisted(() => ({
@@ -11,7 +11,8 @@ const serviceMocks = vi.hoisted(() => ({
     getChatByPublicKey: vi.fn(),
     findMessageByReactionEventId: vi.fn(),
     init: vi.fn(),
-    listMessages: vi.fn(),
+    listMessagesInSecond: vi.fn(),
+    listMessagesReplyingTo: vi.fn(),
     updateMessageMeta: vi.fn(),
     updateChatPreview: vi.fn(),
   },
@@ -27,15 +28,15 @@ const serviceMocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('src/services/chatDataService', () => ({
+vi.mock('#src/services/chatDataService.ts', () => ({
   chatDataService: serviceMocks.chatDataService,
 }));
 
-vi.mock('src/services/contactsService', () => ({
+vi.mock('#src/services/contactsService.ts', () => ({
   contactsService: serviceMocks.contactsService,
 }));
 
-vi.mock('src/services/nostrEventDataService', () => ({
+vi.mock('#src/services/nostrEventDataService.ts', () => ({
   nostrEventDataService: serviceMocks.nostrEventDataService,
 }));
 
@@ -55,16 +56,16 @@ function makeRelayStatus(overrides: Partial<MessageRelayStatus> = {}): MessageRe
   };
 }
 
-function makeReactionEvent(): NDKEvent {
+function makeReactionEvent(): ClientEvent {
   return {
     id: REACTION_EVENT_ID,
-    kind: NDKKind.Reaction,
+    kind: NostrKind.Reaction,
     created_at: 1700003600,
     pubkey: LOGGED_IN_PUBLIC_KEY,
     content: '👍',
     tags: [],
     getMatchingTags: vi.fn(() => []),
-  } as unknown as NDKEvent;
+  } as unknown as ClientEvent;
 }
 
 function createDeps() {
@@ -74,9 +75,9 @@ function createDeps() {
     formatSubscriptionLogValue: vi.fn((value) => value ?? null),
     getLoggedInPublicKeyHex: vi.fn(() => LOGGED_IN_PUBLIC_KEY),
     logInboundEvent: vi.fn(),
-    ndk: new NDK(),
+    ndk: new NostrClient(),
     normalizeEventId: vi.fn((value: unknown) =>
-      typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : null
+      typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : null,
     ),
     normalizeThrottleMs: vi.fn((value: number | undefined) => value ?? 0),
     queuePendingIncomingDeletion: vi.fn(),
@@ -90,7 +91,7 @@ function createDeps() {
     repairMissingMessageDependency: vi.fn(async () => false),
     resolveMissingMessageDependencyRepair: vi.fn(),
     toIsoTimestampFromUnix: vi.fn((value: number | undefined) =>
-      typeof value === 'number' ? new Date(value * 1000).toISOString() : ''
+      typeof value === 'number' ? new Date(value * 1000).toISOString() : '',
     ),
     consumePendingIncomingDeletions: vi.fn(() => []),
     consumePendingIncomingReactions: vi.fn(() => []),
@@ -103,13 +104,14 @@ describe('messageMutationRuntime', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     serviceMocks.chatDataService.getMessageByEventId.mockResolvedValue(null);
     serviceMocks.chatDataService.getMessageByEventIdOrEditReference.mockImplementation((eventId) =>
-      serviceMocks.chatDataService.getMessageByEventId(eventId)
+      serviceMocks.chatDataService.getMessageByEventId(eventId),
     );
     serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue(null);
     serviceMocks.chatDataService.applyMessageEdit.mockResolvedValue(null);
     serviceMocks.chatDataService.findMessageByReactionEventId.mockResolvedValue(null);
     serviceMocks.chatDataService.init.mockResolvedValue(undefined);
-    serviceMocks.chatDataService.listMessages.mockResolvedValue([]);
+    serviceMocks.chatDataService.listMessagesInSecond.mockResolvedValue([]);
+    serviceMocks.chatDataService.listMessagesReplyingTo.mockResolvedValue([]);
     serviceMocks.chatDataService.updateMessageMeta.mockResolvedValue(null);
     serviceMocks.chatDataService.updateChatPreview.mockResolvedValue(null);
     serviceMocks.contactsService.getContactByPublicKey.mockResolvedValue({
@@ -135,7 +137,7 @@ describe('messageMutationRuntime', () => {
         direction: 'in',
         rumorNostrEvent: {
           id: REACTION_EVENT_ID,
-          kind: NDKKind.Reaction,
+          kind: NostrKind.Reaction,
           pubkey: LOGGED_IN_PUBLIC_KEY,
           created_at: 1700003600,
           content: '👍',
@@ -143,14 +145,14 @@ describe('messageMutationRuntime', () => {
           sig: '',
         },
         relayStatuses: [makeRelayStatus()],
-      }
+      },
     );
 
     expect(deps.queuePendingIncomingReaction).toHaveBeenCalledWith(
       TARGET_EVENT_ID,
       expect.objectContaining({
         chatPublicKey: CHAT_PUBLIC_KEY,
-      })
+      }),
     );
     expect(deps.repairMissingMessageDependency).toHaveBeenCalledWith(
       CHAT_PUBLIC_KEY,
@@ -160,7 +162,7 @@ describe('messageMutationRuntime', () => {
         immediate: true,
         referenceCreatedAt: 1700003600,
         seedRelayUrls: ['wss://relay.example'],
-      })
+      }),
     );
   });
 
@@ -176,7 +178,7 @@ describe('messageMutationRuntime', () => {
       {
         referenceCreatedAt: 1700007200,
         seedRelayUrls: ['wss://relay.example'],
-      }
+      },
     );
 
     expect(replyPreview).toEqual({
@@ -196,7 +198,7 @@ describe('messageMutationRuntime', () => {
         immediate: true,
         referenceCreatedAt: 1700007200,
         seedRelayUrls: ['wss://relay.example'],
-      })
+      }),
     );
   });
 
@@ -228,8 +230,8 @@ describe('messageMutationRuntime', () => {
         TARGET_EVENT_ID,
         CHAT_PUBLIC_KEY,
         LOGGED_IN_PUBLIC_KEY,
-        null
-      )
+        null,
+      ),
     ).resolves.toMatchObject({
       text: 'Picture',
       imageUrl,
@@ -241,7 +243,7 @@ describe('messageMutationRuntime', () => {
   it('refreshes stale reply previews when the target message arrives', async () => {
     const deps = createDeps();
     const runtime = createMessageMutationRuntime(deps);
-    serviceMocks.chatDataService.listMessages.mockResolvedValue([
+    serviceMocks.chatDataService.listMessagesReplyingTo.mockResolvedValue([
       {
         id: 12,
         chat_public_key: CHAT_PUBLIC_KEY,
@@ -283,7 +285,7 @@ describe('messageMutationRuntime', () => {
     };
 
     await expect(
-      runtime.refreshReplyPreviewsForTargetMessage(targetMessage as never)
+      runtime.refreshReplyPreviewsForTargetMessage(targetMessage as never),
     ).resolves.toBe(1);
 
     expect(deps.resolveMissingMessageDependencyRepair).toHaveBeenCalledWith(TARGET_EVENT_ID);
@@ -297,15 +299,57 @@ describe('messageMutationRuntime', () => {
           authorName: 'You',
           eventId: TARGET_EVENT_ID,
         }),
-      })
+      }),
     );
     expect(deps.refreshMessageInLiveState).toHaveBeenCalledWith(12);
+  });
+
+  it('does not treat an unrelated same-second message as the replacement for a deletion', async () => {
+    const deps = createDeps();
+    deps.readDeletionTargetEntries.mockReturnValue([
+      { eventId: TARGET_EVENT_ID, kind: NostrKind.PrivateDirectMessage },
+    ]);
+    const runtime = createMessageMutationRuntime(deps);
+    const original = {
+      id: 3,
+      chat_public_key: CHAT_PUBLIC_KEY,
+      author_public_key: LOGGED_IN_PUBLIC_KEY,
+      message: 'Before edit',
+      created_at: '2026-01-01T00:00:00.000Z',
+      event_id: TARGET_EVENT_ID,
+      meta: {},
+    };
+    serviceMocks.chatDataService.getMessageByEventId.mockResolvedValue(original);
+    serviceMocks.chatDataService.listMessagesInSecond.mockResolvedValue([
+      { ...original, id: 1, event_id: 'e'.repeat(64), message: 'Keep earlier message' },
+      original,
+      { ...original, id: 4, event_id: 'a'.repeat(64), message: 'Keep later message' },
+    ]);
+
+    await runtime.processIncomingDeletionRumorEvent(
+      {
+        id: 'f'.repeat(64),
+        kind: NostrKind.EventDeletion,
+        created_at: 1767225660,
+        pubkey: LOGGED_IN_PUBLIC_KEY,
+        content: '',
+        tags: [],
+      } as unknown as ClientEvent,
+      CHAT_PUBLIC_KEY,
+      LOGGED_IN_PUBLIC_KEY,
+    );
+
+    expect(serviceMocks.chatDataService.applyMessageEdit).not.toHaveBeenCalled();
+    expect(serviceMocks.chatDataService.updateMessageMeta).toHaveBeenCalledWith(
+      original.id,
+      expect.objectContaining({ deleted: expect.any(Object) }),
+    );
   });
 
   it('collapses a same-timestamp replacement when the predecessor deletion arrives last', async () => {
     const deps = createDeps();
     deps.readDeletionTargetEntries.mockReturnValue([
-      { eventId: TARGET_EVENT_ID, kind: NDKKind.PrivateDirectMessage },
+      { eventId: TARGET_EVENT_ID, kind: NostrKind.PrivateDirectMessage },
     ]);
     const runtime = createMessageMutationRuntime(deps);
     const replacementEventId = 'e'.repeat(64);
@@ -337,7 +381,7 @@ describe('messageMutationRuntime', () => {
       meta: replacementMessage.meta,
     };
     serviceMocks.chatDataService.getMessageByEventId.mockResolvedValue(originalMessage);
-    serviceMocks.chatDataService.listMessages.mockResolvedValue([
+    serviceMocks.chatDataService.listMessagesInSecond.mockResolvedValue([
       originalMessage,
       replacementMessage,
     ]);
@@ -346,14 +390,14 @@ describe('messageMutationRuntime', () => {
     await runtime.processIncomingDeletionRumorEvent(
       {
         id: 'f'.repeat(64),
-        kind: NDKKind.EventDeletion,
+        kind: NostrKind.EventDeletion,
         created_at: 1767225660,
         pubkey: LOGGED_IN_PUBLIC_KEY,
         content: '',
         tags: [],
-      } as unknown as NDKEvent,
+      } as unknown as ClientEvent,
       CHAT_PUBLIC_KEY,
-      LOGGED_IN_PUBLIC_KEY
+      LOGGED_IN_PUBLIC_KEY,
     );
 
     expect(serviceMocks.chatDataService.applyMessageEdit).toHaveBeenCalledWith(
@@ -362,9 +406,56 @@ describe('messageMutationRuntime', () => {
         message: 'After edit',
         event_id: replacementEventId,
         previous_event_id: TARGET_EVENT_ID,
-      })
+      }),
     );
     expect(serviceMocks.chatDataService.updateMessageMeta).not.toHaveBeenCalled();
     expect(deps.refreshMessageInLiveState).toHaveBeenCalledWith(originalMessage.id);
+  });
+  it('private replies never expose content from another conversation', async () => {
+    const runtime = createMessageMutationRuntime(createDeps());
+    serviceMocks.chatDataService.getMessageByEventId.mockResolvedValue({
+      id: 44,
+      chat_public_key: 'f'.repeat(64),
+      author_public_key: LOGGED_IN_PUBLIC_KEY,
+      message: 'Content from a different private conversation',
+      created_at: '2026-01-01T00:00:00.000Z',
+      event_id: TARGET_EVENT_ID,
+      meta: {},
+    });
+    const preview = await runtime.buildReplyPreviewFromTargetEvent(
+      TARGET_EVENT_ID,
+      CHAT_PUBLIC_KEY,
+      LOGGED_IN_PUBLIC_KEY,
+      null,
+    );
+    expect(preview.text).not.toContain('Content from a different private conversation');
+    expect(preview.authorPublicKey).toBeFalsy();
+  });
+  it('deleted private messages use a tombstone in reply previews', async () => {
+    const runtime = createMessageMutationRuntime(createDeps());
+    serviceMocks.chatDataService.getMessageByEventId.mockResolvedValue({
+      id: 44,
+      chat_public_key: CHAT_PUBLIC_KEY,
+      author_public_key: LOGGED_IN_PUBLIC_KEY,
+      message: 'Deleted content still quoted',
+      created_at: '2026-01-01T00:00:00.000Z',
+      event_id: TARGET_EVENT_ID,
+      meta: {
+        deleted: {
+          deletedAt: '2026-01-02T00:00:00.000Z',
+          deletedByPublicKey: LOGGED_IN_PUBLIC_KEY,
+        },
+      },
+    });
+    expect(
+      (
+        await runtime.buildReplyPreviewFromTargetEvent(
+          TARGET_EVENT_ID,
+          CHAT_PUBLIC_KEY,
+          LOGGED_IN_PUBLIC_KEY,
+          null,
+        )
+      ).text,
+    ).toBe('Message deleted');
   });
 });

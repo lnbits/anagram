@@ -1,32 +1,45 @@
 # Anagram
 
-Anagram is a private messaging app for Nostr. It gives you a clean place to talk one-to-one or in groups, manage contacts, and choose the relays your messages use.
+Private Nostr messaging with DMs, groups, and Iroh audio/video calls. Built with Svelte and Tauri for web, desktop, and mobile. Messages are stored locally in IndexedDB; no application backend is required.
 
-## Screenshots
+## Run
 
-**Desktop**
+Use Node 24 and npm:
 
-![Anagram desktop conversation view](./docs/screenshots/desktop-chat.png)
+```sh
+npm ci
+npm run dev
+```
 
-**Mobile**
+Open [localhost:5173](http://127.0.0.1:5173). Sign in with a private key, a Nostr browser extension, or a remote signer.
 
-<p>
-  <img src="./docs/screenshots/mobile-chats.png" alt="Anagram mobile chat list" width="320">&nbsp;&nbsp;&nbsp;&nbsp;
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="./docs/screenshots/mobile-groups.png" alt="Anagram mobile group conversation" width="320">
-</p>
+## Build
 
-## What You Can Do
+```sh
+npm run build          # Web app → build/
+npm run preview        # Preview the production web app
+npm run dev:desktop    # Desktop development
+npm run build:desktop  # Desktop installer
+```
 
-- Create a new Nostr account or sign in with an existing one.
-- Chat privately with individual contacts.
-- Create and join group conversations.
-- Review new contact requests before accepting, blocking, or deleting them.
-- Search chats, react to messages, delete messages, and keep track of unread conversations.
-- Manage your contacts, profile, relays, theme, and notification preferences.
-- Use the app on desktop-sized screens or mobile-sized screens.
+Desktop builds require Rust and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). The production web app can be installed as a PWA.
 
-## Development
+## Check
 
-Technical setup, build commands, protocol notes, project structure, and testing details live in [DEV.md](./DEV.md).
+```sh
+npm run quality:all
+npm run test:unit
+npx playwright install chromium
+npm run test:e2e:local
+```
+
+## Releases
+
+Version tags build Windows, macOS, Linux, Android, and web assets. **RC tags such as `v0.1.0-rc1` stay as drafts.** iPhone builds are paused.
+
+- [Release and signing setup](docs/releases.md)
+- [Development, hosting, and mobile builds](docs/development.md)
+- [Protocol notes](nips/NIPS_USED.md)
+- [Security review](docs/security-review.md)
+
+Browser private-key login stores the key in localStorage. Use an extension or remote signer if you don’t want the app to store your account key. Uploaded media is not encrypted by this client.

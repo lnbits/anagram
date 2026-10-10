@@ -3,7 +3,7 @@ import {
   hasTransferFiles,
   hasTransferText,
   readFirstImageTransferFile,
-} from 'src/utils/mediaTransfer';
+} from '#src/utils/mediaTransfer.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('media transfer helpers', () => {

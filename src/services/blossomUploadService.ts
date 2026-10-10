@@ -1,9 +1,9 @@
-import type { MessageAttachmentMetadata } from 'src/types/chat';
+import type { MessageAttachmentMetadata } from '#src/types/chat.ts';
 import {
   buildBlossomUploadUrl,
   getBlossomServerHost,
   requireBlossomServerUrl,
-} from 'src/utils/blossomServer';
+} from '#src/utils/blossomServer.ts';
 
 export const BLOSSOM_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
 

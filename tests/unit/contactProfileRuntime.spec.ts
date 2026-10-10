@@ -1,6 +1,6 @@
-import { BACKGROUND_GROUP_CONTACT_REFRESH_COOLDOWN_MS } from 'src/stores/nostr/constants';
-import { createContactProfileRuntime } from 'src/stores/nostr/contactProfileRuntime';
-import type { ContactRecord } from 'src/types/contact';
+import { BACKGROUND_GROUP_CONTACT_REFRESH_COOLDOWN_MS } from '#src/stores/nostr/constants.ts';
+import { createContactProfileRuntime } from '#src/stores/nostr/contactProfileRuntime.ts';
+import type { ContactRecord } from '#src/types/contact.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const USER_PUBKEY = 'a'.repeat(64);
@@ -14,7 +14,7 @@ const serviceMocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('src/services/contactsService', () => ({
+vi.mock('#src/services/contactsService.ts', () => ({
   contactsService: serviceMocks.contactsService,
 }));
 

@@ -1,31 +1,25 @@
-import NDK, { NDKPrivateKeySigner, type NDKUser } from '@nostr-dev-kit/ndk';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
+import { deriveGroupIdentityKey, deriveGroupEpochKey, normalizeRecoveryState } from './groupRecovery.ts';
+import NostrClient, { NostrPrivateKeySigner, type NostrUser } from '#src/lib/nostr/client.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
 import {
   CONTACT_CURSOR_VERSION,
   EVENT_FILTER_LOOKBACK_SECONDS,
   EVENT_SINCE_STORAGE_KEY,
-  PRIVATE_MESSAGES_BACKFILL_INITIAL_DELAY_MS,
-  PRIVATE_MESSAGES_BACKFILL_MAX_DELAY_MS,
   PRIVATE_MESSAGES_BACKFILL_STATE_STORAGE_KEY,
-  PRIVATE_MESSAGES_BACKFILL_WINDOW_SECONDS,
   PRIVATE_MESSAGES_LAST_RECEIVED_EVENT_STORAGE_KEY,
   PRIVATE_MESSAGES_STARTUP_LIVE_LOOKBACK_SECONDS,
   PRIVATE_PREFERENCES_STORAGE_KEY,
-} from 'src/stores/nostr/constants';
-import { hasStorage, isPlainRecord } from 'src/stores/nostr/shared';
+} from '#src/stores/nostr/constants.ts';
+import { hasStorage, isPlainRecord } from '#src/stores/nostr/shared.ts';
 import type {
   ContactCursorContent,
   ContactCursorState,
   GroupIdentitySecretContent,
-  PrivateMessagesBackfillState,
   PrivatePreferences,
-} from 'src/stores/nostr/types';
-import { normalizeBlossomServerUrl } from 'src/utils/blossomServer';
-import {
-  DEFAULT_MESSAGE_HISTORY_RESTORE_DAYS,
-  MESSAGE_HISTORY_RESTORE_DAYS,
-} from 'src/utils/messageHistoryRestore';
-import type { Ref } from 'vue';
+} from '#src/stores/nostr/types.ts';
+import { normalizeBlossomServerUrl } from '#src/utils/blossomServer.ts';
+import { normalizeIrohRelaySettings } from '#src/utils/irohRelays.ts';
+import type { Ref } from '#src/lib/state/reactivity.ts';
 
 interface PendingEventSinceState {
   pendingEventSinceUpdate: number;
@@ -34,9 +28,9 @@ interface PendingEventSinceState {
 interface StorageSessionRuntimeDeps {
   eventSince: Ref<number>;
   getDefaultEventSince: () => number;
-  getLoggedInSignerUser: () => Promise<NDKUser>;
+  getLoggedInSignerUser: () => Promise<NostrUser>;
   isRestoringStartupState: Ref<boolean>;
-  ndk: NDK;
+  ndk: NostrClient;
   normalizeEventId: (value: unknown) => string | null;
   pendingEventSinceState: PendingEventSinceState;
 }
@@ -50,8 +44,6 @@ export function createStorageSessionRuntime({
   normalizeEventId,
   pendingEventSinceState,
 }: StorageSessionRuntimeDeps) {
-  let messageHistoryRestoreDays: number | null = null;
-
   function setStoredEventSince(value: number): number {
     const normalizedValue =
       Number.isInteger(value) && Number(value) > 0
@@ -74,7 +66,7 @@ export function createStorageSessionRuntime({
     if (hasStorage()) {
       const storedValue = Number.parseInt(
         window.localStorage.getItem(EVENT_SINCE_STORAGE_KEY) ?? '',
-        10
+        10,
       );
       if (Number.isInteger(storedValue) && storedValue > 0) {
         eventSince.value = storedValue;
@@ -98,7 +90,7 @@ export function createStorageSessionRuntime({
 
     const storedValue = Number.parseInt(
       window.localStorage.getItem(PRIVATE_MESSAGES_LAST_RECEIVED_EVENT_STORAGE_KEY) ?? '',
-      10
+      10,
     );
     return Number.isInteger(storedValue) && storedValue > 0 ? storedValue : null;
   }
@@ -118,7 +110,7 @@ export function createStorageSessionRuntime({
     if (hasStorage()) {
       window.localStorage.setItem(
         PRIVATE_MESSAGES_LAST_RECEIVED_EVENT_STORAGE_KEY,
-        String(normalizedCreatedAt)
+        String(normalizedCreatedAt),
       );
     }
   }
@@ -129,185 +121,29 @@ export function createStorageSessionRuntime({
     }
   }
 
-  function normalizePrivateMessagesBackfillState(
-    value: unknown
-  ): PrivateMessagesBackfillState | null {
-    if (!isPlainRecord(value)) {
-      return null;
-    }
-
-    const pubkey = inputSanitizerService.normalizeHexKey(
-      typeof value.pubkey === 'string' ? value.pubkey : ''
-    );
-    const nextSince = Number(value.nextSince);
-    const nextUntil = Number(value.nextUntil);
-    const floorSince = Number(value.floorSince);
-    const delayMs = Number(value.delayMs);
-    const completed = value.completed === true;
-
-    if (
-      !pubkey ||
-      !Number.isInteger(nextSince) ||
-      nextSince < 0 ||
-      !Number.isInteger(nextUntil) ||
-      nextUntil < 0 ||
-      !Number.isInteger(floorSince) ||
-      floorSince < 0 ||
-      !Number.isFinite(delayMs)
-    ) {
-      return null;
-    }
-
-    return {
-      pubkey,
-      nextSince: Math.floor(nextSince),
-      nextUntil: Math.floor(nextUntil),
-      floorSince: Math.floor(floorSince),
-      delayMs: Math.min(
-        PRIVATE_MESSAGES_BACKFILL_MAX_DELAY_MS,
-        Math.max(PRIVATE_MESSAGES_BACKFILL_INITIAL_DELAY_MS, Math.floor(delayMs))
-      ),
-      completed,
-    };
-  }
-
-  function readPrivateMessagesBackfillState(): PrivateMessagesBackfillState | null {
-    if (!hasStorage()) {
-      return null;
-    }
-
-    const stored = window.localStorage.getItem(PRIVATE_MESSAGES_BACKFILL_STATE_STORAGE_KEY)?.trim();
-    if (!stored) {
-      return null;
-    }
-
-    try {
-      return normalizePrivateMessagesBackfillState(JSON.parse(stored));
-    } catch {
-      return null;
-    }
-  }
-
-  function writePrivateMessagesBackfillState(state: PrivateMessagesBackfillState): void {
-    if (!hasStorage()) {
-      return;
-    }
-
-    window.localStorage.setItem(PRIVATE_MESSAGES_BACKFILL_STATE_STORAGE_KEY, JSON.stringify(state));
-  }
-
+  // Remove legacy duration checkpoints; history now uses per-relay coverage only.
   function clearPrivateMessagesBackfillState(): void {
-    messageHistoryRestoreDays = null;
-    if (hasStorage()) {
-      window.localStorage.removeItem(PRIVATE_MESSAGES_BACKFILL_STATE_STORAGE_KEY);
-    }
+    if (hasStorage()) window.localStorage.removeItem(PRIVATE_MESSAGES_BACKFILL_STATE_STORAGE_KEY);
   }
-
-  function setMessageHistoryRestoreDays(days: number): void {
-    if (!MESSAGE_HISTORY_RESTORE_DAYS.some((option) => option === days)) {
-      throw new Error('Invalid message history restore duration.');
-    }
-    clearPrivateMessagesBackfillState();
-    messageHistoryRestoreDays = days;
-  }
-
-  function getPrivateMessagesStartupFloorSince(
-    baseUnixTime = Math.floor(Date.now() / 1000)
-  ): number {
-    // Resume an interrupted restore using its original boundary, not a saved preference.
-    // Fresh login and logout both clear the checkpoint and this session's selection.
-    const checkpoint = readPrivateMessagesBackfillState();
-    if (messageHistoryRestoreDays === null && checkpoint && !checkpoint.completed) {
-      return checkpoint.floorSince;
-    }
-    const days = messageHistoryRestoreDays ?? DEFAULT_MESSAGE_HISTORY_RESTORE_DAYS;
-    return Math.max(0, Math.floor(baseUnixTime) - days * 24 * 60 * 60);
-  }
+  clearPrivateMessagesBackfillState();
 
   function getPrivateMessagesStartupLiveSince(
-    baseUnixTime = Math.floor(Date.now() / 1000)
+    baseUnixTime = Math.floor(Date.now() / 1000),
   ): number {
     const normalizedNow = Math.max(0, Math.floor(baseUnixTime));
     const lastReceivedCreatedAt = readStoredPrivateMessagesLastReceivedCreatedAt();
     const anchorCreatedAt = lastReceivedCreatedAt ?? normalizedNow;
 
-    return Math.max(
-      getPrivateMessagesStartupFloorSince(normalizedNow),
-      anchorCreatedAt - PRIVATE_MESSAGES_STARTUP_LIVE_LOOKBACK_SECONDS
-    );
+    return Math.max(0, anchorCreatedAt - PRIVATE_MESSAGES_STARTUP_LIVE_LOOKBACK_SECONDS);
   }
 
   function getPrivateMessagesEpochSwitchSince(
-    baseUnixTime = Math.floor(Date.now() / 1000)
+    baseUnixTime = Math.floor(Date.now() / 1000),
   ): number {
     return Math.max(
-      getPrivateMessagesStartupFloorSince(baseUnixTime),
-      Math.min(getFilterSince(), getPrivateMessagesStartupLiveSince(baseUnixTime))
+      0,
+      Math.min(getFilterSince(), getPrivateMessagesStartupLiveSince(baseUnixTime)),
     );
-  }
-
-  function createInitialPrivateMessagesBackfillState(
-    pubkeyHex: string,
-    liveSince: number,
-    floorSince: number
-  ): PrivateMessagesBackfillState | null {
-    const normalizedPubkey = inputSanitizerService.normalizeHexKey(pubkeyHex);
-    const normalizedLiveSince = Math.max(0, Math.floor(liveSince));
-    const normalizedFloorSince = Math.max(0, Math.floor(floorSince));
-    if (!normalizedPubkey || normalizedLiveSince <= normalizedFloorSince) {
-      return null;
-    }
-
-    const nextUntil = normalizedLiveSince;
-    const nextSince = Math.max(
-      normalizedFloorSince,
-      nextUntil - PRIVATE_MESSAGES_BACKFILL_WINDOW_SECONDS
-    );
-    if (nextSince >= nextUntil) {
-      return null;
-    }
-
-    return {
-      pubkey: normalizedPubkey,
-      nextSince,
-      nextUntil,
-      floorSince: normalizedFloorSince,
-      delayMs: PRIVATE_MESSAGES_BACKFILL_INITIAL_DELAY_MS,
-      completed: false,
-    };
-  }
-
-  function getPrivateMessagesBackfillResumeState(
-    pubkeyHex: string,
-    liveSince: number,
-    floorSince: number
-  ): PrivateMessagesBackfillState | null {
-    const normalizedPubkey = inputSanitizerService.normalizeHexKey(pubkeyHex);
-    if (!normalizedPubkey) {
-      return null;
-    }
-
-    const storedState = readPrivateMessagesBackfillState();
-    if (storedState && storedState.pubkey === normalizedPubkey) {
-      const normalizedFloorSince = Math.max(floorSince, storedState.floorSince);
-      if (storedState.completed && storedState.floorSince <= normalizedFloorSince) {
-        return null;
-      }
-
-      const nextSince = Math.max(normalizedFloorSince, storedState.nextSince);
-      const nextUntil = Math.max(nextSince, storedState.nextUntil);
-      if (nextSince < nextUntil) {
-        return {
-          ...storedState,
-          nextSince,
-          nextUntil,
-          floorSince: normalizedFloorSince,
-          completed: false,
-        };
-      }
-    }
-
-    return createInitialPrivateMessagesBackfillState(normalizedPubkey, liveSince, floorSince);
   }
 
   function updateStoredEventSinceFromCreatedAt(value: unknown): void {
@@ -323,7 +159,7 @@ export function createStorageSessionRuntime({
     if (isRestoringStartupState.value) {
       pendingEventSinceState.pendingEventSinceUpdate = Math.max(
         pendingEventSinceState.pendingEventSinceUpdate,
-        createdAt
+        createdAt,
       );
       return;
     }
@@ -334,7 +170,7 @@ export function createStorageSessionRuntime({
   function flushPendingEventSinceUpdate(): void {
     const nextSince = Math.max(
       ensureStoredEventSince(),
-      pendingEventSinceState.pendingEventSinceUpdate
+      pendingEventSinceState.pendingEventSinceUpdate,
     );
     pendingEventSinceState.pendingEventSinceUpdate = 0;
     setStoredEventSince(nextSince);
@@ -376,7 +212,7 @@ export function createStorageSessionRuntime({
     }
 
     const normalizedContactSecret = inputSanitizerService.normalizeHexKey(
-      typeof value.contactSecret === 'string' ? value.contactSecret : ''
+      typeof value.contactSecret === 'string' ? value.contactSecret : '',
     );
     if (!normalizedContactSecret) {
       return null;
@@ -393,6 +229,9 @@ export function createStorageSessionRuntime({
       delete preferences.blossomServerUrl;
     }
 
+    const irohSettings = normalizeIrohRelaySettings(value.irohRelaySettings);
+    if (irohSettings) preferences.irohRelaySettings = irohSettings;
+    else delete preferences.irohRelaySettings;
     return preferences;
   }
 
@@ -432,7 +271,7 @@ export function createStorageSessionRuntime({
   async function sha256Hex(value: string): Promise<string> {
     const digest = await globalThis.crypto.subtle.digest(
       'SHA-256',
-      new TextEncoder().encode(value)
+      new TextEncoder().encode(value),
     );
     return Array.from(new Uint8Array(digest))
       .map((byte) => byte.toString(16).padStart(2, '0'))
@@ -440,11 +279,11 @@ export function createStorageSessionRuntime({
   }
 
   function buildFreshPrivatePreferences(
-    existing: Record<string, unknown> = {}
+    existing: Record<string, unknown> = {},
   ): PrivatePreferences {
     return {
       ...existing,
-      contactSecret: NDKPrivateKeySigner.generate().privateKey,
+      contactSecret: NostrPrivateKeySigner.generate().privateKey,
     };
   }
 
@@ -456,7 +295,7 @@ export function createStorageSessionRuntime({
     const version = typeof value.version === 'string' ? value.version.trim() : '';
     const lastSeenIncomingActivityAt = normalizeTimestamp(value.last_seen_incoming_activity_at);
     const lastSeenIncomingActivityEventId = normalizeEventId(
-      value.last_seen_incoming_activity_event_id
+      value.last_seen_incoming_activity_event_id,
     );
 
     if (!version || !lastSeenIncomingActivityAt) {
@@ -471,7 +310,7 @@ export function createStorageSessionRuntime({
   }
 
   async function encryptPrivatePreferencesContent(
-    preferences: PrivatePreferences
+    preferences: PrivatePreferences,
   ): Promise<string> {
     const user = await getLoggedInSignerUser();
     ndk.assertSigner();
@@ -479,7 +318,7 @@ export function createStorageSessionRuntime({
   }
 
   async function decryptPrivatePreferencesContent(
-    content: string
+    content: string,
   ): Promise<PrivatePreferences | null> {
     const normalizedContent = content.trim();
     if (!normalizedContent) {
@@ -507,12 +346,12 @@ export function createStorageSessionRuntime({
         last_seen_incoming_activity_at: cursor.at,
         last_seen_incoming_activity_event_id: cursor.eventId,
       }),
-      'nip44'
+      'nip44',
     );
   }
 
   async function decryptContactCursorContent(
-    content: string
+    content: string,
   ): Promise<ContactCursorContent | null> {
     const normalizedContent = content.trim();
     if (!normalizedContent) {
@@ -537,14 +376,14 @@ export function createStorageSessionRuntime({
 
     const version = Number(value.version);
     const groupPubkey = inputSanitizerService.normalizeHexKey(
-      typeof value.group_pubkey === 'string' ? value.group_pubkey : ''
+      typeof value.group_pubkey === 'string' ? value.group_pubkey : '',
     );
     const groupPrivkey = inputSanitizerService.normalizeHexKey(
-      typeof value.group_privkey === 'string' ? value.group_privkey : ''
+      typeof value.group_privkey === 'string' ? value.group_privkey : '',
     );
     const epochNumber = Number(value.epoch_number);
     const epochPrivkey = inputSanitizerService.normalizeHexKey(
-      typeof value.epoch_privkey === 'string' ? value.epoch_privkey : ''
+      typeof value.epoch_privkey === 'string' ? value.epoch_privkey : '',
     );
     const name = typeof value.name === 'string' ? value.name.trim() : '';
     const about = typeof value.about === 'string' ? value.about.trim() : '';
@@ -554,7 +393,7 @@ export function createStorageSessionRuntime({
     }
 
     try {
-      const signer = new NDKPrivateKeySigner(groupPrivkey);
+      const signer = new NostrPrivateKeySigner(groupPrivkey);
       if (inputSanitizerService.normalizeHexKey(signer.pubkey) !== groupPubkey) {
         return null;
       }
@@ -562,7 +401,19 @@ export function createStorageSessionRuntime({
       return null;
     }
 
+    let recovery: Partial<GroupIdentitySecretContent> = {};
+    if (version === 2) {
+      try {
+        if (typeof value.recovery_entropy !== 'string' || typeof value.recovery_state_id !== 'string' ||
+            !/^[0-9a-f]{64}$/.test(value.recovery_state_id)) return null;
+        const state = normalizeRecoveryState(value.recovery_state);
+        if (deriveGroupIdentityKey(value.recovery_entropy) !== groupPrivkey ||
+            state.epoch !== epochNumber || deriveGroupEpochKey(value.recovery_entropy, state.epoch, state.epoch_revision) !== epochPrivkey) return null;
+        recovery = { recovery_entropy: value.recovery_entropy, recovery_state_id: value.recovery_state_id, recovery_state: state };
+      } catch { return null; }
+    }
     return {
+      ...recovery,
       version,
       group_pubkey: groupPubkey,
       group_privkey: groupPrivkey,
@@ -578,7 +429,7 @@ export function createStorageSessionRuntime({
   }
 
   async function encryptGroupIdentitySecretContent(
-    content: GroupIdentitySecretContent
+    content: GroupIdentitySecretContent,
   ): Promise<string> {
     const user = await getLoggedInSignerUser();
     ndk.assertSigner();
@@ -586,7 +437,7 @@ export function createStorageSessionRuntime({
   }
 
   async function decryptGroupIdentitySecretContent(
-    content: string
+    content: string,
   ): Promise<GroupIdentitySecretContent | null> {
     const normalizedContent = content.trim();
     if (!normalizedContent) {
@@ -644,23 +495,18 @@ export function createStorageSessionRuntime({
     ensureStoredEventSince,
     flushPendingEventSinceUpdate,
     getFilterSince,
-    getPrivateMessagesBackfillResumeState,
     getPrivateMessagesEpochSwitchSince,
-    getPrivateMessagesStartupFloorSince,
     getPrivateMessagesStartupLiveSince,
     normalizeGroupIdentitySecretContent,
     normalizeTimestamp,
-    readPrivateMessagesBackfillState,
     readPrivatePreferencesFromStorage,
     readStoredPrivateMessagesLastReceivedCreatedAt,
     resetEventSinceForFreshLogin,
-    setMessageHistoryRestoreDays,
     setStoredEventSince,
     sha256Hex,
     toComparableTimestamp,
     updateStoredEventSinceFromCreatedAt,
     updateStoredPrivateMessagesLastReceivedFromCreatedAt,
-    writePrivateMessagesBackfillState,
     writePrivatePreferencesToStorage,
   };
 }

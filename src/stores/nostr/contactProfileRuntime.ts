@@ -1,21 +1,21 @@
-import type NDK from '@nostr-dev-kit/ndk';
-import type { NDKUser, NDKUserProfile } from '@nostr-dev-kit/ndk';
-import { contactsService } from 'src/services/contactsService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { BACKGROUND_GROUP_CONTACT_REFRESH_COOLDOWN_MS } from 'src/stores/nostr/constants';
+import type NostrClient from '#src/lib/nostr/client.ts';
+import type { NostrUser, NostrUserProfile } from '#src/lib/nostr/client.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { BACKGROUND_GROUP_CONTACT_REFRESH_COOLDOWN_MS } from '#src/stores/nostr/constants.ts';
 import type {
   ContactProfileEventState,
   ContactRefreshLifecycle,
   ContactRelayListFetchResult,
   UserProfileLookupResult,
-} from 'src/stores/nostr/types';
-import type { ContactMetadata, ContactRecord, ContactRelay } from 'src/types/contact';
+} from '#src/stores/nostr/types.ts';
+import type { ContactMetadata, ContactRecord, ContactRelay } from '#src/types/contact.ts';
 
 interface ContactProfileRuntimeDeps {
   hasActiveContactHydration?: (publicKey: string) => boolean;
   applyContactProfileEventStateToMeta: (
     meta: ContactMetadata | undefined,
-    eventState: ContactProfileEventState | null | undefined
+    eventState: ContactProfileEventState | null | undefined,
   ) => ContactMetadata;
   applyContactRelayListEventStateToMeta: (
     meta: ContactMetadata | undefined,
@@ -25,15 +25,15 @@ interface ContactProfileRuntimeDeps {
           eventId: string;
         }
       | null
-      | undefined
+      | undefined,
   ) => ContactMetadata;
   backgroundGroupContactRefreshStartedAt: Map<string, number>;
   buildIdentifierFallbacks: (pubkeyHex: string, existingMeta?: ContactMetadata) => string[];
   buildUpdatedContactMeta: (
     existingMeta: ContactMetadata | undefined,
-    profile: NDKUserProfile | null,
+    profile: NostrUserProfile | null,
     resolvedNpub: string | null,
-    resolvedNprofile: string | null
+    resolvedNprofile: string | null,
   ) => ContactMetadata;
   bumpContactListVersion: () => void;
   chatStore: {
@@ -41,18 +41,18 @@ interface ContactProfileRuntimeDeps {
   };
   contactMetadataEqual: (
     first: ContactMetadata | undefined,
-    second: ContactMetadata | undefined
+    second: ContactMetadata | undefined,
   ) => boolean;
   contactRelayListsEqual: (
     first: ContactRelay[] | undefined,
-    second: ContactRelay[] | undefined
+    second: ContactRelay[] | undefined,
   ) => boolean;
   ensureContactListedInPrivateContactList: (
     targetPubkeyHex: string,
     options?: {
       fallbackName?: string;
       type?: 'user' | 'group';
-    }
+    },
   ) => Promise<{
     contact: ContactRecord | null;
     didChange: boolean;
@@ -64,14 +64,14 @@ interface ContactProfileRuntimeDeps {
       onlyExplicitRelayEntries?: boolean;
       relayEntries?: ContactRelay[];
       seedRelayUrls?: string[];
-    }
+    },
   ) => Promise<{
     eventState: ContactProfileEventState | null;
-    profile: NDKUserProfile | null;
+    profile: NostrUserProfile | null;
   }>;
   fetchContactRelayList: (
     pubkeyHex: string,
-    seedRelayUrls?: string[]
+    seedRelayUrls?: string[],
   ) => Promise<ContactRelayListFetchResult | null>;
   getAppRelayUrls: () => string[];
   getLoggedInPublicKeyHex: () => string | null;
@@ -84,19 +84,19 @@ interface ContactProfileRuntimeDeps {
     eventState: {
       createdAt: number;
       eventId: string;
-    }
+    },
   ) => void;
-  ndk: NDK;
+  ndk: NostrClient;
   publishPrivateContactList: (seedRelayUrls?: string[]) => Promise<void>;
   readContactRelayListEventSince: (meta: ContactMetadata | undefined) => number | null;
   refreshContactRelayList: (
     pubkeyHex: string,
-    seedRelayUrls?: string[]
+    seedRelayUrls?: string[],
   ) => Promise<ContactRelay[] | null>;
   resolveGroupDisplayName: (groupPublicKey: string) => string;
   shouldPreserveExistingGroupRelays: (
     contact: Pick<ContactRecord, 'type' | 'public_key' | 'relays'> | null | undefined,
-    nextRelayEntries: ContactRelay[] | undefined
+    nextRelayEntries: ContactRelay[] | undefined,
   ) => boolean;
 }
 
@@ -129,8 +129,8 @@ export function createContactProfileRuntime({
 }: ContactProfileRuntimeDeps) {
   async function resolveUserByIdentifiers(
     identifiers: string[],
-    expectedPubkeyHex: string
-  ): Promise<NDKUser | undefined> {
+    expectedPubkeyHex: string,
+  ): Promise<NostrUser | undefined> {
     for (const identifier of identifiers) {
       try {
         const user = await ndk.fetchUser(identifier, true);
@@ -153,7 +153,7 @@ export function createContactProfileRuntime({
   async function refreshContactByPublicKey(
     targetPubkeyHex: string,
     fallbackName = '',
-    lifecycle: ContactRefreshLifecycle = {}
+    lifecycle: ContactRefreshLifecycle = {},
   ): Promise<void> {
     const normalizedTargetPubkey = inputSanitizerService.normalizeHexKey(targetPubkeyHex);
     if (!normalizedTargetPubkey) {
@@ -201,7 +201,7 @@ export function createContactProfileRuntime({
       try {
         explicitRelayList = await fetchContactRelayList(
           normalizedTargetPubkey,
-          lifecycle.relayListSeedRelayUrls
+          lifecycle.relayListSeedRelayUrls,
         );
       } catch (error) {
         relayError = error;
@@ -212,9 +212,9 @@ export function createContactProfileRuntime({
     }
 
     const fallbackRelayEntries = inputSanitizerService.normalizeRelayEntriesFromUrls(
-      resolvedUser?.relayUrls ?? []
+      resolvedUser?.relayUrls ?? [],
     );
-    let fetchedProfile: NDKUserProfile | null = null;
+    let fetchedProfile: NostrUserProfile | null = null;
     let fetchedProfileEventState: ContactProfileEventState | null = null;
     let profileError: unknown | null = null;
     lifecycle.onProfileFetchStart?.();
@@ -238,11 +238,11 @@ export function createContactProfileRuntime({
       existingContact?.meta,
       fetchedProfile,
       resolvedNpub,
-      resolvedNprofile
+      resolvedNprofile,
     );
     const nextMetaWithProfileState = applyContactProfileEventStateToMeta(
       baseNextMeta,
-      fetchedProfileEventState
+      fetchedProfileEventState,
     );
     const nextMeta =
       explicitRelayList !== null
@@ -276,6 +276,7 @@ export function createContactProfileRuntime({
 
     if (existingContact) {
       const updatedContact = await contactsService.updateContact(existingContact.id, {
+        metaBase: existingContact.meta,
         name: nextName,
         meta: nextMeta,
         relays: effectiveNextRelays,
@@ -327,7 +328,7 @@ export function createContactProfileRuntime({
     options: {
       fallbackName?: string;
       relays?: ContactRelay[];
-    } = {}
+    } = {},
   ): Promise<ContactRecord | null> {
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
     if (!normalizedGroupPublicKey) {
@@ -337,8 +338,10 @@ export function createContactProfileRuntime({
     await contactsService.init();
     const existingContact = await contactsService.getContactByPublicKey(normalizedGroupPublicKey);
     const fallbackName =
-      options.fallbackName?.trim() ||
+      existingContact?.meta.display_name?.trim() ||
+      existingContact?.meta.name?.trim() ||
       existingContact?.name?.trim() ||
+      options.fallbackName?.trim() ||
       resolveGroupDisplayName(normalizedGroupPublicKey);
 
     if (!existingContact) {
@@ -380,7 +383,7 @@ export function createContactProfileRuntime({
   async function refreshGroupContactByPublicKey(
     groupPublicKey: string,
     fallbackName = '',
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<ContactRecord | null> {
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
     if (!normalizedGroupPublicKey) {
@@ -421,7 +424,7 @@ export function createContactProfileRuntime({
   function queueBackgroundGroupContactRefresh(
     groupPublicKey: string,
     fallbackName = '',
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): void {
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
     if (!normalizedGroupPublicKey) {
@@ -450,12 +453,12 @@ export function createContactProfileRuntime({
     void refreshGroupContactByPublicKey(
       normalizedGroupPublicKey,
       fallbackName,
-      seedRelayUrls
+      seedRelayUrls,
     ).catch((error) => {
       console.warn(
         'Failed to refresh group contact after epoch ticket',
         normalizedGroupPublicKey,
-        error
+        error,
       );
     });
   }
@@ -466,7 +469,7 @@ export function createContactProfileRuntime({
     options: {
       relayEntries?: ContactRelay[];
       seedRelayUrls?: string[];
-    } = {}
+    } = {},
   ): Promise<Pick<ContactRecord, 'public_key' | 'name' | 'given_name' | 'meta'> | null> {
     const normalizedTargetPubkey = inputSanitizerService.normalizeHexKey(targetPubkeyHex);
     if (!normalizedTargetPubkey) {
@@ -483,23 +486,23 @@ export function createContactProfileRuntime({
       try {
         explicitRelayList = await fetchContactRelayList(
           normalizedTargetPubkey,
-          options.seedRelayUrls
+          options.seedRelayUrls,
         );
       } catch (error) {
         console.warn(
           'Failed to fetch transient relay list metadata for contact preview',
           normalizedTargetPubkey,
-          error
+          error,
         );
       }
     }
 
-    let fetchedProfile: NDKUserProfile | null = null;
+    let fetchedProfile: NostrUserProfile | null = null;
     const seedRelayEntries = inputSanitizerService.normalizeRelayEntriesFromUrls(
-      options.seedRelayUrls ?? []
+      options.seedRelayUrls ?? [],
     );
     const fallbackRelayEntries = inputSanitizerService.normalizeRelayEntriesFromUrls(
-      resolvedUser?.relayUrls ?? []
+      resolvedUser?.relayUrls ?? [],
     );
     const relayEntries =
       explicitRelayList?.relayEntries ??
@@ -517,7 +520,7 @@ export function createContactProfileRuntime({
         console.warn(
           'Failed to fetch transient profile metadata for contact preview',
           normalizedTargetPubkey,
-          error
+          error,
         );
       }
     }
@@ -544,7 +547,7 @@ export function createContactProfileRuntime({
       existingContact?.meta,
       fetchedProfile,
       resolvedNpub,
-      resolvedNprofile
+      resolvedNprofile,
     );
     const fallbackContactName =
       fallbackName.trim() || existingContact?.name?.trim() || normalizedTargetPubkey.slice(0, 16);
@@ -564,7 +567,7 @@ export function createContactProfileRuntime({
 
   async function fetchUserProfileFromRelays(
     targetPubkeyHex: string,
-    relayUrls: string[]
+    relayUrls: string[],
   ): Promise<UserProfileLookupResult | null> {
     const normalizedTargetPubkey = inputSanitizerService.normalizeHexKey(targetPubkeyHex);
     if (!normalizedTargetPubkey) {
@@ -605,7 +608,7 @@ export function createContactProfileRuntime({
 
   async function ensureRespondedPubkeyIsContact(
     targetPubkeyHex: string,
-    fallbackName = ''
+    fallbackName = '',
   ): Promise<void> {
     const normalizedTargetPubkey = inputSanitizerService.normalizeHexKey(targetPubkeyHex);
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
@@ -646,7 +649,7 @@ export function createContactProfileRuntime({
         console.warn(
           'Failed to publish private contact list after adding responded contact',
           normalizedTargetPubkey,
-          error
+          error,
         );
       }
     }

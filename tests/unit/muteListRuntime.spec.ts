@@ -1,4 +1,4 @@
-import NDK, { NDKEvent } from '@nostr-dev-kit/ndk';
+import NostrClient, { ClientEvent } from '#src/lib/nostr/client.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const chatDataServiceMock = vi.hoisted(() => ({
@@ -17,16 +17,16 @@ const contactsServiceMock = vi.hoisted(() => ({
   updateContact: vi.fn(async () => null),
 }));
 
-vi.mock('src/services/chatDataService', () => ({
+vi.mock('#src/services/chatDataService.ts', () => ({
   chatDataService: chatDataServiceMock,
 }));
 
-vi.mock('src/services/contactsService', () => ({
+vi.mock('#src/services/contactsService.ts', () => ({
   contactsService: contactsServiceMock,
 }));
 
-import { MUTE_LIST_KIND } from 'src/stores/nostr/constants';
-import { createMuteListRuntime } from 'src/stores/nostr/muteListRuntime';
+import { MUTE_LIST_KIND } from '#src/stores/nostr/constants.ts';
+import { createMuteListRuntime } from '#src/stores/nostr/muteListRuntime.ts';
 
 const LOGGED_IN_PUBKEY = 'a'.repeat(64);
 const PUBKEY_B = 'b'.repeat(64);
@@ -60,7 +60,7 @@ function createChat(publicKey: string, meta: Record<string, unknown> = {}) {
 }
 
 function createRuntime(overrides: Partial<Parameters<typeof createMuteListRuntime>[0]> = {}) {
-  const ndk = new NDK();
+  const ndk = new NostrClient();
   Object.defineProperty(ndk, 'subscribe', {
     configurable: true,
     value: undefined,
@@ -119,7 +119,7 @@ describe('mute list runtime', () => {
         blockedPubkeys: [PUBKEY_D, PUBKEY_D],
       })),
     });
-    const muteListEvent = new NDKEvent(ndk, {
+    const muteListEvent = new ClientEvent(ndk, {
       kind: MUTE_LIST_KIND,
       pubkey: LOGGED_IN_PUBKEY,
       created_at: 1_700_000_000,
@@ -158,11 +158,11 @@ describe('mute list runtime', () => {
     );
     expect(contactsServiceMock.updateContact).toHaveBeenCalledWith(
       Number.parseInt(PUBKEY_B[0] ?? '0', 16),
-      { meta: { muted: true } }
+      { metaBase: {}, meta: { muted: true } }
     );
     expect(contactsServiceMock.updateContact).toHaveBeenCalledWith(
       Number.parseInt(PUBKEY_C[0] ?? '0', 16),
-      { meta: { name: 'Carol' } }
+      { metaBase: { name: 'Carol', muted: true }, meta: { name: 'Carol' } }
     );
     expect(contactsServiceMock.createContact).toHaveBeenCalledWith({
       public_key: PUBKEY_D,
@@ -194,10 +194,10 @@ describe('mute list runtime', () => {
   });
 
   it('publishes only encrypted private p tags for mute and unmute actions', async () => {
-    const publishedEvents: NDKEvent[] = [];
+    const publishedEvents: ClientEvent[] = [];
     const { deps, ndk, runtime } = createRuntime();
     vi.spyOn(ndk, 'fetchEvent').mockResolvedValue(null);
-    vi.spyOn(NDKEvent.prototype, 'publishReplaceable').mockImplementation(function publish() {
+    vi.spyOn(ClientEvent.prototype, 'publishReplaceable').mockImplementation(function publish() {
       publishedEvents.push(this);
       return Promise.resolve(undefined as never);
     });

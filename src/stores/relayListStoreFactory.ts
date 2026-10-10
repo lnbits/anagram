@@ -1,5 +1,5 @@
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { computed, ref } from 'vue';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { computed, ref } from '#src/lib/state/reactivity.ts';
 
 export interface RelayListEntry {
   url: string;

@@ -1,4 +1,4 @@
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
 
 function normalizeExcludedPubkeys(excludedPubkeys: string[]): Set<string> {
   return new Set(

@@ -1,15 +1,19 @@
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { PRIVATE_CONTACT_LIST_MEMBER_CONTACT_META_KEY } from 'src/stores/nostr/constants';
-import type { DeveloperDiagnosticsSnapshot } from 'src/stores/nostr/types';
-import type { MessageAttachmentMetadata } from 'src/types/chat';
-import { saveBrowserNotificationsPreference } from 'src/utils/browserNotificationPreference';
+export async function navigateInApp(path: string) {
+  const { goto } = await import('$app/navigation');
+  return goto(path);
+}
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { PRIVATE_CONTACT_LIST_MEMBER_CONTACT_META_KEY } from '#src/stores/nostr/constants.ts';
+import type { DeveloperDiagnosticsSnapshot } from '#src/stores/nostr/types.ts';
+import type { CallSession } from '#src/types/call.ts';
+import type { MessageAttachmentMetadata } from '#src/types/chat.ts';
+import { saveBrowserNotificationsPreference } from '#src/utils/browserNotificationPreference.ts';
 
 export interface AppE2EBootstrapOptions {
   privateKey: string;
   relayUrls: string[];
   developerDiagnosticsEnabled?: boolean;
   passiveRestore?: boolean;
-  historyRestoreDays?: number;
 }
 
 export interface AppE2ERefreshOptions {
@@ -78,6 +82,13 @@ export interface AppE2EWaitForAppReadyOptions {
 }
 
 export interface AppE2EBridge {
+  getCallSnapshot(): Promise<{
+    session: CallSession | null;
+    audioEnabled: boolean[];
+    videoEnabled: boolean[];
+    hasLocalStream: boolean;
+    failureDetail: string;
+  }>;
   bootstrapSession(options: AppE2EBootstrapOptions): Promise<AppE2ESessionSnapshot>;
   resumeSession(): Promise<void>;
   waitForHistoryRestore(): Promise<void>;
@@ -87,7 +98,7 @@ export interface AppE2EBridge {
   isPrivateContactListMember(options: AppE2EContactListMemberOptions): Promise<boolean>;
   refreshSession(options?: AppE2ERefreshOptions): Promise<void>;
   refreshPrivateMessagesLiveReconnect(
-    options?: AppE2EPrivateMessagesLiveReconnectOptions
+    options?: AppE2EPrivateMessagesLiveReconnectOptions,
   ): Promise<DeveloperDiagnosticsSnapshot>;
   logout(): Promise<void>;
   removeStoredMessageByEventId(options: AppE2ERemoveStoredMessageOptions): Promise<boolean>;
@@ -111,7 +122,7 @@ function normalizeRelayUrls(relayUrls: string[]): string[] {
 function createSessionSnapshot(
   publicKey: string,
   encodeNpub: (publicKeyHex: string) => string | null,
-  relayUrls: string[]
+  relayUrls: string[],
 ): AppE2ESessionSnapshot {
   const normalizedRelayUrls = Array.isArray(relayUrls)
     ? relayUrls.filter((url): url is string => typeof url === 'string')
@@ -122,7 +133,7 @@ function createSessionSnapshot(
       publicKey,
       npub: encodeNpub(publicKey),
       relayUrls: normalizedRelayUrls,
-    })
+    }),
   );
 }
 
@@ -146,7 +157,7 @@ async function waitForPrivateMessagesSubscriptionEose(
     waitForPrivateMessagesIngestQueue?: () => Promise<void>;
   },
   previousEoseAt: string | null,
-  timeoutMs = 5_000
+  timeoutMs = 5_000,
 ): Promise<void> {
   const deadlineAt = Date.now() + timeoutMs;
 
@@ -182,7 +193,7 @@ async function waitForGroupChatWithEpoch(
     type: 'user' | 'group';
     epochPublicKey: string | null;
   },
-  timeoutMs = 5_000
+  timeoutMs = 5_000,
 ): Promise<typeof fallbackChat> {
   const deadlineAt = Date.now() + timeoutMs;
 
@@ -222,11 +233,11 @@ async function bootstrapSession(options: AppE2EBootstrapOptions): Promise<AppE2E
     { useChatStore },
     { useMessageStore },
   ] = await Promise.all([
-    import('src/stores/nostrStore'),
-    import('src/stores/relayStore'),
-    import('src/stores/nip65RelayStore'),
-    import('src/stores/chatStore'),
-    import('src/stores/messageStore'),
+    import('#src/stores/nostrStore.ts'),
+    import('#src/stores/relayStore.ts'),
+    import('#src/stores/nip65RelayStore.ts'),
+    import('#src/stores/chatStore.ts'),
+    import('#src/stores/messageStore.ts'),
   ]);
 
   const nostrStore = useNostrStore();
@@ -250,10 +261,6 @@ async function bootstrapSession(options: AppE2EBootstrapOptions): Promise<AppE2E
   const validation = await nostrStore.savePrivateKey(privateKey);
   if (!validation.isValid) {
     throw new Error('Invalid private key supplied for e2e bootstrap.');
-  }
-
-  if (options.historyRestoreDays !== undefined) {
-    nostrStore.setMessageHistoryRestoreDays(options.historyRestoreDays);
   }
 
   if (!options.passiveRestore) {
@@ -290,12 +297,12 @@ async function bootstrapSession(options: AppE2EBootstrapOptions): Promise<AppE2E
   return createSessionSnapshot(
     publicKey,
     (candidatePublicKey) => nostrStore.encodeNpub(candidatePublicKey),
-    relayUrls
+    relayUrls,
   );
 }
 
 async function waitForHistoryRestore(): Promise<void> {
-  const { useNostrStore } = await import('src/stores/nostrStore');
+  const { useNostrStore } = await import('#src/stores/nostrStore.ts');
   const deadline = Date.now() + 150_000;
   while (Date.now() < deadline) {
     const step = useNostrStore().startupSteps.find((step) => step.id === 'message-history-restore');
@@ -310,7 +317,7 @@ async function seedFailedOutboundRelay(options: {
   eventId: string;
   relayUrl: string;
 }): Promise<void> {
-  const { nostrEventDataService } = await import('src/services/nostrEventDataService');
+  const { nostrEventDataService } = await import('#src/services/nostrEventDataService.ts');
   await nostrEventDataService.appendRelayStatuses(options.eventId, [
     {
       relay_url: options.relayUrl,
@@ -325,8 +332,8 @@ async function seedFailedOutboundRelay(options: {
 
 async function resumeSession(): Promise<void> {
   const [{ useNostrStore }, { useRelayStore }] = await Promise.all([
-    import('src/stores/nostrStore'),
-    import('src/stores/relayStore'),
+    import('#src/stores/nostrStore.ts'),
+    import('#src/stores/relayStore.ts'),
   ]);
   await useNostrStore().runReconnectHealing('session-resume', {
     sessionRelayUrls: useRelayStore().relays,
@@ -336,8 +343,8 @@ async function resumeSession(): Promise<void> {
 
 async function getSessionSnapshot(): Promise<AppE2ESessionSnapshot> {
   const [{ useNostrStore }, { useRelayStore }] = await Promise.all([
-    import('src/stores/nostrStore'),
-    import('src/stores/relayStore'),
+    import('#src/stores/nostrStore.ts'),
+    import('#src/stores/relayStore.ts'),
   ]);
 
   const nostrStore = useNostrStore();
@@ -351,27 +358,27 @@ async function getSessionSnapshot(): Promise<AppE2ESessionSnapshot> {
   return createSessionSnapshot(
     publicKey,
     (candidatePublicKey) => nostrStore.encodeNpub(candidatePublicKey),
-    relayStore.relays
+    relayStore.relays,
   );
 }
 
 async function getDeveloperDiagnosticsSnapshot(): Promise<DeveloperDiagnosticsSnapshot> {
-  const { useNostrStore } = await import('src/stores/nostrStore');
+  const { useNostrStore } = await import('#src/stores/nostrStore.ts');
   const nostrStore = useNostrStore();
   return JSON.parse(
-    JSON.stringify(await nostrStore.getDeveloperDiagnosticsSnapshot())
+    JSON.stringify(await nostrStore.getDeveloperDiagnosticsSnapshot()),
   ) as DeveloperDiagnosticsSnapshot;
 }
 
 async function isPrivateContactListMember(
-  options: AppE2EContactListMemberOptions
+  options: AppE2EContactListMemberOptions,
 ): Promise<boolean> {
   const normalizedPublicKey = inputSanitizerService.normalizeHexKey(options.publicKey);
   if (!normalizedPublicKey) {
     return false;
   }
 
-  const { contactsService } = await import('src/services/contactsService');
+  const { contactsService } = await import('#src/services/contactsService.ts');
   await contactsService.init();
   const contact = await contactsService.getContactByPublicKey(normalizedPublicKey);
   return contact?.meta?.[PRIVATE_CONTACT_LIST_MEMBER_CONTACT_META_KEY] === true;
@@ -379,7 +386,7 @@ async function isPrivateContactListMember(
 
 async function waitForAppReady(options: AppE2EWaitForAppReadyOptions = {}): Promise<void> {
   const normalizedContactPublicKey = inputSanitizerService.normalizeHexKey(
-    options.contactPublicKey ?? ''
+    options.contactPublicKey ?? '',
   );
   if (!normalizedContactPublicKey) {
     return;
@@ -392,8 +399,8 @@ async function waitForAppReady(options: AppE2EWaitForAppReadyOptions = {}): Prom
   const deadlineAt = Date.now() + timeoutMs;
 
   const [{ useNostrStore }, { contactsService }] = await Promise.all([
-    import('src/stores/nostrStore'),
-    import('src/services/contactsService'),
+    import('#src/stores/nostrStore.ts'),
+    import('#src/services/contactsService.ts'),
   ]);
 
   const nostrStore = useNostrStore();
@@ -426,10 +433,10 @@ async function waitForAppReady(options: AppE2EWaitForAppReadyOptions = {}): Prom
 async function refreshSession(options: AppE2ERefreshOptions = {}): Promise<void> {
   const [{ useNostrStore }, { useRelayStore }, { useChatStore }, { useMessageStore }] =
     await Promise.all([
-      import('src/stores/nostrStore'),
-      import('src/stores/relayStore'),
-      import('src/stores/chatStore'),
-      import('src/stores/messageStore'),
+      import('#src/stores/nostrStore.ts'),
+      import('#src/stores/relayStore.ts'),
+      import('#src/stores/chatStore.ts'),
+      import('#src/stores/messageStore.ts'),
     ]);
 
   const nostrStore = useNostrStore();
@@ -459,7 +466,7 @@ async function refreshSession(options: AppE2ERefreshOptions = {}): Promise<void>
           refreshedChat.epochPublicKey,
           {
             force: true,
-          }
+          },
         );
         await nostrStore.waitForPrivateMessagesIngestQueue();
       }
@@ -474,9 +481,9 @@ async function refreshSession(options: AppE2ERefreshOptions = {}): Promise<void>
 }
 
 async function refreshPrivateMessagesLiveReconnect(
-  options: AppE2EPrivateMessagesLiveReconnectOptions = {}
+  options: AppE2EPrivateMessagesLiveReconnectOptions = {},
 ): Promise<DeveloperDiagnosticsSnapshot> {
-  const { useNostrStore } = await import('src/stores/nostrStore');
+  const { useNostrStore } = await import('#src/stores/nostrStore.ts');
   const nostrStore = useNostrStore();
   const previousPrivateMessagesEoseAt = nostrStore.privateMessagesSubscriptionLastEoseAt ?? null;
 
@@ -488,7 +495,7 @@ async function refreshPrivateMessagesLiveReconnect(
 }
 
 async function logout(): Promise<void> {
-  const [{ useNostrStore }] = await Promise.all([import('src/stores/nostrStore')]);
+  const [{ useNostrStore }] = await Promise.all([import('#src/stores/nostrStore.ts')]);
 
   const nostrStore = useNostrStore();
   await nostrStore.logout();
@@ -506,18 +513,18 @@ async function rotateGroupEpoch(options: AppE2ERotateGroupEpochOptions): Promise
     throw new Error('A group public key is required for e2e rotation.');
   }
 
-  const [{ useNostrStore }] = await Promise.all([import('src/stores/nostrStore')]);
+  const [{ useNostrStore }] = await Promise.all([import('#src/stores/nostrStore.ts')]);
 
   const nostrStore = useNostrStore();
   await nostrStore.rotateGroupEpochAndSendTickets(
     normalizedGroupPublicKey,
     normalizedMemberPublicKeys,
-    relayUrls
+    relayUrls,
   );
 }
 
 async function sendMessages(
-  options: AppE2ESendMessagesOptions
+  options: AppE2ESendMessagesOptions,
 ): Promise<AppE2ESentMessageSnapshot[]> {
   const normalizedChatId = options.chatId.trim().toLowerCase();
   const texts = options.texts
@@ -540,8 +547,8 @@ async function sendMessages(
   }
 
   const [{ useChatStore }, { useMessageStore }] = await Promise.all([
-    import('src/stores/chatStore'),
-    import('src/stores/messageStore'),
+    import('#src/stores/chatStore.ts'),
+    import('#src/stores/messageStore.ts'),
   ]);
 
   const chatStore = useChatStore();
@@ -549,6 +556,9 @@ async function sendMessages(
   const sentMessages: AppE2ESentMessageSnapshot[] = [];
 
   await Promise.all([chatStore.init(), messageStore.init()]);
+  // Match opening a recipient through New Chat, even before its history arrives.
+  if (!chatStore.chats.some((chat) => chat.id === normalizedChatId))
+    await chatStore.addContact(normalizedChatId);
 
   for (const [index, text] of texts.entries()) {
     const createdAt = createdAts[index];
@@ -560,7 +570,7 @@ async function sendMessages(
         ? {
             createdAt,
           }
-        : {}
+        : {},
     );
     if (!created) {
       throw new Error(`Failed to send e2e message for chat ${normalizedChatId}.`);
@@ -584,7 +594,7 @@ async function sendMessages(
 }
 
 async function removeStoredMessageByEventId(
-  options: AppE2ERemoveStoredMessageOptions
+  options: AppE2ERemoveStoredMessageOptions,
 ): Promise<boolean> {
   const normalizedChatId = inputSanitizerService.normalizeHexKey(options.chatId);
   const normalizedEventId = inputSanitizerService.normalizeHexKey(options.eventId);
@@ -594,10 +604,10 @@ async function removeStoredMessageByEventId(
 
   const [{ useChatStore }, { useMessageStore }, { chatDataService }, { nostrEventDataService }] =
     await Promise.all([
-      import('src/stores/chatStore'),
-      import('src/stores/messageStore'),
-      import('src/services/chatDataService'),
-      import('src/services/nostrEventDataService'),
+      import('#src/stores/chatStore.ts'),
+      import('#src/stores/messageStore.ts'),
+      import('#src/services/chatDataService.ts'),
+      import('#src/services/nostrEventDataService.ts'),
     ]);
 
   const chatStore = useChatStore();
@@ -624,7 +634,7 @@ async function removeStoredMessageByEventId(
 }
 
 async function setStoredMessageAttachments(
-  options: AppE2ESetStoredMessageAttachmentsOptions
+  options: AppE2ESetStoredMessageAttachmentsOptions,
 ): Promise<void> {
   const normalizedChatId = inputSanitizerService.normalizeHexKey(options.chatId);
   const messageText = options.messageText.trim();
@@ -634,9 +644,9 @@ async function setStoredMessageAttachments(
 
   const [{ chatDataService }, { useMessageStore }, { normalizeMessageAttachment }] =
     await Promise.all([
-      import('src/services/chatDataService'),
-      import('src/stores/messageStore'),
-      import('src/utils/messageAttachments'),
+      import('#src/services/chatDataService.ts'),
+      import('#src/stores/messageStore.ts'),
+      import('#src/utils/messageAttachments.ts'),
     ]);
   await chatDataService.init();
   const messageStore = useMessageStore();
@@ -663,13 +673,13 @@ async function setStoredMessageAttachments(
 }
 
 function startManualReconnectHealing(): void {
-  void import('src/stores/nostrStore').then(({ useNostrStore }) =>
-    useNostrStore().runReconnectHealing('manual-refresh')
+  void import('#src/stores/nostrStore.ts').then(({ useNostrStore }) =>
+    useNostrStore().runReconnectHealing('manual-refresh'),
   );
 }
 
 async function isReconnectHealing(): Promise<boolean> {
-  const { useNostrStore } = await import('src/stores/nostrStore');
+  const { useNostrStore } = await import('#src/stores/nostrStore.ts');
   return useNostrStore().isReconnectHealing;
 }
 
@@ -680,10 +690,10 @@ async function updateContactRelays(options: AppE2EUpdateContactRelaysOptions): P
   }
 
   const relayEntries = inputSanitizerService.normalizeRelayEntriesFromUrls(
-    Array.isArray(options.relayUrls) ? options.relayUrls : []
+    Array.isArray(options.relayUrls) ? options.relayUrls : [],
   );
 
-  const { contactsService } = await import('src/services/contactsService');
+  const { contactsService } = await import('#src/services/contactsService.ts');
   await contactsService.init();
 
   const contact = await contactsService.getContactByPublicKey(normalizedPublicKey);
@@ -700,7 +710,7 @@ async function updateContactRelays(options: AppE2EUpdateContactRelaysOptions): P
 }
 
 async function replaceStoredGroupMembers(
-  options: AppE2EReplaceStoredGroupMembersOptions
+  options: AppE2EReplaceStoredGroupMembersOptions,
 ): Promise<void> {
   const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(options.groupPublicKey);
   if (!normalizedGroupPublicKey) {
@@ -711,11 +721,11 @@ async function replaceStoredGroupMembers(
     new Set(
       (Array.isArray(options.memberPublicKeys) ? options.memberPublicKeys : [])
         .map((value) => inputSanitizerService.normalizeHexKey(value))
-        .filter((value): value is string => Boolean(value))
-    )
+        .filter((value): value is string => Boolean(value)),
+    ),
   );
 
-  const { contactsService } = await import('src/services/contactsService');
+  const { contactsService } = await import('#src/services/contactsService.ts');
   await contactsService.init();
 
   const contact = await contactsService.getContactByPublicKey(normalizedGroupPublicKey);
@@ -749,6 +759,17 @@ export function installAppE2EBridge(): void {
   }
 
   const bridge: AppE2EBridge = {
+    async getCallSnapshot() {
+      const { useCallStore } = await import('#src/stores/callStore.ts');
+      const call = useCallStore();
+      return {
+        session: call.session ? { ...call.session } : null,
+        audioEnabled: call.localStream?.getAudioTracks().map((track) => track.enabled) ?? [],
+        videoEnabled: call.localStream?.getVideoTracks().map((track) => track.enabled) ?? [],
+        hasLocalStream: Boolean(call.localStream),
+        failureDetail: call.failureDetail,
+      };
+    },
     bootstrapSession,
     resumeSession,
     waitForHistoryRestore,

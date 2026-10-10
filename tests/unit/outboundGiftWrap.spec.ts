@@ -1,10 +1,10 @@
-import { type NDKEvent, NDKKind, type NostrEvent } from '@nostr-dev-kit/ndk';
+import { type ClientEvent, NostrKind, type NostrEvent } from '#src/lib/nostr/client.ts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const data = vi.hoisted(() => ({ getEventById: vi.fn(), upsertEvent: vi.fn() }));
-vi.mock('src/services/nostrEventDataService', () => ({ nostrEventDataService: data }));
+vi.mock('#src/services/nostrEventDataService.ts', () => ({ nostrEventDataService: data }));
 
-import { getOrCreateOutboundGiftWrap } from 'src/stores/nostr/outboundGiftWrap';
+import { getOrCreateOutboundGiftWrap } from '#src/stores/nostr/outboundGiftWrap.ts';
 
 describe('persisted outbound gift wraps', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -32,11 +32,11 @@ describe('persisted outbound gift wraps', () => {
         ({
           toNostrEvent: async () => ({
             ...rumor,
-            kind: NDKKind.GiftWrap,
+            kind: NostrKind.GiftWrap,
             id: String(++count).repeat(64),
             sig: 'd'.repeat(128),
           }),
-        }) as NDKEvent
+        }) as ClientEvent
     );
     const [first, second] = await Promise.all([
       getOrCreateOutboundGiftWrap(rumor, 'recipient', create),
@@ -57,7 +57,7 @@ describe('persisted outbound gift wraps', () => {
       getOrCreateOutboundGiftWrap(
         { id: 'e'.repeat(64) } as NostrEvent,
         'recipient',
-        async () => ({ toNostrEvent: async () => ({}) }) as NDKEvent
+        async () => ({ toNostrEvent: async () => ({}) }) as ClientEvent
       )
     ).rejects.toThrow('disk full');
   });

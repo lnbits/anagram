@@ -11,3 +11,22 @@ export function buildAvatarText(value: string): string {
 
   return compactValue.slice(0, 2).toUpperCase();
 }
+
+export function avatarColor(value: string): string {
+  let hash = 0;
+  for (const ch of value.toLowerCase()) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return [
+    '#d65563',
+    '#d97706',
+    '#7c3aed',
+    '#2563eb',
+    '#0f766e',
+    '#4f46e5',
+    '#db2777',
+    '#059669',
+    '#0284c7',
+    '#c2410c',
+    '#475569',
+    '#b45309',
+  ][hash % 12];
+}

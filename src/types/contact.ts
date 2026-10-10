@@ -31,6 +31,8 @@ export interface ContactMetadata {
   banner?: string;
   bot?: boolean;
   group?: boolean;
+  pinned?: string;
+  pinned_created_at?: number;
   birthday?: ContactBirthday;
   // App-local linkage used to map contacts to existing chat threads.
   chatId?: string;
@@ -47,6 +49,8 @@ export interface ContactMetadata {
   blocked?: boolean;
   blocked_at?: string;
   group_private_key_encrypted?: string;
+  // Locally observed recovery branches that must survive reloads.
+  group_recovery_conflicts?: string[];
   owner_public_key?: string;
   group_members?: ContactGroupMember[];
 }
@@ -79,6 +83,8 @@ export interface CreateContactInput {
 }
 
 export interface UpdateContactInput {
+  // Snapshot used to build meta. Only changed fields are applied to the latest record.
+  metaBase?: ContactMetadata;
   public_key?: string;
   type?: ContactType;
   name?: string;

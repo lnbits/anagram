@@ -1,4 +1,4 @@
-import { historyCoverageScope, uncoveredHistoryWindows } from 'src/stores/nostr/historyCoverage';
+import { historyCoverageScope, uncoveredHistoryWindows } from '#src/stores/nostr/historyCoverage.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('epoch history gaps', () => {

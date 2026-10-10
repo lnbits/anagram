@@ -1,220 +1,252 @@
-name: Publish desktop and signed Android binaries
-
+name: Release
 on:
   push:
-    tags:
-      - 'v*.*.*'
-
+    tags: ['v*', '[0-9]*']
+    branches: ['build-validation/**']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to validate (for example v0.9.0-rc1); never publishes'
+        required: false
+        type: string
 permissions:
   contents: read
-
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
-
 jobs:
-  validate-tag:
-    runs-on: ubuntu-latest
+  verify:
+    runs-on: ubuntu-24.04
     outputs:
-      tag: ${{ steps.validate.outputs.tag }}
-      version: ${{ steps.validate.outputs.version }}
-      commit: ${{ steps.validate.outputs.commit }}
-
+      tag: ${{ steps.version.outputs.tag }}
+      draft: ${{ steps.policy.outputs.draft }}
+      prerelease: ${{ steps.policy.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          fetch-depth: 0
-
-      - name: Validate release tag
-        id: validate
-        shell: bash
-        run: bash .github/scripts/validate-release-tag.sh
-
-  build-android:
-    name: Build signed Android release APK
-    needs: validate-tag
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24.x
-
-      - name: Restore Android release keystore
-        shell: bash
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        run: |
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" |
-            base64 --decode > "$RUNNER_TEMP/anagram-release.jks"
-          chmod 600 "$RUNNER_TEMP/anagram-release.jks"
-
-      - name: Build signed Android release APK
-        env:
-          APP_GIT_SHA: ${{ needs.validate-tag.outputs.commit }}
-          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/anagram-release.jks
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: npm run build:android:apk:release
-
-      - name: Stage Android release asset
-        shell: bash
-        run: |
-          bash .github/scripts/stage-release-asset.sh \
-            dist/capacitor/android/apk/release \
-            '*.apk' \
-            release-assets/anagram-android-release.apk
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: release-android
-          path: release-assets/anagram-android-release.apk
-          if-no-files-found: error
-
-  build-linux:
-    name: Build Linux Packages
-    needs: validate-tag
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24.x
+          node-version-file: .node-version
           cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Prepare Quasar files
-        run: npm run prepare:quasar
-
-      - name: Install Linux package tooling
+      - run: npm ci
+      - name: Set build version
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version || (github.ref_type == 'tag' && github.ref_name) || '' }}
+        run: |
+          export RELEASE_TAG="${REQUESTED_VERSION:-v$(node -p 'require("./package.json").version')}"
+          npm run release:version
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - name: Determine release visibility
+        id: policy
+        run: node scripts/release-policy.mjs
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+      - run: npm audit --audit-level=high
+      - run: npm run verify:iroh
+      - run: npm run quality:all
+      - run: npm run test:unit
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e:pwa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-app
+          path: build/
+          if-no-files-found: error
+          retention-days: 7
+  desktop:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bundles: dmg
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: dmg
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage
+            bundle-config: --config src-tauri/tauri.ubuntu-appimage.conf.json
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes rpm xz-utils
-
-      - name: Build Linux packages
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: npm run build:electron:linux
-
-      - name: Stage Linux release assets
-        shell: bash
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libdbus-1-dev \
+            libfontconfig1 libfreetype6 libexpat1 zlib1g libuuid1 libharfbuzz0b libfribidi0 \
+            libx11-6 libx11-xcb1 libxcb1 libwayland-client0 libgpg-error0 libcom-err2 \
+            libgmp10 libasound2 libjack-jackd2-0 \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav gstreamer1.0-tools \
+            build-essential ninja-build pkg-config bison flex python3-venv \
+            libopus-dev libvpx-dev libogg-dev libvorbis-dev libpulse-dev libasound2-dev \
+            libavcodec-dev libavformat-dev libavfilter-dev libswresample-dev libswscale-dev \
+            libjpeg-dev libpng-dev libtheora-dev libgudev-1.0-dev liborc-0.4-dev \
+            xdg-utils webkit2gtk-driver xvfb dbus-x11 gnome-keyring
+      - name: Cache portable media runtime
+        if: runner.os == 'Linux'
+        id: media-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/anagram-gstreamer
+          key: gstreamer-ubuntu22-amd64-${{ hashFiles('scripts/appimage/build-gstreamer.sh', 'scripts/appimage/gstreamer.sha256') }}
+      - name: Build portable media runtime
+        if: runner.os == 'Linux' && steps.media-cache.outputs.cache-hit != 'true'
+        run: bash scripts/appimage/build-gstreamer.sh "$RUNNER_TEMP/anagram-gstreamer" "$RUNNER_TEMP/anagram-gstreamer-build"
+      - name: Use portable media runtime for bundling
+        if: runner.os == 'Linux'
         run: |
-          bash .github/scripts/stage-release-asset.sh dist/electron/Packaged '*.AppImage' release-assets/anagram-linux.AppImage
-          bash .github/scripts/stage-release-asset.sh dist/electron/Packaged '*.deb' release-assets/anagram-linux.deb
-          bash .github/scripts/stage-release-asset.sh dist/electron/Packaged '*.rpm' release-assets/anagram-linux.rpm
-
-      - uses: actions/upload-artifact@v6
+          echo "ANAGRAM_GSTREAMER_PREFIX=$RUNNER_TEMP/anagram-gstreamer" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/anagram-gstreamer/lib" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$RUNNER_TEMP/anagram-gstreamer/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "GSTREAMER_PLUGINS_DIR=$RUNNER_TEMP/anagram-gstreamer/lib/gstreamer-1.0" >> "$GITHUB_ENV"
+          echo "GSTREAMER_HELPERS_DIR=$RUNNER_TEMP/anagram-gstreamer/libexec/gstreamer-1.0" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
         with:
-          name: release-linux
-          path: release-assets/anagram-linux.*
-          if-no-files-found: error
-
-  build-macos:
-    name: Build signed and notarized macOS ZIP
-    needs: validate-tag
-    runs-on: macos-15-intel
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24.x
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Prepare Quasar files
-        run: npm run prepare:quasar
-
-      - name: Sign, notarize, staple, and verify macOS ZIP
+          workspaces: src-tauri -> target
+          key: ${{ matrix.target }}
+      - run: npm ci
+      - name: Set version from tag
+        run: npm run release:version
         env:
-          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
-          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+      - run: npm run verify:iroh
+      - name: Configure optional Apple signing
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || secrets.BUILD_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD || secrets.P12_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD || secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-        run: node .github/scripts/macos-release.cjs build
-
-      - name: Clean up macOS signing credentials
-        if: ${{ always() }}
-        run: node .github/scripts/macos-release.cjs cleanup
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: release-macos
-          path: release-assets/anagram-macos.zip
-          if-no-files-found: error
-
-  build-windows:
-    name: Build Windows EXE
-    needs: validate-tag
-    runs-on: windows-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24.x
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Prepare Quasar files
-        run: npm run prepare:quasar
-
-      - name: Build Windows EXE
+        run: node scripts/configure-macos-signing.mjs
+      - name: Build installer
+        uses: tauri-apps/tauri-action@v1
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: npm run build:electron:win
-
-      - name: Stage Windows release asset
-        shell: pwsh
-        run: .github/scripts/stage-release-asset.ps1 -SearchRoot dist/electron/Packaged -Pattern '*.exe' -OutputPath release-assets/anagram-windows.exe
-
-      - uses: actions/upload-artifact@v6
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPIMAGE_EXTRACT_AND_RUN: '1'
         with:
-          name: release-windows
-          path: release-assets/anagram-windows.exe
+          tauriScript: npm run tauri
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} ${{ matrix.bundle-config }} -- --locked
+          uploadWorkflowArtifacts: ${{ runner.os != 'Linux' }}
+          workflowArtifactNamePattern: desktop-[platform]-[arch]-[bundle]
+      - name: Prepare portable Linux AppImage
+        if: runner.os == 'Linux'
+        run: |
+          mapfile -t packages < <(find src-tauri/target -name '*.AppImage' -type f)
+          [[ ${#packages[@]} -eq 1 ]]
+          bash scripts/postprocess-appimage.sh "${packages[0]}"
+      - name: Install native test driver
+        if: runner.os == 'Linux'
+        run: cargo install tauri-driver --version 2.1.0 --locked
+      - name: Test packaged Linux app
+        if: runner.os == 'Linux'
+        env:
+          ANAGRAM_DISPOSABLE_TEST: '1'
+        run: |
+          mapfile -t packages < <(find src-tauri/target -name '*.AppImage' -type f)
+          [[ ${#packages[@]} -eq 1 ]]
+          xvfb-run -a -s "-screen 0 1920x1440x24" dbus-run-session -- bash scripts/release-smoke/linux.sh "${packages[0]}"
+          mkdir -p "$RUNNER_TEMP/anagram-linux-release"
+          cp "${packages[0]}" "$RUNNER_TEMP/anagram-linux-release/"
+      - name: Upload tested Linux AppImage
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux-amd64-appimage
+          path: ${{ runner.temp }}/anagram-linux-release/*.AppImage
           if-no-files-found: error
-
-  publish-release:
-    name: Publish GitHub Release
-    needs:
-      - validate-tag
-      - build-android
-      - build-linux
-      - build-macos
-      - build-windows
-    runs-on: ubuntu-latest
+      - name: Test installed Windows app
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $packages = @(Get-ChildItem src-tauri/target -Recurse -Filter '*-setup.exe')
+          if ($packages.Count -ne 1) { throw 'Expected one NSIS installer' }
+          ./scripts/release-smoke/windows.ps1 -Installer $packages[0].FullName
+      - name: Test installed macOS app
+        if: runner.os == 'macOS'
+        run: |
+          packages=()
+          while IFS= read -r -d '' package; do packages+=("$package"); done < <(find src-tauri/target -name '*.dmg' -type f -print0)
+          [[ ${#packages[@]} -eq 1 ]]
+          bash scripts/release-smoke/macos.sh "${packages[0]}"
+      - name: Upload packaged-app diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.target }}
+          path: desktop-smoke-results/
+          if-no-files-found: ignore
+          retention-days: 14
+  android:
+    needs: verify
+    uses: ./.github/workflows/android.yml
+    with:
+      release_tag: ${{ needs.verify.outputs.tag }}
+    secrets: inherit
+  publish:
+    needs: [verify, desktop, android]
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
-
     steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/download-artifact@v7
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          pattern: release-*
+          pattern: desktop-*
           path: release-assets
           merge-multiple: true
-
-      - name: Publish release assets
-        shell: bash
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mobile-*
+          path: release-assets
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-app
+          path: web-app
+      - name: Package web app and checksums
+        run: |
+          shopt -s nullglob
+          exes=(release-assets/*.exe)
+          dmgs=(release-assets/*.dmg)
+          appimages=(release-assets/*.AppImage)
+          apks=(release-assets/*.apk)
+          [[ ${#exes[@]} -eq 1 && ${#dmgs[@]} -eq 2 && ${#appimages[@]} -eq 1 && ${#apks[@]} -eq 1 ]]
+          cd web-app
+          zip -qr ../release-assets/anagram-web.zip .
+          cd ../release-assets
+          sha256sum ./* > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-release
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish complete release
+        if: github.event_name == 'push' && github.ref_type == 'tag'
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.validate-tag.outputs.tag }}
-          COMMIT: ${{ needs.validate-tag.outputs.commit }}
-          REPOSITORY: ${{ github.repository }}
-        run: bash .github/scripts/publish-release.sh
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+          RELEASE_DRAFT: ${{ needs.verify.outputs.draft }}
+          RELEASE_PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        run: bash scripts/publish-release.sh

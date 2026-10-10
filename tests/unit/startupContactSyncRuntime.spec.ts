@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ref } from 'vue';
+import { ref } from '#src/lib/state/reactivity.ts';
 
 const chatDataServiceMock = vi.hoisted(() => ({
   init: vi.fn(async () => {}),
@@ -12,18 +12,18 @@ const contactsServiceMock = vi.hoisted(() => ({
   getContactByPublicKey: vi.fn(async () => null),
 }));
 
-vi.mock('src/services/chatDataService', () => ({
+vi.mock('#src/services/chatDataService.ts', () => ({
   chatDataService: chatDataServiceMock,
 }));
 
-vi.mock('src/services/contactsService', () => ({
+vi.mock('#src/services/contactsService.ts', () => ({
   contactsService: contactsServiceMock,
 }));
 
-import { PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS } from 'src/stores/nostr/constants';
-import { RelayQueryTimeoutError } from 'src/stores/nostr/relayQueryUtils';
-import { writeStartupCheckpoint } from 'src/stores/nostr/startupCheckpoint';
-import { createStartupContactSyncRuntime } from 'src/stores/nostr/startupContactSyncRuntime';
+import { PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS } from '#src/stores/nostr/constants.ts';
+import { RelayQueryTimeoutError } from '#src/stores/nostr/relayQueryUtils.ts';
+import { writeStartupCheckpoint } from '#src/stores/nostr/startupCheckpoint.ts';
+import { createStartupContactSyncRuntime } from '#src/stores/nostr/startupContactSyncRuntime.ts';
 
 const PUBKEY = 'a'.repeat(64);
 
@@ -39,7 +39,7 @@ function installLocalStorage(): void {
 }
 
 function createSessionInitializationRuntime(
-  options: { restoreMyRelayListError?: Error; resumeError?: Error } = {}
+  options: { restoreMyRelayListError?: Error; resumeError?: Error } = {},
 ) {
   let restoreStartupStatePromise: Promise<void> | null = null;
   let syncLoggedInContactProfilePromise: Promise<void> | null = null;
@@ -56,6 +56,7 @@ function createSessionInitializationRuntime(
     networkTasks.push(operation);
     return operation;
   };
+  const startPrivateMessagesHistoryRestore = vi.fn();
   const ensureRelayConnections = vi.fn(async () => {});
   const restoreMyRelayList = options.restoreMyRelayListError
     ? vi.fn(async () => {
@@ -99,7 +100,7 @@ function createSessionInitializationRuntime(
     restorePrivatePreferences: task(),
     runLightweightSessionResume,
     startOutboundMessageReplay: task(),
-    startPrivateMessagesHistoryRestore: task(),
+    startPrivateMessagesHistoryRestore,
     setRestoreStartupStatePromise: (promise) => {
       restoreStartupStatePromise = promise;
     },
@@ -119,6 +120,7 @@ function createSessionInitializationRuntime(
 
   return {
     networkTasks,
+    startPrivateMessagesHistoryRestore,
     ensureRelayConnections,
     beginStartupStep,
     runLightweightSessionResume,
@@ -325,13 +327,18 @@ describe('startup contact sync runtime', () => {
   it('uses a completed checkpoint for one lightweight resume per runtime', async () => {
     installLocalStorage();
     writeStartupCheckpoint(PUBKEY, ['wss://relay.one/'], 'complete');
-    const { beginStartupStep, runLightweightSessionResume, runtime } =
-      createSessionInitializationRuntime();
+    const {
+      beginStartupStep,
+      runLightweightSessionResume,
+      startPrivateMessagesHistoryRestore,
+      runtime,
+    } = createSessionInitializationRuntime();
 
     await runtime.initializeSessionState(['wss://relay.one/']);
     await runtime.initializeSessionState(['wss://relay.one/']);
 
     expect(runLightweightSessionResume).toHaveBeenCalledTimes(1);
+    expect(startPrivateMessagesHistoryRestore).toHaveBeenCalledTimes(1);
     expect(runLightweightSessionResume).toHaveBeenCalledWith(['wss://relay.one/']);
     expect(beginStartupStep).not.toHaveBeenCalled();
   });

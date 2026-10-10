@@ -1,9 +1,9 @@
-import type { ContactRecord } from 'src/types/contact';
+import type { ContactRecord } from '#src/types/contact.ts';
 import {
   buildContactSearchFields,
   searchContactsForList,
   sortContactsForList,
-} from 'src/utils/contactList';
+} from '#src/utils/contactList.ts';
 import { describe, expect, it } from 'vitest';
 
 const SELF_PUBKEY = 'a'.repeat(64);

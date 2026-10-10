@@ -1,5 +1,5 @@
-import { nip19 } from '@nostr-dev-kit/ndk';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
+import { nip19 } from '#src/lib/nostr/client.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('inputSanitizerService', () => {
@@ -34,7 +34,7 @@ describe('inputSanitizerService', () => {
             name: 'Ignored',
           },
         ],
-      })
+      }),
     ).toEqual({
       name: 'Alice',
       about: 'Launch squad',
@@ -56,6 +56,26 @@ describe('inputSanitizerService', () => {
         },
       ],
     });
+  });
+
+  it('preserves known recovery conflicts through storage and allows explicit resolution', () => {
+    const first = 'a'.repeat(64),
+      second = 'b'.repeat(64);
+    const encoded = inputSanitizerService.serializeContactMetadata({
+      group_recovery_conflicts: [first, second, first],
+    });
+    expect(
+      inputSanitizerService.parseStoredContactMetadata(encoded).group_recovery_conflicts,
+    ).toEqual([first, second]);
+    expect(
+      inputSanitizerService.normalizeContactMetadata({ group_recovery_conflicts: [] })
+        .group_recovery_conflicts,
+    ).toEqual([]);
+    expect(
+      inputSanitizerService.normalizeContactMetadata({
+        group_recovery_conflicts: ['invalid', null, 42],
+      }).group_recovery_conflicts,
+    ).toEqual([]);
   });
 
   it('validates nsec and npub identifiers and rejects the wrong bech32 type', () => {

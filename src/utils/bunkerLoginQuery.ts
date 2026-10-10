@@ -1,4 +1,4 @@
-import type { LocationQuery, LocationQueryRaw } from 'vue-router';
+import type { LocationQuery, LocationQueryRaw } from '#src/lib/platform/router.ts';
 
 export const BUNKER_LOGIN_QUERY_PARAM = 'bunker';
 export const ALREADY_LOGGED_IN_BUNKER_MESSAGE = 'A user is already logged in.';

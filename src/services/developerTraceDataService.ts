@@ -1,4 +1,4 @@
-import { closeIndexedDbConnection, deleteIndexedDbDatabase } from 'src/utils/indexedDbStorage';
+import { closeIndexedDbConnection, deleteIndexedDbDatabase } from '#src/utils/indexedDbStorage.ts';
 
 export type DeveloperTraceLevel = 'info' | 'warn' | 'error';
 
@@ -16,7 +16,7 @@ interface DeveloperTraceStoreRecord extends DeveloperTraceEntry {
 }
 
 const DEVELOPER_TRACE_DB_NAME = 'developer-trace-indexeddb-v1';
-const DEVELOPER_TRACE_DB_VERSION = 1;
+const DEVELOPER_TRACE_DB_VERSION = 3;
 const DEVELOPER_TRACE_STORE = 'trace_entries';
 const DEVELOPER_TRACE_LOGGED_AT_MS_INDEX = 'logged_at_ms';
 const DEVELOPER_TRACE_LIMIT = 10000;
@@ -240,7 +240,7 @@ class DeveloperTraceDataService {
     return new Promise<IDBDatabase>((resolve, reject) => {
       const request = window.indexedDB.open(DEVELOPER_TRACE_DB_NAME, DEVELOPER_TRACE_DB_VERSION);
 
-      request.onupgradeneeded = () => {
+      request.onupgradeneeded = (event) => {
         const db = request.result;
         const existingStoreNames = Array.from(db.objectStoreNames);
         const store = existingStoreNames.includes(DEVELOPER_TRACE_STORE)
@@ -249,6 +249,8 @@ class DeveloperTraceDataService {
               keyPath: 'id',
             });
 
+        // Remove legacy diagnostics that may contain decrypted payloads or epoch keys.
+        if (event.oldVersion > 0) store?.clear();
         if (store && !store.indexNames.contains(DEVELOPER_TRACE_LOGGED_AT_MS_INDEX)) {
           store.createIndex(DEVELOPER_TRACE_LOGGED_AT_MS_INDEX, 'loggedAtMs', { unique: false });
         }

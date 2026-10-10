@@ -2,7 +2,7 @@ import {
   COLLAPSED_MESSAGE_CHARACTER_LIMIT,
   shouldCollapseMessageText,
   truncateCollapsedMessageText,
-} from 'src/utils/messageTextExpansion';
+} from '#src/utils/messageTextExpansion.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('message text expansion', () => {

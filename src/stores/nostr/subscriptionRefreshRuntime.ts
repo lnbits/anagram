@@ -1,5 +1,5 @@
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import type { SubscribePrivateMessagesOptions } from 'src/stores/nostr/types';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import type { SubscribePrivateMessagesOptions } from '#src/stores/nostr/types.ts';
 
 interface SubscriptionRefreshRuntimeDeps {
   isStartupRestoring?: () => boolean;

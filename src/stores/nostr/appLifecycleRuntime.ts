@@ -1,4 +1,4 @@
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
 
 interface AppLifecycleRuntimeDeps {
   notifyReconnectHealingBrowserOnline: () => void;

@@ -1,14 +1,14 @@
-import type NDK from '@nostr-dev-kit/ndk';
-import { NDKPrivateKeySigner, type NDKSigner, type NDKUser, nip19 } from '@nostr-dev-kit/ndk';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { AUTH_METHOD_STORAGE_KEY, PUBLIC_KEY_STORAGE_KEY } from 'src/stores/nostr/constants';
-import { hasStorage } from 'src/stores/nostr/shared';
-import type { AuthMethod } from 'src/stores/nostr/types';
+import type NostrClient from '#src/lib/nostr/client.ts';
+import { NostrPrivateKeySigner, type NostrSigner, type NostrUser, nip19 } from '#src/lib/nostr/client.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { AUTH_METHOD_STORAGE_KEY, PUBLIC_KEY_STORAGE_KEY } from '#src/stores/nostr/constants.ts';
+import { hasStorage } from '#src/stores/nostr/shared.ts';
+import type { AuthMethod } from '#src/stores/nostr/types.ts';
 
 interface AuthIdentityRuntimeDeps {
-  getOrCreateSigner: () => Promise<NDKSigner>;
+  getOrCreateSigner: () => Promise<NostrSigner>;
   getPrivateKeyHex: () => string | null;
-  ndk: NDK;
+  ndk: NostrClient;
 }
 
 export function createAuthIdentityRuntime({
@@ -81,14 +81,14 @@ export function createAuthIdentityRuntime({
 
     try {
       return inputSanitizerService.normalizeHexKey(
-        new NDKPrivateKeySigner(normalizedPrivateKey).pubkey
+        new NostrPrivateKeySigner(normalizedPrivateKey).pubkey
       );
     } catch {
       return null;
     }
   }
 
-  async function getLoggedInSignerUser(): Promise<NDKUser> {
+  async function getLoggedInSignerUser(): Promise<NostrUser> {
     const signer = await getOrCreateSigner();
     const user = await signer.user();
     user.ndk = ndk;

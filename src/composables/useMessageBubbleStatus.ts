@@ -1,8 +1,8 @@
-import { t } from 'src/i18n';
-import type { Message, MessageRelayStatus } from 'src/types/chat';
-import { isMessageRelayStatus } from 'src/utils/messageRelayStatus';
-import { uniqueRelayUrls } from 'src/utils/relayUrls';
-import { type ComputedRef, computed, type Ref } from 'vue';
+import { t } from '#src/i18n.ts';
+import type { Message, MessageRelayStatus } from '#src/types/chat.ts';
+import { isMessageRelayStatus } from '#src/utils/messageRelayStatus.ts';
+import { uniqueRelayUrls } from '#src/utils/relayUrls.ts';
+import { type ComputedRef, computed, type Ref } from '#src/lib/state/reactivity.ts';
 
 export interface StatusSegment {
   key:
@@ -229,11 +229,14 @@ export function useMessageBubbleStatus(options: {
     return outboundRelayStatuses.value.some((relayStatus) => relayStatus.status === 'pending');
   });
 
-  const hasRelayStatuses = computed(() => {
-    return options.isMine.value
-      ? outboundRelayStatuses.value.length > 0
-      : inboundReceivedRelayUrls.value.length > 0;
-  });
+  // Restored copies of our own messages have inbound observations, not the
+  // sending device's publish acknowledgements. Keep that evidence visible.
+  const showOutboundStatus = computed(
+    () => options.isMine.value && outboundRelayStatuses.value.length > 0,
+  );
+  const hasRelayStatuses = computed(
+    () => showOutboundStatus.value || inboundReceivedRelayUrls.value.length > 0,
+  );
 
   const contactRelaysTitle = computed(() => {
     return t('relays.contactTitle', {
@@ -245,11 +248,11 @@ export function useMessageBubbleStatus(options: {
   const outboundMyRelaysTitle = computed(() => t('relays.myRelays'));
 
   const statusDialogTitle = computed(() => {
-    return options.isMine.value ? t('relays.relayStatus') : t('relays.receivedRelayStatus');
+    return showOutboundStatus.value ? t('relays.relayStatus') : t('relays.receivedRelayStatus');
   });
 
   const statusSegments = computed<StatusSegment[]>(() => {
-    if (!options.isMine.value) {
+    if (!showOutboundStatus.value) {
       const segments: StatusSegment[] = [
         {
           key: 'received',
@@ -259,7 +262,7 @@ export function useMessageBubbleStatus(options: {
         {
           key: 'missing',
           className: getStatusSegmentClassName('missing'),
-          weight: inboundMissingRelayUrls.value.length,
+          weight: options.isMine.value ? 0 : inboundMissingRelayUrls.value.length,
         },
       ];
 
@@ -370,7 +373,7 @@ export function useMessageBubbleStatus(options: {
   });
 
   const statusSections = computed<StatusSection[]>(() => {
-    if (options.isMine.value) {
+    if (showOutboundStatus.value) {
       return [
         buildOutboundStatusSection(
           'recipient',
@@ -381,7 +384,7 @@ export function useMessageBubbleStatus(options: {
       ];
     }
 
-    if (normalizedContactRelayUrls.value.length > 0) {
+    if (!options.isMine.value && normalizedContactRelayUrls.value.length > 0) {
       const sections: StatusSection[] = [
         {
           key: 'contact',
@@ -416,6 +419,7 @@ export function useMessageBubbleStatus(options: {
   });
 
   return {
+    showOutboundStatus,
     hasPendingRelayStatuses,
     hasRelayStatuses,
     statusDialogTitle,

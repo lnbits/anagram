@@ -1,11 +1,11 @@
-import NDK, {
-  NDKEvent,
-  NDKKind,
-  NDKRelayList,
-  NDKRelaySet,
-  NDKSubscriptionCacheUsage,
-  NDKUser,
-} from '@nostr-dev-kit/ndk';
+import NostrClient, {
+  ClientEvent,
+  NostrKind,
+  NostrRelayList,
+  NostrRelaySet,
+  NostrSubscriptionCacheUsage,
+  NostrUser,
+} from '#src/lib/nostr/client.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const chatDataServiceMock = vi.hoisted(() => ({
@@ -26,20 +26,20 @@ const nip65RelayStoreMock = vi.hoisted(() => ({
   replaceRelayEntries: vi.fn(),
 }));
 
-vi.mock('src/services/chatDataService', () => ({
+vi.mock('#src/services/chatDataService.ts', () => ({
   chatDataService: chatDataServiceMock,
 }));
 
-vi.mock('src/services/contactsService', () => ({
+vi.mock('#src/services/contactsService.ts', () => ({
   contactsService: contactsServiceMock,
 }));
 
-vi.mock('src/stores/nip65RelayStore', () => ({
+vi.mock('#src/stores/nip65RelayStore.ts', () => ({
   useNip65RelayStore: () => nip65RelayStoreMock,
 }));
 
-import { createMyRelayListRuntime } from 'src/stores/nostr/myRelayListRuntime';
-import { createSubscriptionLoggingRuntime } from 'src/stores/nostr/subscriptionLoggingRuntime';
+import { createMyRelayListRuntime } from '#src/stores/nostr/myRelayListRuntime.ts';
+import { createSubscriptionLoggingRuntime } from '#src/stores/nostr/subscriptionLoggingRuntime.ts';
 
 const PUBKEY_A = 'a'.repeat(64);
 const USER_KEY = 'b'.repeat(64);
@@ -59,7 +59,7 @@ function relayEntriesFromRelayList(
         writeRelayUrls?: string[];
       }
     | null
-    | undefined
+    | undefined,
 ) {
   const entries = new Map<string, { url: string; read: boolean; write: boolean }>();
   const upsert = (url: string, read: boolean, write: boolean) => {
@@ -164,20 +164,17 @@ describe('relay and subscription runtimes', () => {
           ['p', USER_KEY],
           ['e', 'event'],
         ],
-      } as never)
+      } as never),
     ).toEqual({
       id: 'abc',
       kind: 4,
       created_at: 123,
       pubkey: PUBKEY_A,
-      content: 'hello',
-      tags: [
-        ['p', USER_KEY],
-        ['e', 'event'],
-      ],
+      contentLength: 5,
+      tagCount: 2,
     });
     expect(
-      await runtime.buildTrackedContactSubscriptionTargetDetails([GROUP_KEY, USER_KEY])
+      await runtime.buildTrackedContactSubscriptionTargetDetails([GROUP_KEY, USER_KEY]),
     ).toEqual({
       userTargetCount: 1,
       groupTargetCount: 1,
@@ -187,8 +184,8 @@ describe('relay and subscription runtimes', () => {
     expect(
       await runtime.buildPrivateMessageSubscriptionTargetDetails(
         [PUBKEY_A, EPOCH_KEY, OTHER_KEY],
-        PUBKEY_A
-      )
+        PUBKEY_A,
+      ),
     ).toEqual({
       userRecipientCount: 1,
       groupChatCount: 1,
@@ -210,16 +207,16 @@ describe('relay and subscription runtimes', () => {
       'my-relay-list',
       'Relay Refresh',
       {
-        kinds: [NDKKind.RelayList],
+        kinds: [NostrKind.RelayList],
         since: 123,
       },
       {
-        cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+        cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
         relayUrls: ['wss://relay.one', 'wss://relay.two'],
       } as never,
       {
         source: 'test',
-      }
+      },
     );
     expect(subscription.subId).toMatch(/^Relay-Refresh-1$/i);
     expect(logDeveloperTrace).toHaveBeenCalledTimes(1);
@@ -232,7 +229,7 @@ describe('relay and subscription runtimes', () => {
           'REQ',
           subscription.subId,
           {
-            kinds: [NDKKind.RelayList],
+            kinds: [NostrKind.RelayList],
             since: 123,
           },
         ],
@@ -240,14 +237,14 @@ describe('relay and subscription runtimes', () => {
           'REQ',
           subscription.subId,
           JSON.stringify({
-            kinds: [NDKKind.RelayList],
+            kinds: [NostrKind.RelayList],
             since: 123,
           }),
         ],
         relayCount: 2,
         relayUrls: ['wss://relay.one', 'wss://relay.two'],
         source: 'test',
-      })
+      }),
     );
     expect(runtime.buildFilterSinceDetails(12)).toEqual({
       since: 12,
@@ -260,7 +257,7 @@ describe('relay and subscription runtimes', () => {
   });
 
   it('publishes, restores, and subscribes to the logged-in relay list', async () => {
-    const ndk = new NDK();
+    const ndk = new NostrClient();
     Object.defineProperty(ndk, 'subscribe', {
       configurable: true,
       value: undefined,
@@ -268,7 +265,7 @@ describe('relay and subscription runtimes', () => {
     Object.defineProperty(ndk, 'fetchEvent', {
       configurable: true,
       value: vi.fn(async () => {
-        const relayList = new NDKRelayList(ndk);
+        const relayList = new NostrRelayList(ndk);
         relayList.pubkey = PUBKEY_A;
         relayList.created_at = 2222;
         relayList.bothRelayUrls = ['wss://relay.one/'];
@@ -277,11 +274,11 @@ describe('relay and subscription runtimes', () => {
       writable: true,
     });
 
-    const relaySetSpy = vi.spyOn(NDKRelaySet, 'fromRelayUrls').mockReturnValue({} as never);
+    const relaySetSpy = vi.spyOn(NostrRelaySet, 'fromRelayUrls').mockReturnValue({} as never);
     let publishReplaceableCount = 0;
     const publishReplaceableSpy = vi
-      .spyOn(NDKEvent.prototype, 'publishReplaceable')
-      .mockImplementation(async function publishReplaceable(this: NDKEvent) {
+      .spyOn(ClientEvent.prototype, 'publishReplaceable')
+      .mockImplementation(async function publishReplaceable(this: ClientEvent) {
         publishReplaceableCount += 1;
         this.created_at = 1110 + publishReplaceableCount;
         return new Set();
@@ -292,13 +289,13 @@ describe('relay and subscription runtimes', () => {
     const completeStartupStep = vi.fn();
     const failStartupStep = vi.fn();
     const ensureRelayConnections = vi.fn(async () => {});
-    const getLoggedInSignerUser = vi.fn(async () => new NDKUser({ pubkey: PUBKEY_A }));
+    const getLoggedInSignerUser = vi.fn(async () => new NostrUser({ pubkey: PUBKEY_A }));
     const logSubscription = vi.fn();
     const queueTrackedContactSubscriptionsRefresh = vi.fn();
     const subscribePrivateMessagesForLoggedInUser = vi.fn(async () => {});
     const updateStoredEventSinceFromCreatedAt = vi.fn();
     const subscriptionStop = vi.fn();
-    let capturedOnEvent: ((event: NDKEvent) => void) | undefined;
+    let capturedOnEvent: ((event: ClientEvent) => void) | undefined;
 
     const runtime = createMyRelayListRuntime({
       beginStartupStep,
@@ -331,7 +328,7 @@ describe('relay and subscription runtimes', () => {
       subscribePrivateMessagesForLoggedInUser,
       subscribeWithReqLogging: vi.fn((_name, _label, _filters, options) => {
         capturedOnEvent = options.onEvent;
-        const snapshot = new NDKRelayList(ndk);
+        const snapshot = new NostrRelayList(ndk);
         snapshot.pubkey = PUBKEY_A;
         snapshot.created_at = 2222;
         snapshot.bothRelayUrls = ['wss://relay.one/'];
@@ -383,13 +380,13 @@ describe('relay and subscription runtimes', () => {
           write: false,
         },
       ],
-      ['wss://seed.example']
+      ['wss://seed.example'],
     );
     expect(ensureRelayConnections).toHaveBeenCalledWith(['wss://relay.one/']);
     expect(publishReplaceableSpy).toHaveBeenCalledTimes(2);
-    expect((publishReplaceableSpy.mock.contexts[0] as NDKEvent).kind).toBe(NDKKind.RelayList);
-    const directMessageRelayListEvent = publishReplaceableSpy.mock.contexts[1] as NDKEvent;
-    expect(directMessageRelayListEvent.kind).toBe(NDKKind.DirectMessageReceiveRelayList);
+    expect((publishReplaceableSpy.mock.contexts[0] as ClientEvent).kind).toBe(NostrKind.RelayList);
+    const directMessageRelayListEvent = publishReplaceableSpy.mock.contexts[1] as ClientEvent;
+    expect(directMessageRelayListEvent.kind).toBe(NostrKind.DirectMessageReceiveRelayList);
     expect(directMessageRelayListEvent.content).toBe('');
     expect(directMessageRelayListEvent.tags).toEqual([
       ['relay', 'wss://relay.one/'],
@@ -440,7 +437,7 @@ describe('relay and subscription runtimes', () => {
     await runtime.subscribeMyRelayListUpdates(['wss://relay.one/']);
     expect(subscriptionStop).not.toHaveBeenCalled();
 
-    const liveRelayEvent = new NDKRelayList(ndk);
+    const liveRelayEvent = new NostrRelayList(ndk);
     liveRelayEvent.pubkey = PUBKEY_A;
     liveRelayEvent.created_at = 3333;
     liveRelayEvent.bothRelayUrls = ['wss://relay.two/'];
@@ -455,6 +452,51 @@ describe('relay and subscription runtimes', () => {
         write: true,
       },
     ]);
+
+    // A transient storage failure must not poison the list queue or consume
+    // the snapshot: the same signed list can be delivered again by another relay.
+    const retryEvent = new NostrRelayList(ndk);
+    retryEvent.pubkey = PUBKEY_A;
+    retryEvent.created_at = 4444;
+    retryEvent.bothRelayUrls = ['wss://recovered-inbox.test/'];
+    contactsServiceMock.init.mockRejectedValueOnce(new Error('transient IndexedDB failure'));
+    capturedOnEvent?.(retryEvent);
+    await flushPromises();
+    contactsServiceMock.createContact.mockClear();
+    capturedOnEvent?.(retryEvent);
+    await flushPromises();
+    expect(contactsServiceMock.createContact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        relays: [{ url: 'wss://recovered-inbox.test/', read: true, write: true }],
+      }),
+    );
+
+    const indexerList = new NostrRelayList(ndk);
+    indexerList.pubkey = PUBKEY_A;
+    indexerList.created_at = 5555;
+    indexerList.bothRelayUrls = ['wss://new-outbox.test/'];
+    await runtime.applyOwnRelayList(indexerList);
+    contactsServiceMock.createContact.mockClear();
+    capturedOnEvent?.(retryEvent);
+    await flushPromises();
+    expect(contactsServiceMock.createContact).not.toHaveBeenCalled();
+    // An older live inbox snapshot must not replace a newer list restored from DB.
+    contactsServiceMock.getContactByPublicKey.mockResolvedValue({
+      id: 1,
+      public_key: PUBKEY_A,
+      relays: [],
+      meta: { dm_receive_relay_event_created_at: 8000 },
+    } as never);
+    contactsServiceMock.updateContact.mockClear();
+    const staleInbox = new ClientEvent(ndk, {
+      pubkey: PUBKEY_A,
+      kind: 10050,
+      created_at: 7000,
+      tags: [['relay', 'wss://stale.test/']],
+      content: '',
+    });
+    await runtime.applyOwnRelayList(staleInbox);
+    expect(contactsServiceMock.updateContact).not.toHaveBeenCalled();
 
     runtime.resetMyRelayListRuntimeState('logout');
     expect(subscriptionStop).toHaveBeenCalledTimes(1);

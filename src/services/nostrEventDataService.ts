@@ -1,10 +1,10 @@
-import type { NostrEvent } from '@nostr-dev-kit/ndk';
-import type { MessageRelayStatus, NostrEventDirection, NostrEventEntry } from 'src/types/chat';
-import { closeIndexedDbConnection, deleteIndexedDbDatabase } from 'src/utils/indexedDbStorage';
+import type { NostrEvent } from '#src/lib/nostr/client.ts';
+import type { MessageRelayStatus, NostrEventDirection, NostrEventEntry } from '#src/types/chat.ts';
+import { closeIndexedDbConnection, deleteIndexedDbDatabase } from '#src/utils/indexedDbStorage.ts';
 import {
   mergeMessageRelayStatuses,
   normalizeMessageRelayStatuses,
-} from 'src/utils/messageRelayStatus';
+} from '#src/utils/messageRelayStatus.ts';
 
 interface NostrEventStoreRecord {
   gift_wraps?: Partial<Record<'recipient' | 'self', NostrEvent>>;
@@ -82,6 +82,7 @@ function normalizeEvent(value: NostrEvent): NostrEvent | null {
   }
 
   const normalizedEvent: NostrEvent = {
+    kind: Number(value.kind ?? 1),
     created_at: createdAt,
     content,
     tags,

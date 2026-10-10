@@ -1,6 +1,6 @@
-import { isValidPubkey, nip19 } from '@nostr-dev-kit/ndk';
-import type { MessageMentionMetadata, MessageMetadata } from 'src/types/chat';
-import type { ContactGroupMember, ContactMetadata } from 'src/types/contact';
+import { isValidPubkey, nip19 } from '#src/lib/nostr/client.ts';
+import type { MessageMentionMetadata, MessageMetadata } from '#src/types/chat.ts';
+import type { ContactGroupMember, ContactMetadata } from '#src/types/contact.ts';
 
 export interface NostrMentionProfile {
   publicKey: string;
@@ -39,7 +39,8 @@ interface MentionProfileInput {
 
 type GroupMentionMetadata = Pick<ContactMetadata, 'group_members'> | Record<string, unknown>;
 
-const NOSTR_URI_PATTERN = /nostr:([A-Za-z0-9]+)/gu;
+const NOSTR_URI_PATTERN =
+  /(?<![\p{L}\p{N}_:/?=&#.%])(?:nostr:)?((?:npub|nprofile)1[023456789acdefghjklmnpqrstuvwxyz]+)(?![\p{L}\p{N}_])/giu;
 
 function normalizePublicKey(value: unknown): string | null {
   if (typeof value !== 'string') {
@@ -92,7 +93,7 @@ function decodeNprofile(value: string | null | undefined): {
       publicKey: normalizePublicKey(data.pubkey),
       relayUrls: Array.isArray(data.relays)
         ? normalizeRelayUrls(
-            data.relays.filter((relay): relay is string => typeof relay === 'string')
+            data.relays.filter((relay): relay is string => typeof relay === 'string'),
           )
         : [],
     };
@@ -107,7 +108,7 @@ function decodeNprofile(value: string | null | undefined): {
 function buildMentionHandle(
   displayName: string,
   publicKey: string,
-  usedHandles: Set<string>
+  usedHandles: Set<string>,
 ): string {
   const cleanedName = displayName
     .trim()
@@ -137,7 +138,7 @@ function isGroupMemberLike(value: unknown): value is ContactGroupMember {
 }
 
 function readGroupMentionMembers(
-  meta: GroupMentionMetadata | null | undefined
+  meta: GroupMentionMetadata | null | undefined,
 ): ContactGroupMember[] {
   const groupMembers = meta?.group_members;
   return Array.isArray(groupMembers) ? groupMembers.filter(isGroupMemberLike) : [];
@@ -145,7 +146,7 @@ function readGroupMentionMembers(
 
 export function createNprofileMentionUri(
   publicKey: string,
-  relayUrls: string[] = []
+  relayUrls: string[] = [],
 ): string | null {
   const normalizedPublicKey = normalizePublicKey(publicKey);
   if (!normalizedPublicKey) {
@@ -197,7 +198,7 @@ export function buildMentionProfiles(inputs: MentionProfileInput[]): NostrMentio
 }
 
 export function buildGroupMemberMentionProfiles(
-  meta: GroupMentionMetadata | null | undefined
+  meta: GroupMentionMetadata | null | undefined,
 ): NostrMentionProfile[] {
   return buildMentionProfiles(
     readGroupMentionMembers(meta).map((member) => ({
@@ -206,7 +207,7 @@ export function buildGroupMemberMentionProfiles(
       picture: member.picture ?? null,
       avatar: member.avatar ?? null,
       nprofile: member.nprofile ?? null,
-    }))
+    })),
   );
 }
 
@@ -254,7 +255,7 @@ export function parseNostrMentions(text: string): ParsedNostrMention[] {
         publicKey,
         relayUrls: Array.isArray(data.relays)
           ? normalizeRelayUrls(
-              data.relays.filter((relay): relay is string => typeof relay === 'string')
+              data.relays.filter((relay): relay is string => typeof relay === 'string'),
             )
           : [],
         nprofile: bech32Value,
@@ -267,7 +268,7 @@ export function parseNostrMentions(text: string): ParsedNostrMention[] {
 
 export function buildMentionMetadata(
   text: string,
-  loggedInPublicKey?: string | null
+  loggedInPublicKey?: string | null,
 ): Pick<MessageMetadata, 'mentions' | 'mentions_me'> {
   const normalizedLoggedInPublicKey = normalizePublicKey(loggedInPublicKey);
   const mentionsByPubkey = new Map<string, MessageMentionMetadata>();
@@ -290,7 +291,7 @@ export function buildMentionMetadata(
     ...(mentions.length > 0 && normalizedLoggedInPublicKey
       ? {
           mentions_me: mentions.some(
-            (mention) => mention.publicKey === normalizedLoggedInPublicKey
+            (mention) => mention.publicKey === normalizedLoggedInPublicKey,
           ),
         }
       : {}),
@@ -318,11 +319,11 @@ export function serializeMentionDraft(text: string, profiles: NostrMentionProfil
 
     const handlePattern = new RegExp(
       `(^|[^\\w@])@${escapeRegExp(profile.handle)}(?=$|[^\\w-])`,
-      'giu'
+      'giu',
     );
     nextText = nextText.replace(
       handlePattern,
-      (_match, prefix: string) => `${prefix}${mentionUri}`
+      (_match, prefix: string) => `${prefix}${mentionUri}`,
     );
   }
 
@@ -331,7 +332,7 @@ export function serializeMentionDraft(text: string, profiles: NostrMentionProfil
 
 export function formatNostrMentionsForDisplay(
   text: string,
-  profiles: NostrMentionProfile[] = []
+  profiles: NostrMentionProfile[] = [],
 ): string {
   return buildNostrMentionTextParts(text, profiles)
     .map((part) => part.text)
@@ -340,18 +341,14 @@ export function formatNostrMentionsForDisplay(
 
 export function formatGroupMentionsForDisplay(
   text: string,
-  meta: GroupMentionMetadata | null | undefined
+  meta: GroupMentionMetadata | null | undefined,
 ): string {
-  if (!text.includes('nostr:')) {
-    return text;
-  }
-
   return formatNostrMentionsForDisplay(text, buildGroupMemberMentionProfiles(meta));
 }
 
 export function buildNostrMentionTextParts(
   text: string,
-  profiles: NostrMentionProfile[] = []
+  profiles: NostrMentionProfile[] = [],
 ): NostrMentionTextPart[] {
   const mentions = parseNostrMentions(text);
   if (mentions.length === 0) {
@@ -365,7 +362,7 @@ export function buildNostrMentionTextParts(
   }
 
   const profilesByPubkey = new Map(
-    profiles.map((profile) => [profile.publicKey, profile] as const)
+    profiles.map((profile) => [profile.publicKey, profile] as const),
   );
   const parts: NostrMentionTextPart[] = [];
   let cursor = 0;

@@ -1,4 +1,4 @@
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
 import {
   RECONNECT_HEALING_FOCUS_DELAY_MS,
   RECONNECT_HEALING_MIN_BACKGROUND_MS,
@@ -8,9 +8,9 @@ import {
   RECONNECT_HEALING_RELAY_LIST_CHANGE_DELAY_MS,
   RECONNECT_HEALING_RELAY_RECONNECT_DELAY_MS,
   RECONNECT_HEALING_VISIBILITY_DELAY_MS,
-} from 'src/stores/nostr/constants';
-import type { ChatType } from 'src/types/chat';
-import type { Ref } from 'vue';
+} from '#src/stores/nostr/constants.ts';
+import type { ChatType } from '#src/types/chat.ts';
+import type { Ref } from '#src/lib/state/reactivity.ts';
 
 export type ReconnectHealingReason =
   | 'manual-refresh'
@@ -43,6 +43,7 @@ export interface ReconnectHealingChatTarget {
 }
 
 interface ReconnectHealingRuntimeDeps {
+  logReconnectHealing?: (phase: string, details?: Record<string, unknown>) => void;
   getLoggedInPublicKeyHex: () => string | null;
   getPrivateMessagesLiveEoseAt: () => string | null;
   getVisibleChatTarget: () => ReconnectHealingChatTarget | null;
@@ -89,10 +90,6 @@ function hasWindow(): boolean {
 
 function isBrowserOffline(): boolean {
   return typeof navigator !== 'undefined' && navigator.onLine === false;
-}
-
-function logReconnectHealing(phase: string, details: Record<string, unknown> = {}): void {
-  console.log('[anagram][reconnect-healing]', phase, details);
 }
 
 function normalizeChatTarget(
@@ -150,6 +147,7 @@ function delay(ms: number): Promise<void> {
 }
 
 export function createReconnectHealingRuntime({
+  logReconnectHealing = () => {},
   getLoggedInPublicKeyHex,
   getPrivateMessagesLiveEoseAt,
   getVisibleChatTarget,

@@ -2,7 +2,7 @@ import {
   readBunkerLoginQueryParam,
   removeBunkerLoginQueryParamFromUrl,
   withoutBunkerLoginQueryParam,
-} from 'src/utils/bunkerLoginQuery';
+} from '#src/utils/bunkerLoginQuery.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('bunker login query helpers', () => {

@@ -1,0 +1,64 @@
+name: iPhone app (paused)
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        type: string
+        required: false
+        default: ''
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ios:
+    # Paused until iOS distribution signing is configured and verified.
+    if: vars.IOS_BUILDS_ENABLED == 'true'
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+      IOS_EXPORT_METHOD: ${{ vars.IOS_EXPORT_METHOD || 'app-store-connect' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ios
+      - run: npm ci
+      - name: Set release version
+        if: inputs.release_tag != ''
+        run: npm run release:version
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+      - run: npm run verify:iroh
+      - name: Install Xcode tooling
+        run: |
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodebuild -version
+          # Device builds use the installed SDK; no simulator runtime is needed.
+          xcrun --sdk iphoneos --show-sdk-path
+      - name: Generate iPhone project
+        run: |
+          if [[ -z "${APPLE_DEVELOPMENT_TEAM:-}" ]]; then unset APPLE_DEVELOPMENT_TEAM; fi
+          npm run tauri -- ios init --ci
+          node scripts/mobile-version.mjs
+          npm run tauri -- icon src-tauri/icons/icon.png --output src-tauri/icons
+      - name: Build and package iPhone app
+        env:
+          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
+        run: bash scripts/package-ios.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-ios
+          path: mobile-assets/*.ipa
+          if-no-files-found: error
+          retention-days: 14

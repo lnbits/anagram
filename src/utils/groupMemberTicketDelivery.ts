@@ -1,4 +1,4 @@
-import type { GroupMemberTicketDelivery } from 'src/types/chat';
+import type { GroupMemberTicketDelivery } from '#src/types/chat.ts';
 
 function normalizeComparableTimestamp(value: string): number {
   const parsed = new Date(value).getTime();

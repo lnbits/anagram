@@ -1,0 +1,23 @@
+package com.nostr.anagram;
+
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+
+public final class BootCompletedReceiver extends BroadcastReceiver {
+
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        if (
+            Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction()) &&
+            RelayNotificationPreferences.isEnabled(context) &&
+            RelayNotificationPreferences.shouldStartOnBoot(context)
+        ) {
+            try {
+                RelayNotificationService.startOrRefresh(context);
+            } catch (RuntimeException ignored) {
+                // Some Android builds restrict background starts; opening the app retries.
+            }
+        }
+    }
+}

@@ -1,10 +1,10 @@
-import { normalizeRelayUrl } from '@nostr-dev-kit/ndk';
-import { chatDataService } from 'src/services/chatDataService';
-import { contactsService } from 'src/services/contactsService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { useNip65RelayStore } from 'src/stores/nip65RelayStore';
-import { useNostrStore } from 'src/stores/nostrStore';
-import { useRelayStore } from 'src/stores/relayStore';
+import { normalizeRelayUrl } from '#src/lib/nostr/client.ts';
+import { chatDataService } from '#src/services/chatDataService.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { useNip65RelayStore } from '#src/stores/nip65RelayStore.ts';
+import { useNostrStore } from '#src/stores/nostrStore.ts';
+import { useRelayStore } from '#src/stores/relayStore.ts';
 
 const ANDROID_NOTIFICATION_RELAY_SELECTION_STORAGE_KEY =
   'ui-android-relay-notifications-selected-relays';

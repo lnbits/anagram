@@ -1,15 +1,15 @@
-import { chatDataService } from 'src/services/chatDataService';
-import { contactsService } from 'src/services/contactsService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { GROUP_INVITE_REQUEST_MESSAGE } from 'src/stores/nostr/constants';
+import { chatDataService } from '#src/services/chatDataService.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { GROUP_INVITE_REQUEST_MESSAGE } from '#src/stores/nostr/constants.ts';
 import {
   buildAcceptedGroupInviteChatPlanValue,
   buildGroupInviteRequestPlanValue,
   resolveCurrentGroupChatEpochEntryValue,
   resolveGroupDisplayNameValue,
-} from 'src/stores/nostr/valueUtils';
-import type { ChatMetadata } from 'src/types/chat';
-import type { ContactRecord } from 'src/types/contact';
+} from '#src/stores/nostr/valueUtils.ts';
+import type { ChatMetadata } from '#src/types/chat.ts';
+import type { ContactRecord } from '#src/types/contact.ts';
 
 interface GroupInviteRuntimeDeps {
   bumpContactListVersion: () => void;

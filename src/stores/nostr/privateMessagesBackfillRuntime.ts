@@ -1,34 +1,41 @@
-import NDK, {
-  NDKEvent,
-  type NDKFilter,
-  NDKKind,
-  NDKRelaySet,
-  NDKSubscriptionCacheUsage,
-  type NDKSubscriptionOptions,
-} from '@nostr-dev-kit/ndk';
-import { type ChatRow, chatDataService } from 'src/services/chatDataService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { nostrEventDataService } from 'src/services/nostrEventDataService';
-import { createHistoryCoverage } from 'src/services/nostrHistoryCoverageService';
+import { createThreadHistoryRuntime } from '#src/stores/nostr/threadHistoryRuntime.ts';
+import { MESSAGE_HYDRATION_VERSION } from '#src/lib/nostr/hydrationVersion.ts';
+import { messageInbox } from '#src/lib/nostr/inbox.ts';
+import { HistoryPager } from '#src/stores/nostr/historyPager.ts';
+import { hydrateTimeWindows } from '#src/stores/nostr/timeWindowHydrator.ts';
+import NostrClient, {
+  ClientEvent,
+  type NostrFilter,
+  NostrKind,
+  NostrRelaySet,
+  NostrSubscriptionCacheUsage,
+  type NostrSubscriptionOptions,
+} from '#src/lib/nostr/client.ts';
+import { type ChatRow, chatDataService } from '#src/services/chatDataService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { nostrEventDataService } from '#src/services/nostrEventDataService.ts';
+import { createHistoryCoverage } from '#src/services/nostrHistoryCoverageService.ts';
 import {
   MISSING_MESSAGE_DEPENDENCY_REPAIR_RETRY_DELAYS_MS,
   MISSING_MESSAGE_DEPENDENCY_REPAIR_WINDOW_SECONDS,
-  PRIVATE_MESSAGES_BACKFILL_DELAY_STEP_MS,
-  PRIVATE_MESSAGES_BACKFILL_MAX_DELAY_MS,
   PRIVATE_MESSAGES_BACKFILL_WINDOW_SECONDS,
   PRIVATE_MESSAGES_RECONNECT_LOOKBACK_SECONDS,
   PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS,
-} from 'src/stores/nostr/constants';
-import { historyCoverageScope, uncoveredHistoryWindows } from 'src/stores/nostr/historyCoverage';
-import { resolvePrivateMessageRelayScopes } from 'src/stores/nostr/privateMessageRouting';
-import { createReadyRelaySet, RelayQueryUnavailableError } from 'src/stores/nostr/relayQueryUtils';
-import type { StartupStepId } from 'src/stores/nostr/startupState';
+} from '#src/stores/nostr/constants.ts';
+import {
+  historyCoverageScope,
+  uncoveredHistoryWindows,
+} from '#src/stores/nostr/historyCoverage.ts';
+import { resolvePrivateMessageRelayScopes } from '#src/stores/nostr/privateMessageRouting.ts';
+import {
+  createReadyRelaySet,
+  RelayQueryUnavailableError,
+} from '#src/stores/nostr/relayQueryUtils.ts';
+import type { StartupStepId } from '#src/stores/nostr/startupState.ts';
 import type {
   MissingMessageDependencyRepairReason,
-  PrivateMessagesBackfillState,
   RepairMissingMessageDependencyOptions,
-} from 'src/stores/nostr/types';
-import { resolveGroupChatEpochEntriesValue } from 'src/stores/nostr/valueUtils';
+} from '#src/stores/nostr/types.ts';
 
 interface GroupEpochHistoryRestoreOptions {
   force?: boolean;
@@ -62,40 +69,25 @@ function getAggressiveMissingMessageDependencyRepairAttemptIndex(): number {
   return Math.max(0, MISSING_MESSAGE_DEPENDENCY_REPAIR_WINDOW_SECONDS.length - 1);
 }
 
-function toUnixTimestampFromIso(value: unknown): number | null {
-  if (typeof value !== 'string' || !value.trim()) {
-    return null;
-  }
-
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-
-  const unixTimestamp = Math.floor(parsed / 1000);
-  return unixTimestamp > 0 ? unixTimestamp : null;
-}
-
 interface PrivateMessagesBackfillRuntimeDeps {
   ensureLiveRecipientSubscription?: () => Promise<void>;
-  getLiveRecipientSince?: (publicKey: string) => number | null;
   beginStartupInternalTask: (
     parentStepId: StartupStepId,
     taskId: string,
     label: string,
-    updates?: { eventCount?: number | null; label?: string }
+    updates?: { eventCount?: number | null; label?: string },
   ) => void;
   buildFilterSinceDetails: (since: number | undefined) => Record<string, unknown>;
   buildFilterUntilDetails: (until: number | undefined) => Record<string, unknown>;
   buildPrivateMessageSubscriptionTargetDetails: (
     recipientPubkeys: string[],
-    loggedInPubkeyHex: string
+    loggedInPubkeyHex: string,
   ) => Promise<Record<string, unknown>>;
   buildSubscriptionRelayDetails: (relayUrls: string[]) => Record<string, unknown>;
   completeStartupInternalTask: (
     parentStepId: StartupStepId,
     taskId: string,
-    updates?: { eventCount?: number | null; label?: string }
+    updates?: { eventCount?: number | null; label?: string },
   ) => void;
   completeStartupStep: (stepId: StartupStepId) => void;
   ensureRelayConnections: (relayUrls: string[]) => Promise<void>;
@@ -103,69 +95,61 @@ interface PrivateMessagesBackfillRuntimeDeps {
     parentStepId: StartupStepId,
     taskId: string,
     error: unknown,
-    updates?: { eventCount?: number | null; label?: string }
+    updates?: { eventCount?: number | null; label?: string },
   ) => void;
   failStartupStep: (stepId: StartupStepId, error: unknown) => void;
   flushPrivateMessagesUiRefreshNow: () => void;
   formatSubscriptionLogValue: (value: string | null | undefined) => string | null;
   getLoggedInPublicKeyHex: () => string | null;
-  isStartupRestoring?: () => boolean;
-  getPrivateMessagesBackfillResumeState: (
-    pubkeyHex: string,
-    liveSince: number,
-    floorSince: number
-  ) => PrivateMessagesBackfillState | null;
   getPrivateMessagesIngestQueue: () => Promise<void>;
-  getPrivateMessagesStartupFloorSince: (baseUnixTime?: number) => number;
   logSubscription: (
     label: 'private-messages',
     stage: string,
-    details?: Record<string, unknown>
+    details?: Record<string, unknown>,
   ) => void;
-  ndk: NDK;
+  ndk: NostrClient;
   normalizeThrottleMs: (value: number | undefined) => number;
   queuePrivateMessageIngestion: (
-    wrappedEvent: NDKEvent,
+    wrappedEvent: ClientEvent,
     loggedInPubkeyHex: string,
     options?: {
       uiThrottleMs?: number;
-    }
-  ) => void;
+      priority?: 'foreground' | 'background';
+      reprocess?: boolean;
+    },
+  ) => void | Promise<boolean>;
   relaySignature: (relays: string[]) => string;
   resolveGroupChatEpochEntries: (
-    chat: Pick<ChatRow, 'meta' | 'type'>
+    chat: Pick<ChatRow, 'meta' | 'type'>,
   ) => Array<{ epoch_public_key: string }>;
   resolvePrivateMessageReadRelayUrls: (seedRelayUrls?: string[]) => Promise<string[]>;
   schedulePostPrivateMessagesEoseChecks: () => void;
   subscribeWithReqLogging: (
     label: string,
     requestLabel: string,
-    filters: NDKFilter | NDKFilter[],
-    options: NDKSubscriptionOptions & {
-      onEvent?: (event: NDKEvent) => void;
+    filters: NostrFilter | NostrFilter[],
+    options: NostrSubscriptionOptions & {
+      onEvent?: (event: ClientEvent) => void;
       onEose?: () => void;
       onClose?: () => void;
     },
-    details?: Record<string, unknown>
-  ) => ReturnType<NDK['subscribe']>;
+    details?: Record<string, unknown>,
+  ) => ReturnType<NostrClient['subscribe']>;
   toOptionalIsoTimestampFromUnix: (value: number | null | undefined) => string | null;
   updateStoredEventSinceFromCreatedAt: (value: unknown) => void;
   updateStoredPrivateMessagesLastReceivedFromCreatedAt: (value: unknown) => void;
   updateStartupInternalTask: (
     parentStepId: StartupStepId,
     taskId: string,
-    updates: { eventCount?: number | null; label?: string }
+    updates: { eventCount?: number | null; label?: string },
   ) => void;
-  writePrivateMessagesBackfillState: (state: PrivateMessagesBackfillState) => void;
 }
 
 export function createPrivateMessagesBackfillRuntime({
   ensureLiveRecipientSubscription = async () => {},
-  getLiveRecipientSince = () => null,
   beginStartupInternalTask,
   buildFilterSinceDetails,
   buildFilterUntilDetails,
-  buildPrivateMessageSubscriptionTargetDetails,
   buildSubscriptionRelayDetails,
   completeStartupInternalTask,
   completeStartupStep,
@@ -175,13 +159,9 @@ export function createPrivateMessagesBackfillRuntime({
   flushPrivateMessagesUiRefreshNow,
   formatSubscriptionLogValue,
   getLoggedInPublicKeyHex,
-  isStartupRestoring = () => false,
-  getPrivateMessagesBackfillResumeState,
   getPrivateMessagesIngestQueue,
-  getPrivateMessagesStartupFloorSince,
   logSubscription,
   ndk,
-  normalizeThrottleMs,
   queuePrivateMessageIngestion,
   relaySignature,
   resolveGroupChatEpochEntries,
@@ -192,29 +172,18 @@ export function createPrivateMessagesBackfillRuntime({
   updateStoredEventSinceFromCreatedAt,
   updateStoredPrivateMessagesLastReceivedFromCreatedAt,
   updateStartupInternalTask,
-  writePrivateMessagesBackfillState,
 }: PrivateMessagesBackfillRuntimeDeps) {
-  let privateMessagesBackfillSubscription: ReturnType<NDK['subscribe']> | null = null;
+  const historySubscriptions = new Set<ReturnType<NostrClient['subscribe']>>();
   let privateMessagesBackfillPromise: Promise<void> | null = null;
   let privateMessagesBackfillRunToken = 0;
-  let privateMessagesBackfillSignature = '';
-  let privateMessagesBackfillDelayTimerId: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let privateMessagesBackfillDelayResolver: (() => void) | null = null;
+  let historyAbort: AbortController | null = null;
   const coverage = createHistoryCoverage(getLoggedInPublicKeyHex);
-  let globalWindow: { since: number; until: number; floor: number; recipients: string[] } | null =
-    null;
-  const groupEpochHistoryRestorePromises = new Map<string, Promise<void>>();
-  const restoredGroupEpochHistoryKeys = new Set<string>();
-  const privateMessagesForRecipientRestorePromises = new Map<string, Promise<void>>();
-  const restoredPrivateMessagesForRecipientKeys = new Set<string>();
+  const historyRecipients = new Set<string>();
+  const historyRelaySeeds = new Set<string>();
   const missingMessageDependencyRepairs = new Map<string, MissingMessageDependencyRepairState>();
 
   function normalizeRepairDelayMs(value: number): number {
     return Math.max(0, Math.floor(value));
-  }
-
-  function buildStartupBackfillChunkTaskId(since: number, until: number): string {
-    return `private-message-backfill:${Math.max(0, Math.floor(since))}:${Math.max(0, Math.floor(until))}`;
   }
 
   function formatStartupBackfillChunkLabel(since: number, until: number): string {
@@ -237,8 +206,8 @@ export function createPrivateMessagesBackfillRuntime({
       new Set(
         [...currentRelayUrls, ...nextRelayUrls]
           .map((relayUrl) => relayUrl.trim())
-          .filter((relayUrl) => relayUrl.length > 0)
-      )
+          .filter((relayUrl) => relayUrl.length > 0),
+      ),
     );
   }
 
@@ -254,18 +223,19 @@ export function createPrivateMessagesBackfillRuntime({
 
   async function resolveMissingMessageDependencyRepairTarget(
     chatPublicKey: string,
-    loggedInPubkeyHex: string
+    loggedInPubkeyHex: string,
   ): Promise<MissingMessageDependencyRepairTarget | null> {
     await chatDataService.init();
 
     const chat = await chatDataService.getChatByPublicKey(chatPublicKey);
+    if (chat?.meta.deleted_locally === true) return null;
     if (chat?.type === 'group') {
       const recipientPubkeys = Array.from(
         new Set(
           resolveGroupChatEpochEntries(chat)
             .map((entry) => inputSanitizerService.normalizeHexKey(entry.epoch_public_key))
-            .filter((value): value is string => Boolean(value))
-        )
+            .filter((value): value is string => Boolean(value)),
+        ),
       );
       if (recipientPubkeys.length === 0) {
         return null;
@@ -279,12 +249,12 @@ export function createPrivateMessagesBackfillRuntime({
 
     return {
       groupPublicKey: null,
-      recipientPubkeys: Array.from(new Set([loggedInPubkeyHex, chatPublicKey])),
+      recipientPubkeys: [loggedInPubkeyHex],
     };
   }
 
   function clearMissingMessageDependencyRepairTimer(
-    state: MissingMessageDependencyRepairState
+    state: MissingMessageDependencyRepairState,
   ): void {
     if (state.timerId !== null) {
       globalThis.clearTimeout(state.timerId);
@@ -305,60 +275,17 @@ export function createPrivateMessagesBackfillRuntime({
     missingMessageDependencyRepairs.delete(targetEventId);
   }
 
-  function clearPrivateMessagesBackfillDelay(): void {
-    if (privateMessagesBackfillDelayTimerId !== null) {
-      globalThis.clearTimeout(privateMessagesBackfillDelayTimerId);
-      privateMessagesBackfillDelayTimerId = null;
-    }
-
-    if (privateMessagesBackfillDelayResolver) {
-      const resolver = privateMessagesBackfillDelayResolver;
-      privateMessagesBackfillDelayResolver = null;
-      resolver();
-    }
-  }
-
   function stopPrivateMessagesBackfill(reason = 'replace'): void {
-    globalWindow = null;
+    historyRecipients.clear();
+    historyRelaySeeds.clear();
+    historyAbort?.abort();
+    historyAbort = null;
     privateMessagesBackfillRunToken += 1;
-    clearPrivateMessagesBackfillDelay();
 
-    if (privateMessagesBackfillSubscription) {
-      logSubscription('private-messages', 'backfill-stop', {
-        reason,
-        signature: privateMessagesBackfillSignature || null,
-      });
-      privateMessagesBackfillSubscription.stop();
-      privateMessagesBackfillSubscription = null;
-    }
+    for (const subscription of historySubscriptions) subscription.stop();
+    historySubscriptions.clear();
 
     privateMessagesBackfillPromise = null;
-    privateMessagesBackfillSignature = '';
-  }
-
-  async function waitForPrivateMessagesBackfillDelay(
-    delayMs: number,
-    runToken: number
-  ): Promise<boolean> {
-    const normalizedDelayMs = normalizeThrottleMs(delayMs);
-    if (normalizedDelayMs <= 0) {
-      return runToken === privateMessagesBackfillRunToken;
-    }
-
-    await new Promise<void>((resolve) => {
-      privateMessagesBackfillDelayResolver = () => {
-        privateMessagesBackfillDelayResolver = null;
-        resolve();
-      };
-      privateMessagesBackfillDelayTimerId = globalThis.setTimeout(() => {
-        privateMessagesBackfillDelayTimerId = null;
-        const resolver = privateMessagesBackfillDelayResolver;
-        privateMessagesBackfillDelayResolver = null;
-        resolver?.();
-      }, normalizedDelayMs);
-    });
-
-    return runToken === privateMessagesBackfillRunToken;
   }
 
   async function runPrivateMessagesBackfillWindow(options: {
@@ -368,104 +295,167 @@ export function createPrivateMessagesBackfillRuntime({
     since: number;
     until: number;
     signature: string;
-    startupTaskId: string;
-  }): Promise<{ eventCount: number; relayUrls: string[] }> {
-    const privateMessageTargetDetails = await buildPrivateMessageSubscriptionTargetDetails(
-      options.recipientPubkeys,
-      options.loggedInPubkeyHex
+    startupTaskId?: string;
+    requireReady?: boolean;
+    requestLabel?: string;
+    details?: Record<string, unknown>;
+    pager?: HistoryPager;
+    probe?: boolean;
+    signal?: AbortSignal;
+    foreground?: boolean;
+    reprocess?: boolean;
+  }): Promise<{ eventCount: number; relayUrls: string[]; oldest: number }> {
+    const runToken = privateMessagesBackfillRunToken;
+    let eventCount = 0;
+    let oldestEvent = Infinity;
+    const cancelled = () =>
+      options.signal?.aborted ||
+      runToken !== privateMessagesBackfillRunToken ||
+      options.loggedInPubkeyHex !== getLoggedInPublicKeyHex();
+    const completedRelays: string[] = [];
+    const readyRelays =
+      options.requireReady === false
+        ? NostrRelaySet.fromRelayUrls(options.relayUrls, ndk, false)
+        : createReadyRelaySet(ndk, options.relayUrls);
+    if (!readyRelays) throw new RelayQueryUnavailableError();
+    // Each relay owns a bounded cursor. A busy or unavailable relay cannot widen
+    // another relay's request, and only a real EOSE plus committed ingestion counts.
+    await Promise.all(
+      readyRelays.relayUrls.map(async (relayUrl) => {
+        const pager = options.pager ?? new HistoryPager(options.since, options.until);
+        const pageLimit = () => (options.probe ? 1 : pager.limit);
+        while (!pager.done) {
+          if (cancelled()) throw new Error('History restore cancelled');
+          const relaySet = NostrRelaySet.fromRelayUrls([relayUrl], ndk, false);
+          const page = await new Promise<{ count: number; oldest: number }>((resolve, reject) => {
+            let settled = false,
+              receivedEose = false,
+              count = 0,
+              oldest = Infinity;
+            let subscription: ReturnType<NostrClient['subscribe']> | undefined;
+            const ingestions: Array<Promise<boolean | void>> = [];
+            const finish = (error?: unknown) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(deadline);
+              options.signal?.removeEventListener('abort', aborted);
+              if (subscription) {
+                historySubscriptions.delete(subscription);
+                subscription.stop();
+              }
+              if (error) reject(error);
+              else resolve({ count, oldest });
+            };
+            const aborted = () => finish(new Error('Thread history cancelled'));
+            const deadline = setTimeout(
+              () => finish(new Error('Message history relay timed out')),
+              30000,
+            );
+            options.signal?.addEventListener('abort', aborted, { once: true });
+            if (cancelled()) {
+              aborted();
+              return;
+            }
+            try {
+              subscription = subscribeWithReqLogging(
+                'private-messages',
+                options.requestLabel ?? 'private-messages-backfill',
+                {
+                  kinds: [NostrKind.GiftWrap],
+                  '#p': options.recipientPubkeys,
+                  since: pager.since,
+                  until: pager.until,
+                  limit: pageLimit(),
+                },
+                {
+                  relaySet,
+                  cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
+                  closeOnEose: true,
+                  onEvent: (event) => {
+                    if (settled || receivedEose || cancelled()) return;
+                    const wrap = event instanceof ClientEvent ? event : new ClientEvent(ndk, event);
+                    if (
+                      count >= pageLimit() ||
+                      !Number.isFinite(wrap.created_at) ||
+                      wrap.created_at! < pager.since ||
+                      wrap.created_at! > pager.until
+                    ) {
+                      finish(new Error('Relay returned an invalid history page'));
+                      return;
+                    }
+                    count++;
+                    eventCount++;
+                    oldest = Math.min(oldest, wrap.created_at ?? Infinity);
+                    if (options.startupTaskId)
+                      updateStartupInternalTask('message-history-restore', options.startupTaskId, {
+                        eventCount,
+                      });
+                    ingestions.push(
+                      Promise.resolve(
+                        queuePrivateMessageIngestion(wrap, options.loggedInPubkeyHex, {
+                          uiThrottleMs: options.foreground
+                            ? 0
+                            : PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS,
+                          ...(options.foreground ? { priority: 'foreground' as const } : {}),
+                          ...(options.reprocess ? { reprocess: true } : {}),
+                        }),
+                      ).then(async (accepted) => {
+                        if (cancelled()) throw new Error('History restore cancelled');
+                        // An undecryptable envelope must not trap paging on this
+                        // window. Its ciphertext stays in the account's durable
+                        // inbox for replay when keys/signer become available.
+                        if (
+                          accepted === false &&
+                          !(await messageInbox.hasPending(options.loggedInPubkeyHex, wrap.id))
+                        )
+                          throw new Error('History message has not committed');
+                        if (cancelled()) throw new Error('History restore cancelled');
+                        updateStoredPrivateMessagesLastReceivedFromCreatedAt(wrap.created_at);
+                        updateStoredEventSinceFromCreatedAt(wrap.created_at);
+                        return accepted;
+                      }),
+                    );
+                    // Attach a rejection handler immediately; EOSE still awaits the result.
+                    void ingestions[ingestions.length - 1]!.catch(() => {});
+                  },
+                  onEose: () => {
+                    receivedEose = true;
+                    clearTimeout(deadline);
+                    // The adapter closes after EOSE; disk work can complete afterwards.
+                    if (subscription) historySubscriptions.delete(subscription);
+                    void Promise.all(ingestions).then(() => finish(), finish);
+                  },
+                  onClose: () => {
+                    if (!receivedEose) finish(new Error('Message history closed before EOSE'));
+                  },
+                },
+                {
+                  ...options.details,
+                  signature: options.signature,
+                  relayUrl,
+                  since: pager.since,
+                  until: pager.until,
+                  limit: pageLimit(),
+                },
+              );
+              if (!settled && !receivedEose) historySubscriptions.add(subscription);
+              else subscription.stop();
+            } catch (error) {
+              finish(error);
+            }
+          });
+          if (cancelled()) throw new Error('History restore cancelled');
+          oldestEvent = Math.min(oldestEvent, page.oldest);
+          if (!options.probe) pager.advance(page.count, page.oldest);
+          // The background scheduler yields and discovers new groups after every page.
+          if (options.pager || options.probe) break;
+        }
+        completedRelays.push(relayUrl);
+      }),
     );
-
-    const relaySet = createReadyRelaySet(ndk, options.relayUrls);
-    if (!relaySet) throw new RelayQueryUnavailableError();
-    const queryRelayUrls = [...relaySet.relayUrls];
-
-    return new Promise<{ eventCount: number; relayUrls: string[] }>((resolve, reject) => {
-      let didFinish = false;
-      let eventCount = 0;
-      let subscription: ReturnType<NDK['subscribe']> | null = null;
-
-      const finish = (error?: unknown) => {
-        if (didFinish) {
-          return;
-        }
-
-        didFinish = true;
-        if (subscription && privateMessagesBackfillSubscription === subscription) {
-          privateMessagesBackfillSubscription = null;
-        }
-
-        if (error) {
-          reject(error);
-          return;
-        }
-
-        resolve({ eventCount, relayUrls: queryRelayUrls });
-      };
-
-      try {
-        logSubscription('private-messages', 'backfill-window-subscribe', {
-          signature: options.signature,
-          ...buildFilterSinceDetails(options.since),
-          ...buildFilterUntilDetails(options.until),
-          ...buildSubscriptionRelayDetails(queryRelayUrls),
-          recipientCount: options.recipientPubkeys.length,
-          recipients: options.recipientPubkeys.map((value) => formatSubscriptionLogValue(value)),
-          ...privateMessageTargetDetails,
-        });
-        const privateMessagesBackfillFilters: NDKFilter = {
-          kinds: [NDKKind.GiftWrap],
-          '#p': options.recipientPubkeys,
-          since: options.since,
-          until: options.until,
-        };
-        subscription = subscribeWithReqLogging(
-          'private-messages',
-          'private-messages-backfill',
-          privateMessagesBackfillFilters,
-          {
-            relaySet,
-            cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
-            closeOnEose: true,
-            onEvent: (event) => {
-              const wrappedEvent = event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
-              eventCount += 1;
-              updateStartupInternalTask('message-history-restore', options.startupTaskId, {
-                eventCount,
-              });
-              updateStoredPrivateMessagesLastReceivedFromCreatedAt(wrappedEvent.created_at);
-              updateStoredEventSinceFromCreatedAt(wrappedEvent.created_at);
-              queuePrivateMessageIngestion(wrappedEvent, options.loggedInPubkeyHex, {
-                uiThrottleMs: PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS,
-              });
-            },
-            onEose: () => {
-              logSubscription('private-messages', 'backfill-eose', {
-                signature: options.signature,
-                eventCount,
-                ...buildFilterSinceDetails(options.since),
-                ...buildFilterUntilDetails(options.until),
-              });
-              schedulePostPrivateMessagesEoseChecks();
-              flushPrivateMessagesUiRefreshNow();
-              finish();
-            },
-            onClose: () => {
-              finish(new Error('Message history subscription closed before completing.'));
-            },
-          },
-          {
-            signature: options.signature,
-            ...buildFilterSinceDetails(options.since),
-            ...buildFilterUntilDetails(options.until),
-            ...buildSubscriptionRelayDetails(queryRelayUrls),
-          }
-        );
-
-        privateMessagesBackfillSubscription = subscription;
-      } catch (error) {
-        reject(error);
-      }
-    });
+    schedulePostPrivateMessagesEoseChecks();
+    flushPrivateMessagesUiRefreshNow();
+    return { eventCount, relayUrls: completedRelays, oldest: oldestEvent };
   }
 
   async function runGroupEpochHistoryRestoreWindow(options: {
@@ -475,100 +465,23 @@ export function createPrivateMessagesBackfillRuntime({
     relayUrls: string[];
     since: number;
     until?: number;
+    reprocess?: boolean;
   }): Promise<void> {
-    const normalizedUntil = Number.isInteger(options.until) ? Number(options.until) : undefined;
-    if (
-      options.relayUrls.length === 0 ||
-      (normalizedUntil !== undefined && options.since >= normalizedUntil)
-    ) {
-      return;
-    }
-
-    await new Promise<void>((resolve, reject) => {
-      let didFinish = false;
-      let subscription: ReturnType<NDK['subscribe']> | null = null;
-
-      const finish = (error?: unknown) => {
-        if (didFinish) {
-          return;
-        }
-
-        didFinish = true;
-        if (subscription) {
-          subscription.stop();
-          subscription = null;
-        }
-
-        if (error) {
-          reject(error);
-          return;
-        }
-
-        resolve();
-      };
-
-      try {
-        const relaySet = NDKRelaySet.fromRelayUrls(options.relayUrls, ndk, false);
-        logSubscription('private-messages', 'epoch-history-subscribe', {
-          subscriptionTargetType: 'epoch',
-          groupChatPubkeys: [formatSubscriptionLogValue(options.groupPublicKey)],
-          epochRecipientCount: 1,
-          epochRecipients: [
-            {
-              groupChatPubkey:
-                formatSubscriptionLogValue(options.groupPublicKey) ?? options.groupPublicKey,
-              epochRecipientPubkey:
-                formatSubscriptionLogValue(options.recipientPubkey) ?? options.recipientPubkey,
-            },
-          ],
-          ...buildFilterSinceDetails(options.since),
-          ...buildFilterUntilDetails(normalizedUntil),
-          ...buildSubscriptionRelayDetails(options.relayUrls),
-        });
-        const groupEpochHistoryFilters: NDKFilter = {
-          kinds: [NDKKind.GiftWrap],
-          '#p': [options.recipientPubkey],
-          since: options.since,
-          ...(normalizedUntil !== undefined ? { until: normalizedUntil } : {}),
-        };
-        subscription = subscribeWithReqLogging(
-          'private-messages',
-          'private-messages-epoch-history',
-          groupEpochHistoryFilters,
-          {
-            relaySet,
-            cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
-            closeOnEose: true,
-            onEvent: (event) => {
-              const wrappedEvent = event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
-              updateStoredPrivateMessagesLastReceivedFromCreatedAt(wrappedEvent.created_at);
-              updateStoredEventSinceFromCreatedAt(wrappedEvent.created_at);
-              queuePrivateMessageIngestion(wrappedEvent, options.loggedInPubkeyHex, {
-                uiThrottleMs: PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS,
-              });
-            },
-            onEose: () => {
-              schedulePostPrivateMessagesEoseChecks();
-              flushPrivateMessagesUiRefreshNow();
-              finish();
-            },
-            onClose: () => {
-              finish();
-            },
-          },
-          {
-            groupPublicKey: formatSubscriptionLogValue(options.groupPublicKey),
-            epochRecipientPubkey: formatSubscriptionLogValue(options.recipientPubkey),
-            ...buildFilterSinceDetails(options.since),
-            ...buildFilterUntilDetails(normalizedUntil),
-            ...buildSubscriptionRelayDetails(options.relayUrls),
-          }
-        );
-      } catch (error) {
-        reject(error);
-      }
+    if (!options.relayUrls.length) return;
+    const until = options.until ?? Math.floor(Date.now() / 1000);
+    if (options.since > until) return;
+    await runPrivateMessagesBackfillWindow({
+      ...options,
+      recipientPubkeys: [options.recipientPubkey],
+      until,
+      details: {
+        groupPublicKey: formatSubscriptionLogValue(options.groupPublicKey),
+        epochRecipientPubkey: formatSubscriptionLogValue(options.recipientPubkey),
+      },
+      signature: options.groupPublicKey,
+      requestLabel: 'private-messages-epoch-history',
+      requireReady: false,
     });
-
     await getPrivateMessagesIngestQueue();
   }
 
@@ -578,120 +491,37 @@ export function createPrivateMessagesBackfillRuntime({
     relayUrls: string[];
     since: number;
     until?: number;
+    reprocess?: boolean;
   }): Promise<void> {
-    const normalizedUntil = Number.isInteger(options.until) ? Number(options.until) : undefined;
-    if (
-      options.relayUrls.length === 0 ||
-      (normalizedUntil !== undefined && options.since >= normalizedUntil)
-    ) {
-      return;
-    }
-
-    const privateMessageTargetDetails = await buildPrivateMessageSubscriptionTargetDetails(
-      [options.recipientPubkey],
-      options.loggedInPubkeyHex
-    );
-
-    await new Promise<void>((resolve, reject) => {
-      let didFinish = false;
-      let subscription: ReturnType<NDK['subscribe']> | null = null;
-
-      const finish = (error?: unknown) => {
-        if (didFinish) {
-          return;
-        }
-
-        didFinish = true;
-        if (subscription) {
-          subscription.stop();
-          subscription = null;
-        }
-
-        if (error) {
-          reject(error);
-          return;
-        }
-
-        resolve();
-      };
-
-      try {
-        const relaySet = NDKRelaySet.fromRelayUrls(options.relayUrls, ndk, false);
-        logSubscription('private-messages', 'private-message-recipient-subscribe', {
-          recipientPubkey: formatSubscriptionLogValue(options.recipientPubkey),
-          recipientCount: 1,
-          recipients: [formatSubscriptionLogValue(options.recipientPubkey)],
-          ...buildFilterSinceDetails(options.since),
-          ...buildFilterUntilDetails(normalizedUntil),
-          ...buildSubscriptionRelayDetails(options.relayUrls),
-          ...privateMessageTargetDetails,
-        });
-        const privateMessagesForRecipientRestoreFilters: NDKFilter = {
-          kinds: [NDKKind.GiftWrap],
-          '#p': [options.recipientPubkey],
-          since: options.since,
-          ...(normalizedUntil !== undefined ? { until: normalizedUntil } : {}),
-        };
-        subscription = subscribeWithReqLogging(
-          'private-messages',
-          'private-messages-recipient-restore',
-          privateMessagesForRecipientRestoreFilters,
-          {
-            relaySet,
-            cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
-            closeOnEose: true,
-            onEvent: (event) => {
-              const wrappedEvent = event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
-              updateStoredPrivateMessagesLastReceivedFromCreatedAt(wrappedEvent.created_at);
-              updateStoredEventSinceFromCreatedAt(wrappedEvent.created_at);
-              queuePrivateMessageIngestion(wrappedEvent, options.loggedInPubkeyHex, {
-                uiThrottleMs: PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS,
-              });
-            },
-            onEose: () => {
-              logSubscription('private-messages', 'private-messages-recipient-eose', {
-                recipientPubkey: formatSubscriptionLogValue(options.recipientPubkey),
-                ...buildFilterSinceDetails(options.since),
-                ...buildFilterUntilDetails(normalizedUntil),
-              });
-              schedulePostPrivateMessagesEoseChecks();
-              flushPrivateMessagesUiRefreshNow();
-              finish();
-            },
-            onClose: () => {
-              finish();
-            },
-          },
-          {
-            recipientPubkey: formatSubscriptionLogValue(options.recipientPubkey),
-            ...buildFilterSinceDetails(options.since),
-            ...buildFilterUntilDetails(normalizedUntil),
-            ...buildSubscriptionRelayDetails(options.relayUrls),
-          }
-        );
-      } catch (error) {
-        reject(error);
-      }
+    if (!options.relayUrls.length) return;
+    const until = options.until ?? Math.floor(Date.now() / 1000);
+    if (options.since > until) return;
+    await runPrivateMessagesBackfillWindow({
+      ...options,
+      recipientPubkeys: [options.recipientPubkey],
+      until,
+      signature: options.recipientPubkey,
+      requestLabel: 'private-messages-recipient-restore',
+      requireReady: false,
     });
-
     await getPrivateMessagesIngestQueue();
   }
 
   function buildMissingMessageDependencyRepairBounds(
     referenceCreatedAt: number | null,
-    attemptIndex: number
+    attemptIndex: number,
   ): { since: number; until: number; windowSeconds: number } {
     const now = Math.floor(Date.now() / 1000);
     const windowSeconds =
       MISSING_MESSAGE_DEPENDENCY_REPAIR_WINDOW_SECONDS[
         Math.min(
           attemptIndex,
-          Math.max(0, MISSING_MESSAGE_DEPENDENCY_REPAIR_WINDOW_SECONDS.length - 1)
+          Math.max(0, MISSING_MESSAGE_DEPENDENCY_REPAIR_WINDOW_SECONDS.length - 1),
         )
       ] ?? 0;
     const until = Math.max(
       1,
-      Math.min(now, normalizeRepairReferenceCreatedAt(referenceCreatedAt) ?? now)
+      Math.min(now, normalizeRepairReferenceCreatedAt(referenceCreatedAt) ?? now),
     );
     const since = Math.max(0, until - windowSeconds);
 
@@ -703,7 +533,7 @@ export function createPrivateMessagesBackfillRuntime({
   }
 
   function resolveInitialMissingMessageDependencyRepairAttemptIndex(
-    options: RepairMissingMessageDependencyOptions
+    options: RepairMissingMessageDependencyOptions,
   ): number {
     if (options.reason === 'reply-target-missing') {
       return getAggressiveMissingMessageDependencyRepairAttemptIndex();
@@ -718,7 +548,7 @@ export function createPrivateMessagesBackfillRuntime({
 
   function scheduleMissingMessageDependencyRepair(
     state: MissingMessageDependencyRepairState,
-    delayMs: number
+    delayMs: number,
   ): void {
     if (state.cancelled) {
       return;
@@ -744,7 +574,7 @@ export function createPrivateMessagesBackfillRuntime({
   }
 
   async function runMissingMessageDependencyRepairAttempt(
-    state: MissingMessageDependencyRepairState
+    state: MissingMessageDependencyRepairState,
   ): Promise<boolean> {
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
     if (!loggedInPubkeyHex) {
@@ -783,7 +613,7 @@ export function createPrivateMessagesBackfillRuntime({
 
     const repairTarget = await resolveMissingMessageDependencyRepairTarget(
       state.chatPublicKey,
-      loggedInPubkeyHex
+      loggedInPubkeyHex,
     );
     if (!repairTarget || repairTarget.recipientPubkeys.length === 0) {
       logSubscription('private-messages', 'dependency-repair-skip', {
@@ -798,7 +628,7 @@ export function createPrivateMessagesBackfillRuntime({
 
     const { since, until, windowSeconds } = buildMissingMessageDependencyRepairBounds(
       state.referenceCreatedAt,
-      state.attemptIndex
+      state.attemptIndex,
     );
     if (since >= until) {
       logSubscription('private-messages', 'dependency-repair-skip', {
@@ -828,23 +658,29 @@ export function createPrivateMessagesBackfillRuntime({
       ...buildSubscriptionRelayDetails(relayUrls),
     });
 
-    for (const recipientPubkey of repairTarget.recipientPubkeys) {
+    const repairRoutes = await resolvePrivateMessageRelayScopes(
+      repairTarget.recipientPubkeys,
+      relayUrls,
+    );
+    for (const { publicKey: recipientPubkey, relayUrls: recipientRelayUrls } of repairRoutes) {
       if (repairTarget.groupPublicKey) {
         await runGroupEpochHistoryRestoreWindow({
           loggedInPubkeyHex,
           groupPublicKey: repairTarget.groupPublicKey,
           recipientPubkey,
-          relayUrls,
+          relayUrls: recipientRelayUrls,
           since,
           until,
+          reprocess: true,
         });
       } else {
         await runPrivateMessagesForRecipientRestoreWindow({
           loggedInPubkeyHex,
           recipientPubkey,
-          relayUrls,
+          relayUrls: recipientRelayUrls,
           since,
           until,
+          reprocess: true,
         });
       }
 
@@ -857,7 +693,7 @@ export function createPrivateMessagesBackfillRuntime({
   }
 
   async function startMissingMessageDependencyRepairAttempt(
-    state: MissingMessageDependencyRepairState
+    state: MissingMessageDependencyRepairState,
   ): Promise<boolean> {
     if (state.cancelled) {
       return false;
@@ -925,7 +761,7 @@ export function createPrivateMessagesBackfillRuntime({
           'Failed to repair missing message dependency',
           state.chatPublicKey,
           state.targetEventId,
-          error
+          error,
         );
         if (missingMessageDependencyRepairs.get(state.targetEventId) !== state || state.cancelled) {
           return false;
@@ -971,7 +807,7 @@ export function createPrivateMessagesBackfillRuntime({
   async function repairMissingMessageDependency(
     chatPublicKey: string,
     targetEventId: string,
-    options: RepairMissingMessageDependencyOptions
+    options: RepairMissingMessageDependencyOptions,
   ): Promise<boolean> {
     const normalizedChatPublicKey = inputSanitizerService.normalizeHexKey(chatPublicKey);
     const normalizedTargetEventId = inputSanitizerService.normalizeHexKey(targetEventId);
@@ -1003,7 +839,7 @@ export function createPrivateMessagesBackfillRuntime({
       state.reason = options.reason;
       state.seedRelayUrls = mergeSeedRelayUrls(state.seedRelayUrls, options.seedRelayUrls);
       const normalizedReferenceCreatedAt = normalizeRepairReferenceCreatedAt(
-        options.referenceCreatedAt
+        options.referenceCreatedAt,
       );
       if (
         normalizedReferenceCreatedAt !== null &&
@@ -1037,7 +873,7 @@ export function createPrivateMessagesBackfillRuntime({
     if (options.immediate === false) {
       scheduleMissingMessageDependencyRepair(
         state,
-        MISSING_MESSAGE_DEPENDENCY_REPAIR_RETRY_DELAYS_MS[state.attemptIndex] ?? 0
+        MISSING_MESSAGE_DEPENDENCY_REPAIR_RETRY_DELAYS_MS[state.attemptIndex] ?? 0,
       );
       return false;
     }
@@ -1060,223 +896,47 @@ export function createPrivateMessagesBackfillRuntime({
   async function restoreGroupEpochHistory(
     groupPublicKey: string,
     epochPublicKey: string,
-    options: GroupEpochHistoryRestoreOptions = {}
+    options: GroupEpochHistoryRestoreOptions = {},
   ): Promise<void> {
-    if (isStartupRestoring() && !options.force) return;
-    const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
-    const normalizedEpochPublicKey = inputSanitizerService.normalizeHexKey(epochPublicKey);
-    const loggedInPubkeyHex = getLoggedInPublicKeyHex();
-    if (!normalizedGroupPublicKey || !normalizedEpochPublicKey || !loggedInPubkeyHex) {
-      return;
-    }
-
-    await chatDataService.init();
-    const groupChat = await chatDataService.getChatByPublicKey(normalizedGroupPublicKey);
-    if (!groupChat || groupChat.type !== 'group') {
-      return;
-    }
-
-    let epochPublicKeys = Array.from(
-      new Set(
-        resolveGroupChatEpochEntries(groupChat)
-          .map((entry) => inputSanitizerService.normalizeHexKey(entry.epoch_public_key))
-          .filter((value): value is string => Boolean(value))
-      )
-    );
-    if (!epochPublicKeys.includes(normalizedEpochPublicKey)) {
-      return;
-    }
-    if (!options.force) await ensureLiveRecipientSubscription();
-    if (loggedInPubkeyHex !== getLoggedInPublicKeyHex()) return;
-
-    const relayUrls = await resolvePrivateMessageReadRelayUrls(options.seedRelayUrls);
-    if (relayUrls.length === 0) {
-      return;
-    }
-
-    await ensureRelayConnections(relayUrls);
-    const now = Math.floor(Date.now() / 1000);
-    const widestRepairWindowSeconds =
-      MISSING_MESSAGE_DEPENDENCY_REPAIR_WINDOW_SECONDS[
-        MISSING_MESSAGE_DEPENDENCY_REPAIR_WINDOW_SECONDS.length - 1
-      ] ?? PRIVATE_MESSAGES_RECONNECT_LOOKBACK_SECONDS;
-    let since = Math.max(0, now - widestRepairWindowSeconds);
-    if (!options.force) {
-      const latestMessages = await chatDataService.listLatestMessages(normalizedGroupPublicKey, 1);
-      const latestMessageTime =
-        toUnixTimestampFromIso(latestMessages.rows[0]?.created_at) ??
-        toUnixTimestampFromIso(groupChat.last_message_at);
-      since =
-        latestMessageTime !== null
-          ? Math.max(0, latestMessageTime - PRIVATE_MESSAGES_RECONNECT_LOOKBACK_SECONDS)
-          : getPrivateMessagesStartupFloorSince(now);
-    }
-
-    const handledEpochPublicKeys = new Set<string>();
-
-    while (epochPublicKeys.length > 0) {
-      await Promise.all(
-        epochPublicKeys.map((epochPublicKeyToRestore) => {
-          handledEpochPublicKeys.add(epochPublicKeyToRestore);
-          const restoreKey = `${normalizedGroupPublicKey}:${epochPublicKeyToRestore}`;
-          if (!options.force && restoredGroupEpochHistoryKeys.has(restoreKey)) {
-            return Promise.resolve();
-          }
-
-          const existingRestore = groupEpochHistoryRestorePromises.get(restoreKey);
-          if (existingRestore) {
-            return existingRestore;
-          }
-
-          const restorePromise = (async () => {
-            const entry = resolveGroupChatEpochEntriesValue(groupChat).find(
-              (entry) => entry.epoch_public_key === epochPublicKeyToRestore
-            );
-            const invitationSince = toUnixTimestampFromIso(entry?.invitation_created_at);
-            const floor =
-              invitationSince === null
-                ? since
-                : Math.max(since, invitationSince - 2 * 24 * 60 * 60);
-            const pendingCoverage = globalWindow
-              ? [
-                  {
-                    since: globalWindow.floor,
-                    until: globalWindow.recipients.includes(epochPublicKeyToRestore)
-                      ? globalWindow.until
-                      : globalWindow.since - 1,
-                  },
-                ]
-              : [];
-            const route = (
-              await resolvePrivateMessageRelayScopes([epochPublicKeyToRestore], relayUrls)
-            )[0];
-            if (!route?.relayUrls.length) return;
-            const liveSince = getLiveRecipientSince(epochPublicKeyToRestore);
-            const liveCoverage = liveSince === null ? [] : [{ since: liveSince, until: now }];
-            const gaps = uncoveredHistoryWindows(
-              { since: floor, until: now },
-              options.force
-                ? []
-                : [
-                    ...coverage.read(
-                      historyCoverageScope(epochPublicKeyToRestore, route.relayUrls)
-                    ),
-                    ...pendingCoverage,
-                    ...liveCoverage,
-                  ]
-            );
-            for (const gap of gaps) {
-              await runGroupEpochHistoryRestoreWindow({
-                loggedInPubkeyHex,
-                groupPublicKey: normalizedGroupPublicKey,
-                recipientPubkey: epochPublicKeyToRestore,
-                relayUrls: route.relayUrls,
-                ...gap,
-              });
-              await getPrivateMessagesIngestQueue();
-              coverage.add(historyCoverageScope(epochPublicKeyToRestore, route.relayUrls), gap);
-            }
-          })()
-            .then(() => {
-              restoredGroupEpochHistoryKeys.add(restoreKey);
-            })
-            .catch((error) => {
-              console.warn(
-                'Failed to restore group epoch history',
-                normalizedGroupPublicKey,
-                epochPublicKeyToRestore,
-                error
-              );
-            })
-            .finally(() => {
-              groupEpochHistoryRestorePromises.delete(restoreKey);
-            });
-
-          groupEpochHistoryRestorePromises.set(restoreKey, restorePromise);
-          return restorePromise;
-        })
-      );
-
-      const latestGroupChat = await chatDataService.getChatByPublicKey(normalizedGroupPublicKey);
-      if (!latestGroupChat || latestGroupChat.type !== 'group') {
-        return;
-      }
-
-      epochPublicKeys = Array.from(
-        new Set(
-          resolveGroupChatEpochEntries(latestGroupChat)
-            .map((entry) => inputSanitizerService.normalizeHexKey(entry.epoch_public_key))
-            .filter((value): value is string => Boolean(value))
-        )
-      ).filter((epochPublicKeyToRestore) => !handledEpochPublicKeys.has(epochPublicKeyToRestore));
-    }
+    const owner = getLoggedInPublicKeyHex();
+    const group = inputSanitizerService.normalizeHexKey(groupPublicKey);
+    const epoch = inputSanitizerService.normalizeHexKey(epochPublicKey);
+    if (!owner || !group || !epoch) return;
+    const chat = await chatDataService.getChatByPublicKey(group);
+    if (!chat || chat.type !== 'group' || chat.meta.deleted_locally === true) return;
+    const recipients = resolveGroupChatEpochEntries(chat).map((entry) => entry.epoch_public_key);
+    if (!recipients.includes(epoch)) return;
+    await ensureLiveRecipientSubscription();
+    const relays = await resolvePrivateMessageReadRelayUrls(options.seedRelayUrls);
+    if (owner !== getLoggedInPublicKeyHex()) return;
+    startPrivateMessagesStartupBackfill(owner, [owner, ...recipients], relays, 0);
   }
 
   async function restorePrivateMessagesForRecipient(
     recipientPubkey: string,
-    options: PrivateMessagesForRecipientRestoreOptions = {}
+    options: PrivateMessagesForRecipientRestoreOptions = {},
   ): Promise<void> {
-    const normalizedRecipientPubkey = inputSanitizerService.normalizeHexKey(recipientPubkey);
-    const loggedInPubkeyHex = getLoggedInPublicKeyHex();
-    if (!normalizedRecipientPubkey || !loggedInPubkeyHex) {
-      return;
-    }
-
-    const restoreKey = `${loggedInPubkeyHex}:${normalizedRecipientPubkey}`;
-    if (!options.force && restoredPrivateMessagesForRecipientKeys.has(restoreKey)) {
-      return;
-    }
-
-    const existingRestore = privateMessagesForRecipientRestorePromises.get(restoreKey);
-    if (existingRestore) {
-      return existingRestore;
-    }
-
-    const restorePromise = (async () => {
-      const relayUrls = await resolvePrivateMessageReadRelayUrls(options.seedRelayUrls);
-      if (relayUrls.length === 0) {
-        return;
-      }
-
-      await ensureRelayConnections(relayUrls);
-      const now = Math.floor(Date.now() / 1000);
-      await runPrivateMessagesForRecipientRestoreWindow({
-        loggedInPubkeyHex,
-        recipientPubkey: normalizedRecipientPubkey,
-        relayUrls,
-        since: getPrivateMessagesStartupFloorSince(now),
-        until: now,
-      });
-      restoredPrivateMessagesForRecipientKeys.add(restoreKey);
-    })()
-      .catch((error) => {
-        console.warn(
-          'Failed to restore private messages for recipient',
-          normalizedRecipientPubkey,
-          error
-        );
-      })
-      .finally(() => {
-        privateMessagesForRecipientRestorePromises.delete(restoreKey);
-      });
-
-    privateMessagesForRecipientRestorePromises.set(restoreKey, restorePromise);
-    return restorePromise;
+    const owner = getLoggedInPublicKeyHex();
+    const recipient = inputSanitizerService.normalizeHexKey(recipientPubkey);
+    if (!owner || !recipient) return;
+    const relays = await resolvePrivateMessageReadRelayUrls(options.seedRelayUrls);
+    if (owner !== getLoggedInPublicKeyHex()) return;
+    startPrivateMessagesStartupBackfill(owner, [owner, recipient], relays, 0);
   }
 
   function startPrivateMessagesStartupBackfill(
     loggedInPubkeyHex: string,
     recipientPubkeys: string[],
     relayUrls: string[],
-    liveSince: number
+    liveSince: number,
   ): void {
     const normalizedPubkey = inputSanitizerService.normalizeHexKey(loggedInPubkeyHex);
     const normalizedRecipientPubkeys = Array.from(
       new Set(
         recipientPubkeys
           .map((pubkey) => inputSanitizerService.normalizeHexKey(pubkey))
-          .filter((pubkey): pubkey is string => Boolean(pubkey))
-      )
+          .filter((pubkey): pubkey is string => Boolean(pubkey)),
+      ),
     );
     if (!normalizedPubkey || relayUrls.length === 0 || normalizedRecipientPubkeys.length === 0) {
       completeStartupStep('message-history-restore');
@@ -1285,227 +945,238 @@ export function createPrivateMessagesBackfillRuntime({
 
     const signature = `${normalizedPubkey}:${normalizedRecipientPubkeys.join(',')}:${relaySignature(relayUrls)}:${liveSince}`;
     if (privateMessagesBackfillPromise) {
+      normalizedRecipientPubkeys.forEach((key) => historyRecipients.add(key));
+      relayUrls.forEach((url) => historyRelaySeeds.add(url));
       return;
     }
 
     stopPrivateMessagesBackfill('replace');
-    privateMessagesBackfillSignature = signature;
+    normalizedRecipientPubkeys.forEach((key) => historyRecipients.add(key));
+    relayUrls.forEach((url) => historyRelaySeeds.add(url));
     const runToken = ++privateMessagesBackfillRunToken;
-    privateMessagesBackfillPromise = (async () => {
-      const floorSince = getPrivateMessagesStartupFloorSince();
-      let state = getPrivateMessagesBackfillResumeState(normalizedPubkey, liveSince, floorSince);
-
-      if (!state) {
-        logSubscription('private-messages', 'backfill-skip', {
-          signature,
-          reason: 'no-pending-window',
-          ...buildFilterSinceDetails(liveSince),
-          floorSince,
-          floorSinceIso: toOptionalIsoTimestampFromUnix(floorSince),
-        });
-        completeStartupStep('message-history-restore');
-        return;
-      }
-
-      logSubscription('private-messages', 'backfill-start', {
-        signature,
-        ...buildFilterSinceDetails(state.nextSince),
-        ...buildFilterUntilDetails(state.nextUntil),
-        floorSince: state.floorSince,
-        floorSinceIso: toOptionalIsoTimestampFromUnix(state.floorSince),
-        delayMs: state.delayMs,
-      });
-
-      while (runToken === privateMessagesBackfillRunToken) {
-        if (state.nextSince >= state.nextUntil || state.nextUntil <= state.floorSince) {
-          writePrivateMessagesBackfillState({
-            ...state,
-            completed: true,
-          });
-          logSubscription('private-messages', 'backfill-complete', {
-            signature,
-            ...buildFilterSinceDetails(state.nextSince),
-            ...buildFilterUntilDetails(state.nextUntil),
-            floorSince: state.floorSince,
-            floorSinceIso: toOptionalIsoTimestampFromUnix(state.floorSince),
-          });
-          completeStartupStep('message-history-restore');
-          return;
-        }
-
-        writePrivateMessagesBackfillState(state);
-        const startupTaskId = buildStartupBackfillChunkTaskId(state.nextSince, state.nextUntil);
-        const startupTaskLabel = formatStartupBackfillChunkLabel(state.nextSince, state.nextUntil);
-        beginStartupInternalTask('message-history-restore', startupTaskId, startupTaskLabel, {
-          eventCount: 0,
-        });
-        logSubscription('private-messages', 'backfill-window-start', {
-          signature,
-          ...buildFilterSinceDetails(state.nextSince),
-          ...buildFilterUntilDetails(state.nextUntil),
-          delayMs: state.delayMs,
-        });
-
-        try {
-          const chats = await chatDataService.listChats();
-          if (runToken !== privateMessagesBackfillRunToken) return;
-          const currentRecipients = [
-            ...new Set([
-              ...normalizedRecipientPubkeys,
-              ...chats
-                .filter((chat) => chat.type === 'group')
-                .flatMap((chat) =>
-                  resolveGroupChatEpochEntries(chat).map((entry) => entry.epoch_public_key)
-                ),
-            ]),
-          ];
-          globalWindow = {
-            since: state.nextSince,
-            until: state.nextUntil,
-            floor: state.floorSince,
-            recipients: currentRecipients,
-          };
-          const routes = await resolvePrivateMessageRelayScopes(
-            currentRecipients,
-            await resolvePrivateMessageReadRelayUrls()
-          );
-          let eventCount = 0;
-          for (const route of routes) {
-            for (const gap of uncoveredHistoryWindows(
-              {
-                since: Math.max(state.nextSince, route.since ?? state.nextSince),
-                until: state.nextUntil,
-              },
-              coverage.read(historyCoverageScope(route.publicKey, route.relayUrls))
-            )) {
-              const result = await runPrivateMessagesBackfillWindow({
-                loggedInPubkeyHex: normalizedPubkey,
-                recipientPubkeys: [route.publicKey],
-                relayUrls: route.relayUrls,
-                ...gap,
-                signature,
-                startupTaskId,
-              });
-              eventCount += result.eventCount;
-              await getPrivateMessagesIngestQueue();
-              if (runToken !== privateMessagesBackfillRunToken) return;
-              coverage.add(historyCoverageScope(route.publicKey, result.relayUrls), gap);
-            }
-          }
-          await getPrivateMessagesIngestQueue();
-          if (runToken !== privateMessagesBackfillRunToken) {
-            return;
-          }
-          flushPrivateMessagesUiRefreshNow();
-          completeStartupInternalTask('message-history-restore', startupTaskId, {
-            eventCount,
-          });
-        } catch (error) {
-          if (runToken !== privateMessagesBackfillRunToken) {
-            return;
-          }
-          failStartupInternalTask('message-history-restore', startupTaskId, error);
-          throw error;
-        }
-
-        if (runToken !== privateMessagesBackfillRunToken) {
-          return;
-        }
-
-        const reachedFloor = state.nextSince <= state.floorSince;
-        if (reachedFloor) {
-          writePrivateMessagesBackfillState({
-            ...state,
-            completed: true,
-          });
-          logSubscription('private-messages', 'backfill-complete', {
-            signature,
-            ...buildFilterSinceDetails(state.nextSince),
-            ...buildFilterUntilDetails(state.nextUntil),
-            floorSince: state.floorSince,
-            floorSinceIso: toOptionalIsoTimestampFromUnix(state.floorSince),
-          });
-          completeStartupStep('message-history-restore');
-          return;
-        }
-
-        const waitDelayMs = state.delayMs;
-        const nextUntil = state.nextSince;
-        const nextSince = Math.max(
-          state.floorSince,
-          nextUntil - PRIVATE_MESSAGES_BACKFILL_WINDOW_SECONDS
+    const controller = new AbortController();
+    historyAbort = controller;
+    const cancelled = () =>
+      controller.signal.aborted ||
+      runToken !== privateMessagesBackfillRunToken ||
+      normalizedPubkey !== getLoggedInPublicKeyHex();
+    const initialUntil = Math.floor(Date.now() / 1000);
+    // Resume unfinished ranges first, then revalidate the saved coverage. EOSE
+    // describes one relay snapshot, not a permanent promise that older messages
+    // will never be replicated/restored there. Cached receipts avoid redecryption.
+    const verifiedCoverage = createHistoryCoverage(getLoggedInPublicKeyHex, false);
+    const recordCoverage = (key: string, window: { since: number; until: number }) => {
+      coverage.add(key, window);
+      verifiedCoverage.add(key, window);
+    };
+    type Target = {
+      key: string;
+      publicKey: string;
+      relayUrl: string;
+      until: number;
+      revalidating?: boolean;
+      window?: { since: number; until: number; pager: HistoryPager; eventCount: number };
+    };
+    privateMessagesBackfillPromise = hydrateTimeWindows<Target>({
+      signal: controller.signal,
+      concurrency: 4,
+      concurrencyKey: (target) => target.relayUrl,
+      cancelled,
+      onDiscoveryError: (error) =>
+        logSubscription('private-messages', 'backfill-discovery-retry', { error }),
+      discover: async () => {
+        const chats = await chatDataService.listChats();
+        if (cancelled()) return [];
+        const recipients = [
+          ...new Set([
+            ...historyRecipients,
+            ...chats
+              .filter((chat) => chat.type === 'group')
+              .flatMap((chat) =>
+                resolveGroupChatEpochEntries(chat).map((entry) => entry.epoch_public_key),
+              ),
+          ]),
+        ];
+        const routes = await resolvePrivateMessageRelayScopes(
+          recipients,
+          await resolvePrivateMessageReadRelayUrls([...historyRelaySeeds]),
         );
-        state = {
-          ...state,
-          nextSince,
-          nextUntil,
-          delayMs: Math.min(
-            PRIVATE_MESSAGES_BACKFILL_MAX_DELAY_MS,
-            state.delayMs + PRIVATE_MESSAGES_BACKFILL_DELAY_STEP_MS
-          ),
-          completed: false,
-        };
-        writePrivateMessagesBackfillState(state);
-        globalWindow = {
-          since: state.nextSince,
-          until: state.nextUntil,
-          floor: state.floorSince,
-          recipients: [],
-        };
-
-        logSubscription('private-messages', 'backfill-wait', {
-          signature,
-          delayMs: waitDelayMs,
-          nextSince,
-          nextSinceIso: toOptionalIsoTimestampFromUnix(nextSince),
-          nextUntil,
-          nextUntilIso: toOptionalIsoTimestampFromUnix(nextUntil),
-        });
-
-        const shouldContinue = await waitForPrivateMessagesBackfillDelay(waitDelayMs, runToken);
-        if (!shouldContinue) {
-          return;
+        return routes.flatMap((route) =>
+          route.relayUrls.map((relayUrl) => ({
+            // Do not reuse old age-limited or combined-relay completion markers.
+            key: `time-v${MESSAGE_HYDRATION_VERSION}:${historyCoverageScope(route.publicKey, [relayUrl])}`,
+            publicKey: route.publicKey,
+            relayUrl,
+            until: initialUntil,
+          })),
+        );
+      },
+      step: async (target) => {
+        if (cancelled()) return true;
+        let gap = uncoveredHistoryWindows(
+          { since: 0, until: target.until },
+          (target.revalidating ? verifiedCoverage : coverage).read(target.key),
+        ).at(-1);
+        if (!gap && !target.revalidating) {
+          target.revalidating = true;
+          target.until = initialUntil;
+          target.window = undefined;
+          gap = uncoveredHistoryWindows(
+            { since: 0, until: target.until },
+            verifiedCoverage.read(target.key),
+          ).at(-1);
         }
-      }
-    })()
+        if (!gap) return true;
+        target.window ??= (() => {
+          const since = Math.max(
+            gap.since,
+            gap.until - PRIVATE_MESSAGES_BACKFILL_WINDOW_SECONDS + 1,
+          );
+          return {
+            since,
+            until: gap.until,
+            pager: new HistoryPager(since, gap.until, true),
+            eventCount: 0,
+          };
+        })();
+        const window = target.window;
+        const taskId = `history:${target.key}`;
+        beginStartupInternalTask(
+          'message-history-restore',
+          taskId,
+          formatStartupBackfillChunkLabel(window.since, window.until),
+          { eventCount: window.eventCount },
+        );
+        await ensureRelayConnections([target.relayUrl]);
+        if (cancelled()) return true;
+        const query = {
+          loggedInPubkeyHex: normalizedPubkey,
+          recipientPubkeys: [target.publicKey],
+          relayUrls: [target.relayUrl],
+          signature,
+          startupTaskId: taskId,
+        };
+        const result = await runPrivateMessagesBackfillWindow({
+          ...query,
+          since: window.since,
+          until: window.until,
+          pager: window.pager,
+        });
+        if (cancelled()) return true;
+        window.eventCount += result.eventCount;
+        if (!window.pager.done) {
+          // Resume large windows after the last fully stored timestamp boundary.
+          if (window.pager.until < window.until)
+            recordCoverage(target.key, { since: window.pager.until + 1, until: window.until });
+          return false;
+        }
+        // Each page's own commits have finished. Never wait for the live inbox queue.
+        recordCoverage(target.key, { since: window.since, until: window.until });
+        target.until = window.since - 1;
+        target.window = undefined;
+        if (!window.eventCount && target.until >= gap.since) {
+          // One encrypted envelope locates the next occupied period across sparse
+          // history. An empty recent week alone never proves history is exhausted.
+          const olderUntil = target.until;
+          const probe = await runPrivateMessagesBackfillWindow({
+            ...query,
+            since: gap.since,
+            until: olderUntil,
+            probe: true,
+          });
+          if (cancelled()) return true;
+          if (!probe.eventCount) {
+            recordCoverage(target.key, { since: gap.since, until: olderUntil });
+            target.until = gap.since - 1;
+          } else {
+            if (probe.oldest < olderUntil)
+              recordCoverage(target.key, { since: probe.oldest + 1, until: olderUntil });
+            target.until = probe.oldest;
+          }
+        }
+        completeStartupInternalTask('message-history-restore', taskId, {
+          eventCount: window.eventCount,
+        });
+        // One final step checks whether saved ranges still need revalidation.
+        return target.revalidating === true && target.until < 0;
+      },
+      onError: (target, error) => {
+        failStartupInternalTask('message-history-restore', `history:${target.key}`, error);
+        logSubscription('private-messages', 'backfill-retry', { relayUrl: target.relayUrl, error });
+      },
+    })
+      .then(() => {
+        if (!cancelled()) completeStartupStep('message-history-restore');
+      })
       .catch((error) => {
-        if (runToken !== privateMessagesBackfillRunToken) {
-          return;
-        }
-        console.error('Failed to backfill private messages', error);
-        logSubscription('private-messages', 'backfill-error', {
-          signature,
-          error,
-        });
-        failStartupStep('message-history-restore', error);
+        if (!cancelled()) failStartupStep('message-history-restore', error);
       })
       .finally(() => {
-        if (runToken !== privateMessagesBackfillRunToken) {
-          return;
-        }
-
-        clearPrivateMessagesBackfillDelay();
-        privateMessagesBackfillSubscription = null;
+        if (runToken !== privateMessagesBackfillRunToken) return;
+        historyAbort = null;
         privateMessagesBackfillPromise = null;
-        privateMessagesBackfillSignature = '';
-        globalWindow = null;
       });
   }
 
+  const threadHistory = createThreadHistoryRuntime({
+    owner: getLoggedInPublicKeyHex,
+    context: async (chatPublicKey) => {
+      const owner = getLoggedInPublicKeyHex();
+      if (!owner) return { routes: [], timestamps: [] };
+      await chatDataService.init();
+      const [chat, batch, relays] = await Promise.all([
+        chatDataService.getChatByPublicKey(chatPublicKey),
+        chatDataService.listLatestMessages(chatPublicKey, 100),
+        resolvePrivateMessageReadRelayUrls(),
+      ]);
+      if (chat?.meta.deleted_locally === true) return { routes: [], timestamps: [] };
+      if (chat?.type === 'group') await ensureLiveRecipientSubscription();
+      const recipients =
+        chat?.type === 'group'
+          ? resolveGroupChatEpochEntries(chat).map((entry) => entry.epoch_public_key)
+          : [owner];
+      return {
+        routes: await resolvePrivateMessageRelayScopes(recipients, relays),
+        timestamps: batch.rows.map((row) => Math.floor(Date.parse(row.created_at) / 1000)),
+      };
+    },
+    query: async ({ owner, publicKey, relayUrl, signal, ...window }) => {
+      if (signal.aborted || owner !== getLoggedInPublicKeyHex())
+        throw new Error('Thread history cancelled');
+      return runPrivateMessagesBackfillWindow({
+        ...window,
+        signal,
+        foreground: true,
+        requireReady: false,
+        loggedInPubkeyHex: owner,
+        recipientPubkeys: [publicKey],
+        relayUrls: [relayUrl],
+        signature: `thread:${publicKey}:${relayUrl}`,
+        requestLabel: 'selected-thread-history',
+      });
+    },
+    onError: () => logSubscription('private-messages', 'selected-thread-history-retry'),
+  });
+
+  function prioritizeThreadHistory(chatPublicKey: string | null, refresh = false): void {
+    threadHistory.select(
+      chatPublicKey ? inputSanitizerService.normalizeHexKey(chatPublicKey) : null,
+      refresh,
+    );
+  }
+
   function resetPrivateMessagesBackfillRuntimeState(): void {
+    threadHistory.stop();
     stopPrivateMessagesBackfill('reset');
     for (const state of missingMessageDependencyRepairs.values()) {
       clearMissingMessageDependencyRepairTimer(state);
       state.cancelled = true;
     }
     missingMessageDependencyRepairs.clear();
-    groupEpochHistoryRestorePromises.clear();
-    restoredGroupEpochHistoryKeys.clear();
-    privateMessagesForRecipientRestorePromises.clear();
-    restoredPrivateMessagesForRecipientKeys.clear();
   }
 
   return {
+    prioritizeThreadHistory,
     repairMissingMessageDependency,
     resetPrivateMessagesBackfillRuntimeState,
     resolveMissingMessageDependencyRepair,

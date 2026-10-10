@@ -4,7 +4,7 @@ import {
   hasDifferentBundle,
   normalizeAppBuildInfo,
   resolveAppShellUrl,
-} from 'src/services/appShellService';
+} from '#src/services/appShellService.ts';
 import { describe, expect, it, vi } from 'vitest';
 
 describe('appShellService', () => {

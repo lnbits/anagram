@@ -1,6 +1,6 @@
-import { NDKKind } from '@nostr-dev-kit/ndk';
-import { createOutboundMessageReplayRuntime } from 'src/stores/nostr/outboundMessageReplayRuntime';
-import type { MessageRelayStatus } from 'src/types/chat';
+import { NostrKind } from '#src/lib/nostr/client.ts';
+import { createOutboundMessageReplayRuntime } from '#src/stores/nostr/outboundMessageReplayRuntime.ts';
+import type { MessageRelayStatus } from '#src/types/chat.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const serviceMocks = vi.hoisted(() => ({
@@ -14,11 +14,11 @@ const serviceMocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('src/services/chatDataService', () => ({
+vi.mock('#src/services/chatDataService.ts', () => ({
   chatDataService: serviceMocks.chatDataService,
 }));
 
-vi.mock('src/services/nostrEventDataService', () => ({
+vi.mock('#src/services/nostrEventDataService.ts', () => ({
   nostrEventDataService: serviceMocks.nostrEventDataService,
 }));
 
@@ -67,7 +67,7 @@ describe('outboundMessageReplayRuntime', () => {
         direction: 'out',
         event: {
           id: 'event-1',
-          kind: NDKKind.PrivateDirectMessage,
+          kind: NostrKind.PrivateDirectMessage,
         },
         relay_statuses: [
           makeRelayStatus({
@@ -91,7 +91,7 @@ describe('outboundMessageReplayRuntime', () => {
         direction: 'out',
         event: {
           id: 'event-2',
-          kind: NDKKind.Reaction,
+          kind: NostrKind.Reaction,
         },
         relay_statuses: [
           makeRelayStatus({
@@ -156,7 +156,7 @@ describe('outboundMessageReplayRuntime', () => {
         direction: 'out',
         event: {
           id: 'event-1',
-          kind: NDKKind.PrivateDirectMessage,
+          kind: NostrKind.PrivateDirectMessage,
         },
         relay_statuses: [relayStatus],
       },
@@ -191,7 +191,7 @@ describe('outboundMessageReplayRuntime', () => {
     serviceMocks.nostrEventDataService.listEventsByDirection.mockResolvedValue([
       {
         direction: 'out',
-        event: { id: 'event-1', kind: NDKKind.PrivateDirectMessage },
+        event: { id: 'event-1', kind: NostrKind.PrivateDirectMessage },
         relay_statuses: [
           makeRelayStatus({ relay_url: 'wss://connected.test/' }),
           makeRelayStatus({ relay_url: 'wss://unrelated.test/' }),

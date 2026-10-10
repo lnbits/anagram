@@ -2,7 +2,7 @@ import {
   sha256HexFromBlob,
   uploadBlossomMedia,
   validateBlossomMediaFile,
-} from 'src/services/blossomUploadService';
+} from '#src/services/blossomUploadService.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 describe('blossomUploadService', () => {

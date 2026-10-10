@@ -1,0 +1,149 @@
+{
+  "reference": "/home/ben/Projects/anagram",
+  "purpose": "Behavioral migration map, not a claim of passing results. Run the named suites to verify.",
+  "normalCommand": "npm run test:e2e:local",
+  "liveCallCommand": "ANAGRAM_LIVE_CALL_TEST=1 npm run test:e2e:local -- e2e/parity/calls.spec.ts",
+  "localCallPrerequisite": "Iroh relay reachable on 127.0.0.1:7003 and openssl on PATH (or OPENSSL executable path); runner starts TLS proxy on 7004 and isolated Vite on 5187.",
+  "performanceCommand": "ANAGRAM_PERF_TEST=1 npm run test:e2e:local -- e2e/dm-performance.spec.ts",
+  "scenarios": [
+    {
+      "original": "e2e/auth.spec.ts",
+      "replacement": [
+        "e2e/parity/auth.spec.ts",
+        "e2e/auth-parity.spec.ts",
+        "e2e/history-hydration.spec.ts"
+      ],
+      "notes": "Restricted duration controls replaced with unlimited history and logout/onboarding checks; signer, registration and QR behavior retained."
+    },
+    {
+      "original": "e2e/calls.spec.ts",
+      "replacement": ["e2e/parity/calls.spec.ts", "e2e/call-ui.spec.ts", "e2e/calls.spec.ts"],
+      "notes": "Real Iroh transport, decoded audio, video frames, mute, capture errors, redial, screen sharing, detached windows, rooms and relay approval. Requires ANAGRAM_LIVE_CALL_TEST=1 and local Iroh relay on 7003. UI-only tests do not replace these."
+    },
+    {
+      "original": "e2e/contacts.spec.ts",
+      "replacement": [
+        "e2e/parity/contacts.spec.ts",
+        "e2e/contacts-parity.spec.ts",
+        "e2e/profile-search.spec.ts",
+        "e2e/profile-hydration.spec.ts"
+      ],
+      "notes": "Contact restoration, refresh, creation and QR behavior retained; Vue/Quasar header geometry is not an implementation contract."
+    },
+    {
+      "original": "e2e/dm/edit.spec.ts",
+      "replacement": ["e2e/parity/dm/edit.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/dm/forward.spec.ts",
+      "replacement": ["e2e/parity/dm/forward.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/dm/history.spec.ts",
+      "replacement": [
+        "e2e/history-hydration.spec.ts",
+        "e2e/incoming-history-recovery.spec.ts",
+        "e2e/app.spec.ts",
+        "e2e/group-history.spec.ts"
+      ],
+      "notes": "All duration cutoffs replaced with unlimited sparse history, resume, pagination, account inbox/backup discovery, all group epochs and UI-before-storage checks."
+    },
+    {
+      "original": "e2e/dm/media.spec.ts",
+      "replacement": ["e2e/parity/dm/media.spec.ts"],
+      "notes": "Trust-gated images, download filename and viewer surviving background refresh retained; Escape closes the viewer."
+    },
+    {
+      "original": "e2e/dm/pagination.spec.ts",
+      "replacement": ["e2e/parity/dm/pagination.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/dm/reactions.spec.ts",
+      "replacement": ["e2e/parity/dm/reactions.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/dm/read-state.spec.ts",
+      "replacement": ["e2e/parity/dm/read-state.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/dm/recovery.spec.ts",
+      "replacement": ["e2e/parity/dm/recovery.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/dm/repair.spec.ts",
+      "replacement": ["e2e/parity/dm/repair.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/dm/requests.spec.ts",
+      "replacement": ["e2e/parity/dm/requests.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/dm/search.spec.ts",
+      "replacement": ["e2e/parity/dm/search.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/groups/lifecycle.spec.ts",
+      "replacement": ["e2e/parity/groups/lifecycle.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/groups/membership.spec.ts",
+      "replacement": ["e2e/parity/groups/membership.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/groups/recovery.spec.ts",
+      "replacement": ["e2e/parity/groups/recovery.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/groups/relays.spec.ts",
+      "replacement": ["e2e/parity/groups/relays.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/groups/removal.spec.ts",
+      "replacement": ["e2e/parity/groups/removal.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/groups/roster.spec.ts",
+      "replacement": ["e2e/parity/groups/roster.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/groups/rotation.spec.ts",
+      "replacement": ["e2e/parity/groups/rotation.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/iroh-relays.spec.ts",
+      "replacement": ["e2e/parity/iroh-relays.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/relay-traffic.spec.ts",
+      "replacement": ["e2e/parity/relay-traffic.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/relays.spec.ts",
+      "replacement": ["e2e/parity/relays.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    },
+    {
+      "original": "e2e/session.spec.ts",
+      "replacement": ["e2e/parity/session.spec.ts"],
+      "notes": "Behavioral port using Svelte selectors, generated accounts and local nostr-tools relays."
+    }
+  ]
+}

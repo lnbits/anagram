@@ -1,28 +1,28 @@
-import NDK, {
-  NDKEvent,
-  type NDKFilter,
-  NDKKind,
-  NDKRelaySet,
-  NDKSubscriptionCacheUsage,
-  type NDKSubscriptionOptions,
+import NostrClient, {
+  ClientEvent,
+  type NostrFilter,
+  NostrKind,
+  NostrRelaySet,
+  NostrSubscriptionCacheUsage,
+  type NostrSubscriptionOptions,
   normalizeRelayUrl,
-} from '@nostr-dev-kit/ndk';
+} from '#src/lib/nostr/client.ts';
 import {
   PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS,
   PRIVATE_MESSAGES_WATCHDOG_INTERVAL_MS,
   PRIVATE_MESSAGES_WATCHDOG_RECOVERY_COOLDOWN_MS,
-} from 'src/stores/nostr/constants';
+} from '#src/stores/nostr/constants.ts';
 import {
   createDesiredSubscriptions,
   subscriptionSignature,
-} from 'src/stores/nostr/desiredSubscriptions';
-import { resolvePrivateMessageRelayScopes } from 'src/stores/nostr/privateMessageRouting';
+} from '#src/stores/nostr/desiredSubscriptions.ts';
+import { resolvePrivateMessageRelayScopes } from '#src/stores/nostr/privateMessageRouting.ts';
 import type {
   RefreshPrivateMessagesLiveSubscriptionOptions,
   RefreshPrivateMessagesLiveSubscriptionResult,
   SubscribePrivateMessagesOptions,
-} from 'src/stores/nostr/types';
-import type { Ref } from 'vue';
+} from '#src/stores/nostr/types.ts';
+import type { Ref } from '#src/lib/state/reactivity.ts';
 
 type MessageStartupTrackId = 'private-message-events' | 'message-history-restore';
 
@@ -40,17 +40,17 @@ interface PrivateMessagesSubscriptionRuntimeDeps {
   buildFilterSinceDetails: (since: number | undefined) => Record<string, unknown>;
   buildPrivateMessageSubscriptionTargetDetails: (
     recipientPubkeys: string[],
-    loggedInPubkeyHex: string
+    loggedInPubkeyHex: string,
   ) => Promise<Record<string, unknown>>;
   buildSubscriptionEventDetails: (
-    event: Pick<NDKEvent, 'id' | 'kind' | 'created_at' | 'pubkey'>
+    event: Pick<ClientEvent, 'id' | 'kind' | 'created_at' | 'pubkey'>,
   ) => Record<string, unknown>;
   buildSubscriptionRelayDetails: (relayUrls: string[]) => Record<string, unknown>;
   bumpDeveloperDiagnosticsVersion: () => void;
   clearPrivateMessagesUiRefreshState: () => void;
   completeStartupStep: (stepId: MessageStartupTrackId) => void;
   ensureRelayConnections: (relayUrls: string[]) => Promise<void>;
-  extractRelayUrlsFromEvent: (event: NDKEvent) => string[];
+  extractRelayUrlsFromEvent: (event: ClientEvent) => string[];
   failStartupStep: (stepId: MessageStartupTrackId, error: unknown) => void;
   flushPrivateMessagesUiRefreshNow: () => void;
   formatSubscriptionLogValue: (value: string | null | undefined) => string | null;
@@ -68,9 +68,9 @@ interface PrivateMessagesSubscriptionRuntimeDeps {
   logSubscription: (
     label: 'private-messages',
     stage: string,
-    details?: Record<string, unknown>
+    details?: Record<string, unknown>,
   ) => void;
-  ndk: NDK;
+  ndk: NostrClient;
   normalizeEventId: (value: unknown) => string | null;
   normalizeRelayStatusUrls: (relayUrls: string[]) => string[];
   normalizeThrottleMs: (value: number | undefined) => number;
@@ -82,7 +82,11 @@ interface PrivateMessagesSubscriptionRuntimeDeps {
   privateMessagesSubscriptionRelayUrls: Ref<string[]>;
   privateMessagesSubscriptionSince: Ref<number | null>;
   privateMessagesSubscriptionStartedAt: Ref<string | null>;
-  queuePrivateMessageIngestion: (wrappedEvent: NDKEvent, loggedInPubkeyHex: string) => void;
+  queuePrivateMessageIngestion: (
+    wrappedEvent: ClientEvent,
+    loggedInPubkeyHex: string,
+    options?: { priority: 'foreground' | 'background' },
+  ) => void;
   refreshAllStoredContacts: () => Promise<unknown>;
   relaySignature: (relays: string[]) => string;
   resolvePrivateMessageReadRelayUrls: (seedRelayUrls?: string[]) => Promise<string[]>;
@@ -92,19 +96,19 @@ interface PrivateMessagesSubscriptionRuntimeDeps {
     loggedInPubkeyHex: string,
     recipientPubkeys: string[],
     relayUrls: string[],
-    liveSince: number
+    liveSince: number,
   ) => void;
   subscribeWithReqLogging: (
     label: string,
     requestLabel: string,
-    filters: NDKFilter | NDKFilter[],
-    options: NDKSubscriptionOptions & {
-      onEvent?: (event: NDKEvent) => void;
+    filters: NostrFilter | NostrFilter[],
+    options: NostrSubscriptionOptions & {
+      onEvent?: (event: ClientEvent) => void;
       onEose?: () => void;
       onClose?: () => void;
     },
-    details?: Record<string, unknown>
-  ) => ReturnType<NDK['subscribe']>;
+    details?: Record<string, unknown>,
+  ) => ReturnType<NostrClient['subscribe']>;
   updateStoredEventSinceFromCreatedAt: (value: unknown) => void;
   updateStoredPrivateMessagesLastReceivedFromCreatedAt: (value: unknown) => void;
 }
@@ -121,7 +125,6 @@ export function createPrivateMessagesSubscriptionRuntime({
   flushPrivateMessagesUiRefreshNow,
   getLoggedInPublicKeyHex,
   getOrCreateSigner,
-  getPrivateMessagesIngestQueue,
   getPrivateMessagesStartupLiveSince,
   getStartupStepSnapshot,
   getStoredAuthMethod,
@@ -149,14 +152,19 @@ export function createPrivateMessagesSubscriptionRuntime({
   updateStoredEventSinceFromCreatedAt,
   updateStoredPrivateMessagesLastReceivedFromCreatedAt,
 }: PrivateMessagesSubscriptionRuntimeDeps) {
-  let privateMessagesSubscription: ReturnType<NDK['subscribe']> | null = null;
+  let privateMessagesSubscription: ReturnType<NostrClient['subscribe']> | null = null;
   let privateMessagesSubscriptionSignature = '';
   const subscriptions = createDesiredSubscriptions();
   let generation = 0;
   let desiredScopeCount = 0;
   const scopes = new Map<
     string,
-    { signature: string; since: number; ready: boolean; subscription: ReturnType<NDK['subscribe']> }
+    {
+      signature: string;
+      since: number;
+      ready: boolean;
+      subscription: ReturnType<NostrClient['subscribe']>;
+    }
   >();
   let subscriptionSetup: Promise<void> = Promise.resolve();
   let privateMessagesWatchdogTimeoutId: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -180,17 +188,13 @@ export function createPrivateMessagesSubscriptionRuntime({
 
   async function runPendingMessageHistoryRestore(): Promise<void> {
     const context = messageHistoryRestoreContext;
-    if (!messageHistoryRestoreRequested || !context?.ready || context.preparing) {
+    if (!messageHistoryRestoreRequested || !context || context.preparing) {
       return;
     }
 
     messageHistoryRestoreRequested = false;
     context.preparing = true;
     try {
-      await getPrivateMessagesIngestQueue();
-      if (context !== messageHistoryRestoreContext) {
-        return;
-      }
       if (
         context !== messageHistoryRestoreContext ||
         context.loggedInPubkeyHex !== getLoggedInPublicKeyHex()
@@ -202,7 +206,7 @@ export function createPrivateMessagesSubscriptionRuntime({
         context.loggedInPubkeyHex,
         context.recipientPubkeys,
         context.relayUrls,
-        context.liveSince
+        context.liveSince,
       );
     } catch (error) {
       if (context === messageHistoryRestoreContext) {
@@ -249,7 +253,7 @@ export function createPrivateMessagesSubscriptionRuntime({
         privateMessagesWatchdogTimeoutId = null;
         void runPrivateMessagesWatchdog();
       },
-      Math.max(0, Math.floor(delayMs))
+      Math.max(0, Math.floor(delayMs)),
     );
   }
 
@@ -299,7 +303,7 @@ export function createPrivateMessagesSubscriptionRuntime({
   }
 
   async function refreshPrivateMessagesLiveSubscription(
-    options: RefreshPrivateMessagesLiveSubscriptionOptions = {}
+    options: RefreshPrivateMessagesLiveSubscriptionOptions = {},
   ): Promise<RefreshPrivateMessagesLiveSubscriptionResult> {
     const sinceOverride = getPrivateMessagesSubscriptionSinceOverride(options.sinceOverride);
     const subscribeOptions: SubscribePrivateMessagesOptions = {
@@ -309,7 +313,7 @@ export function createPrivateMessagesSubscriptionRuntime({
     };
 
     const recreateLiveSubscription = async (
-      reason: string
+      reason: string,
     ): Promise<RefreshPrivateMessagesLiveSubscriptionResult> => {
       const previousStartedAt = privateMessagesSubscriptionStartedAt.value;
       logSubscription('private-messages', 'live-refresh-recreate', {
@@ -345,7 +349,7 @@ export function createPrivateMessagesSubscriptionRuntime({
       privateMessagesSubscription &&
       scopes.size > 0 &&
       privateMessagesSubscriptionRelayUrls.value.every(
-        (url) => ndk.pool.getRelay(normalizeRelayUrl(url), false)?.connected
+        (url) => ndk.pool.getRelay(normalizeRelayUrl(url), false)?.connected,
       )
     ) {
       await subscribePrivateMessagesForLoggedInUser(false, subscribeOptions);
@@ -353,7 +357,7 @@ export function createPrivateMessagesSubscriptionRuntime({
     }
     if (!privateMessagesSubscription) return recreateLiveSubscription('missing-subscription');
 
-    // NDK reissues the existing filters when transport reconnects. A second probe
+    // NostrClient reissues the existing filters when transport reconnects. A second probe
     // downloads the same window and is not evidence that a healthy listener needs replacing.
     await ensureRelayConnections(privateMessagesSubscriptionRelayUrls.value);
     await subscribePrivateMessagesForLoggedInUser(false, subscribeOptions);
@@ -362,7 +366,7 @@ export function createPrivateMessagesSubscriptionRuntime({
 
   async function recoverPrivateMessagesSubscriptionFromWatchdog(
     reason: string,
-    details: Record<string, unknown> = {}
+    details: Record<string, unknown> = {},
   ): Promise<void> {
     const now = Date.now();
     if (
@@ -438,11 +442,11 @@ export function createPrivateMessagesSubscriptionRuntime({
         }
 
         const disconnectedRelayUrls = relayUrls.filter(
-          (relayUrl) => !relayStatesBefore.get(relayUrl)
+          (relayUrl) => !relayStatesBefore.get(relayUrl),
         );
         if (disconnectedRelayUrls.length > 0 && !browserOffline) {
           const shouldLogReconnectAttempt = disconnectedRelayUrls.some(
-            (relayUrl) => privateMessagesWatchdogRelayConnectionStates.get(relayUrl) !== false
+            (relayUrl) => privateMessagesWatchdogRelayConnectionStates.get(relayUrl) !== false,
           );
           if (shouldLogReconnectAttempt) {
             logSubscription('private-messages', 'watchdog-reconnect-relays', {
@@ -514,7 +518,7 @@ export function createPrivateMessagesSubscriptionRuntime({
   }
 
   function resetPrivateMessagesSubscriptionRuntimeState(
-    options: { clearLastEventState?: boolean } = {}
+    options: { clearLastEventState?: boolean } = {},
   ): void {
     privateMessagesWatchdogLastRecoveryAt = 0;
     privateMessagesSubscriptionShouldBeActive = false;
@@ -536,7 +540,7 @@ export function createPrivateMessagesSubscriptionRuntime({
 
   function subscribePrivateMessagesForLoggedInUser(
     _force = false,
-    options: SubscribePrivateMessagesOptions = {}
+    options: SubscribePrivateMessagesOptions = {},
   ): Promise<void> {
     // Serialize desired-state reads as well as creation; later callers recheck effective signatures.
     const session = getLoggedInPublicKeyHex();
@@ -557,7 +561,7 @@ export function createPrivateMessagesSubscriptionRuntime({
 
   async function reconcilePrivateMessages(
     unhealthy: boolean,
-    options: SubscribePrivateMessagesOptions
+    options: SubscribePrivateMessagesOptions,
   ): Promise<void> {
     const runGeneration = generation;
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
@@ -573,12 +577,12 @@ export function createPrivateMessagesSubscriptionRuntime({
     const recipients = await listPrivateMessageRecipientPubkeys();
     const routes = await resolvePrivateMessageRelayScopes(
       recipients,
-      await resolvePrivateMessageReadRelayUrls(options.seedRelayUrls)
+      await resolvePrivateMessageReadRelayUrls(options.seedRelayUrls),
     );
     if (runGeneration !== generation || loggedInPubkeyHex !== getLoggedInPublicKeyHex()) return;
     const requestedSince = options.sinceOverride ?? getPrivateMessagesStartupLiveSince();
     const activeKeys = new Set(
-      routes.filter((route) => route.relayUrls.length).map((route) => route.publicKey)
+      routes.filter((route) => route.relayUrls.length).map((route) => route.publicKey),
     );
     for (const key of scopes.keys()) if (!activeKeys.has(key)) scopes.delete(key);
     let changed = false;
@@ -589,7 +593,7 @@ export function createPrivateMessagesSubscriptionRuntime({
         // A wall-clock/cursor advance never narrows an existing live listener. Epoch catch-up
         // is owned by history restore and must not broaden unrelated recipients' windows.
         const since = current && !unhealthy ? current.since : requestedSince;
-        const filters: NDKFilter = { kinds: [NDKKind.GiftWrap], '#p': [publicKey], since };
+        const filters: NostrFilter = { kinds: [NostrKind.GiftWrap], '#p': [publicKey], since };
         const signature = subscriptionSignature(filters, relayUrls);
         return {
           key: publicKey,
@@ -604,7 +608,7 @@ export function createPrivateMessagesSubscriptionRuntime({
               signature,
               since,
               ready: false,
-              subscription: null as unknown as ReturnType<NDK['subscribe']>,
+              subscription: null as unknown as ReturnType<NostrClient['subscribe']>,
             };
             scopes.set(publicKey, state);
             state.subscription = subscribeWithReqLogging(
@@ -612,11 +616,12 @@ export function createPrivateMessagesSubscriptionRuntime({
               'private-messages-live',
               filters,
               {
-                relaySet: NDKRelaySet.fromRelayUrls(relayUrls, ndk, false),
-                cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+                relaySet: NostrRelaySet.fromRelayUrls(relayUrls, ndk, false),
+                cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
                 onEvent: (event) => {
                   if (getLoggedInPublicKeyHex() !== loggedInPubkeyHex) return;
-                  const wrapped = event instanceof NDKEvent ? event : new NDKEvent(ndk, event);
+                  const wrapped =
+                    event instanceof ClientEvent ? event : new ClientEvent(ndk, event);
                   markPrivateMessagesLiveCoverageNow();
                   privateMessagesSubscriptionLastEventSeenAt.value = new Date().toISOString();
                   privateMessagesSubscriptionLastEventId.value =
@@ -624,7 +629,9 @@ export function createPrivateMessagesSubscriptionRuntime({
                   privateMessagesSubscriptionLastEventCreatedAt.value = wrapped.created_at ?? null;
                   updateStoredPrivateMessagesLastReceivedFromCreatedAt(wrapped.created_at);
                   updateStoredEventSinceFromCreatedAt(wrapped.created_at);
-                  queuePrivateMessageIngestion(wrapped, loggedInPubkeyHex);
+                  queuePrivateMessageIngestion(wrapped, loggedInPubkeyHex, {
+                    priority: 'foreground',
+                  });
                   bumpDeveloperDiagnosticsVersion();
                 },
                 onEose: () => {
@@ -642,7 +649,7 @@ export function createPrivateMessagesSubscriptionRuntime({
                 signature,
                 ...buildSubscriptionRelayDetails(relayUrls),
                 ...buildFilterSinceDetails(since),
-              }
+              },
             );
             return state.subscription;
           },
@@ -656,7 +663,7 @@ export function createPrivateMessagesSubscriptionRuntime({
     privateMessagesSubscriptionSignature = desired.map((item) => item.signature).join('|');
     privateMessagesSubscriptionRelayUrls.value = relayUrls;
     privateMessagesSubscriptionSince.value = Math.min(
-      ...[...scopes.values()].map((state) => state.since)
+      ...[...scopes.values()].map((state) => state.since),
     );
     syncPrivateMessagesWatchdogRelayConnectionStates(relayUrls);
     if (changed) {
@@ -665,6 +672,7 @@ export function createPrivateMessagesSubscriptionRuntime({
       setPrivateMessagesRestoreThrottleMs(normalizeThrottleMs(options.restoreThrottleMs));
     }
     // Keep the original global backfill context while epoch recipients change.
+    const updatingHistory = messageHistoryRestoreContext !== null;
     messageHistoryRestoreContext ??= {
       loggedInPubkeyHex,
       recipientPubkeys: recipients,
@@ -673,7 +681,13 @@ export function createPrivateMessagesSubscriptionRuntime({
       ready: false,
       preparing: false,
     };
+    if (changed && updatingHistory) {
+      messageHistoryRestoreContext.recipientPubkeys = recipients;
+      messageHistoryRestoreContext.relayUrls = relayUrls;
+      messageHistoryRestoreRequested = true;
+    }
     finishInitialMessages();
+    void runPendingMessageHistoryRestore();
     bumpDeveloperDiagnosticsVersion();
 
     function finishInitialMessages(): void {
@@ -696,7 +710,7 @@ export function createPrivateMessagesSubscriptionRuntime({
     }
   }
 
-  function getPrivateMessagesSubscription(): ReturnType<NDK['subscribe']> | null {
+  function getPrivateMessagesSubscription(): ReturnType<NostrClient['subscribe']> | null {
     return privateMessagesSubscription;
   }
 

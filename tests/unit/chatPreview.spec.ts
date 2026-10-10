@@ -1,5 +1,5 @@
-import type { Chat } from 'src/types/chat';
-import { resolveChatPreviewAuthorLabel } from 'src/utils/chatPreview';
+import type { Chat } from '#src/types/chat.ts';
+import { resolveChatPreviewAuthorLabel } from '#src/utils/chatPreview.ts';
 import { describe, expect, it } from 'vitest';
 
 const BOB_PUBLIC_KEY = 'b'.repeat(64);

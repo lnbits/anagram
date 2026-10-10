@@ -4,7 +4,7 @@ import {
   normalizeDesktopMessageLayoutPreference,
   readDesktopMessageLayoutPreference,
   saveDesktopMessageLayoutPreference,
-} from 'src/utils/themeStorage';
+} from '#src/utils/themeStorage.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 class TestCustomEvent<T = unknown> extends Event {
@@ -36,15 +36,15 @@ describe('themeStorage', () => {
     vi.unstubAllGlobals();
   });
 
-  it('normalizes desktop message layout values to text by default', () => {
+  it('normalizes desktop message layout values to bubbles by default', () => {
     expect(normalizeDesktopMessageLayoutPreference('bubbles')).toBe('bubbles');
     expect(normalizeDesktopMessageLayoutPreference(' BUBBLES ')).toBe('bubbles');
     expect(normalizeDesktopMessageLayoutPreference('text')).toBe('text');
-    expect(normalizeDesktopMessageLayoutPreference('unknown')).toBe('text');
-    expect(normalizeDesktopMessageLayoutPreference(null)).toBe('text');
+    expect(normalizeDesktopMessageLayoutPreference('unknown')).toBe('bubbles');
+    expect(normalizeDesktopMessageLayoutPreference(null)).toBe('bubbles');
   });
 
-  it('reads the saved desktop message layout with text as the fallback', () => {
+  it('reads the saved desktop message layout with bubbles as the fallback', () => {
     const localStorage = createMockStorage({
       [DESKTOP_MESSAGE_LAYOUT_STORAGE_KEY]: 'bubbles',
     });
@@ -53,6 +53,12 @@ describe('themeStorage', () => {
     expect(readDesktopMessageLayoutPreference()).toBe('bubbles');
 
     localStorage.store.set(DESKTOP_MESSAGE_LAYOUT_STORAGE_KEY, 'invalid');
+    expect(readDesktopMessageLayoutPreference()).toBe('bubbles');
+
+    localStorage.store.delete(DESKTOP_MESSAGE_LAYOUT_STORAGE_KEY);
+    expect(readDesktopMessageLayoutPreference()).toBe('bubbles');
+
+    localStorage.store.set(DESKTOP_MESSAGE_LAYOUT_STORAGE_KEY, 'text');
     expect(readDesktopMessageLayoutPreference()).toBe('text');
   });
 

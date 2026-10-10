@@ -2,7 +2,7 @@ import {
   scheduleBackgroundTask,
   yieldToMainThread,
   yieldToNextPaint,
-} from 'src/utils/backgroundTasks';
+} from '#src/utils/backgroundTasks.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 describe('backgroundTasks', () => {

@@ -1,6 +1,6 @@
-import { defineStore } from 'pinia';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { ref } from 'vue';
+import { defineStore } from '#src/lib/state/store.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { ref } from '#src/lib/state/reactivity.ts';
 
 const TRUSTED_IMAGE_SENDERS_STORAGE_KEY = 'nostr-chat:trusted-image-senders';
 

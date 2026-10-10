@@ -1,6 +1,6 @@
-import { chatDataService } from 'src/services/chatDataService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import type { QueuePrivateMessageUiRefreshOptions } from 'src/stores/nostr/types';
+import { chatDataService } from '#src/services/chatDataService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import type { QueuePrivateMessageUiRefreshOptions } from '#src/stores/nostr/types.ts';
 
 interface PrivateMessagesUiRuntimeDeps {
   chatStore: {
@@ -48,7 +48,7 @@ export function createPrivateMessagesUiRuntime({
       }
 
       if (shouldReloadMessages) {
-        const { useMessageStore } = await import('src/stores/messageStore');
+        const { useMessageStore } = await import('#src/stores/messageStore.ts');
         tasks.push(useMessageStore().reloadLoadedMessages());
       }
 
@@ -120,7 +120,7 @@ export function createPrivateMessagesUiRuntime({
       }
 
       await chatStore.reload();
-      const { useMessageStore } = await import('src/stores/messageStore');
+      const { useMessageStore } = await import('#src/stores/messageStore.ts');
       const messageStore = useMessageStore();
 
       for (const chatId of chatIds) {
@@ -178,7 +178,7 @@ export function createPrivateMessagesUiRuntime({
           try {
             await waitForPrivateMessagesIngestQueue();
             await refreshDeveloperPendingQueues();
-            const { useMessageStore } = await import('src/stores/messageStore');
+            const { useMessageStore } = await import('#src/stores/messageStore.ts');
             await useMessageStore().syncChatsReadStateFromSeenBoundary();
             scheduleChatChecks([], { allChats: true });
           } catch (error) {

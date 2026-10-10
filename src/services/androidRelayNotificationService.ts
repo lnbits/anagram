@@ -1,19 +1,35 @@
-import { Capacitor, type PluginListenerHandle, registerPlugin } from '@capacitor/core';
-import { NDKPrivateKeySigner, type NostrEvent, normalizeRelayUrl } from '@nostr-dev-kit/ndk';
+import {
+  syncClosedAndroidCalls,
+  type AndroidCallAction,
+} from '#src/services/androidCallNotificationService.ts';
+import { resolvePreferredContactRelayUrls } from '#src/utils/contactRelayUrls.ts';
+import { resolveGroupChatEpochEntriesValue } from '#src/stores/nostr/valueUtils.ts';
+import {
+  isAndroidNative,
+  type PluginListenerHandle,
+  androidNotificationPlugin,
+} from '#src/lib/platform/androidNotifications.ts';
+import {
+  NostrPrivateKeySigner,
+  type NostrEvent,
+  normalizeRelayUrl,
+} from '#src/lib/nostr/client.ts';
 import {
   AndroidNotificationRelaySelectionError,
+  loadAndroidNotificationRelayChoices,
+  saveAndroidNotificationRelaySelection,
   resolveSelectedAndroidNotificationRelayUrls,
-} from 'src/services/androidNotificationRelaySelectionService';
-import { readAndroidSecurePrivateKeyHex } from 'src/services/androidSecurePrivateKeyStorage';
-import { chatDataService } from 'src/services/chatDataService';
-import { contactsService } from 'src/services/contactsService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { resolveCurrentGroupChatEpochEntryValue } from 'src/stores/nostr/valueUtils';
-import { useNostrStore } from 'src/stores/nostrStore';
-import type { Chat } from 'src/types/chat';
-import type { ContactRecord } from 'src/types/contact';
-import { buildAvatarText } from 'src/utils/avatarText';
-import type { RouteLocationRaw } from 'vue-router';
+} from '#src/services/androidNotificationRelaySelectionService.ts';
+import { readNativeKey } from '#src/lib/platform/secureKeys.ts';
+import { chatDataService } from '#src/services/chatDataService.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { resolveCurrentGroupChatEpochEntryValue } from '#src/stores/nostr/valueUtils.ts';
+import { useNostrStore } from '#src/stores/nostrStore.ts';
+import type { Chat } from '#src/types/chat.ts';
+import type { ContactRecord } from '#src/types/contact.ts';
+import { buildAvatarText } from '#src/utils/avatarText.ts';
+import type { RouteLocationRaw } from '#src/lib/platform/router.ts';
 
 const ANDROID_RELAY_NOTIFICATIONS_STORAGE_KEY = 'ui-android-relay-notifications';
 const ANDROID_RELAY_START_ON_BOOT_STORAGE_KEY = 'ui-android-relay-notifications-start-on-boot';
@@ -21,13 +37,11 @@ const ANDROID_RELAY_CONVERSATION_DETAILS_STORAGE_KEY =
   'ui-android-relay-notifications-conversation-details';
 
 export type AndroidRelayNotificationPermissionState =
-  | 'granted'
-  | 'denied'
-  | 'prompt'
-  | 'unsupported';
+  'granted' | 'denied' | 'prompt' | 'unsupported';
 
 export interface AndroidRelayNotificationState {
   enabled: boolean;
+  running?: boolean;
   startOnBoot: boolean;
   showConversationDetails: boolean;
   permission: AndroidRelayNotificationPermissionState;
@@ -41,7 +55,10 @@ export interface AndroidNotificationWatchPlan {
 
 interface AndroidNotificationConversation {
   chatPubkey: string;
+  replyRelays?: string[];
   recipientPubkey?: string;
+  epochNumber?: number;
+  knownEpochPubkeys?: string[];
   name: string;
   avatarUrl: string;
   avatarText: string;
@@ -66,7 +83,7 @@ interface AndroidRelayNotificationsPlugin {
   configure(
     options: AndroidNotificationConfiguration & {
       startOnBoot: boolean;
-    }
+    },
   ): Promise<AndroidRelayNotificationState>;
   stop(): Promise<AndroidRelayNotificationState>;
   setStartOnBoot(options: { enabled: boolean }): Promise<AndroidRelayNotificationState>;
@@ -76,19 +93,31 @@ interface AndroidRelayNotificationsPlugin {
   clearDeliveredNotifications(options?: { chatPubkey?: string }): Promise<void>;
   addListener(
     eventName: 'notificationActionPerformed',
-    listener: (event: { chatPubkey?: string; openChats?: boolean }) => void
+    listener: (
+      event: {
+        chatPubkey?: string;
+        openChats?: boolean;
+        ownerPubkey?: string;
+      } & Partial<AndroidCallAction>,
+    ) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
     eventName: 'pendingEventsAvailable',
-    listener: () => void
+    listener: () => void,
   ): Promise<PluginListenerHandle>;
 }
 
-const AndroidRelayNotifications = registerPlugin<AndroidRelayNotificationsPlugin>(
-  'AndroidRelayNotifications'
-);
+const AndroidRelayNotifications = androidNotificationPlugin<AndroidRelayNotificationsPlugin>();
 
 let didInstallNotificationListeners = false;
+let configurationRevision = 0;
+let notificationsStopped = false;
+let nativeConfigurationTail: Promise<unknown> = Promise.resolve();
+function serializeNativeConfiguration<T>(operation: () => Promise<T>): Promise<T> {
+  const result = nativeConfigurationTail.then(operation, operation);
+  nativeConfigurationTail = result.catch(() => {});
+  return result;
+}
 const ANDROID_NOTIFICATION_REFRESH_DEBOUNCE_MS = 250;
 const decryptedGroupEpochPrivateKeyCache = new Map<string, string | null>();
 let lastAppliedConfigurationSignature: string | null = null;
@@ -145,7 +174,7 @@ function parseAndroidRelayPendingEvent(value: unknown): AndroidRelayPendingEvent
 
   const eventId = inputSanitizerService.normalizeHexKey(String(value.id ?? ''));
   const recipientPubkey = inputSanitizerService.normalizeHexKey(
-    String(value.recipientPubkey ?? '')
+    String(value.recipientPubkey ?? ''),
   );
   const relayUrl = normalizePendingRelayUrl(value.relayUrl);
   const rawEvent = value.event;
@@ -155,7 +184,7 @@ function parseAndroidRelayPendingEvent(value: unknown): AndroidRelayPendingEvent
   const tags = Array.isArray(rawEvent.tags)
     ? rawEvent.tags.filter(
         (tag): tag is string[] =>
-          Array.isArray(tag) && tag.length > 0 && tag.every((entry) => typeof entry === 'string')
+          Array.isArray(tag) && tag.length > 0 && tag.every((entry) => typeof entry === 'string'),
       )
     : [];
   const createdAt = Number(rawEvent.created_at);
@@ -195,7 +224,7 @@ function parseAndroidRelayPendingEvent(value: unknown): AndroidRelayPendingEvent
 }
 
 export function isAndroidRelayNotificationSupported(): boolean {
-  return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+  return isAndroidNative();
 }
 
 export function readAndroidRelayNotificationsPreference(): boolean {
@@ -220,9 +249,9 @@ export function readAndroidRelayStartOnBootPreference(): boolean {
 
 export function readAndroidRelayConversationDetailsPreference(): boolean {
   if (!canUseStorage()) {
-    return true;
+    return false;
   }
-  return window.localStorage.getItem(ANDROID_RELAY_CONVERSATION_DETAILS_STORAGE_KEY) !== '0';
+  return window.localStorage.getItem(ANDROID_RELAY_CONVERSATION_DETAILS_STORAGE_KEY) === '1';
 }
 
 function saveAndroidRelayStartOnBootPreference(enabled: boolean): void {
@@ -235,7 +264,7 @@ function saveAndroidRelayConversationDetailsPreference(enabled: boolean): void {
   if (canUseStorage()) {
     window.localStorage.setItem(
       ANDROID_RELAY_CONVERSATION_DETAILS_STORAGE_KEY,
-      enabled ? '1' : '0'
+      enabled ? '1' : '0',
     );
   }
 }
@@ -291,6 +320,7 @@ function readMetaString(meta: Record<string, unknown>, key: string): string {
 
 function isConversationNotificationEnabled(meta: Record<string, unknown>): boolean {
   return (
+    meta.deleted_locally !== true &&
     meta.muted !== true &&
     meta.blocked !== true &&
     meta.inbox_state !== 'blocked' &&
@@ -299,7 +329,7 @@ function isConversationNotificationEnabled(meta: Record<string, unknown>): boole
 }
 
 function isContactNotificationSuppressed(
-  contact: Pick<ContactRecord, 'meta'> | null | undefined
+  contact: Pick<ContactRecord, 'meta'> | null | undefined,
 ): boolean {
   return (
     contact?.meta.muted === true ||
@@ -309,7 +339,7 @@ function isContactNotificationSuppressed(
 }
 
 export function isAndroidDirectNotificationContactEligible(
-  contact: Pick<ContactRecord, 'meta' | 'type'> | null | undefined
+  contact: Pick<ContactRecord, 'meta' | 'type'> | null | undefined,
 ): boolean {
   return contact?.type === 'user' && contact.meta.private_contact_list_member === true;
 }
@@ -338,7 +368,7 @@ export function isAndroidDirectNotificationConversationEnabled(input: {
 }
 
 export function createAndroidNotificationConversationSignature(
-  chats: Pick<Chat, 'avatar' | 'epochPublicKey' | 'meta' | 'name' | 'publicKey' | 'type'>[]
+  chats: Pick<Chat, 'avatar' | 'epochPublicKey' | 'meta' | 'name' | 'publicKey' | 'type'>[],
 ): string {
   return chats
     .map((chat) =>
@@ -348,6 +378,9 @@ export function createAndroidNotificationConversationSignature(
         blocked: chat.meta.blocked === true,
         blockedAt: readMetaString(chat.meta, 'blocked_at'),
         epochPublicKey: chat.epochPublicKey ?? '',
+        knownEpochPubkeys: resolveGroupChatEpochEntriesValue(chat).map(
+          (entry) => entry.epoch_public_key,
+        ),
         inboxState: readMetaString(chat.meta, 'inbox_state'),
         lastOutgoingMessageAt: readMetaString(chat.meta, 'last_outgoing_message_at'),
         muted: chat.meta.muted === true,
@@ -355,7 +388,7 @@ export function createAndroidNotificationConversationSignature(
         picture: readMetaString(chat.meta, 'picture'),
         publicKey: chat.publicKey,
         type: chat.type,
-      })
+      }),
     )
     .sort()
     .join('|');
@@ -365,7 +398,7 @@ async function resolveLocalIdentityPrivateKey(ownerPubkey: string): Promise<stri
   const nostrStore = useNostrStore();
   let securePrivateKey: string | null = null;
   try {
-    securePrivateKey = await readAndroidSecurePrivateKeyHex();
+    securePrivateKey = await readNativeKey();
   } catch (error) {
     console.warn('Failed to read the Android private key for detailed notifications.', error);
   }
@@ -377,7 +410,7 @@ async function resolveLocalIdentityPrivateKey(ownerPubkey: string): Promise<stri
     }
     try {
       if (
-        inputSanitizerService.normalizeHexKey(new NDKPrivateKeySigner(privateKey).pubkey) ===
+        inputSanitizerService.normalizeHexKey(new NostrPrivateKeySigner(privateKey).pubkey) ===
         ownerPubkey
       ) {
         return privateKey;
@@ -393,23 +426,24 @@ async function decryptGroupEpochPrivateKey(input: {
   identityPrivateKey: string;
   ownerPubkey: string;
 }): Promise<string | null> {
+  if (decryptedGroupEpochPrivateKeyCache.size >= 256) decryptedGroupEpochPrivateKeyCache.clear();
   const cacheKey = `${input.ownerPubkey}:${input.epochPubkey}:${input.encryptedPrivateKey}`;
   if (decryptedGroupEpochPrivateKeyCache.has(cacheKey)) {
     return decryptedGroupEpochPrivateKeyCache.get(cacheKey) ?? null;
   }
 
   try {
-    const identitySigner = new NDKPrivateKeySigner(input.identityPrivateKey);
+    const identitySigner = new NostrPrivateKeySigner(input.identityPrivateKey);
     const identityUser = await identitySigner.user();
     const decrypted = inputSanitizerService.normalizeHexKey(
-      await identitySigner.decrypt(identityUser, input.encryptedPrivateKey, 'nip44')
+      await identitySigner.decrypt(identityUser, input.encryptedPrivateKey, 'nip44'),
     );
     if (!decrypted) {
       decryptedGroupEpochPrivateKeyCache.set(cacheKey, null);
       return null;
     }
     const result =
-      inputSanitizerService.normalizeHexKey(new NDKPrivateKeySigner(decrypted).pubkey) ===
+      inputSanitizerService.normalizeHexKey(new NostrPrivateKeySigner(decrypted).pubkey) ===
       input.epochPubkey
         ? decrypted
         : null;
@@ -445,7 +479,7 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
     contacts.flatMap((contact) => {
       const pubkey = inputSanitizerService.normalizeHexKey(contact.public_key);
       return pubkey ? [[pubkey, contact] as const] : [];
-    })
+    }),
   );
   const conversations: AndroidNotificationConversation[] = [];
   const recipientKeys: AndroidNotificationRecipientKey[] = [];
@@ -464,6 +498,7 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
       continue;
     }
     chatPubkeys.add(chatPubkey);
+    if (chat.meta.deleted_locally === true) continue;
     const contact = contactsByPubkey.get(chatPubkey);
     const name =
       contact?.given_name?.trim() ||
@@ -481,6 +516,7 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
       });
     const baseConversation = {
       chatPubkey,
+      replyRelays: resolvePreferredContactRelayUrls(contact?.relays),
       name,
       avatarUrl,
       avatarText: readMetaString(chat.meta, 'avatar') || buildAvatarText(name),
@@ -508,6 +544,10 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
     conversations.push({
       ...baseConversation,
       recipientPubkey: epochPubkey,
+      epochNumber: epochEntry?.epoch_number,
+      knownEpochPubkeys: resolveGroupChatEpochEntriesValue(chat).map(
+        (entry) => entry.epoch_public_key,
+      ),
     });
     if (!identityPrivateKey || !epochEntry?.epoch_private_key_encrypted) {
       continue;
@@ -539,6 +579,7 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
       contactPubkey;
     conversations.push({
       chatPubkey: contactPubkey,
+      replyRelays: resolvePreferredContactRelayUrls(contact.relays),
       name,
       avatarUrl: contact.meta.picture?.trim() || '',
       avatarText: buildAvatarText(name),
@@ -556,17 +597,17 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
 }
 
 function createAndroidNotificationConfigurationSignature(
-  configuration: AndroidNotificationConfiguration
+  configuration: AndroidNotificationConfiguration,
 ): string {
   return JSON.stringify({
     ...configuration,
     conversations: [...configuration.conversations].sort((first, second) =>
       `${first.chatPubkey}:${first.recipientPubkey ?? ''}`.localeCompare(
-        `${second.chatPubkey}:${second.recipientPubkey ?? ''}`
-      )
+        `${second.chatPubkey}:${second.recipientPubkey ?? ''}`,
+      ),
     ),
     recipientKeys: [...configuration.recipientKeys].sort((first, second) =>
-      first.recipientPubkey.localeCompare(second.recipientPubkey)
+      first.recipientPubkey.localeCompare(second.recipientPubkey),
     ),
   });
 }
@@ -574,20 +615,31 @@ function createAndroidNotificationConfigurationSignature(
 async function configureAndroidNotificationListener(input: {
   configuration: AndroidNotificationConfiguration;
   startOnBoot: boolean;
+  revision: number;
 }): Promise<AndroidRelayNotificationState> {
-  const state = await AndroidRelayNotifications.configure({
-    ...input.configuration,
-    startOnBoot: input.startOnBoot,
+  return serializeNativeConfiguration(async () => {
+    const current = () =>
+      !notificationsStopped &&
+      input.revision === configurationRevision &&
+      input.configuration.ownerPubkey === useNostrStore().getLoggedInPublicKeyHex();
+    if (!current()) throw new Error('Notification configuration cancelled.');
+    const state = await AndroidRelayNotifications.configure({
+      ...input.configuration,
+      startOnBoot: input.startOnBoot,
+    });
+    if (!current()) throw new Error('Notification configuration cancelled.');
+    lastAppliedConfigurationSignature = state.enabled
+      ? createAndroidNotificationConfigurationSignature(input.configuration)
+      : null;
+    return state;
   });
-  lastAppliedConfigurationSignature = state.enabled
-    ? createAndroidNotificationConfigurationSignature(input.configuration)
-    : null;
-  return state;
 }
 
 async function performAndroidNotificationRefresh(): Promise<void> {
+  if (notificationsStopped) return;
+  const revision = configurationRevision;
   const state = await getAndroidRelayNotificationState();
-  if (!state.enabled || state.permission !== 'granted') {
+  if (state.permission !== 'granted' || (!state.enabled && !readAndroidRelayNotificationsPreference())) {
     lastAppliedConfigurationSignature = null;
     return;
   }
@@ -595,11 +647,12 @@ async function performAndroidNotificationRefresh(): Promise<void> {
   try {
     const configuration = await buildAndroidNotificationConfiguration();
     const signature = createAndroidNotificationConfigurationSignature(configuration);
-    if (signature === lastAppliedConfigurationSignature) {
+    if (state.enabled && state.running !== false && signature === lastAppliedConfigurationSignature) {
       return;
     }
     await configureAndroidNotificationListener({
       configuration,
+      revision,
       startOnBoot: state.startOnBoot,
     });
   } catch (error) {
@@ -608,7 +661,8 @@ async function performAndroidNotificationRefresh(): Promise<void> {
     }
     await AndroidRelayNotifications.stop();
     lastAppliedConfigurationSignature = null;
-    saveAndroidRelayNotificationsPreference(false);
+    // Relay lists may still be restoring at startup. Suspend the listener while
+    // no selected route is available, but retain the user's notification choice.
   }
 }
 
@@ -683,10 +737,37 @@ export async function getAndroidRelayNotificationState(): Promise<AndroidRelayNo
     ...state,
     permission: normalizePermission(state.permission),
   };
-  saveAndroidRelayNotificationsPreference(normalizedState.enabled);
+  // Native setup state is not the user's preference. A failed/stopped listener
+  // must not silently become an explicit opt-out and prevent later recovery.
+  if (normalizedState.enabled && !notificationsStopped) {
+    saveAndroidRelayNotificationsPreference(true);
+  }
   saveAndroidRelayStartOnBootPreference(normalizedState.startOnBoot);
   saveAndroidRelayConversationDetailsPreference(normalizedState.showConversationDetails);
   return normalizedState;
+}
+
+export async function initializeAndroidRelayNotificationsAfterLogin(): Promise<void> {
+  if (!isAndroidRelayNotificationSupported() || !canUseStorage()) return;
+  const revision = configurationRevision;
+  const state = await getAndroidRelayNotificationState();
+  if (revision !== configurationRevision || state.enabled) return;
+  const preference = window.localStorage.getItem(ANDROID_RELAY_NOTIFICATIONS_STORAGE_KEY);
+  if (preference === '0') return;
+  if (preference === '1') {
+    if (state.permission === 'granted') await refreshAndroidRelayNotificationListener();
+    return;
+  }
+
+  // Record the attempt before requesting permission so denial or a failed setup
+  // does not prompt again on every visit. Settings can explicitly enable it later.
+  saveAndroidRelayNotificationsPreference(false);
+  const choices = await loadAndroidNotificationRelayChoices();
+  if (revision !== configurationRevision || choices.selectedRelayUrls.length === 0) return;
+  if (!choices.hasSavedSelection) {
+    saveAndroidNotificationRelaySelection(choices.selectedRelayUrls);
+  }
+  await requestAndroidRelayNotificationsAfterLogin();
 }
 
 export async function requestAndroidRelayNotificationsAfterLogin(): Promise<AndroidRelayNotificationPermissionState> {
@@ -695,6 +776,8 @@ export async function requestAndroidRelayNotificationsAfterLogin(): Promise<Andr
     return 'unsupported';
   }
 
+  notificationsStopped = false;
+  const revision = ++configurationRevision;
   const result = await AndroidRelayNotifications.requestPermissions();
   const permission = normalizePermission(result.receive);
   if (permission !== 'granted') {
@@ -702,17 +785,22 @@ export async function requestAndroidRelayNotificationsAfterLogin(): Promise<Andr
     return permission;
   }
 
+  if (revision !== configurationRevision || notificationsStopped)
+    throw new Error('Notification configuration cancelled.');
+  // Permission was granted and the user asked for notifications. Persist that
+  // intent before native setup, which can fail transiently (including on resume).
+  saveAndroidRelayNotificationsPreference(true);
   const state = await configureAndroidNotificationListener({
+    revision,
     configuration: await buildAndroidNotificationConfiguration(),
     startOnBoot: readAndroidRelayStartOnBootPreference(),
   });
-  saveAndroidRelayNotificationsPreference(state.enabled);
   saveAndroidRelayStartOnBootPreference(state.startOnBoot);
   return state.enabled ? 'granted' : 'denied';
 }
 
 export async function refreshAndroidRelayNotificationListener(): Promise<void> {
-  if (!isAndroidRelayNotificationSupported()) {
+  if (notificationsStopped || !isAndroidRelayNotificationSupported()) {
     return;
   }
 
@@ -736,12 +824,13 @@ export async function setAndroidRelayNotificationStartOnBoot(enabled: boolean): 
 }
 
 export async function setAndroidRelayNotificationConversationDetails(
-  enabled: boolean
+  enabled: boolean,
 ): Promise<void> {
   if (!isAndroidRelayNotificationSupported()) {
     saveAndroidRelayConversationDetailsPreference(enabled);
     return;
   }
+  const revision = configurationRevision;
   const state = await getAndroidRelayNotificationState();
   saveAndroidRelayConversationDetailsPreference(enabled);
   if (!state.enabled || state.permission !== 'granted') {
@@ -750,6 +839,7 @@ export async function setAndroidRelayNotificationConversationDetails(
 
   try {
     await configureAndroidNotificationListener({
+      revision,
       configuration: await buildAndroidNotificationConfiguration(),
       startOnBoot: state.startOnBoot,
     });
@@ -778,8 +868,10 @@ export async function disableAndroidRelayNotifications(): Promise<void> {
     return;
   }
 
+  notificationsStopped = true;
+  configurationRevision++;
   try {
-    await AndroidRelayNotifications.stop();
+    await serializeNativeConfiguration(() => AndroidRelayNotifications.stop());
   } finally {
     lastAppliedConfigurationSignature = null;
     decryptedGroupEpochPrivateKeyCache.clear();
@@ -788,9 +880,10 @@ export async function disableAndroidRelayNotifications(): Promise<void> {
 }
 
 async function performAndroidRelayPendingEventDrain(): Promise<void> {
+  await syncClosedAndroidCalls();
   const nostrStore = useNostrStore();
   const ownerPubkey = inputSanitizerService.normalizeHexKey(
-    nostrStore.getLoggedInPublicKeyHex() ?? ''
+    nostrStore.getLoggedInPublicKeyHex() ?? '',
   );
   if (!ownerPubkey) {
     return;
@@ -866,7 +959,7 @@ async function performAndroidRelayPendingEventDrain(): Promise<void> {
           console.warn('Failed to acknowledge an Android relay notification event.', error);
           return false;
         }
-      })
+      }),
     );
     const acknowledgedEventCount =
       permanentlyInvalidEventIds.size + ingestionResults.filter(Boolean).length;
@@ -901,6 +994,9 @@ export function ingestPendingAndroidRelayNotificationEvents(): Promise<void> {
 export const __androidRelayNotificationServiceTestUtils = {
   resetRefreshState(): void {
     resetRefreshCoordinator();
+    configurationRevision++;
+    notificationsStopped = false;
+    nativeConfigurationTail = Promise.resolve();
     lastAppliedConfigurationSignature = null;
     decryptedGroupEpochPrivateKeyCache.clear();
     pendingEventDrainPromise = null;
@@ -910,27 +1006,46 @@ export const __androidRelayNotificationServiceTestUtils = {
 
 export function startAndroidRelayNotificationListeners(
   onNotificationAction: (chatPubkey: string | null) => void,
-  onPendingEventsAvailable: () => void
-): void {
-  if (!isAndroidRelayNotificationSupported() || didInstallNotificationListeners) {
-    return;
-  }
-
+  onPendingEventsAvailable: () => void,
+  onCallAction?: (action: AndroidCallAction) => void,
+): () => void {
+  if (!isAndroidRelayNotificationSupported() || didInstallNotificationListeners) return () => {};
   didInstallNotificationListeners = true;
-  void getAndroidRelayNotificationState().catch((error) => {
-    console.warn('Failed to synchronize Android notification listener state.', error);
-  });
-
-  void AndroidRelayNotifications.addListener('notificationActionPerformed', (event) => {
-    onNotificationAction(inputSanitizerService.normalizeHexKey(String(event.chatPubkey ?? '')));
-  });
-  void AndroidRelayNotifications.addListener('pendingEventsAvailable', () => {
-    onPendingEventsAvailable();
-  });
+  let stopped = false;
+  const handles: PluginListenerHandle[] = [];
+  async function keep(pending: Promise<PluginListenerHandle>) {
+    try {
+      const handle = await pending;
+      if (stopped) await handle.remove();
+      else handles.push(handle);
+    } catch {
+      /* The foreground reconnect still recovers messages if native IPC is unavailable. */
+    }
+  }
+  void keep(
+    AndroidRelayNotifications.addListener('notificationActionPerformed', (event) => {
+      if (stopped) return;
+      if (event.token && event.event && onCallAction) {
+        onCallAction(event as AndroidCallAction);
+      } else if (event.ownerPubkey === useNostrStore().getLoggedInPublicKeyHex()) {
+        onNotificationAction(inputSanitizerService.normalizeHexKey(String(event.chatPubkey ?? '')));
+      }
+    }),
+  );
+  void keep(
+    AndroidRelayNotifications.addListener('pendingEventsAvailable', () => {
+      if (!stopped) onPendingEventsAvailable();
+    }),
+  );
+  return () => {
+    stopped = true;
+    didInstallNotificationListeners = false;
+    for (const handle of handles) void handle.remove().catch(() => {});
+  };
 }
 
 export async function resolveAndroidRelayNotificationRoute(
-  chatPubkey: string | null
+  chatPubkey: string | null,
 ): Promise<RouteLocationRaw> {
   const normalizedChatPubkey = inputSanitizerService.normalizeHexKey(chatPubkey ?? '');
   if (!normalizedChatPubkey) {

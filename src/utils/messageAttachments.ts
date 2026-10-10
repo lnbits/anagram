@@ -1,4 +1,7 @@
-import type { MessageAttachmentMetadata } from 'src/types/chat';
+import { buildMessageTextParts } from '#src/utils/messageTextParts.ts';
+import { publicGroupLinkTarget } from '#src/utils/publicGroupLink.ts';
+import { parseRoomLink } from '#src/utils/callRoom.ts';
+import type { MessageAttachmentMetadata } from '#src/types/chat.ts';
 
 const IMETA_TAG_NAME = 'imeta';
 export const IMAGE_ATTACHMENT_PREVIEW_TEXT = 'Picture';
@@ -64,7 +67,7 @@ export function buildAttachmentMessageText(attachment: MessageAttachmentMetadata
 }
 
 export function buildAttachmentMessageMeta(
-  attachment: MessageAttachmentMetadata
+  attachment: MessageAttachmentMetadata,
 ): { attachments: MessageAttachmentMetadata[] } | Record<string, never> {
   const normalized = normalizeMessageAttachment(attachment);
   return normalized ? { attachments: [normalized] } : {};
@@ -146,7 +149,7 @@ export function readImageAttachmentsFromMeta(
         attachments?: unknown;
       }
     | null
-    | undefined
+    | undefined,
 ): MessageAttachmentMetadata[] {
   if (!meta || !Array.isArray(meta.attachments)) {
     return [];
@@ -155,13 +158,13 @@ export function readImageAttachmentsFromMeta(
   return meta.attachments
     .map((attachment) => normalizeMessageAttachment(attachment))
     .filter((attachment): attachment is MessageAttachmentMetadata =>
-      attachment ? isImageAttachment(attachment) : false
+      attachment ? isImageAttachment(attachment) : false,
     );
 }
 
 export function buildImageAttachmentPreviewText(
   text: string,
-  meta: { attachments?: unknown } | null | undefined
+  meta: { attachments?: unknown } | null | undefined,
 ): string {
   const normalizedText = normalizeText(text);
   const imageAttachments = readImageAttachmentsFromMeta(meta);
@@ -170,7 +173,7 @@ export function buildImageAttachmentPreviewText(
   }
 
   const attachmentUrls = new Set(
-    imageAttachments.map((attachment) => attachment.url.trim()).filter(Boolean)
+    imageAttachments.map((attachment) => attachment.url.trim()).filter(Boolean),
   );
   let previewText = normalizedText;
   for (const url of attachmentUrls) {
@@ -182,11 +185,63 @@ export function buildImageAttachmentPreviewText(
 
 export function buildMessageReplyPreviewContent(
   text: string,
-  meta: { attachments?: unknown } | null | undefined
+  meta: { attachments?: unknown; deleted?: unknown } | null | undefined,
 ): MessageReplyPreviewContent {
-  const imageUrl = readImageAttachmentsFromMeta(meta)[0]?.url.trim() ?? '';
+  if (meta?.deleted) return { text: 'Message deleted' };
+  const attachments = new Map<string, string>();
+  if (Array.isArray(meta?.attachments))
+    for (const attachment of meta.attachments) {
+      if (!isRecord(attachment)) continue;
+      try {
+        const url = new URL(normalizeText(attachment.url));
+        if (!['http:', 'https:'].includes(url.protocol)) continue;
+        const mime = normalizeText(attachment.mimeType).toLowerCase();
+        attachments.set(
+          url.href,
+          mime.startsWith('image/')
+            ? 'Picture'
+            : mime.startsWith('video/')
+              ? 'Video'
+              : mime.startsWith('audio/')
+                ? 'Audio'
+                : 'File',
+        );
+      } catch {
+        /* Invalid attachment URLs remain plain text. */
+      }
+    }
+  const mediaLabels = new Set<string>();
+  let imageUrl = [...attachments].find(([, label]) => label === 'Picture')?.[0] ?? '';
+  const summary = buildMessageTextParts(normalizeText(text))
+    .map((part) => {
+      if (part.type !== 'url') return part.text;
+      if (publicGroupLinkTarget(part.href)) return 'Join chat';
+      if (parseRoomLink(part.href)) return 'Join call';
+      const path = new URL(part.href).pathname;
+      const label =
+        attachments.get(part.href) ||
+        (/\.(png|jpe?g|gif|webp|avif|svg)$/i.test(path)
+          ? 'Picture'
+          : /\.(mp4|webm|mov|ogv|m4v)$/i.test(path)
+            ? 'Video'
+            : /\.(mp3|ogg|wav|m4a|flac)$/i.test(path)
+              ? 'Audio'
+              : '');
+      if (!label) return part.text;
+      mediaLabels.add(label);
+      if (label === 'Picture' && !imageUrl) imageUrl = part.href;
+      return ' ';
+    })
+    .join('')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  // Classify full links before truncating: invite tokens can exceed the preview limit.
+  const preview =
+    (!mediaLabels.size || !/^[\p{P}\s]*$/u.test(summary) ? summary : '') ||
+    [...mediaLabels].join(' · ') ||
+    normalizeText(text);
   return {
-    text: buildImageAttachmentPreviewText(text, meta),
+    text: preview.length > 300 ? `${preview.slice(0, 299)}…` : preview,
     ...(imageUrl ? { imageUrl } : {}),
   };
 }

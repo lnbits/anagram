@@ -1,4 +1,4 @@
-import { normalizeRelayUrl } from '@nostr-dev-kit/ndk';
+import { normalizeRelayUrl } from '#src/lib/nostr/client.ts';
 
 export function buildRelayLookupKey(relay: string): string {
   try {

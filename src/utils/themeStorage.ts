@@ -1,4 +1,4 @@
-import { isPackagedAppRuntime } from 'src/utils/runtimePlatform';
+import { isPackagedAppRuntime } from '#src/utils/runtimePlatform.ts';
 
 const THEME_MODE_STORAGE_KEY = 'ui-theme-mode';
 const PANEL_OPACITY_STORAGE_KEY = 'ui-panel-opacity';
@@ -9,7 +9,7 @@ const DEFAULT_PANEL_OPACITY = 75;
 export const DEFAULT_DESKTOP_SIDEBAR_WIDTH = 360;
 export const MIN_DESKTOP_SIDEBAR_WIDTH = 280;
 export const MAX_DESKTOP_SIDEBAR_WIDTH = 4096;
-export const DEFAULT_DESKTOP_MESSAGE_LAYOUT = 'text';
+export const DEFAULT_DESKTOP_MESSAGE_LAYOUT = 'bubbles';
 export const DEFAULT_APP_MESSAGE_LAYOUT = 'bubbles';
 
 export type DesktopMessageLayoutPreference = 'text' | 'bubbles';
@@ -52,8 +52,8 @@ function normalizeDesktopSidebarWidthPreference(value: unknown): number {
 export function normalizeDesktopMessageLayoutPreference(
   value: unknown
 ): DesktopMessageLayoutPreference {
-  return typeof value === 'string' && value.trim().toLowerCase() === 'bubbles'
-    ? 'bubbles'
+  return typeof value === 'string' && value.trim().toLowerCase() === 'text'
+    ? 'text'
     : DEFAULT_DESKTOP_MESSAGE_LAYOUT;
 }
 

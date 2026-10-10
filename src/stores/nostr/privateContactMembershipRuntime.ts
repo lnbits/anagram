@@ -1,8 +1,8 @@
-import { chatDataService } from 'src/services/chatDataService';
-import { contactsService } from 'src/services/contactsService';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { PRIVATE_CONTACT_LIST_MEMBER_CONTACT_META_KEY } from 'src/stores/nostr/constants';
-import type { ContactMetadata, ContactRecord } from 'src/types/contact';
+import { chatDataService } from '#src/services/chatDataService.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { PRIVATE_CONTACT_LIST_MEMBER_CONTACT_META_KEY } from '#src/stores/nostr/constants.ts';
+import type { ContactMetadata, ContactRecord } from '#src/types/contact.ts';
 
 interface PrivateContactMembershipRuntimeDeps {
   bumpContactListVersion: () => void;
@@ -77,6 +77,7 @@ export function createPrivateContactMembershipRuntime({
     }
 
     const updatedContact = await contactsService.updateContact(existingContact.id, {
+      metaBase: existingContact.meta,
       ...(shouldUpdateType ? { type: options.type } : {}),
       ...(shouldUpdateMeta ? { meta: nextMeta } : {}),
     });

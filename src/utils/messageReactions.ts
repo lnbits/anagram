@@ -1,4 +1,4 @@
-import type { MessageReaction } from 'src/types/chat';
+import type { MessageReaction } from '#src/types/chat.ts';
 
 function normalizeEventId(value: unknown): string | null {
   if (typeof value !== 'string') {

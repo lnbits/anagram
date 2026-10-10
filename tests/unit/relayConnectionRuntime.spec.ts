@@ -1,10 +1,10 @@
-import { NDKRelayStatus } from '@nostr-dev-kit/ndk';
+import { NostrRelayStatus } from '#src/lib/nostr/client.ts';
 import {
   calculateRelayConnectRetryDelayMs,
   createRelayConnectionRuntime,
   ensureSingleSocketRelayConnectGuard,
   isUsableRelayClientUrl,
-} from 'src/stores/nostr/relayConnectionRuntime';
+} from '#src/stores/nostr/relayConnectionRuntime.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type FakeSocket = {
@@ -13,11 +13,11 @@ type FakeSocket = {
 };
 
 type FakeRelay = {
-  readonly status: NDKRelayStatus;
+  readonly status: NostrRelayStatus;
   url: string;
   connected: boolean;
   connectivity: {
-    _status: NDKRelayStatus;
+    _status: NostrRelayStatus;
     connectTimeout: ReturnType<typeof globalThis.setTimeout> | null;
     resetReconnectionState: ReturnType<typeof vi.fn>;
     ws: FakeSocket | undefined;
@@ -31,13 +31,13 @@ type FakeRelay = {
 
 function createFakeRelay(url = 'wss://relay.example/') {
   const connectivity = {
-    _status: NDKRelayStatus.DISCONNECTED,
+    _status: NostrRelayStatus.DISCONNECTED,
     connectTimeout: null as ReturnType<typeof globalThis.setTimeout> | null,
     resetReconnectionState: vi.fn(),
     ws: undefined as FakeSocket | undefined,
   };
   const rawConnect = vi.fn<(timeoutMs?: number, reconnect?: boolean) => Promise<void>>(
-    async () => {}
+    async () => {},
   );
   const rawPublish = vi.fn(async () => true);
   const relay = {
@@ -46,7 +46,7 @@ function createFakeRelay(url = 'wss://relay.example/') {
     connectivity,
     connect: ((timeoutMs?: number, reconnect = true) => rawConnect(timeoutMs, reconnect)) as (
       timeoutMs?: number,
-      reconnect?: boolean
+      reconnect?: boolean,
     ) => Promise<void>,
     disconnect: vi.fn(),
     emit: vi.fn(),
@@ -72,7 +72,7 @@ function createRuntimeHarness(
     hasActivatedPool?: boolean;
     isPrivateMessagesSubscriptionRelayTracked?: boolean;
     loggedInPublicKeyHex?: string | null;
-  } = {}
+  } = {},
 ) {
   const { connectivity, rawConnect, relay } = createFakeRelay();
   let hasActivatedPool = options.hasActivatedPool ?? true;
@@ -184,7 +184,7 @@ describe('relayConnectionRuntime', () => {
     };
     let resolveConnect: (() => void) | null = null;
     rawConnect.mockImplementation(() => {
-      connectivity._status = NDKRelayStatus.CONNECTING;
+      connectivity._status = NostrRelayStatus.CONNECTING;
       connectivity.ws = pendingSocket;
 
       return new Promise<void>((resolve) => {
@@ -234,7 +234,7 @@ describe('relayConnectionRuntime', () => {
     expect(rawConnect).toHaveBeenCalledWith(3000, false);
   });
 
-  it('forces NDK-initiated connect calls to use the app-owned no-auto-retry policy', async () => {
+  it('forces NostrClient-initiated connect calls to use the app-owned no-auto-retry policy', async () => {
     const { rawConnect, relay } = createFakeRelay();
 
     ensureSingleSocketRelayConnectGuard(relay as never);
@@ -243,14 +243,14 @@ describe('relayConnectionRuntime', () => {
     expect(rawConnect).toHaveBeenCalledWith(2500, false);
   });
 
-  it('prevents NDK publish calls from initiating disconnected relay connections', async () => {
+  it('prevents NostrClient publish calls from initiating disconnected relay connections', async () => {
     const { connectivity, rawPublish, relay } = createFakeRelay();
     ensureSingleSocketRelayConnectGuard(relay as never);
 
     await expect(relay.publish({}, 2500)).rejects.toThrow('is not connected');
     expect(rawPublish).not.toHaveBeenCalled();
 
-    connectivity._status = NDKRelayStatus.CONNECTED;
+    connectivity._status = NostrRelayStatus.CONNECTED;
     await expect(relay.publish({}, 2500)).resolves.toBe(true);
     expect(rawPublish).toHaveBeenCalledWith({}, 2500);
   });
@@ -262,11 +262,11 @@ describe('relayConnectionRuntime', () => {
     await runtime.ensureRelayConnections(['wss://relay.example']);
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000);
     const relayDisconnectHandler = pool.on.mock.calls.find(
-      ([eventName]) => eventName === 'relay:disconnect'
+      ([eventName]) => eventName === 'relay:disconnect',
     )?.[1] as ((nextRelay: FakeRelay) => void) | undefined;
 
     expect(relayDisconnectHandler).toBeTypeOf('function');
-    connectivity._status = NDKRelayStatus.DISCONNECTED;
+    connectivity._status = NostrRelayStatus.DISCONNECTED;
     relayDisconnectHandler?.(relay);
 
     expect(connectivity.resetReconnectionState).toHaveBeenCalled();
@@ -284,6 +284,18 @@ describe('relayConnectionRuntime', () => {
     expect(rawConnect).toHaveBeenLastCalledWith(3000, false);
   });
 
+  it('allows an explicit retry while preserving background connection backoff', async () => {
+    const { runtime, relayConnectRetryStateByUrl, rawConnect } = createRuntimeHarness();
+    relayConnectRetryStateByUrl.set('wss://relay.example/', {
+      failureCount: 1,
+      nextAttemptAt: Date.now() + 60000,
+    });
+    await runtime.ensureRelayConnections(['wss://relay.example']);
+    expect(rawConnect).not.toHaveBeenCalled();
+    await runtime.ensureRelayConnections(['wss://relay.example'], { force: true });
+    expect(rawConnect).toHaveBeenCalledOnce();
+  });
+
   it('clears relay retry backoff after a successful connection', async () => {
     const { pool, relay, relayConnectRetryStateByUrl, runtime } = createRuntimeHarness();
     relayConnectRetryStateByUrl.set(relay.url, {
@@ -292,7 +304,7 @@ describe('relayConnectionRuntime', () => {
     });
     await runtime.ensureRelayConnections([]);
     const relayConnectHandler = pool.on.mock.calls.find(
-      ([eventName]) => eventName === 'relay:connect'
+      ([eventName]) => eventName === 'relay:connect',
     )?.[1] as ((nextRelay: FakeRelay) => void) | undefined;
 
     relay.connected = true;
@@ -321,16 +333,16 @@ describe('relayConnectionRuntime', () => {
     expect(runtime.isRelayConnectionPending('wss://relay.example')).toBe(true);
 
     relayConnectPromises.clear();
-    connectivity._status = NDKRelayStatus.CONNECTING;
+    connectivity._status = NostrRelayStatus.CONNECTING;
     expect(runtime.isRelayConnectionPending('wss://relay.example')).toBe(true);
 
-    connectivity._status = NDKRelayStatus.RECONNECTING;
+    connectivity._status = NostrRelayStatus.RECONNECTING;
     expect(runtime.isRelayConnectionPending('wss://relay.example')).toBe(true);
 
-    connectivity._status = NDKRelayStatus.AUTHENTICATING;
+    connectivity._status = NostrRelayStatus.AUTHENTICATING;
     expect(runtime.isRelayConnectionPending('wss://relay.example')).toBe(true);
 
-    connectivity._status = NDKRelayStatus.CONNECTED;
+    connectivity._status = NostrRelayStatus.CONNECTED;
     expect(runtime.isRelayConnectionPending('wss://relay.example')).toBe(false);
   });
 
@@ -343,7 +355,7 @@ describe('relayConnectionRuntime', () => {
 
     await runtime.ensureRelayConnections(['wss://relay.example']);
     const relayConnectHandler = pool.on.mock.calls.find(
-      ([eventName]) => eventName === 'relay:connect'
+      ([eventName]) => eventName === 'relay:connect',
     )?.[1] as ((nextRelay: FakeRelay) => void) | undefined;
 
     expect(relayConnectHandler).toBeTypeOf('function');
@@ -364,7 +376,7 @@ describe('relayConnectionRuntime', () => {
             relay.connected = true;
             resolve();
           }, 20);
-        })
+        }),
     );
 
     const startedAt = Date.now();
@@ -414,7 +426,7 @@ describe('relay retry helpers', () => {
         jitterRatio: 0.2,
         maxDelayMs: 300000,
         randomValue: 0,
-      })
+      }),
     ).toBe(8000);
     expect(
       calculateRelayConnectRetryDelayMs({
@@ -423,7 +435,7 @@ describe('relay retry helpers', () => {
         jitterRatio: 0.2,
         maxDelayMs: 300000,
         randomValue: 1,
-      })
+      }),
     ).toBe(48000);
     expect(
       calculateRelayConnectRetryDelayMs({
@@ -432,7 +444,7 @@ describe('relay retry helpers', () => {
         jitterRatio: 0.2,
         maxDelayMs: 300000,
         randomValue: 1,
-      })
+      }),
     ).toBe(300000);
   });
 

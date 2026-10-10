@@ -1,6 +1,6 @@
-import { createBlossomSettingsRuntime } from 'src/stores/nostr/blossomSettingsRuntime';
-import type { PrivatePreferences } from 'src/stores/nostr/types';
-import { DEFAULT_BLOSSOM_SERVER_URL } from 'src/utils/blossomServer';
+import { createBlossomSettingsRuntime } from '#src/stores/nostr/blossomSettingsRuntime.ts';
+import type { PrivatePreferences } from '#src/stores/nostr/types.ts';
+import { DEFAULT_BLOSSOM_SERVER_URL } from '#src/utils/blossomServer.ts';
 import { describe, expect, it, vi } from 'vitest';
 
 const CONTACT_SECRET = 'a'.repeat(64);

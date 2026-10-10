@@ -2,7 +2,7 @@ import {
   raceWithTimeout,
   selectReadyRelayUrls,
   waitForFirstReadyOrTimeout,
-} from 'src/stores/nostr/relayTimeoutUtils';
+} from '#src/stores/nostr/relayTimeoutUtils.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('relayTimeoutUtils', () => {

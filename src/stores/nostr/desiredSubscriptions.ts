@@ -1,11 +1,11 @@
-import type { NDKFilter } from '@nostr-dev-kit/ndk';
-import { inputSanitizerService } from 'src/services/inputSanitizerService';
-import { RELAY_QUERY_TIMEOUT_MS } from 'src/stores/nostr/constants';
-import { RelayQueryTimeoutError } from 'src/stores/nostr/relayQueryUtils';
-import { normalizeRelayStatusUrlsValue } from 'src/stores/nostr/valueUtils';
+import type { NostrFilter } from '#src/lib/nostr/client.ts';
+import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { RELAY_QUERY_TIMEOUT_MS } from '#src/stores/nostr/constants.ts';
+import { RelayQueryTimeoutError } from '#src/stores/nostr/relayQueryUtils.ts';
+import { normalizeRelayStatusUrlsValue } from '#src/stores/nostr/valueUtils.ts';
 
 export function subscriptionSignature(
-  filters: NDKFilter | NDKFilter[],
+  filters: NostrFilter | NostrFilter[],
   relayUrls: string[]
 ): string {
   const canonical = (value: unknown): unknown => {

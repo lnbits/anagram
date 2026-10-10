@@ -1,0 +1,14 @@
+{
+  "identifier": "default",
+  "description": "Main Anagram window",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "allow-read-private-key",
+    "allow-write-private-key",
+    "allow-remove-private-key"
+  ]
+}

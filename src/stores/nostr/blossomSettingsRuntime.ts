@@ -1,9 +1,9 @@
-import type { PrivatePreferences } from 'src/stores/nostr/types';
+import type { PrivatePreferences } from '#src/stores/nostr/types.ts';
 import {
   DEFAULT_BLOSSOM_SERVER_URL,
   normalizeBlossomServerUrl,
   requireBlossomServerUrl,
-} from 'src/utils/blossomServer';
+} from '#src/utils/blossomServer.ts';
 
 interface BlossomSettingsRuntimeDeps {
   ensurePrivatePreferences: () => Promise<PrivatePreferences>;

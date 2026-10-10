@@ -927,9 +927,17 @@ input[type='range'] {
   outline: 1px solid var(--q-primary);
   border-radius: 8px;
 }
+.thread-viewport {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
 .jump-latest {
   position: absolute;
-  bottom: 84px;
+  bottom: 12px;
   right: 18px;
   background: var(--nc-panel-header-bg);
   border: 1px solid var(--nc-border);
@@ -1209,7 +1217,7 @@ input[type='range'] {
 }
 .jump-reactions {
   position: absolute;
-  bottom: 84px;
+  bottom: 12px;
   right: 66px;
   border-radius: 20px;
   padding: 8px 12px;

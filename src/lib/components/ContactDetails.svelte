@@ -3,6 +3,7 @@
   import { dismissOnBackdrop } from '#src/lib/actions/dismissOnBackdrop.ts';
   import { onMount } from 'svelte';
   import { translate } from '#src/i18n.ts';
+  import { Notify } from '#src/lib/platform/ui.ts';
   import { contactsService } from '#src/services/contactsService.ts';
   import { useNostrStore } from '#src/stores/nostrStore.ts';
   import { observe } from '#src/lib/state/store.ts';
@@ -78,9 +79,11 @@
   async function copy(value: string) {
     try {
       await navigator.clipboard.writeText(value);
-      notice = $translate('common.copiedLabel', { label: $translate('contacts.publicKey') });
+      Notify.create({
+        message: $translate('common.copiedLabel', { label: $translate('contacts.publicKey') }),
+      });
     } catch {
-      error = 'Could not copy the public key.';
+      Notify.create({ type: 'negative', message: 'Could not copy the public key.' });
     }
   }
   async function share() {

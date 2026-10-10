@@ -341,7 +341,11 @@
       setReply(message);
       await tick();
       composerInput?.focus();
-    } else if (action === 'copy') await act(() => navigator.clipboard.writeText(message.text));
+    } else if (action === 'copy')
+      await act(async () => {
+        await navigator.clipboard.writeText(message.text);
+        Notify.create({ message: $translate('message.messageCopied') });
+      });
     else if (action === 'forward') {
       forward = message;
       modal = 'forward';

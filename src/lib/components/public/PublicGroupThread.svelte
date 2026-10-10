@@ -21,6 +21,7 @@
   import MediaUploadConfirmation from '../MediaUploadConfirmation.svelte';
   import { chatDate } from '#src/utils/chatDate.ts';
   import { locale, translate } from '#src/i18n.ts';
+  import { Notify } from '#src/lib/platform/ui.ts';
   export let messageLayout: string = 'bubbles';
   import { onMount, tick } from 'svelte';
   import { goto } from '$app/navigation';
@@ -47,7 +48,6 @@
     draft = '',
     sending = false,
     error = '',
-    notice = '',
     nearBottom = true;
   let paging = false;
   let searching = false;
@@ -198,9 +198,9 @@
     if (action === 'copy') {
       try {
         await navigator.clipboard.writeText(message.text);
-        notice = 'Message copied';
+        Notify.create({ message: $translate('message.messageCopied') });
       } catch {
-        error = 'Could not copy message.';
+        Notify.create({ type: 'negative', message: 'Could not copy message.' });
       }
     }
   }
@@ -356,9 +356,9 @@
   async function share() {
     try {
       await navigator.clipboard.writeText(publicGroupShareLink(room!));
-      notice = 'Group link copied';
+      Notify.create({ message: 'Group link copied.' });
     } catch {
-      error = 'Could not copy the group link.';
+      Notify.create({ type: 'negative', message: 'Could not copy the group link.' });
     }
   }
   onMount(() => {
@@ -529,7 +529,6 @@
   {#if $state.refreshing}<p class="status" role="status">
       Syncing public group…
     </p>{:else if $state.stale}<p class="status">Offline · Showing saved messages.</p>{/if}
-  {#if notice}<p class="status" role="status">{notice}</p>{/if}
   {#if error || $state.error}<p class="status error" role="alert">{error || $state.error}</p>{/if}
   {#if mediaNotice}<ModalFrame title="Media sharing" onclose={() => (mediaNotice = false)}>
       <p>

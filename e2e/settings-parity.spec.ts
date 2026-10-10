@@ -457,7 +457,8 @@ test('profile copies the current locally stored private key as nsec without reve
   await page.goto('/settings/profile');
   const copy = page.getByRole('button', { name: 'Copy private key', exact: true });
   await copy.click();
-  await expect(page.getByRole('status')).toHaveText('Private key copied.');
+  const toasts = page.locator('.notices > div');
+  await expect(toasts.last()).toHaveText('Private key copied.');
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(nip19.nsecEncode(account.key));
   const body = await page.locator('body').textContent();
   expect(body).not.toContain(nip19.nsecEncode(account.key));
@@ -470,16 +471,18 @@ test('profile copies the current locally stored private key as nsec without reve
     await navigator.clipboard.writeText('unchanged');
   }, other);
   await copy.click();
-  await expect(page.getByRole('alert')).toHaveText('The stored private key does not match this account.');
+  await expect(toasts.last()).toHaveText('The stored private key does not match this account.');
+  await expect(toasts.last()).toHaveClass(/error/);
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('unchanged');
   await page.evaluate(() => localStorage.removeItem('nsec'));
   await copy.click();
-  await expect(page.getByRole('alert')).toHaveText('No private key is stored locally for this account.');
+  await expect(toasts.last()).toHaveText('No private key is stored locally for this account.');
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('unchanged');
   await page.evaluate((key) => {
     localStorage.setItem('nsec', key);
     navigator.clipboard.writeText = async () => { throw new Error('Clipboard denied'); };
   }, Buffer.from(account.key).toString('hex'));
   await copy.click();
-  await expect(page.getByRole('alert')).toHaveText('Could not copy the private key.');
+  await expect(toasts.last()).toHaveText('Could not copy the private key.');
+  await expect(toasts.last()).toHaveClass(/error/);
 });

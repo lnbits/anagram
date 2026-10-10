@@ -5,6 +5,7 @@
   import Shell from '#src/lib/components/Shell.svelte';
   import { applyThemeAccent, readThemeAccent, ACCENT_STORAGE_KEY } from '#src/utils/themeAccent.ts';
   import { notices } from '#src/lib/platform/ui.ts';
+  import { noticesFollowModal } from '#src/lib/actions/noticesFollowModal.ts';
   import '#src/app.css';
   import '#src/lib/components/shell.css';
   let authenticated = false;
@@ -31,7 +32,7 @@
 {#if ready}{#if authenticated}<Shell />{:else}<Auth
       onlogin={() => (authenticated = true)}
     />{/if}{/if}
-<div class="notices" aria-live="polite">
+<div class="notices" aria-live="polite" use:noticesFollowModal={$notices.length}>
   {#each $notices as notice (notice.id)}<div class:error={notice.type === 'negative'}>
       {notice.message}
     </div>{/each}

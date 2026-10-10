@@ -5,6 +5,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { translate } from '#src/i18n.ts';
+  import { Notify } from '#src/lib/platform/ui.ts';
   import { useNostrStore } from '#src/stores/nostrStore.ts';
   import { NostrPrivateKeySigner, nip19 } from '#src/lib/nostr/client.ts';
   import { AUTH_METHOD_STORAGE_KEY, PRIVATE_KEY_STORAGE_KEY } from '#src/stores/nostr/constants.ts';
@@ -110,31 +111,33 @@
   async function copy(value = hex ? pubkey : npub) {
     try {
       await navigator.clipboard.writeText(value);
-      notice = $translate('common.copiedLabel', { label: $translate('contacts.publicKey') });
+      Notify.create({
+        message: $translate('common.copiedLabel', { label: $translate('contacts.publicKey') }),
+      });
     } catch {
-      error = 'Could not copy the public key.';
+      Notify.create({ type: 'negative', message: 'Could not copy the public key.' });
     }
   }
   async function copyPrivateKey() {
     if (copyingPrivateKey) return;
     copyingPrivateKey = true;
-    error = '';
-    notice = '';
+    // Feedback never includes the key itself.
+    const fail = (message: string) => Notify.create({ type: 'negative', message });
     try {
       const stored = localStorage.getItem(PRIVATE_KEY_STORAGE_KEY)?.trim();
       if (!stored || localStorage.getItem(AUTH_METHOD_STORAGE_KEY) !== 'nsec') {
-        error = 'No private key is stored locally for this account.';
+        fail('No private key is stored locally for this account.');
         return;
       }
       const signer = new NostrPrivateKeySigner(stored);
       if (signer.pubkey !== pubkey || signer.pubkey !== nostr.getLoggedInPublicKeyHex()) {
-        error = 'The stored private key does not match this account.';
+        fail('The stored private key does not match this account.');
         return;
       }
       await navigator.clipboard.writeText(nip19.nsecEncode(signer.secretKey));
-      notice = 'Private key copied.';
+      Notify.create({ message: 'Private key copied.' });
     } catch {
-      error = 'Could not copy the private key.';
+      fail('Could not copy the private key.');
     } finally {
       copyingPrivateKey = false;
     }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Message, MessageRelayStatus } from '#src/types/chat.ts';
   import { translate } from '#src/i18n.ts';
+  import { Notify } from '#src/lib/platform/ui.ts';
   export let message: Message;
   export let onretry: (status: MessageRelayStatus) => Promise<void>;
   let error = '';
@@ -17,6 +18,16 @@
       busy = false;
     }
   }
+  async function copyEventId() {
+    try {
+      await navigator.clipboard.writeText(message.eventId ?? '');
+      Notify.create({
+        message: $translate('common.copiedLabel', { label: $translate('message.eventId') }),
+      });
+    } catch {
+      Notify.create({ type: 'negative', message: 'Could not copy the event ID.' });
+    }
+  }
 </script>
 
 <dl class="message-info">
@@ -27,11 +38,7 @@
   <dt>{$translate('message.eventId')}</dt>
   <dd>{message.eventId || 'Not published yet'}</dd>
 </dl>
-<button
-  class="outline"
-  onclick={() => act(() => navigator.clipboard.writeText(message.eventId ?? ''))}
-  >Copy event ID</button
->
+<button class="outline" disabled={!message.eventId} onclick={copyEventId}>Copy event ID</button>
 {#each message.nostrEvent?.relay_statuses ?? [] as status}<p>
     {status.relay_url} — {status.status}
     {#if message.sender === 'me' && status.status === 'failed' && (status.scope === 'recipient' || status.scope === 'self')}<button

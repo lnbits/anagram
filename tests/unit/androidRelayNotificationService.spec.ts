@@ -206,6 +206,51 @@ describe('androidRelayNotificationService', () => {
     expect(localStorageValues.get('ui-android-relay-notifications')).toBe('0');
   });
 
+  it('retries an interrupted setup after permission was granted without another prompt', async () => {
+    unconfiguredListener();
+    moduleMocks.plugin.configure.mockRejectedValueOnce(new Error('Temporary native failure'));
+    await expect(initializeAndroidRelayNotificationsAfterLogin()).rejects.toThrow('Temporary native failure');
+    expect(localStorageValues.get('ui-android-relay-notifications')).toBe('1');
+    moduleMocks.plugin.getState.mockResolvedValue({
+      enabled: false, startOnBoot: true, showConversationDetails: false, permission: 'granted',
+    });
+    await initializeAndroidRelayNotificationsAfterLogin();
+    expect(moduleMocks.plugin.configure).toHaveBeenCalledTimes(2);
+    expect(moduleMocks.plugin.requestPermissions).toHaveBeenCalledOnce();
+  });
+
+  it('does not turn an enabled preference into an opt-out when native setup is stopped', async () => {
+    localStorageValues.set('ui-android-relay-notifications', '1');
+    moduleMocks.plugin.getState.mockResolvedValue({
+      enabled: false, startOnBoot: true, showConversationDetails: false, permission: 'granted',
+    });
+    await getAndroidRelayNotificationState();
+    expect(localStorageValues.get('ui-android-relay-notifications')).toBe('1');
+    await refreshAndroidRelayNotificationListener();
+    expect(moduleMocks.plugin.configure).toHaveBeenCalledOnce();
+    expect(moduleMocks.plugin.requestPermissions).not.toHaveBeenCalled();
+  });
+
+  it('restarts an enabled but stopped native service even if its configuration has not changed', async () => {
+    await refreshAndroidRelayNotificationListener();
+    moduleMocks.plugin.getState.mockResolvedValue({
+      enabled: true, running: false, startOnBoot: true, showConversationDetails: false, permission: 'granted',
+    } as Awaited<ReturnType<typeof moduleMocks.plugin.getState>>);
+    await refreshAndroidRelayNotificationListener();
+    expect(moduleMocks.plugin.configure).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry configuration when Android permission is denied', async () => {
+    localStorageValues.set('ui-android-relay-notifications', '1');
+    moduleMocks.plugin.getState.mockResolvedValue({
+      enabled: false, startOnBoot: true, showConversationDetails: false, permission: 'denied',
+    });
+    await initializeAndroidRelayNotificationsAfterLogin();
+    await refreshAndroidRelayNotificationListener();
+    expect(moduleMocks.plugin.configure).not.toHaveBeenCalled();
+    expect(moduleMocks.plugin.requestPermissions).not.toHaveBeenCalled();
+  });
+
   it('preserves an explicit notification opt-out', async () => {
     unconfiguredListener();
     localStorageValues.set('ui-android-relay-notifications', '0');
@@ -747,7 +792,7 @@ describe('androidRelayNotificationService', () => {
     ]);
   });
 
-  it('stops the foreground listener when every saved relay becomes unavailable', async () => {
+  it('suspends unavailable relay selection and recovers when the selected route returns', async () => {
     localStorageValues.set(
       'ui-android-relay-notifications-selected-relays',
       JSON.stringify({
@@ -759,6 +804,14 @@ describe('androidRelayNotificationService', () => {
 
     expect(moduleMocks.plugin.configure).not.toHaveBeenCalled();
     expect(moduleMocks.plugin.stop).toHaveBeenCalledOnce();
+    expect(localStorageValues.get('ui-android-relay-notifications')).toBe('1');
+    moduleMocks.plugin.getState.mockResolvedValue({
+      enabled: false, startOnBoot: true, showConversationDetails: false, permission: 'granted',
+    });
+    moduleMocks.appRelayEntries.push({ url: 'wss://removed-relay.example', read: true, write: true });
+    await refreshAndroidRelayNotificationListener();
+    expect(moduleMocks.plugin.configure).toHaveBeenCalledOnce();
+    expect(moduleMocks.plugin.configure.mock.calls[0][0].relays).toEqual(['wss://removed-relay.example/']);
   });
 
   it('coalesces a burst of listener refresh requests into one configuration', async () => {

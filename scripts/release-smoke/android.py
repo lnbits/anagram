@@ -131,6 +131,18 @@ def click(label):
     tap(wait(label, scroll=True))
 
 
+def wait_notification_listener(seconds=30):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        running()
+        service = adb('shell', 'dumpsys', 'activity', 'services',
+                      f'{PACKAGE}/.RelayNotificationService')
+        if 'isForeground=true' in service:
+            return
+        time.sleep(0.5)
+    raise RuntimeError('Android notification listener did not enter the foreground')
+
+
 def main():
     global OUTPUT
     OUTPUT = Path(sys.argv[1])
@@ -164,9 +176,11 @@ def main():
             break
         time.sleep(0.5)
     wait('settings')
+    wait_notification_listener()
     adb('shell', 'am', 'force-stop', PACKAGE)
     adb('shell', 'am', 'start', '-W', '-n', f'{PACKAGE}/.MainActivity')
     wait('settings')  # Native keystore identity restored after a real process restart.
+    wait_notification_listener()
     click('settings')
     click('Relays')
     click('App Relays')
@@ -174,10 +188,10 @@ def main():
     running()
     OUTPUT.joinpath('result.json').write_text(json.dumps({
         'passed': True,
-        'checks': ['rendered-login', 'native-key-login', 'first-login-wss', 'cold-restart', 'wss-after-restart'],
+        'checks': ['rendered-login', 'native-key-login', 'first-login-wss', 'notification-listener', 'cold-restart', 'notification-listener-after-restart', 'wss-after-restart'],
         'relay_requirement': 'at least one default public WSS relay; read-only',
     }, indent=2))
-    print('Release APK passed first-login WSS connectivity and native identity restoration.')
+    print('Release APK passed WSS connectivity, notification listener startup and native identity restoration.')
 
 
 if __name__ == '__main__':

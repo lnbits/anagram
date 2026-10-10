@@ -41,6 +41,7 @@ export type AndroidRelayNotificationPermissionState =
 
 export interface AndroidRelayNotificationState {
   enabled: boolean;
+  running?: boolean;
   startOnBoot: boolean;
   showConversationDetails: boolean;
   permission: AndroidRelayNotificationPermissionState;
@@ -638,7 +639,7 @@ async function performAndroidNotificationRefresh(): Promise<void> {
   if (notificationsStopped) return;
   const revision = configurationRevision;
   const state = await getAndroidRelayNotificationState();
-  if (!state.enabled || state.permission !== 'granted') {
+  if (state.permission !== 'granted' || (!state.enabled && !readAndroidRelayNotificationsPreference())) {
     lastAppliedConfigurationSignature = null;
     return;
   }
@@ -646,7 +647,7 @@ async function performAndroidNotificationRefresh(): Promise<void> {
   try {
     const configuration = await buildAndroidNotificationConfiguration();
     const signature = createAndroidNotificationConfigurationSignature(configuration);
-    if (signature === lastAppliedConfigurationSignature) {
+    if (state.enabled && state.running !== false && signature === lastAppliedConfigurationSignature) {
       return;
     }
     await configureAndroidNotificationListener({
@@ -660,7 +661,8 @@ async function performAndroidNotificationRefresh(): Promise<void> {
     }
     await AndroidRelayNotifications.stop();
     lastAppliedConfigurationSignature = null;
-    saveAndroidRelayNotificationsPreference(false);
+    // Relay lists may still be restoring at startup. Suspend the listener while
+    // no selected route is available, but retain the user's notification choice.
   }
 }
 
@@ -735,12 +737,10 @@ export async function getAndroidRelayNotificationState(): Promise<AndroidRelayNo
     ...state,
     permission: normalizePermission(state.permission),
   };
-  // Reading an unconfigured listener must not record an explicit opt-out.
-  if (
-    normalizedState.enabled ||
-    (canUseStorage() && window.localStorage.getItem(ANDROID_RELAY_NOTIFICATIONS_STORAGE_KEY) !== null)
-  ) {
-    saveAndroidRelayNotificationsPreference(normalizedState.enabled);
+  // Native setup state is not the user's preference. A failed/stopped listener
+  // must not silently become an explicit opt-out and prevent later recovery.
+  if (normalizedState.enabled && !notificationsStopped) {
+    saveAndroidRelayNotificationsPreference(true);
   }
   saveAndroidRelayStartOnBootPreference(normalizedState.startOnBoot);
   saveAndroidRelayConversationDetailsPreference(normalizedState.showConversationDetails);
@@ -751,11 +751,13 @@ export async function initializeAndroidRelayNotificationsAfterLogin(): Promise<v
   if (!isAndroidRelayNotificationSupported() || !canUseStorage()) return;
   const revision = configurationRevision;
   const state = await getAndroidRelayNotificationState();
-  if (
-    revision !== configurationRevision ||
-    state.enabled ||
-    window.localStorage.getItem(ANDROID_RELAY_NOTIFICATIONS_STORAGE_KEY) !== null
-  ) return;
+  if (revision !== configurationRevision || state.enabled) return;
+  const preference = window.localStorage.getItem(ANDROID_RELAY_NOTIFICATIONS_STORAGE_KEY);
+  if (preference === '0') return;
+  if (preference === '1') {
+    if (state.permission === 'granted') await refreshAndroidRelayNotificationListener();
+    return;
+  }
 
   // Record the attempt before requesting permission so denial or a failed setup
   // does not prompt again on every visit. Settings can explicitly enable it later.
@@ -783,12 +785,16 @@ export async function requestAndroidRelayNotificationsAfterLogin(): Promise<Andr
     return permission;
   }
 
+  if (revision !== configurationRevision || notificationsStopped)
+    throw new Error('Notification configuration cancelled.');
+  // Permission was granted and the user asked for notifications. Persist that
+  // intent before native setup, which can fail transiently (including on resume).
+  saveAndroidRelayNotificationsPreference(true);
   const state = await configureAndroidNotificationListener({
     revision,
     configuration: await buildAndroidNotificationConfiguration(),
     startOnBoot: readAndroidRelayStartOnBootPreference(),
   });
-  saveAndroidRelayNotificationsPreference(state.enabled);
   saveAndroidRelayStartOnBootPreference(state.startOnBoot);
   return state.enabled ? 'granted' : 'denied';
 }

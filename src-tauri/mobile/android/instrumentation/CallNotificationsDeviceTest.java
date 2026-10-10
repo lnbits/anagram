@@ -170,7 +170,17 @@ public final class CallNotificationsDeviceTest {
                     if (Notification.CATEGORY_CALL.equals(shown.getNotification().category)) call = shown.getNotification();
                 if (call == null) Thread.sleep(20);
             }
-            assertNotNull(call); call.actions[0].actionIntent.send();
+            assertNotNull(call);
+            Notification message = null;
+            while (message == null && System.currentTimeMillis() < deadline) {
+                for (android.service.notification.StatusBarNotification shown : context.getSystemService(NotificationManager.class).getActiveNotifications())
+                    if (Notification.CATEGORY_MESSAGE.equals(shown.getNotification().category)) message = shown.getNotification();
+                if (message == null) Thread.sleep(20);
+            }
+            assertNotNull("Encrypted direct message must also produce a notification", message);
+            assertEquals("Anagram", message.extras.getString(Notification.EXTRA_TITLE));
+            assertFalse(message.extras.toString().contains("Private notification regression message"));
+            call.actions[0].actionIntent.send();
             boolean delivered = false;
             while (System.currentTimeMillis() < deadline) {
                 java.net.HttpURLConnection connection = (java.net.HttpURLConnection) new java.net.URL("http://10.0.2.2:7018/status").openConnection();
@@ -181,6 +191,21 @@ public final class CallNotificationsDeviceTest {
                 Thread.sleep(50);
             }
             assertTrue("Caller must receive both encrypted ringing and declined signals", delivered);
+            boolean messageAfterCall = false;
+            while (System.currentTimeMillis() < deadline) {
+                for (android.service.notification.StatusBarNotification shown : context.getSystemService(NotificationManager.class).getActiveNotifications()) {
+                    Notification notification = shown.getNotification();
+                    if (Notification.CATEGORY_MESSAGE.equals(notification.category) && notification.number == 2) {
+                        assertEquals("Anagram", notification.extras.getString(Notification.EXTRA_TITLE));
+                        assertFalse(notification.extras.toString().contains("Private message after declining the call"));
+                        messageAfterCall = true;
+                    }
+                }
+                if (messageAfterCall) break;
+                Thread.sleep(20);
+            }
+            assertTrue("Ordinary message notifications must keep working after declining a call", messageAfterCall);
+            waitForNotifications(0);
         } finally { RelayNotificationService.requestStop(context, true); }
     }
     @Test public void jniCanCreateGiftWrapWithoutOpeningAnActivity() throws Exception {

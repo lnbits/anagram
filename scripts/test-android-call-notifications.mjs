@@ -17,14 +17,21 @@ const server = createServer((_request, response) =>
 );
 const sockets = new WebSocketServer({ server });
 let invitation;
+let directMessage;
+let afterCallMessage;
+const subscriptions = new Map();
 sockets.on('connection', (socket) =>
   socket.on('message', (raw) => {
     const message = JSON.parse(raw.toString());
     if (message[0] === 'REQ') {
+      subscriptions.set(socket, message[1]);
+      // Use one timestamp: key derivation can cross a second boundary, otherwise
+      // the generated expiry can exceed the protocol's 61-second rumor limit.
+      const sentAt = Date.now();
       invitation ??= nip59.wrapEvent(
         {
           kind: 21117,
-          created_at: Math.floor(Date.now() / 1000),
+          created_at: Math.floor(sentAt / 1000),
           pubkey: getPublicKey(caller),
           tags: [['p', getPublicKey(callee)]],
           content: JSON.stringify({
@@ -33,7 +40,7 @@ sockets.on('connection', (socket) =>
             action: 'invite',
             mode: 'audio',
             mediaVersion: 2,
-            expiresAt: new Date(Date.now() + 60000).toISOString(),
+            expiresAt: new Date(sentAt + 60000).toISOString(),
             mimeType: 'audio/webm;codecs=opus',
             address: { id: 'a'.repeat(64), relayUrl: 'https://relay.example/' },
           }),
@@ -41,6 +48,18 @@ sockets.on('connection', (socket) =>
         caller,
         getPublicKey(callee),
       );
+      directMessage ??= nip59.wrapEvent(
+        {
+          kind: 14,
+          created_at: Math.floor(sentAt / 1000),
+          pubkey: getPublicKey(caller),
+          tags: [['p', getPublicKey(callee)]],
+          content: 'Private notification regression message',
+        },
+        caller,
+        getPublicKey(callee),
+      );
+      socket.send(JSON.stringify(['EVENT', message[1], directMessage]));
       socket.send(JSON.stringify(['EVENT', message[1], invitation]));
       socket.send(JSON.stringify(['EOSE', message[1]]));
     } else if (message[0] === 'EVENT') {
@@ -52,6 +71,21 @@ sockets.on('connection', (socket) =>
         throw new Error('Native reply identity or call mismatch');
       received.add(signal.action === 'end' ? signal.reason : signal.action);
       socket.send(JSON.stringify(['OK', event.id, true, '']));
+      if (received.has('ringing') && received.has('declined') && !afterCallMessage) {
+        afterCallMessage = nip59.wrapEvent(
+          {
+            kind: 14,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [['p', getPublicKey(callee)]],
+            content: 'Private message after declining the call',
+          },
+          caller,
+          getPublicKey(callee),
+        );
+        for (const [subscriber, subscription] of subscriptions)
+          if (subscriber.readyState === 1)
+            subscriber.send(JSON.stringify(['EVENT', subscription, afterCallMessage]));
+      }
     }
   }),
 );

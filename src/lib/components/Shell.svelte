@@ -115,6 +115,10 @@
     relays = useRelayStore();
   const androidNotifications = isAndroidRelayNotificationSupported();
   let notificationsReady = false;
+  function resumeAndroidNotifications() {
+    if (notificationsReady && document.visibilityState === 'visible')
+      void refreshAndroidRelayNotificationListener().catch(fail);
+  }
   $: notificationPlan = androidNotifications
     ? `${$state.contactVersion}:${createAndroidNotificationConversationSignature($state.chats)}:${JSON.stringify($state.relayEntries)}`
     : '';
@@ -933,6 +937,7 @@
       messageLayout = readDesktopMessageLayoutPreference();
     };
     window.addEventListener(DESKTOP_MESSAGE_LAYOUT_CHANGED_EVENT, updateLayout);
+    document.addEventListener('visibilitychange', resumeAndroidNotifications);
     void chats.init().then(() => {
       const id = $page.url.pathname.split('/')[2];
       if (id && chats.chats.some((c) => c.id === id)) {
@@ -991,6 +996,7 @@
       .catch(fail);
     return () => {
       window.removeEventListener(DESKTOP_MESSAGE_LAYOUT_CHANGED_EVENT, updateLayout);
+      document.removeEventListener('visibilitychange', resumeAndroidNotifications);
       disposed = true;
       notificationsReady = false;
       stopNotifications();
@@ -1004,7 +1010,10 @@
 
 <svelte:window
   onresize={() => (mobileViewport = matchMedia('(max-width: 767px)').matches)}
-  onfocus={() => void markVisibleReactions()}
+  onfocus={() => {
+    void markVisibleReactions();
+    resumeAndroidNotifications();
+  }}
   onkeydown={(e) => {
     if (e.key === 'Escape') {
       closeMessageActions();

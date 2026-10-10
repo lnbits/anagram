@@ -102,6 +102,11 @@ public final class RelayNotificationService extends Service {
     private boolean hasPostedForegroundNotification;
     private static volatile RelayNotificationService runningInstance;
 
+    static boolean isRunning() {
+        RelayNotificationService service = runningInstance;
+        return service != null && !service.isStopping;
+    }
+
     static void refreshCallNotification(Context context) {
         RelayNotificationService service = runningInstance;
         if (service == null) {

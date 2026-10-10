@@ -456,6 +456,7 @@ public final class AndroidRelayNotificationsPlugin extends Plugin {
     private JSObject createState() {
         JSObject state = new JSObject();
         state.put("enabled", RelayNotificationPreferences.isEnabled(getContext()));
+        state.put("running", RelayNotificationService.isRunning());
         state.put("startOnBoot", RelayNotificationPreferences.shouldStartOnBoot(getContext()));
         state.put(
             "showConversationDetails",

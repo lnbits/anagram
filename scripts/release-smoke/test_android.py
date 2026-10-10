@@ -116,5 +116,21 @@ class AndroidNotificationPrompt(unittest.TestCase):
             adb.assert_not_called()
 
 
+class AndroidNotificationListener(unittest.TestCase):
+    def test_waits_for_foreground_service_not_just_live_app(self):
+        with patch.object(android, 'running'), \
+                patch.object(android, 'adb', side_effect=['(nothing)', 'isForeground=false', 'isForeground=true foregroundId=4101']), \
+                patch.object(android.time, 'sleep'):
+            android.wait_notification_listener()
+
+    def test_fails_when_listener_does_not_start(self):
+        with patch.object(android, 'running'), \
+                patch.object(android, 'adb', return_value='isForeground=false'), \
+                patch.object(android.time, 'monotonic', side_effect=[0, 0, 31]), \
+                patch.object(android.time, 'sleep'):
+            with self.assertRaisesRegex(RuntimeError, 'notification listener did not enter the foreground'):
+                android.wait_notification_listener()
+
+
 if __name__ == '__main__':
     unittest.main()

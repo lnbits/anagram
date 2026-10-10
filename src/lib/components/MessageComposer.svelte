@@ -26,6 +26,8 @@
   export let onsend: () => void;
   export let onfile: (file?: File) => void;
   export let onchange: () => void = () => {};
+  // Escape cancels a reply or edit once nothing else in the composer is open.
+  export let oncancel: (() => void) | undefined = undefined;
   function chooseUpload(types: string) {
     attachmentMenu = false;
     fileInput.accept = types;
@@ -116,6 +118,10 @@
           ':',
         );
       return;
+    }
+    if (event.key === 'Escape' && oncancel && !emoji && !attachmentMenu && !event.isComposing) {
+      event.preventDefault();
+      oncancel();
     }
   }
 </script>

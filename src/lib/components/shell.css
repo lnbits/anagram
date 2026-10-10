@@ -301,6 +301,8 @@ p {
   position: relative;
   overscroll-behavior: contain;
   overflow: auto;
+  /* A swiped message must not create a horizontal scrollbar. */
+  overflow-x: hidden;
   flex: 1;
   min-height: 0;
   padding: 14px 16px 24px;
@@ -334,6 +336,48 @@ p {
   margin: 0 0 5px;
   padding-right: 30px;
   padding-bottom: 2px;
+  /* Horizontal touch moves reach the swipe-to-reply gesture; scrolling stays native. */
+  touch-action: pan-y pinch-zoom;
+}
+.message-row.swipe-reply-active > * {
+  transform: translateX(var(--swipe-reply-offset, 0px));
+  transition: transform 0.18s ease-out;
+}
+.message-row.swipe-reply-active::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 0;
+  top: 50%;
+  width: 24px;
+  height: 24px;
+  margin-top: -12px;
+  background: var(--nc-text-secondary);
+  -webkit-mask: var(--swipe-reply-icon) center / contain no-repeat;
+  mask: var(--swipe-reply-icon) center / contain no-repeat;
+  opacity: var(--swipe-reply-progress, 0);
+  scale: 0.8;
+  pointer-events: none;
+  transition: opacity 0.18s ease-out, scale 0.18s ease-out;
+  --swipe-reply-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 5-6 6 6 6M3 11h10a7 7 0 0 1 7 7'/%3E%3C/svg%3E");
+}
+[dir='rtl'] .message-row.swipe-reply-active::before {
+  transform: scaleX(-1);
+}
+.message-row.swipe-reply-armed::before {
+  background: var(--q-primary);
+  scale: 1;
+}
+.message-row.swipe-reply-dragging > * {
+  transition: none;
+}
+.message-row.swipe-reply-dragging::before {
+  transition: scale 0.18s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .message-row.swipe-reply-active > *,
+  .message-row.swipe-reply-active::before {
+    transition: none;
+  }
 }
 .message-author {
   display: flex;

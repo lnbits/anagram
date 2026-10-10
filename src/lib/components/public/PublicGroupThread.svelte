@@ -487,6 +487,9 @@
         contextOpen={actionMessage?.id === message.id}
         onactions={(event) =>
           actionMessage?.id === message.id ? closeActions() : showActions(message, event)}
+        onreply={writable && !actionMessage
+          ? () => void messageAction('reply', message)
+          : undefined}
         {onauthor}
         publicGroup
         onreaction={(emoji, remove) => runtime.react(message.id, emoji, remove)}

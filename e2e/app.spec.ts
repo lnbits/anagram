@@ -1197,3 +1197,209 @@ test('message actions open at the pointer, stay within the viewport, and support
   await page.getByTestId('chat-thread').dispatchEvent('scroll');
   await expect(menu).toHaveCount(0);
 });
+
+test('quick reply: mouse double-click and touch swipe toward the inline end', async ({ page }) => {
+  await login(page);
+  await contact(page, getPublicKey(generateSecretKey()), 'Quick reply fixture');
+  const composer = page.getByTestId('message-composer-input');
+  const replyContext = page.locator('.composer-context');
+  const menu = page.getByTestId('message-context-menu');
+  await composer.fill('Swipe reply fixture https://example.invalid/quick-reply');
+  await page.getByTestId('message-send-button').click();
+  const message = page.getByTestId('message-bubble').filter({ hasText: 'Swipe reply fixture' });
+  await expect(message).toBeVisible();
+  const text = message.locator('.message-text');
+  const content = message.locator('.message-content');
+  const cancelReply = () => page.getByRole('button', { name: 'Cancel reply or edit' }).click();
+
+  // Desktop: a mouse double-click on message text replies through the normal flow.
+  await text.dblclick({ position: { x: 8, y: 6 } });
+  await expect(replyContext).toContainText('Swipe reply fixture');
+  await expect(composer).toBeFocused();
+  await expect(menu).toHaveCount(0);
+  await cancelReply();
+  await expect(replyContext).toHaveCount(0);
+
+  // Interactive content keeps its own behavior.
+  await page.evaluate(() => {
+    (window as unknown as { openedUrls: string[] }).openedUrls = [];
+    window.open = (url) => {
+      (window as unknown as { openedUrls: string[] }).openedUrls.push(String(url));
+      return null;
+    };
+  });
+  await message.getByTestId('message-url-link').dblclick();
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as unknown as { openedUrls: string[] }).openedUrls.length),
+    )
+    .toBeGreaterThan(0);
+  await message.getByRole('button', { name: 'Message actions', exact: true }).dblclick();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(replyContext).toHaveCount(0);
+
+  // A touch-generated dblclick never replies.
+  const box = (await content.boundingBox())!;
+  const tap = {
+    clientX: box.x + 12,
+    clientY: box.y + 10,
+    pointerType: 'touch',
+    pointerId: 3,
+    isPrimary: true,
+  };
+  await content.dispatchEvent('pointerdown', tap);
+  await content.dispatchEvent('pointerup', tap);
+  await content.dispatchEvent('dblclick', { clientX: tap.clientX, clientY: tap.clientY });
+  await expect(replyContext).toHaveCount(0);
+
+  // Mobile swipe.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(content).toBeVisible();
+  const thread = page.getByTestId('chat-thread');
+  expect(await thread.evaluate((node) => getComputedStyle(node).overflowX)).toBe('hidden');
+  let origin = { x: 0, y: 0 };
+  const point = (dx: number, dy: number) => ({
+    clientX: origin.x + dx,
+    clientY: origin.y + dy,
+    pointerType: 'touch',
+    pointerId: 9,
+    isPrimary: true,
+  });
+  async function drag(...moves: [number, number][]) {
+    const bounds = (await content.boundingBox())!;
+    origin = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+    await content.dispatchEvent('pointerdown', point(0, 0));
+    for (const [dx, dy] of moves) {
+      for (let step = 1; step <= 4; step++)
+        await content.dispatchEvent('pointermove', point((dx * step) / 4, (dy * step) / 4));
+    }
+    return moves.at(-1)!;
+  }
+  async function release(end: [number, number], type = 'pointerup') {
+    await content.dispatchEvent(type, point(...end));
+    await content.dispatchEvent('click', {
+      clientX: origin.x + end[0],
+      clientY: origin.y + end[1],
+    });
+  }
+  const offset = () =>
+    message.evaluate((node) => node.style.getPropertyValue('--swipe-reply-offset'));
+
+  // Small horizontal movement follows the finger but does not arm or reply.
+  let end = await drag([20, 0]);
+  expect(await offset()).toBe('20px');
+  await expect(message).not.toHaveClass(/swipe-reply-armed/);
+  await release(end);
+  await expect(replyContext).toHaveCount(0);
+  // Vertical movement belongs to scrolling.
+  await release(await drag([15, 80]));
+  await expect(message).not.toHaveClass(/swipe-reply-active/);
+  await expect(replyContext).toHaveCount(0);
+  // Swiping toward the inline start does nothing in LTR.
+  await release(await drag([-80, 0]));
+  await expect(replyContext).toHaveCount(0);
+  // Armed then cancelled by the browser.
+  end = await drag([80, 0]);
+  await expect(message).toHaveClass(/swipe-reply-armed/);
+  await release(end, 'pointercancel');
+  await expect(replyContext).toHaveCount(0);
+  // A second finger elsewhere on the page cancels an armed swipe.
+  end = await drag([80, 0]);
+  await expect(message).toHaveClass(/swipe-reply-armed/);
+  await thread.dispatchEvent('pointerdown', {
+    clientX: 200,
+    clientY: 200,
+    pointerType: 'touch',
+    pointerId: 10,
+    isPrimary: false,
+  });
+  await expect(message).not.toHaveClass(/swipe-reply-armed/);
+  await release(end);
+  await expect(replyContext).toHaveCount(0);
+  // Armed, then dragged back under the threshold before release.
+  end = await drag([80, 0]);
+  await content.dispatchEvent('pointermove', point(20, 0));
+  await expect(message).not.toHaveClass(/swipe-reply-armed/);
+  await release([20, 0]);
+  await expect(replyContext).toHaveCount(0);
+  // A full swipe replies once on release, with the bubble capped and clamped.
+  end = await drag([200, 0]);
+  expect(await offset()).toBe('72px');
+  await expect(message).toHaveClass(/swipe-reply-armed/);
+  await expect(replyContext).toHaveCount(0);
+  await release(end);
+  await expect(replyContext).toContainText('Swipe reply fixture');
+  await expect(menu).toHaveCount(0);
+  await expect(message).not.toHaveClass(/swipe-reply-active/);
+  await cancelReply();
+
+  // RTL mirrors the gesture: swipe left replies, swipe right does not.
+  await page.evaluate(() => {
+    document.documentElement.dir = 'rtl';
+  });
+  await release(await drag([80, 0]));
+  await expect(replyContext).toHaveCount(0);
+  end = await drag([-80, 0]);
+  await expect(message).toHaveClass(/swipe-reply-armed/);
+  expect(await offset()).toMatch(/^-/);
+  await release(end);
+  await expect(replyContext).toContainText('Swipe reply fixture');
+});
+
+test.describe('quick reply with real touch input', () => {
+  test.use({ hasTouch: true, viewport: { width: 390, height: 844 } });
+  test('a swipe that starts on message text replies; drags and long press keep their behavior', async ({
+    page,
+  }) => {
+    await login(page);
+    await contact(page, getPublicKey(generateSecretKey()), 'Touch reply fixture');
+    await page.getByTestId('message-composer-input').fill('Touch swipe fixture text');
+    await page.getByTestId('message-send-button').click();
+    const message = page.getByTestId('message-bubble').filter({ hasText: 'Touch swipe fixture' });
+    await expect(message).toBeVisible();
+    const replyContext = page.locator('.composer-context');
+    const menu = page.getByTestId('message-context-menu');
+    // CDP touches run the browser's real touch pipeline, including implicit
+    // pointer capture on the touched element and touch-action handling.
+    const cdp = await page.context().newCDPSession(page);
+    async function touchDrag(dx: number, dy: number, holdMs = 0) {
+      const text = message.locator('.message-text');
+      await expect(text).toBeVisible();
+      let box = await text.boundingBox();
+      await expect.poll(async () => (box = await text.boundingBox())).not.toBeNull();
+      box = box!;
+      const x = box.x + 8,
+        y = box.y + box.height / 2;
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+      if (holdMs) await page.waitForTimeout(holdMs);
+      for (let step = 1; dx || dy ? step <= 12 : false; step++)
+        await cdp.send('Input.dispatchTouchEvent', {
+          type: 'touchMove',
+          touchPoints: [{ x: x + (dx * step) / 12, y: y + (dy * step) / 12 }],
+        });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    }
+
+    await touchDrag(0, 90);
+    await touchDrag(30, 0);
+    await expect(replyContext).toHaveCount(0);
+    await touchDrag(96, 0);
+    await expect(replyContext).toContainText('Touch swipe fixture text');
+    await page.getByRole('button', { name: 'Cancel reply or edit' }).click();
+
+    await touchDrag(0, 0, 700);
+    await expect(menu).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await expect(replyContext).toHaveCount(0);
+
+    await page.evaluate(() => {
+      document.documentElement.dir = 'rtl';
+    });
+    await touchDrag(96, 0);
+    await expect(replyContext).toHaveCount(0);
+    await touchDrag(-96, 0);
+    await expect(replyContext).toContainText('Touch swipe fixture text');
+  });
+});

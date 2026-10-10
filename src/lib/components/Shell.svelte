@@ -1458,6 +1458,7 @@
                 contextMessage === message.id
                   ? closeMessageActions()
                   : showMessageActions(message, event)}
+              onreply={contextMessage ? undefined : () => void messageAction('reply', message)}
             >
               {#if message.meta.reply && !message.meta.deleted}<MessageReply
                   reply={message.meta.reply}

@@ -1,6 +1,10 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import { messagePress } from '#src/lib/actions/messagePress.ts';
+  import {
+    isQuickReplyIgnoredTarget,
+    messageSwipeReply,
+  } from '#src/lib/actions/messageQuickReply.ts';
   import type { Message } from '#src/types/chat.ts';
   import { locale } from '#src/i18n.ts';
   import Avatar from './Avatar.svelte';
@@ -26,7 +30,23 @@
   export let onretry: ((url: string) => Promise<void>) | undefined = undefined;
   export let onauthor: (key: string) => void;
   export let onactions: ((event: MouseEvent) => void) | undefined = undefined;
+  // Quick reply (mouse double-click, touch swipe); omitted rows have no gesture.
+  export let onreply: (() => void) | undefined = undefined;
   export let children: Snippet;
+  // dblclick is a MouseEvent without pointerType; remember the input that
+  // started it so touch-generated double taps never reply.
+  let pointerType = '';
+  function quickReply(event: MouseEvent) {
+    if (
+      !onreply ||
+      pointerType !== 'mouse' ||
+      event.button !== 0 ||
+      message.meta.deleted ||
+      isQuickReplyIgnoredTarget(event.target)
+    )
+      return;
+    onreply();
+  }
 </script>
 
 {#snippet name()}{#if authorLabel}{@render authorLabel()}{:else}{author.name}{/if}{/snippet}
@@ -45,6 +65,12 @@
   data-day-label={dayLabel}
   oncontextmenu={message.meta.deleted ? undefined : onactions}
   use:messagePress={Boolean(onactions) && !message.meta.deleted}
+  onpointerdown={(event) => (pointerType = event.pointerType)}
+  ondblclick={quickReply}
+  use:messageSwipeReply={{
+    disabled: !onreply || Boolean(message.meta.deleted),
+    onreply: () => onreply?.(),
+  }}
 >
   {#if bubbleLayout}
     {#if !senderContinues}<button

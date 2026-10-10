@@ -347,14 +347,13 @@ export function createPublicGroupRuntime(deps: Dependencies) {
     const db = data!;
     const previous = await db.get(room.address);
     assertSession(owner);
-    const saved = {
+    const saved = await db.save({
       address: room.address,
       room,
       joined,
       successor: successor || previous?.successor,
       updated: Date.now(),
-    };
-    await db.save(saved);
+    });
     assertSession(owner);
     state.update((s) => ({
       ...s,
@@ -365,6 +364,7 @@ export function createPublicGroupRuntime(deps: Dependencies) {
         .sort((a, b) => b.updated - a.updated)
         .slice(0, 200),
     }));
+    return saved.room;
   }
   async function hydrate(
     address: string,
@@ -672,7 +672,7 @@ export function createPublicGroupRuntime(deps: Dependencies) {
         get(state).rooms.length >= 200
       )
         throw new Error('Leave an unused public group before joining another.');
-      await saveRoom(room, true, undefined, owner);
+      room = await saveRoom(room, true, undefined, owner);
       const cached = await db.page(room.address, undefined, ROOM_PAGE);
       assertSession(owner);
       if (token !== view) return;
@@ -682,14 +682,19 @@ export function createPublicGroupRuntime(deps: Dependencies) {
         db,
       );
       if (token !== view || owner !== account) return;
-      state.update((s) => ({
-        ...s,
-        room,
-        ancestors,
-        messages: s.room?.address === room.address ? s.messages : hydrated,
-        refreshing: false,
-        stale: false,
-      }));
+      state.update((s) => {
+        // Hydration yields to the live listener. Keep any newer signed policy it
+        // received while this refresh was reading or saving its older snapshot.
+        if (s.room?.address === room.address && newerRoom(s.room, room)) room = s.room;
+        return {
+          ...s,
+          room,
+          ancestors,
+          messages: s.room?.address === room.address ? s.messages : hydrated,
+          refreshing: false,
+          stale: false,
+        };
+      });
       if (token !== view) return;
       const urls = await relayUrls(room.relays);
       if (token !== view || owner !== account) return;

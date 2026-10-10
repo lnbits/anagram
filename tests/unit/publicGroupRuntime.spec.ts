@@ -299,6 +299,67 @@ it('shows cached messages immediately, hydrates during refresh and keeps posting
   await runtime.send('Now verified');
 });
 
+it.each(['save', 'hydrate'] as const)(
+  'keeps live trust updates while an older room refresh finishes %s',
+  async (phase) => {
+    const key = generateSecretKey();
+    const trusted = getPublicKey(generateSecretKey());
+    const initial = room(key, 'live-policy-race', [], 10);
+    const latest = room(key, 'live-policy-race', [['trusted', trusted]], 20);
+    const { runtime, listeners } = setup([initial], key);
+    const link = encodeRoomLink(parsePublicRoom(initial));
+    await runtime.open(link);
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let waiting = false;
+    if (phase === 'save') {
+      const save = PublicGroupData.prototype.save;
+      vi.spyOn(PublicGroupData.prototype, 'save').mockImplementation(async function (value) {
+        if (!waiting && value.room.event.id === initial.id) {
+          waiting = true;
+          await paused;
+        }
+        return save.call(this, value);
+      });
+    } else {
+      const page = PublicGroupData.prototype.page;
+      let reads = 0;
+      vi.spyOn(PublicGroupData.prototype, 'page').mockImplementation(async function (...args) {
+        if (++reads === 2) {
+          waiting = true;
+          await paused;
+        }
+        return page.apply(this, args);
+      });
+    }
+    const opening = runtime.open(link);
+    try {
+      await vi.waitFor(() => expect(waiting).toBe(true));
+      const live = [...listeners].find((l) => l.filters.some((f) => f.kinds?.includes(9)))!;
+      live.options.onEvent?.(new ClientEvent(undefined, latest));
+      await vi.waitFor(() =>
+        expect(
+          get(runtime.state).rooms.find((r) => r.address === parsePublicRoom(initial).address)?.room
+            .event.id,
+        ).toBe(latest.id),
+      );
+    } finally {
+      release();
+    }
+    await opening;
+    expect(get(runtime.state).room?.trusted).toEqual([trusted]);
+    expect(
+      get(runtime.state).rooms.find((r) => r.address === parsePublicRoom(initial).address)?.room
+        .event.id,
+    ).toBe(latest.id);
+    // A stale relay reply must not undo the live update on the next open either.
+    await runtime.open(link);
+    expect(get(runtime.state).room?.trusted).toEqual([trusted]);
+  },
+);
+
 it('owner edits succeed through a healthy relay without waiting for stalled replicas', async () => {
   const key = generateSecretKey();
   const event = room(key, 'available-write', [['relay', 'wss://stalled.example.org/']]);

@@ -2,7 +2,7 @@ import { normalizeMessageSearchText } from '#src/utils/messageSearch.ts';
 import type { NostrEvent } from '#src/lib/nostr/client.ts';
 import type { MessageRelayStatus } from '#src/types/chat.ts';
 import { mergeMessageRelayStatuses } from '#src/utils/messageRelayStatus.ts';
-import type { PublicRoom } from '#src/stores/nostr/publicGroups.ts';
+import { newerRoom, type PublicRoom } from '#src/stores/nostr/publicGroups.ts';
 export type PublicGroupMessage = NostrEvent & {
   relay_statuses?: MessageRelayStatus[];
   activity?: PublicGroupMessage[];
@@ -108,9 +108,21 @@ export class PublicGroupData {
       };
     });
   }
-  save(value: SavedPublicRoom): Promise<void> {
-    return this.transaction('rooms', 'readwrite', (s) => {
-      s.put(value);
+  save(value: SavedPublicRoom): Promise<SavedPublicRoom> {
+    return this.transaction('rooms', 'readwrite', (store, done) => {
+      const request = store.get(value.address);
+      request.onsuccess = () => {
+        const previous = request.result as SavedPublicRoom | undefined;
+        // A refresh can finish after a newer live policy has already been saved.
+        // Compare inside the write transaction so concurrent saves cannot regress it.
+        const saved = {
+          ...value,
+          room: previous && newerRoom(previous.room, value.room) ? previous.room : value.room,
+          successor: previous?.successor || value.successor,
+        };
+        store.put(saved);
+        done(saved);
+      };
     });
   }
   message(room: string, id: string): Promise<PublicGroupMessage | undefined> {

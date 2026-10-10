@@ -141,6 +141,17 @@ describe('call negotiation and lifetime', () => {
     expect(failed.deps.onEnded).not.toHaveBeenCalled();
   });
 
+  it('does not replace the original call failure with a history publication error', async () => {
+    const h = setup();
+    h.deps.sendSignal.mockRejectedValue(new Error('Invitation delivery failed'));
+    h.deps.onEnded.mockRejectedValue(new Error('History delivery failed'));
+    await h.runtime.start(peer, 'audio');
+    await Promise.resolve();
+    expect(h.runtime.error.value).toBe('call.error.failed');
+    expect(h.runtime.failureDetail.value).toBe('Invitation delivery failed');
+    expect(h.runtime.session.value?.endReason).toBe('failed');
+  });
+
   it('reports busy during a room only to eligible contacts and deduplicates the invitation', async () => {
     const h = setup();
     h.deps.otherCallBusy.mockReturnValue(true);

@@ -1056,11 +1056,34 @@ export const useMessageStore = defineStore('messageStore', () => {
     return inputSanitizerService.normalizeStringArray(relayStore.relays);
   }
 
-  async function resolveRecipientRelayUrls(chatPublicKey: string): Promise<string[]> {
+  async function resolveRecipientRelayUrls(
+    chatPublicKey: string,
+    discover = false,
+  ): Promise<string[]> {
     await contactsService.init();
-    const contact = await contactsService.getContactByPublicKey(chatPublicKey);
+    let contact = await contactsService.getContactByPublicKey(chatPublicKey);
+    if (discover && resolvePreferredContactRelayUrls(contact?.relays).length === 0) {
+      const nostr = await getNostrStore();
+      const account = nostr.getLoggedInPublicKeyHex();
+      try {
+        await nostr.refreshContactByPublicKey(chatPublicKey, chatPublicKey, {
+          refreshRelayList: true,
+          relayListSeedRelayUrls: await resolveAppRelayUrls(),
+        });
+      } catch {
+        // Discovery is best effort; configured app relays remain a delivery route.
+      }
+      if (nostr.getLoggedInPublicKeyHex() !== account)
+        throw new Error('Account changed during relay discovery.');
+      contact = await contactsService.getContactByPublicKey(chatPublicKey);
+    }
     const contactRelayUrls = resolvePreferredContactRelayUrls(contact?.relays);
-    const appRelayUrls = contact?.sendMessagesToAppRelays ? await resolveAppRelayUrls() : [];
+    // Direct messages and call history always include app relays.
+    // Private groups retain their advertised routes.
+    const isGroup =
+      contact?.type === 'group' ||
+      (await chatDataService.getChatByPublicKey(chatPublicKey))?.type === 'group';
+    const appRelayUrls = isGroup ? [] : await resolveAppRelayUrls();
     return inputSanitizerService.normalizeStringArray([...contactRelayUrls, ...appRelayUrls]);
   }
 
@@ -1068,22 +1091,9 @@ export const useMessageStore = defineStore('messageStore', () => {
     chatPublicKey: string,
     relayUrls: string[] | undefined,
   ): Promise<string[]> {
-    let recipientRelayUrls = Array.isArray(relayUrls)
+    const recipientRelayUrls = Array.isArray(relayUrls)
       ? relayUrls
-      : await resolveRecipientRelayUrls(chatPublicKey);
-    if (!Array.isArray(relayUrls) && recipientRelayUrls.length === 0) {
-      // A freshly restored contact may precede its relay metadata. Discover the
-      // recipient's advertised inbox before asking to fall back to app relays.
-      const nostr = await getNostrStore();
-      const account = nostr.getLoggedInPublicKeyHex();
-      await nostr.refreshContactByPublicKey(chatPublicKey, chatPublicKey, {
-        refreshRelayList: true,
-        relayListSeedRelayUrls: await resolveAppRelayUrls(),
-      });
-      if (nostr.getLoggedInPublicKeyHex() !== account)
-        throw new Error('Account changed during relay discovery.');
-      recipientRelayUrls = await resolveRecipientRelayUrls(chatPublicKey);
-    }
+      : await resolveRecipientRelayUrls(chatPublicKey, true);
     return resolveSendRelayUrlsValue({ chatPublicKey, relayUrls, recipientRelayUrls });
   }
 

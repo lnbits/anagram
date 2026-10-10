@@ -4,6 +4,7 @@ Nostr authenticates peers and exchanges connection details. Iroh carries encrypt
 
 ## Signalling
 
+- Direct call controls attempt delivery to configured app relays and any known recipient inboxes. Missing inbox metadata does not prevent a call. A single relay acknowledgement is sufficient; other publish attempts continue without delaying negotiation.
 - An unsigned `kind:21117` rumor travels inside a NIP-44 `kind:13` seal and NIP-59 `kind:1059` gift wrap, with one intended `p` recipient. The rumor author must match the seal signer.
 - JSON uses `protocol: "anagram/iroh-call/1"`, UUID `callId`, `action` (`invite`, `ringing`, `accept`, `end`), `mode` (`audio`, `video`) and ISO `expiresAt`.
 - Invites and accepts include `address: { id, relayUrl }` and `mimeType`. End controls include a reason. Signals expire within 60 seconds; future timestamps beyond 10 seconds are rejected.

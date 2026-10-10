@@ -29,7 +29,11 @@ import type {
 import type { MessageRelayStatus } from '#src/types/chat.ts';
 
 interface RelayPublishRuntimeDeps {
-  prepareOutgoingPrivateMessage: (rumor: ClientEvent, recipient: string, retry?: boolean) => Promise<void>;
+  prepareOutgoingPrivateMessage: (
+    rumor: ClientEvent,
+    recipient: string,
+    retry?: boolean,
+  ) => Promise<void>;
   appendRelayStatusesToMessageEvent: (
     messageId: number,
     relayStatuses: MessageRelayStatus[],
@@ -38,11 +42,11 @@ interface RelayPublishRuntimeDeps {
       event?: NostrEvent;
       direction?: 'in' | 'out';
       eventId?: string;
-    }
+    },
   ) => Promise<void>;
   buildRelaySaveStatus: (relayStatuses: MessageRelayStatus[]) => RelaySaveStatus;
   decryptGroupIdentitySecretContent: (
-    content: string
+    content: string,
   ) => Promise<GroupIdentitySecretContent | null>;
   ensureRelayConnections: (relayUrls: string[]) => Promise<void>;
   getRelayConnectionAttemptBlockReason: (relayUrl: string) => string | null;
@@ -54,7 +58,7 @@ interface RelayPublishRuntimeDeps {
   normalizeRelayStatusUrls: (relayUrls: string[]) => string[];
   resolveGroupPublishRelayUrls: (
     relays: Array<{ url: string; read?: boolean; write?: boolean }> | undefined,
-    seedRelayUrls?: string[]
+    seedRelayUrls?: string[],
   ) => string[];
   resolveLoggedInPublishRelayUrls: (seedRelayUrls?: string[]) => Promise<string[]>;
   toStoredNostrEvent: (event: ClientEvent) => Promise<NostrEvent | null>;
@@ -86,21 +90,24 @@ export function createRelayPublishRuntime({
     relayUrls: string[],
     publishedRelayUrls: Set<string>,
     errorsByRelayUrl: Map<string, string>,
-    scope: 'recipient' | 'self'
+    scope: 'recipient' | 'self',
+    pendingWithoutResult = false,
   ): MessageRelayStatus[] {
     const updatedAt = new Date().toISOString();
 
     return normalizeRelayStatusUrls(relayUrls).map((relayUrl) => {
       const isPublished = publishedRelayUrls.has(relayUrl);
-      const detail = isPublished
-        ? undefined
-        : (errorsByRelayUrl.get(relayUrl) ??
-          'Delivery unknown: relay did not acknowledge publish.');
+      const isPending = pendingWithoutResult && !isPublished && !errorsByRelayUrl.has(relayUrl);
+      const detail =
+        isPublished || isPending
+          ? undefined
+          : (errorsByRelayUrl.get(relayUrl) ??
+            'Delivery unknown: relay did not acknowledge publish.');
 
       return {
         relay_url: relayUrl,
         direction: 'outbound',
-        status: isPublished ? 'published' : 'failed',
+        status: isPublished ? 'published' : isPending ? 'pending' : 'failed',
         scope,
         updated_at: updatedAt,
         ...(detail ? { detail } : {}),
@@ -110,7 +117,7 @@ export function createRelayPublishRuntime({
 
   function buildPendingOutboundRelayStatuses(
     relayUrls: string[],
-    scope: 'recipient' | 'self'
+    scope: 'recipient' | 'self',
   ): MessageRelayStatus[] {
     const updatedAt = new Date().toISOString();
 
@@ -126,7 +133,7 @@ export function createRelayPublishRuntime({
   function buildFailedOutboundRelayStatuses(
     relayUrls: string[],
     scope: 'recipient' | 'self',
-    detail: string
+    detail: string,
   ): MessageRelayStatus[] {
     const normalizedRelayUrls = normalizeRelayStatusUrls(relayUrls);
     const normalizedDetail = detail.trim() || 'Failed to publish event.';
@@ -140,7 +147,7 @@ export function createRelayPublishRuntime({
       normalizedRelayUrls,
       new Set<string>(),
       errorsByRelayUrl,
-      scope
+      scope,
     );
   }
 
@@ -153,7 +160,8 @@ export function createRelayPublishRuntime({
 
   async function publishSignedEventToRelays(
     event: ClientEvent,
-    relayUrls: string[]
+    relayUrls: string[],
+    returnOnFirstAck = false,
   ): Promise<{
     publishedRelayUrls: Set<string>;
     errorsByRelayUrl: Map<string, string>;
@@ -223,7 +231,7 @@ export function createRelayPublishRuntime({
 
       let timeoutId: ReturnType<typeof globalThis.setTimeout> | null = globalThis.setTimeout(
         finish,
-        RELAY_PUBLISH_TIMEOUT_MS
+        RELAY_PUBLISH_TIMEOUT_MS,
       );
 
       for (const relay of relays) {
@@ -238,13 +246,14 @@ export function createRelayPublishRuntime({
             if (success && normalizedRelayUrl) {
               publishedRelayUrls.add(normalizedRelayUrl);
               errorsByRelayUrl.delete(normalizedRelayUrl);
+              if (returnOnFirstAck) finish();
               return;
             }
 
             if (normalizedRelayUrl && !publishedRelayUrls.has(normalizedRelayUrl)) {
               errorsByRelayUrl.set(
                 normalizedRelayUrl,
-                'Delivery unknown: relay did not acknowledge publish.'
+                'Delivery unknown: relay did not acknowledge publish.',
               );
             }
           })
@@ -256,7 +265,7 @@ export function createRelayPublishRuntime({
             if (normalizedRelayUrl && !publishedRelayUrls.has(normalizedRelayUrl)) {
               errorsByRelayUrl.set(
                 normalizedRelayUrl,
-                error instanceof Error ? error.message : String(error)
+                error instanceof Error ? error.message : String(error),
               );
             }
           })
@@ -279,7 +288,11 @@ export function createRelayPublishRuntime({
     }
 
     for (const relayUrl of relayUrls) {
-      if (!publishedRelayUrls.has(relayUrl) && !errorsByRelayUrl.has(relayUrl)) {
+      if (
+        !(returnOnFirstAck && publishedRelayUrls.size > 0) &&
+        !publishedRelayUrls.has(relayUrl) &&
+        !errorsByRelayUrl.has(relayUrl)
+      ) {
         errorsByRelayUrl.set(relayUrl, `Publish timeout after ${RELAY_PUBLISH_TIMEOUT_MS}ms`);
       }
     }
@@ -293,7 +306,8 @@ export function createRelayPublishRuntime({
   async function publishEventWithRelayStatuses(
     event: ClientEvent,
     relayUrls: string[],
-    scope: 'recipient' | 'self'
+    scope: 'recipient' | 'self',
+    returnOnFirstAck = false,
   ): Promise<RelayPublishStatusesResult> {
     const normalizedRelayUrls = normalizeRelayStatusUrls(relayUrls);
     if (normalizedRelayUrls.length === 0) {
@@ -305,7 +319,8 @@ export function createRelayPublishRuntime({
 
     const { publishedRelayUrls, errorsByRelayUrl } = await publishSignedEventToRelays(
       event,
-      normalizedRelayUrls
+      normalizedRelayUrls,
+      returnOnFirstAck,
     );
 
     return {
@@ -313,7 +328,8 @@ export function createRelayPublishRuntime({
         normalizedRelayUrls,
         publishedRelayUrls,
         errorsByRelayUrl,
-        scope
+        scope,
+        returnOnFirstAck && publishedRelayUrls.size > 0,
       ),
       error:
         publishedRelayUrls.size > 0
@@ -325,7 +341,7 @@ export function createRelayPublishRuntime({
   async function publishReplaceableEventWithRelayStatuses(
     event: ClientEvent,
     relayUrls: string[],
-    scope: 'recipient' | 'self'
+    scope: 'recipient' | 'self',
   ): Promise<RelayPublishStatusesResult> {
     const normalizedRelayUrls = normalizeRelayStatusUrls(relayUrls);
     if (normalizedRelayUrls.length === 0) {
@@ -341,7 +357,7 @@ export function createRelayPublishRuntime({
 
     const { publishedRelayUrls, errorsByRelayUrl } = await publishSignedEventToRelays(
       event,
-      normalizedRelayUrls
+      normalizedRelayUrls,
     );
 
     return {
@@ -349,7 +365,7 @@ export function createRelayPublishRuntime({
         normalizedRelayUrls,
         publishedRelayUrls,
         errorsByRelayUrl,
-        scope
+        scope,
       ),
       error:
         publishedRelayUrls.size > 0
@@ -365,9 +381,9 @@ export function createRelayPublishRuntime({
     createRumorEvent: (
       senderPubkey: string,
       recipientPubkey: string,
-      createdAt: number
+      createdAt: number,
     ) => ClientEvent,
-    options: SendGiftWrappedRumorOptions = {}
+    options: SendGiftWrappedRumorOptions = {},
   ): Promise<GiftWrappedRumorPublishResult> {
     const recipientInput = recipientPublicKey.trim();
     if (!recipientInput) {
@@ -399,14 +415,14 @@ export function createRelayPublishRuntime({
     const recipientRumorEvent = createRumorEvent(
       signer.pubkey,
       normalizedRecipientPubkey,
-      createdAt
+      createdAt,
     );
     await prepareOutgoingPrivateMessage(recipientRumorEvent, normalizedRecipientPubkey);
     const recipientRumorNostrEvent = await toStoredNostrEvent(recipientRumorEvent);
     const rumorEventId = normalizeEventId(recipientRumorNostrEvent?.id ?? recipientRumorEvent.id);
     const selfRelayUrls = shouldPublishSelfCopy ? await resolveLoggedInPublishRelayUrls() : [];
     const persistOutboundRelayStatuses = async (
-      relayStatuses: MessageRelayStatus[]
+      relayStatuses: MessageRelayStatus[],
     ): Promise<void> => {
       if (!options.localMessageId || !rumorEventId || relayStatuses.length === 0) {
         return;
@@ -421,7 +437,7 @@ export function createRelayPublishRuntime({
     const appendFailedOutboundRelayStatuses = async (
       relayUrlsToFail: string[],
       scope: 'recipient' | 'self',
-      detail: string
+      detail: string,
     ): Promise<MessageRelayStatus[]> => {
       const failedRelayStatuses = buildFailedOutboundRelayStatuses(relayUrlsToFail, scope, detail);
       await persistOutboundRelayStatuses(failedRelayStatuses);
@@ -449,15 +465,16 @@ export function createRelayPublishRuntime({
           ? new ClientEvent(
               ndk,
               await getOrCreateOutboundGiftWrap(recipientRumorNostrEvent, 'recipient', () =>
-                giftWrap(recipientRumorEvent, recipient, signer, { rumorKind })
-              )
+                giftWrap(recipientRumorEvent, recipient, signer, { rumorKind }),
+              ),
             )
           : await giftWrap(recipientRumorEvent, recipient, signer, { rumorKind });
       await prepareOutgoingPrivateMessage(recipientRumorEvent, normalizedRecipientPubkey, true);
       const recipientPublishResult = await publishEventWithRelayStatuses(
         recipientGiftWrapEvent,
         relayUrls,
-        'recipient'
+        'recipient',
+        options.returnOnFirstAck,
       );
       combinedRelayStatuses.push(...recipientPublishResult.relayStatuses);
       await persistOutboundRelayStatuses(recipientPublishResult.relayStatuses);
@@ -467,7 +484,7 @@ export function createRelayPublishRuntime({
         const skippedSelfRelayStatuses = await appendFailedOutboundRelayStatuses(
           selfRelayUrls,
           'self',
-          'Skipped because recipient relay publish failed.'
+          'Skipped because recipient relay publish failed.',
         );
         combinedRelayStatuses.push(...skippedSelfRelayStatuses);
         selfRelayStatusesFinalized = true;
@@ -481,21 +498,21 @@ export function createRelayPublishRuntime({
           const selfRumorEvent = createRumorEvent(
             signer.pubkey,
             normalizedRecipientPubkey,
-            createdAt
+            createdAt,
           );
           const selfGiftWrapEvent =
             options.localMessageId && recipientRumorNostrEvent
               ? new ClientEvent(
                   ndk,
                   await getOrCreateOutboundGiftWrap(recipientRumorNostrEvent, 'self', () =>
-                    giftWrap(selfRumorEvent, senderRecipient, signer, { rumorKind })
-                  )
+                    giftWrap(selfRumorEvent, senderRecipient, signer, { rumorKind }),
+                  ),
                 )
               : await giftWrap(selfRumorEvent, senderRecipient, signer, { rumorKind });
           const selfPublishResult = await publishEventWithRelayStatuses(
             selfGiftWrapEvent,
             selfRelayUrls,
-            'self'
+            'self',
           );
           combinedRelayStatuses.push(...selfPublishResult.relayStatuses);
           await persistOutboundRelayStatuses(selfPublishResult.relayStatuses);
@@ -512,7 +529,7 @@ export function createRelayPublishRuntime({
           const selfFailureRelayStatuses = await appendFailedOutboundRelayStatuses(
             selfRelayUrls,
             'self',
-            selfFailureDetail
+            selfFailureDetail,
           );
           combinedRelayStatuses.push(...selfFailureRelayStatuses);
           selfRelayStatusesFinalized = true;
@@ -543,7 +560,7 @@ export function createRelayPublishRuntime({
 
   async function publishUserMetadata(
     metadata: PublishUserMetadataInput,
-    relayUrls: string[]
+    relayUrls: string[],
   ): Promise<void> {
     const relayList = inputSanitizerService.normalizeStringArray(relayUrls);
     if (relayList.length === 0) {
@@ -570,7 +587,7 @@ export function createRelayPublishRuntime({
   async function publishGroupMetadata(
     groupPublicKey: string,
     metadata: PublishUserMetadataInput,
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<void> {
     const assertAccount = () => {
       if (getLoggedInPublicKeyHex() !== loggedInPubkeyHex) throw new Error('Account changed.');
@@ -593,21 +610,26 @@ export function createRelayPublishRuntime({
     }
 
     const normalizedOwnerPublicKey = inputSanitizerService.normalizeHexKey(
-      groupContact.meta.owner_public_key ?? ''
+      groupContact.meta.owner_public_key ?? '',
     );
     if (!normalizedOwnerPublicKey || normalizedOwnerPublicKey !== loggedInPubkeyHex) {
       throw new Error('Only the owner can publish this group profile.');
     }
 
-    if (metadata.pinned !== undefined && metadata.pinned !== '' &&
-        (typeof metadata.pinned !== 'string' || !/^[a-f0-9]{64}$/.test(metadata.pinned)))
+    if (
+      metadata.pinned !== undefined &&
+      metadata.pinned !== '' &&
+      (typeof metadata.pinned !== 'string' || !/^[a-f0-9]{64}$/.test(metadata.pinned))
+    )
       throw new Error('Invalid pinned message ID.');
     // Ordinary profile edits retain the existing pin; an explicit empty ID clears it.
     metadata = {
-      ...(groupContact.meta.pinned ? {
-        pinned: groupContact.meta.pinned,
-        pinned_created_at: groupContact.meta.pinned_created_at,
-      } : {}),
+      ...(groupContact.meta.pinned
+        ? {
+            pinned: groupContact.meta.pinned,
+            pinned_created_at: groupContact.meta.pinned_created_at,
+          }
+        : {}),
       ...metadata,
     };
 
@@ -644,7 +666,7 @@ export function createRelayPublishRuntime({
     const profileCreatedAt = Math.max(
       Math.floor(Date.now() / 1000),
       (groupContact.meta.profile_event_created_at ?? 0) + 1,
-      (groupProfilePublishTimes.get(normalizedGroupPublicKey) ?? 0) + 1
+      (groupProfilePublishTimes.get(normalizedGroupPublicKey) ?? 0) + 1,
     );
     groupProfilePublishTimes.set(normalizedGroupPublicKey, profileCreatedAt);
     const metadataEvent = new ClientEvent(ndk, {
@@ -659,7 +681,7 @@ export function createRelayPublishRuntime({
     const publishResult = await publishEventWithRelayStatuses(metadataEvent, relayUrls, 'self');
     if (
       publishResult.relayStatuses.some(
-        (entry) => entry.direction === 'outbound' && entry.status === 'published'
+        (entry) => entry.direction === 'outbound' && entry.status === 'published',
       )
     ) {
       updateStoredEventSinceFromCreatedAt(metadataEvent.created_at);
@@ -672,7 +694,7 @@ export function createRelayPublishRuntime({
   async function publishGroupRelayList(
     groupPublicKey: string,
     relayEntries: RelayListMetadataEntry[],
-    publishRelayUrls: string[] = []
+    publishRelayUrls: string[] = [],
   ): Promise<RelaySaveStatus> {
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
@@ -691,7 +713,7 @@ export function createRelayPublishRuntime({
     }
 
     const normalizedOwnerPublicKey = inputSanitizerService.normalizeHexKey(
-      groupContact.meta.owner_public_key ?? ''
+      groupContact.meta.owner_public_key ?? '',
     );
     if (!normalizedOwnerPublicKey || normalizedOwnerPublicKey !== loggedInPubkeyHex) {
       throw new Error('Only the owner can publish the group relay list.');

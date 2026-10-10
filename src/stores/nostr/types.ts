@@ -93,6 +93,8 @@ export interface Nip46SessionSnapshot {
 }
 
 export interface SendGiftWrappedRumorOptions {
+  // Time-sensitive controls proceed once any recipient relay accepts them.
+  returnOnFirstAck?: boolean;
   localMessageId?: number;
   createdAt?: string;
   publishSelfCopy?: boolean;

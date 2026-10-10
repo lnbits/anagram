@@ -157,7 +157,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     patch({ phase: 'ended', endReason: reason });
     if (ctx.inviteSent && session.value?.direction === 'outgoing' && deps.onEnded) {
       void deps.onEnded({ ...session.value }).catch(() => {
-        if (session.value?.id === ctx.id) error.value = 'call.error.history';
+        if (session.value?.id === ctx.id && !error.value) error.value = 'call.error.history';
       });
     }
     if (notify && (ctx.inviteSent || session.value?.direction === 'incoming'))

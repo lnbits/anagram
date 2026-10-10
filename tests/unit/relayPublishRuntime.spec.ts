@@ -99,8 +99,74 @@ describe('relayPublishRuntime', () => {
     await runtime.publishGroupMetadata(signer.pubkey, { name: 'Second' });
     expect(published).toEqual([restored + 1, restored + 2]);
     expect(profiles[1]).toMatchObject({ pinned: 'c'.repeat(64), pinned_created_at: 100 });
-    await runtime.publishGroupMetadata(signer.pubkey, { name: 'Third', pinned: '', pinned_created_at: 0 });
+    await runtime.publishGroupMetadata(signer.pubkey, {
+      name: 'Third',
+      pinned: '',
+      pinned_created_at: 0,
+    });
     expect(profiles[2].pinned).toBe('');
+  });
+
+  it('lets call controls proceed after one ack while still publishing to every relay', async () => {
+    const { runtime } = createRuntime();
+    let rejectSlow!: (error: Error) => void;
+    const fast = {
+      status: NostrRelayStatus.CONNECTED,
+      url: 'wss://fast.example/',
+      publish: vi.fn(async () => true),
+    };
+    const slow = {
+      status: NostrRelayStatus.CONNECTED,
+      url: 'wss://slow.example/',
+      publish: vi.fn(
+        () =>
+          new Promise<boolean>((_resolve, reject) => {
+            rejectSlow = reject;
+          }),
+      ),
+    };
+    vi.spyOn(NostrRelaySet, 'fromRelayUrls').mockReturnValue({
+      relays: new Set([fast, slow]),
+    } as never);
+    const result = await runtime.publishEventWithRelayStatuses(
+      { sig: 'signature' } as never,
+      [fast.url, slow.url],
+      'recipient',
+      true,
+    );
+    expect(fast.publish).toHaveBeenCalledOnce();
+    expect(slow.publish).toHaveBeenCalledOnce();
+    expect(result.error).toBeNull();
+    expect(result.relayStatuses).toEqual([
+      expect.objectContaining({ relay_url: fast.url, status: 'published' }),
+      expect.objectContaining({ relay_url: slow.url, status: 'pending' }),
+    ]);
+    rejectSlow(new Error('Late failure'));
+    await Promise.resolve();
+    expect(result.error).toBeNull();
+  });
+
+  it('still requires an acknowledgement for call controls when all relays reject', async () => {
+    const { runtime } = createRuntime();
+    vi.spyOn(NostrRelaySet, 'fromRelayUrls').mockReturnValue({
+      relays: new Set([
+        {
+          status: NostrRelayStatus.CONNECTED,
+          url: 'wss://no.example/',
+          publish: async () => {
+            throw new Error('rejected');
+          },
+        },
+      ]),
+    } as never);
+    const result = await runtime.publishEventWithRelayStatuses(
+      { sig: 'signature' } as never,
+      ['wss://no.example/'],
+      'recipient',
+      true,
+    );
+    expect(result.error).toBeInstanceOf(Error);
+    expect(result.relayStatuses[0].status).toBe('failed');
   });
 
   it('waits for every connected relay to settle before finalizing publish statuses', async () => {

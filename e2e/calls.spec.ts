@@ -91,19 +91,13 @@ test('live Iroh audio, video and group room connect two generated accounts', asy
     await page.getByTestId('contact-identifier-input').fill(nip19.npubEncode(pubkey));
     await page.getByRole('button', { name: 'Add contact', exact: true }).click();
     await expect(page.getByRole('dialog')).toBeHidden();
-    await page.evaluate(async (pubkey) => {
-      const { contactsService } = await import('/src/services/contactsService.ts');
-      await contactsService.updateSendMessagesToAppRelays(pubkey, true);
-    }, pubkey);
   }
   try {
     await login(a, alice);
     await login(b, bob);
     await contact(a, getPublicKey(bob));
     await contact(b, getPublicKey(alice));
-    await a.getByTestId('message-composer-input').fill('Call setup');
-    await a.getByTestId('message-send-button').click();
-    await expect(b.getByTestId('message-bubble').filter({ hasText: 'Call setup' })).toBeVisible();
+    // Call first: neither account advertises an inbox or opts into app-relay delivery.
     await a.getByRole('button', { name: 'Audio call', exact: true }).click();
     await expect(b.getByTestId('call-accept')).toBeVisible({ timeout: 35000 });
     await b.getByTestId('call-accept').click();
@@ -174,6 +168,10 @@ test('live Iroh audio, video and group room connect two generated accounts', asy
     await a.getByTestId('call-dismiss').click();
     await expect(a.getByTestId('call-panel')).toBeHidden();
     await b.getByTestId('call-dismiss').click();
+    await expect(b.getByTestId('message-call-history')).toHaveCount(1);
+    await a.getByTestId('message-composer-input').fill('Call setup');
+    await a.getByTestId('message-send-button').click();
+    await expect(b.getByTestId('message-bubble').filter({ hasText: 'Call setup' })).toBeVisible();
     await a.getByRole('button', { name: 'Chat options' }).click();
     await a.getByRole('button', { name: 'Create or join a call' }).click();
     await a.getByTestId('room-create-audio').click();

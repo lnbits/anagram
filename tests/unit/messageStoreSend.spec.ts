@@ -118,6 +118,8 @@ describe('messageStore send', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
+    serviceMocks.relayStore.relays = ['wss://app.example'];
+    serviceMocks.nostrStore.refreshContactByPublicKey.mockResolvedValue(undefined);
     serviceMocks.chatDataService.init.mockResolvedValue(undefined);
     serviceMocks.chatDataService.getMessageByEventIdOrEditReference.mockResolvedValue(null);
     serviceMocks.contactsService.init.mockResolvedValue(undefined);
@@ -314,7 +316,8 @@ describe('messageStore send', () => {
     return pending;
   });
 
-  it('keeps the visible message when contact relays are missing', async () => {
+  it('keeps the visible message when both contact and app relays are missing', async () => {
+    serviceMocks.relayStore.relays = [];
     serviceMocks.contactsService.getContactByPublicKey.mockResolvedValue({
       public_key: CHAT_ID,
       relays: [],
@@ -336,7 +339,7 @@ describe('messageStore send', () => {
     expect(serviceMocks.nostrStore.sendDirectMessage).not.toHaveBeenCalled();
   });
 
-  it('discovers recipient relays before asking for a fallback during fresh hydration', async () => {
+  it('discovers recipient inboxes and includes app relays during fresh hydration', async () => {
     serviceMocks.contactsService.getContactByPublicKey.mockResolvedValueOnce({
       public_key: CHAT_ID,
       relays: [],
@@ -352,10 +355,45 @@ describe('messageStore send', () => {
     expect(serviceMocks.nostrStore.sendDirectMessage).toHaveBeenCalledWith(
       CHAT_ID,
       'discover first',
-      ['wss://contact.example'],
+      ['wss://contact.example', 'wss://app.example'],
       expect.anything(),
     );
     expect(store.getMessages(CHAT_ID)).toHaveLength(1);
+  });
+
+  it.each([false, true])(
+    'uses app relays without a recipient inbox even when discovery fails: %s',
+    async (fails) => {
+      serviceMocks.contactsService.getContactByPublicKey.mockResolvedValue({
+        public_key: CHAT_ID,
+        type: 'user',
+        relays: [],
+        sendMessagesToAppRelays: false,
+      });
+      if (fails)
+        serviceMocks.nostrStore.refreshContactByPublicKey.mockRejectedValue(new Error('offline'));
+      await useMessageStore().sendMessage(CHAT_ID, 'app route');
+      expect(serviceMocks.nostrStore.sendDirectMessage).toHaveBeenCalledWith(
+        CHAT_ID,
+        'app route',
+        ['wss://app.example'],
+        expect.anything(),
+      );
+    },
+  );
+
+  it('keeps private group messages on their group relays', async () => {
+    serviceMocks.contactsService.getContactByPublicKey.mockResolvedValue({
+      public_key: CHAT_ID, type: 'group', meta: {},
+      relays: [{ url: 'wss://group.example', read: true }],
+    });
+    serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue(makeChatRow({
+      type: 'group', meta: { current_epoch_public_key: 'c'.repeat(64) },
+    }));
+    await useMessageStore().sendMessage(CHAT_ID, 'group message');
+    expect(serviceMocks.nostrStore.sendDirectMessage).toHaveBeenCalledWith(
+      'c'.repeat(64), 'group message', ['wss://group.example'], expect.anything(),
+    );
   });
 
   it('retries a missing-relay send against the already created local message', async () => {

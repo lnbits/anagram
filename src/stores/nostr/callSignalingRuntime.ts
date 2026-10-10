@@ -33,7 +33,7 @@ export function createCallSignalingRuntime(deps: {
           content,
         });
       },
-      { publishSelfCopy: false }
+      { publishSelfCopy: false, returnOnFirstAck: true },
     );
   }
   async function sendCallSignal(peerInput: string, signal: CallSignal): Promise<void> {
@@ -63,7 +63,7 @@ export function createCallSignalingRuntime(deps: {
     const relays = inputSanitizerService
       .normalizeRelayEntriesFromUrls([
         ...resolvePreferredContactRelayUrls(contact?.relays),
-        ...(contact?.sendMessagesToAppRelays ? deps.getAppRelays() : []),
+        ...deps.getAppRelays(),
       ])
       .map((entry) => entry.url);
     if (!relays.length && refreshError) throw refreshError;
@@ -72,7 +72,7 @@ export function createCallSignalingRuntime(deps: {
   async function sendRoomSignal(
     peerInput: string,
     signal: CallRoomSignal,
-    relayHints: string[]
+    relayHints: string[],
   ): Promise<void> {
     const peer = inputSanitizerService.normalizeHexKey(peerInput);
     const own = deps.getOwnPubkey();

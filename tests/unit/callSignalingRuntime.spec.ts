@@ -1,3 +1,4 @@
+import { contactsService } from '#src/services/contactsService.ts';
 import NostrClient from '#src/lib/nostr/client.ts';
 import { createCallSignalingRuntime } from '#src/stores/nostr/callSignalingRuntime.ts';
 import { CALL_PROTOCOL, CALL_SIGNAL_KIND, type CallSignal } from '#src/types/call.ts';
@@ -42,7 +43,7 @@ describe('call signaling publication', () => {
       ['wss://recipient.example'],
       CALL_SIGNAL_KIND,
       expect.any(Function),
-      { publishSelfCopy: false }
+      { publishSelfCopy: false, returnOnFirstAck: true },
     );
     const factory = sendRumor.mock.calls[0]?.[3];
     const rumor = factory(own, peer, 123);
@@ -75,13 +76,13 @@ describe('call signaling publication', () => {
       ['wss://room.example'],
       CALL_SIGNAL_KIND,
       expect.any(Function),
-      { publishSelfCopy: false }
+      { publishSelfCopy: false, returnOnFirstAck: true },
     );
     expect(sendRumor.mock.calls[0]?.[3]('b'.repeat(64), 'a'.repeat(64), 123).content).toBe(
-      JSON.stringify(signal)
+      JSON.stringify(signal),
     );
     await expect(
-      runtime.sendRoomSignal('a'.repeat(64), signal, ['file:///not-a-relay'])
+      runtime.sendRoomSignal('a'.repeat(64), signal, ['file:///not-a-relay']),
     ).rejects.toThrow();
   });
 
@@ -110,42 +111,79 @@ describe('call signaling publication', () => {
       ['wss://recipient.example'],
       CALL_SIGNAL_KIND,
       expect.any(Function),
-      { publishSelfCopy: false }
+      { publishSelfCopy: false, returnOnFirstAck: true },
     );
   });
 
-  it.each([
-    'account',
-    'sender',
-    'blocked',
-  ])('rechecks %s when signing a delayed direct signal', async (change) => {
-    const original = 'b'.repeat(64);
-    let own = original;
-    let blocked = false;
-    const sendRumor = vi.fn().mockResolvedValue({});
-    const runtime = createCallSignalingRuntime({
-      ndk: new NostrClient(),
-      getOwnPubkey: () => own,
-      isBlocked: () => blocked,
-      refreshRelays: async () => {},
-      getAppRelays: () => [],
-      sendRumor,
-    });
-    await runtime.sendCallSignal('a'.repeat(64), {
-      protocol: CALL_PROTOCOL,
-      action: 'end',
-      reason: 'hangup',
-      callId: crypto.randomUUID(),
-      mode: 'audio',
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
-    });
-    if (change === 'account') own = 'c'.repeat(64);
-    if (change === 'blocked') blocked = true;
-    const sender = change === 'sender' ? 'c'.repeat(64) : original;
-    expect(() => sendRumor.mock.calls[0]?.[3](sender, 'a'.repeat(64), 123)).toThrow(
-      'Call session changed'
-    );
-  });
+  it.each(['account', 'sender', 'blocked'])(
+    'rechecks %s when signing a delayed direct signal',
+    async (change) => {
+      const original = 'b'.repeat(64);
+      let own = original;
+      let blocked = false;
+      const sendRumor = vi.fn().mockResolvedValue({});
+      const runtime = createCallSignalingRuntime({
+        ndk: new NostrClient(),
+        getOwnPubkey: () => own,
+        isBlocked: () => blocked,
+        refreshRelays: async () => {},
+        getAppRelays: () => [],
+        sendRumor,
+      });
+      await runtime.sendCallSignal('a'.repeat(64), {
+        protocol: CALL_PROTOCOL,
+        action: 'end',
+        reason: 'hangup',
+        callId: crypto.randomUUID(),
+        mode: 'audio',
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      });
+      if (change === 'account') own = 'c'.repeat(64);
+      if (change === 'blocked') blocked = true;
+      const sender = change === 'sender' ? 'c'.repeat(64) : original;
+      expect(() => sendRumor.mock.calls[0]?.[3](sender, 'a'.repeat(64), 123)).toThrow(
+        'Call session changed',
+      );
+    },
+  );
+
+  it.each([false, true])(
+    'always includes app relays; missing recipient inbox: %s',
+    async (missing) => {
+      vi.mocked(contactsService.getContactByPublicKey).mockResolvedValueOnce({
+        type: 'user',
+        meta: {},
+        sendMessagesToAppRelays: false,
+        relays: missing ? [] : [{ url: 'wss://recipient.example', read: true, write: true }],
+      } as never);
+      const sendRumor = vi.fn().mockResolvedValue({});
+      const runtime = createCallSignalingRuntime({
+        ndk: new NostrClient(),
+        getOwnPubkey: () => 'b'.repeat(64),
+        isBlocked: () => false,
+        refreshRelays: async () => {
+          throw new Error('Metadata timeout');
+        },
+        getAppRelays: () => ['wss://app.example'],
+        sendRumor,
+      });
+      await runtime.sendCallSignal('a'.repeat(64), {
+        protocol: CALL_PROTOCOL,
+        action: 'end',
+        reason: 'hangup',
+        callId: crypto.randomUUID(),
+        mode: 'audio',
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      });
+      expect(sendRumor).toHaveBeenCalledWith(
+        'a'.repeat(64),
+        missing ? ['wss://app.example'] : ['wss://recipient.example', 'wss://app.example'],
+        CALL_SIGNAL_KIND,
+        expect.any(Function),
+        { publishSelfCopy: false, returnOnFirstAck: true },
+      );
+    },
+  );
 
   it('does not publish after an account switch during relay lookup', async () => {
     let own = 'b'.repeat(64);
@@ -168,7 +206,7 @@ describe('call signaling publication', () => {
         callId: crypto.randomUUID(),
         mode: 'audio',
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      })
+      }),
     ).rejects.toThrow('unavailable');
     expect(sendRumor).not.toHaveBeenCalled();
   });

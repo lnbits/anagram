@@ -6,7 +6,7 @@ Private messages use Nostr NIP-17, NIP-44 encryption and NIP-59 gift wraps.
 
 - Text is an unsigned `kind:14` rumor with a `p` recipient tag.
 - The sender encrypts the rumor in a signed `kind:13` seal, then encrypts the seal in a `kind:1059` gift wrap signed with a fresh random key.
-- Separate wraps go to the recipient and the sender for history. Delivery uses receiving relays, including NIP-17 `kind:10050` inboxes.
+- Separate wraps go to the recipient and the sender for history. Delivery always includes configured app relays alongside known receiving relays, including NIP-17 `kind:10050` inboxes. Missing recipient relay metadata does not require a per-contact opt-in.
 - Receivers verify signatures and require the rumor author to match the seal author.
 
 ## Messages

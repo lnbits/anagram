@@ -55,7 +55,7 @@
   const page = toStore(() => ({ url: routeState.url }));
   import { countUnseenReactionsForAuthor } from '#src/utils/messageReactions.ts';
   import { useChatStore } from '#src/stores/chatStore.ts';
-  import { useMessageStore, isMissingContactRelaysError } from '#src/stores/messageStore.ts';
+  import { useMessageStore } from '#src/stores/messageStore.ts';
   import { useNostrStore } from '#src/stores/nostrStore.ts';
   import { useRelayStore } from '#src/stores/relayStore.ts';
   import { useCallStore } from '#src/stores/callStore.ts';
@@ -516,17 +516,7 @@
     try {
       await fn();
     } catch (e) {
-      if (
-        isMissingContactRelaysError(e) &&
-        confirm('No relays found for this contact. Use your application relays?')
-      ) {
-        try {
-          await contactsService.updateSendMessagesToAppRelays(e.chatPublicKey, true);
-          await fn();
-        } catch (cause) {
-          fail(cause);
-        }
-      } else fail(e);
+      fail(e);
     }
   }
   async function loadThread(id: string) {
@@ -639,24 +629,8 @@
         else reply = null;
       }
     } catch (e) {
-      if (
-        isMissingContactRelaysError(e) &&
-        confirm('No relays found for this contact. Use your application relays?')
-      ) {
-        try {
-          await contactsService.updateSendMessagesToAppRelays(chat.publicKey, true);
-          await messages.sendMessage(chat.id, text, reply, {
-            relayUrls: relays.relays,
-            attachments,
-            continueFromMessageId: e.localMessageId ?? undefined,
-          });
-        } catch (cause) {
-          fail(cause);
-        }
-      } else {
-        if (currentId === chat.id) draft = text;
-        fail(e);
-      }
+      if (currentId === chat.id) draft = text;
+      fail(e);
     } finally {
       busy = false;
     }

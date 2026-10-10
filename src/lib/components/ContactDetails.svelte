@@ -74,20 +74,7 @@
       refreshing = false;
     }
   }
-  async function setAppRelays(value: boolean) {
-    if (saving) return;
-    saving = true;
-    error = '';
-    try {
-      const next = await contactsService.updateSendMessagesToAppRelays(publicKey, value);
-      if (!next) throw new Error();
-      if (mounted) contact = next;
-    } catch {
-      error = 'Could not save the relay preference.';
-    } finally {
-      saving = false;
-    }
-  }
+
   async function copy(value: string) {
     try {
       await navigator.clipboard.writeText(value);
@@ -252,20 +239,6 @@
       <details class="profile-section">
         <summary>{$translate('relays.nip65.title')}</summary>
         <div class="fields">
-          <label class="switch"
-            ><span
-              >{$translate('relays.sendViaAppRelays')}<small
-                >{$translate('relays.useAppRelays.description')}</small
-              ></span
-            ><input
-              type="checkbox"
-              role="switch"
-              aria-label={$translate('relays.sendViaAppRelays')}
-              checked={contact.sendMessagesToAppRelays}
-              disabled={saving}
-              onchange={(event) => setAppRelays(event.currentTarget.checked)}
-            /></label
-          >
           {#each contact.relays ?? [] as relay (relay.url)}<details
               class="relay"
               ontoggle={(event) => {

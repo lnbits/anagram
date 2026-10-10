@@ -373,7 +373,7 @@ test('unsupported browsers and busy devices report the actual problem before neg
     await alice.page.getByRole('button', { name: 'Audio call', exact: true }).click();
     const unsupported = alice.page
       .getByRole('alert')
-      .filter({ hasText: 'This browser cannot run Iroh calls' });
+      .filter({ hasText: 'This app or browser is missing media support required for Iroh calls.' });
     await expect(unsupported).toBeVisible();
     await expect(unsupported).toContainText('Chrome, Edge, or Firefox');
     expect(

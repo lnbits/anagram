@@ -57,7 +57,7 @@ async function prepare(page: Page) {
   return { peer, group, key };
 }
 
-test('contacts open cached details, public metadata, sharing, relay preference and group tabs without creating chats', async ({
+test('contacts open cached details, public metadata, sharing, relay information and group tabs without creating chats', async ({
   page,
   context,
 }) => {
@@ -93,8 +93,7 @@ test('contacts open cached details, public metadata, sharing, relay preference a
   await expect(details.getByLabel('Year', { exact: true })).toHaveValue('1990');
   await details.locator('summary').filter({ hasText: 'NIP-65' }).click();
   const appRelays = details.getByRole('switch', { name: /Send.*App Relays/i });
-  await appRelays.check();
-  await expect(appRelays).toBeChecked();
+  await expect(appRelays).toHaveCount(0);
   await details.getByTestId('contact-profile-share-button').click();
   const share = page.getByRole('dialog', { name: 'Share Contact' });
   await expect(share.getByRole('img')).toBeVisible();
@@ -104,7 +103,7 @@ test('contacts open cached details, public metadata, sharing, relay preference a
   await page.reload();
   await expect(details.getByLabel('About', { exact: true })).toHaveValue('Contact biography');
   await details.locator('summary').filter({ hasText: 'NIP-65' }).click();
-  await expect(appRelays).toBeChecked();
+  await expect(appRelays).toHaveCount(0);
   await page.getByTestId('contact-item').filter({ hasText: 'Contact Group' }).click();
   await expect(details).toHaveAttribute('data-public-key', group);
   await details.getByRole('tab', { name: 'Members', exact: true }).click();

@@ -79,7 +79,7 @@ try {
     process.stdout.write(chunk);
   });
   child.stderr.pipe(process.stderr);
-  const timer = setTimeout(() => child.kill(), 25000);
+  const timer = setTimeout(() => child.kill(), 45000);
   const code = await new Promise((resolve) => child.once('close', resolve));
   clearTimeout(timer);
   if (

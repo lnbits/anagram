@@ -1,5 +1,6 @@
 package com.nostr.anagram;
 
+import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -9,7 +10,6 @@ import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Build;
 import androidx.core.app.NotificationCompat;
-import androidx.core.app.NotificationManagerCompat;
 import androidx.core.app.Person;
 import java.util.LinkedHashSet;
 import java.util.UUID;
@@ -24,7 +24,7 @@ final class CallNotifications {
     static final String EXTRA_TOKEN = "anagram.call.token";
     static final String EXTRA_ANSWER = "anagram.call.answer";
     private static final String CHANNEL = "anagram-incoming-calls";
-    private static final int NOTIFICATION_ID = 7104;
+    static final int NOTIFICATION_ID = 7104;
     private static final ThreadPoolExecutor sender = new ThreadPoolExecutor(
         1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(8));
     // A notification receiver has a short Android deadline. Never queue its
@@ -97,7 +97,7 @@ final class CallNotifications {
         dismiss(c);
     }
     private static void dismiss(Context c) {
-        NotificationManagerCompat.from(c).cancel(NOTIFICATION_ID);
+        RelayNotificationService.refreshCallNotification(c);
     }
     static synchronized void finish(Context c, String owner, String peer, String id) {
         rememberClosed(c, owner, peer, id);
@@ -232,6 +232,15 @@ final class CallNotifications {
             }
         };
         expiryHandler.postDelayed(expiryTask, Math.max(1, pending.optLong("expiresAt") - System.currentTimeMillis()));
+        RelayNotificationService.refreshCallNotification(c);
+    }
+    // The service reads current state on its main thread, rather than posting a
+    // captured card that may have been cancelled or claimed in the meantime.
+    static synchronized Notification currentNotification(Context c) {
+        JSONObject pending = read(c, "pending");
+        if (pending.optBoolean("claimed") || pending.optLong("expiresAt") <= System.currentTimeMillis() ||
+            !eligible(c, pending.optString("ownerPubkey"), pending.optString("peer")) ||
+            isClosed(c, pending.optString("ownerPubkey"), pending.optString("peer"), pending.optString("callId"))) return null;
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationChannel channel = new NotificationChannel(CHANNEL, "Incoming calls", NotificationManager.IMPORTANCE_HIGH);
             channel.setSound(android.provider.Settings.System.DEFAULT_RINGTONE_URI,
@@ -251,6 +260,7 @@ final class CallNotifications {
         NotificationCompat.Builder builder = new NotificationCompat.Builder(c, CHANNEL)
             .setSmallIcon(R.drawable.nostr_chat_notification).setContentTitle(title).setContentText("Incoming call")
             .setCategory(NotificationCompat.CATEGORY_CALL).setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setOngoing(true).setOnlyAlertOnce(true)
             .setTimeoutAfter(Math.max(1, pending.optLong("expiresAt") - System.currentTimeMillis()))
             .setContentIntent(open(c, pending, false))
@@ -259,7 +269,6 @@ final class CallNotifications {
                 .setContentTitle("Incoming Anagram call").setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setCategory(NotificationCompat.CATEGORY_CALL).setContentIntent(open(c, pending, false))
                 .setStyle(NotificationCompat.CallStyle.forIncomingCall(new Person.Builder().setName("Incoming Anagram call").build(), declineIntent, answerIntent)).build());
-        try { NotificationManagerCompat.from(c).notify(NOTIFICATION_ID, builder.build()); }
-        catch (SecurityException ignored) { }
+        return builder.build();
     }
 }

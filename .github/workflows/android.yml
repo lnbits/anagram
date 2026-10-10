@@ -100,6 +100,17 @@ jobs:
           mapfile -t apks < <(find mobile-assets -name '*.apk' -type f)
           [[ ${#apks[@]} -eq 1 ]]
           bash scripts/test-android-startup.sh "${apks[0]}"
+          # CallStyle is enforced by Android 12+, so JVM tests alone cannot
+          # validate it. Reuse this Android 15 emulator after the release smoke.
+          # The debug test harness packages the native libraries just built above.
+          ./src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:assembleUniversalDebug :app:assembleUniversalDebugAndroidTest -x rustBuildUniversalDebug
+          adb uninstall com.nostr.anagram
+          adb install src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+          adb install src-tauri/gen/android/app/build/outputs/apk/androidTest/universal/debug/app-universal-debug-androidTest.apk
+          adb shell pm grant com.nostr.anagram android.permission.POST_NOTIFICATIONS
+          adb shell am instrument -w -e class com.nostr.anagram.CallNotificationsDeviceTest com.nostr.anagram.test/androidx.test.runner.AndroidJUnitRunner | tee android-startup-results/call-notifications.txt
+          grep -Eq '^OK \([0-9]+ tests?\)' android-startup-results/call-notifications.txt
+          node scripts/test-android-call-notifications.mjs | tee android-startup-results/call-notification-relay.txt
       - name: Upload startup diagnostics
         if: always()
         uses: actions/upload-artifact@v4

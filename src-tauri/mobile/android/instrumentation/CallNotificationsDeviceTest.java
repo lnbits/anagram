@@ -20,13 +20,37 @@ public final class CallNotificationsDeviceTest {
     private final String owner = repeat("a", 64), peer = repeat("b", 64);
     private final String id = "12345678-1234-4123-8123-123456789abc";
     private void plan(String account, boolean allowed, boolean details) {
-        RelayNotificationPreferences.saveWatchPlan(context, Collections.emptyList(), account, Collections.singletonList(account),
+        RelayNotificationPreferences.saveWatchPlan(context, Collections.singletonList("ws://127.0.0.1:7019/"), account, Collections.singletonList(account),
             Collections.singletonList(new NotificationConversation(peer, null, "Private caller name", "", "PC", allowed, allowed)), details);
         RelayNotificationPreferences.setEnabled(context, true);
         RelayNotificationPreferences.setAppForeground(context, false);
     }
-    @Before public void before() { CallNotifications.clear(context); plan(owner, true, false); }
-    @After public void after() { CallNotifications.clear(context); RelayNotificationPreferences.setEnabled(context, false); }
+    @Before public void before() throws Exception {
+        CallNotifications.clear(context); plan(owner, true, false);
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> RelayNotificationService.startOrRefresh(context, true));
+        waitForListener();
+    }
+    @After public void after() throws Exception {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> RelayNotificationService.requestStop(context, true));
+        long deadline = System.currentTimeMillis() + 3000;
+        while (context.getSystemService(NotificationManager.class).getActiveNotifications().length != 0 && System.currentTimeMillis() < deadline) Thread.sleep(20);
+        assertEquals(0, context.getSystemService(NotificationManager.class).getActiveNotifications().length);
+    }
+    private android.service.notification.StatusBarNotification[] calls() {
+        return java.util.Arrays.stream(context.getSystemService(NotificationManager.class).getActiveNotifications())
+            .filter(n -> Notification.CATEGORY_CALL.equals(n.getNotification().category))
+            .toArray(android.service.notification.StatusBarNotification[]::new);
+    }
+    private void waitForListener() throws Exception {
+        // Android can defer the first quiet foreground-service notification.
+        long deadline = System.currentTimeMillis() + 15000;
+        while (System.currentTimeMillis() < deadline) {
+            for (android.service.notification.StatusBarNotification n : context.getSystemService(NotificationManager.class).getActiveNotifications())
+                if (!Notification.CATEGORY_CALL.equals(n.getNotification().category) && (n.getNotification().flags & Notification.FLAG_FOREGROUND_SERVICE) != 0) return;
+            Thread.sleep(20);
+        }
+        fail("Quiet foreground listener notification was not restored");
+    }
     private IncomingCallSignal signal(String action) throws Exception {
         JSONObject value = new JSONObject().put("protocol", "anagram/iroh-call/1").put("callId", id)
             .put("action", action).put("mode", "audio").put("reason", "cancelled")
@@ -40,18 +64,20 @@ public final class CallNotificationsDeviceTest {
     }
     private void waitForNotifications(int count) throws Exception {
         long deadline = System.currentTimeMillis() + 3000;
-        while (context.getSystemService(NotificationManager.class).getActiveNotifications().length != count && System.currentTimeMillis() < deadline) Thread.sleep(20);
-        assertEquals(count, context.getSystemService(NotificationManager.class).getActiveNotifications().length);
+        while (calls().length != count && System.currentTimeMillis() < deadline) Thread.sleep(20);
+        assertEquals(count, calls().length);
+        if (count == 0) waitForListener();
     }
     private void invite() throws Exception { CallNotifications.receive(context, owner, peer, signal("invite"), new JSONObject().put("content", "ciphertext"), ""); }
     @Test public void notificationIsPrivateAndHasAnswerDeclineActions() throws Exception {
         invite();
         waitForNotifications(1);
-        android.service.notification.StatusBarNotification[] shown = context.getSystemService(NotificationManager.class).getActiveNotifications();
+        android.service.notification.StatusBarNotification[] shown = calls();
         assertEquals(1, shown.length);
         Notification notification = shown[0].getNotification();
         assertEquals("Incoming Anagram call", notification.extras.getString(Notification.EXTRA_TITLE));
         assertEquals(Notification.VISIBILITY_PRIVATE, notification.visibility);
+        assertTrue("Call card must belong to the foreground service", (notification.flags & Notification.FLAG_FOREGROUND_SERVICE) != 0);
         assertNotNull(notification.publicVersion);
         assertEquals("Incoming Anagram call", notification.publicVersion.extras.getString(Notification.EXTRA_TITLE));
         assertEquals(2, notification.publicVersion.actions.length);
@@ -59,7 +85,9 @@ public final class CallNotificationsDeviceTest {
         assertNotNull(notification.contentIntent);
         assertFalse(pending().toString().contains("relay.example"));
         plan(owner, true, true); CallNotifications.refresh(context);
-        shown = context.getSystemService(NotificationManager.class).getActiveNotifications();
+        long deadline = System.currentTimeMillis() + 3000;
+        while (!"Private caller name".equals(calls()[0].getNotification().extras.getString(Notification.EXTRA_TITLE)) && System.currentTimeMillis() < deadline) Thread.sleep(20);
+        shown = calls();
         assertEquals("Private caller name", shown[0].getNotification().extras.getString(Notification.EXTRA_TITLE));
     }
     @Test public void answerTokenIsSingleUseAndUnforgeable() throws Exception {
@@ -67,6 +95,7 @@ public final class CallNotificationsDeviceTest {
         assertNull(CallNotifications.action(context, "forged", true));
         assertNotNull(CallNotifications.action(context, token, true));
         assertNull(CallNotifications.action(context, token, true));
+        waitForNotifications(0);
     }
     @Test public void cancelPreventsDelayedInvitationAndOldAction() throws Exception {
         invite(); String token = pending().getString("token");
@@ -103,11 +132,20 @@ public final class CallNotificationsDeviceTest {
     }
     @Test public void declineActionWorksWithoutAnActivity() throws Exception {
         invite(); waitForNotifications(1);
-        Notification notification = context.getSystemService(NotificationManager.class).getActiveNotifications()[0].getNotification();
+        Notification notification = calls()[0].getNotification();
         notification.actions[0].actionIntent.send();
         long deadline = System.currentTimeMillis() + 3000;
         while (!CallNotifications.isClosed(context, owner, peer, id) && System.currentTimeMillis() < deadline) Thread.sleep(20);
         assertTrue(CallNotifications.isClosed(context, owner, peer, id));
+        waitForNotifications(0);
+    }
+    @Test public void serviceRefreshKeepsRingingAndCancellationRestoresListener() throws Exception {
+        invite(); waitForNotifications(1);
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> RelayNotificationService.startOrRefresh(context, true));
+        Thread.sleep(600); // Includes the debounced relay-status notification update.
+        waitForNotifications(1);
+        assertTrue((calls()[0].getNotification().flags & Notification.FLAG_FOREGROUND_SERVICE) != 0);
+        CallNotifications.finish(context, owner, peer, id);
         waitForNotifications(0);
     }
     @Test public void backgroundListenerReceivesAndDeclinesThroughRelay() throws Exception {

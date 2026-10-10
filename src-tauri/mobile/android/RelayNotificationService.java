@@ -100,10 +100,24 @@ public final class RelayNotificationService extends Service {
     private ConnectivityManager.NetworkCallback networkCallback;
     private boolean hasNetworkConnection;
     private boolean hasPostedForegroundNotification;
+    private static volatile RelayNotificationService runningInstance;
+
+    static void refreshCallNotification(Context context) {
+        RelayNotificationService service = runningInstance;
+        if (service == null) {
+            NotificationManagerCompat.from(context).cancel(CallNotifications.NOTIFICATION_ID);
+            return; // A persisted invitation is restored when the listener starts.
+        }
+        service.handler.post(() -> {
+            if (runningInstance == service && service.hasPostedForegroundNotification && !service.isStopping)
+                service.postServiceNotificationUpdate();
+        });
+    }
 
     @Override
     public void onCreate() {
         super.onCreate();
+        runningInstance = this;
         logDebug("service-created");
         if (!isProcessInForeground()) {
             RelayNotificationPreferences.setAppForeground(this, false);
@@ -155,6 +169,7 @@ public final class RelayNotificationService extends Service {
 
     @Override
     public void onDestroy() {
+        if (runningInstance == this) runningInstance = null;
         logDebug("service-destroyed sockets=" + sockets.size());
         isStopping = true;
         hasPostedForegroundNotification = false;
@@ -245,20 +260,23 @@ public final class RelayNotificationService extends Service {
     }
 
     private void startAsForegroundService() {
-        Notification notification = createServiceNotification();
+        // Android 12+ requires CallStyle to be the foreground-service notification
+        // (or use a full-screen intent). Reuse our running listener; no new service,
+        // background activity launch, microphone permission or full-screen access.
+        Notification call = CallNotifications.currentNotification(this);
+        int id = call == null ? SERVICE_NOTIFICATION_ID : CallNotifications.NOTIFICATION_ID;
+        Notification notification = call == null ? createServiceNotification() : call;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                SERVICE_NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            );
-            hasPostedForegroundNotification = true;
-            logDebug("foreground-notification-posted id=" + SERVICE_NOTIFICATION_ID);
-            return;
+            startForeground(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+        } else {
+            startForeground(id, notification);
         }
-        startForeground(SERVICE_NOTIFICATION_ID, notification);
         hasPostedForegroundNotification = true;
-        logDebug("foreground-notification-posted id=" + SERVICE_NOTIFICATION_ID);
+        // Distinct IDs/channels let each new call ring, while status updates keep
+        // the ringing card in place. Answer/decline/expiry restore the quiet card.
+        NotificationManagerCompat.from(this).cancel(
+            call == null ? CallNotifications.NOTIFICATION_ID : SERVICE_NOTIFICATION_ID);
+        logDebug("foreground-notification-posted id=" + id);
     }
 
     private void stopListener(boolean disablePreference) {
@@ -1030,10 +1048,7 @@ public final class RelayNotificationService extends Service {
             return;
         }
         try {
-            NotificationManagerCompat.from(this).notify(
-                SERVICE_NOTIFICATION_ID,
-                createServiceNotification()
-            );
+            startAsForegroundService();
         } catch (SecurityException exception) {
             logWarning("foreground-notification-update-failed " + exceptionSummary(exception));
         }

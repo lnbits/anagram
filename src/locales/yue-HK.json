@@ -443,6 +443,7 @@
   "mediaDataStorage.serverSaved": "已儲存 Blossom 伺服器。",
   "mediaDataStorage.serverUrl": "伺服器網址",
   "mediaDataStorage.serverUrlHint": "輸入唔包含上載路徑嘅 HTTPS 基本網址。",
+  "mediaDataStorage.serverUrlFromPublishedList": "Using the first server from the Blossom list published to your relays.",
   "mediaDataStorage.serverUrlInvalid": "請輸入有效嘅 HTTPS 伺服器網址，唔包含路徑、查詢參數或片段。",
   "mediaDataStorage.serverUrlRequired": "必須提供 Blossom 伺服器網址。",
   "mediaDataStorage.title": "媒體及資料儲存",

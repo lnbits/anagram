@@ -443,6 +443,7 @@
   "mediaDataStorage.serverSaved": "Blossom సర్వర్ సేవ్ అయింది.",
   "mediaDataStorage.serverUrl": "సర్వర్ URL",
   "mediaDataStorage.serverUrlHint": "అప్‌లోడ్ పాత్ లేకుండా ప్రాథమిక HTTPS URL ఇవ్వండి.",
+  "mediaDataStorage.serverUrlFromPublishedList": "Using the first server from the Blossom list published to your relays.",
   "mediaDataStorage.serverUrlInvalid": "పాత్, క్వెరీ లేదా ఫ్రాగ్మెంట్ లేని చెల్లుబాటు అయ్యే HTTPS సర్వర్ URL ఇవ్వండి.",
   "mediaDataStorage.serverUrlRequired": "Blossom సర్వర్ URL అవసరం.",
   "mediaDataStorage.title": "మీడియా మరియు డేటా నిల్వ",

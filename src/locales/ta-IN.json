@@ -443,6 +443,7 @@
   "mediaDataStorage.serverSaved": "Blossom சேவையகம் சேமிக்கப்பட்டது.",
   "mediaDataStorage.serverUrl": "சேவையக URL",
   "mediaDataStorage.serverUrlHint": "பதிவேற்றப் பாதை இல்லாத அடிப்படை HTTPS URL ஐ உள்ளிடவும்.",
+  "mediaDataStorage.serverUrlFromPublishedList": "Using the first server from the Blossom list published to your relays.",
   "mediaDataStorage.serverUrlInvalid": "பாதை, வினவல் அல்லது துண்டு இல்லாத செல்லுபடியான HTTPS சேவையக URL ஐ உள்ளிடவும்.",
   "mediaDataStorage.serverUrlRequired": "Blossom சேவையக URL தேவை.",
   "mediaDataStorage.title": "ஊடகம் மற்றும் தரவு சேமிப்பு",

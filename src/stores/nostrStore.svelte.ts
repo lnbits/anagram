@@ -38,6 +38,7 @@ import { useNip65RelayStore } from '#src/stores/nip65RelayStore.ts';
 import { createAppLifecycleRuntime } from '#src/stores/nostr/appLifecycleRuntime.ts';
 import { createAuthIdentityRuntime } from '#src/stores/nostr/authIdentityRuntime.ts';
 import { createAuthSessionRuntime } from '#src/stores/nostr/authSessionRuntime.ts';
+import { createBlossomServerListRuntime } from '#src/stores/nostr/blossomServerListRuntime.ts';
 import { createBlossomSettingsRuntime } from '#src/stores/nostr/blossomSettingsRuntime.ts';
 import { createCallSignalingRuntime } from '#src/stores/nostr/callSignalingRuntime.ts';
 import {
@@ -192,6 +193,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
   const relayStore = useRelayStore();
   let relayStatusVersion = $state(0);
   let contactListVersion = $state(0);
+  let blossomServerListVersion = $state(0);
   let isRestoringStartupState = $state(false);
   let eventSince = $state(0);
   let startupSteps = $state<StartupStepSnapshot[]>(createInitialStartupStepSnapshots());
@@ -1992,12 +1994,34 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
       getOwnPubkey: getLoggedInPublicKeyHex,
     });
 
-  const { getBlossomServerUrl, saveBlossomServerUrl } = createBlossomSettingsRuntime({
-    ensurePrivatePreferences,
-    publishPrivatePreferences,
-    readPrivatePreferencesFromStorage,
-    writePrivatePreferencesToStorage,
+  function bumpBlossomServerListVersion(): void {
+    blossomServerListVersion += 1;
+  }
+
+  const {
+    getBlossomServerUrls,
+    resetBlossomServerListRuntimeState,
+    subscribeMyBlossomServerListUpdates,
+  } = createBlossomServerListRuntime({
+    buildSubscriptionRelayDetails,
+    ensureRelayConnections,
+    getLoggedInPublicKeyHex,
+    getLoggedInSignerUser,
+    logSubscription,
+    ndk,
+    onBlossomServerListApplied: bumpBlossomServerListVersion,
+    resolveLoggedInReadRelayUrls,
+    subscribeWithReqLogging,
   });
+
+  const { getBlossomServerOrigin, getBlossomServerUrl, saveBlossomServerUrl } =
+    createBlossomSettingsRuntime({
+      ensurePrivatePreferences,
+      publishPrivatePreferences,
+      readPrivatePreferencesFromStorage,
+      readPublishedBlossomServerUrls: getBlossomServerUrls,
+      writePrivatePreferencesToStorage,
+    });
 
   const {
     resetGroupRosterSubscriptionRuntimeState: resetGroupRosterSubscriptionRuntimeStateImpl,
@@ -2085,6 +2109,8 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     setSyncRecentChatContactsPromise: (promise) => {
       syncRecentChatContactsPromise = promise;
     },
+    subscribeBlossomServerListUpdates: (seedRelayUrls) =>
+      subscribeMyBlossomServerListUpdates(seedRelayUrls),
     subscribeContactProfileUpdates,
     subscribeContactRelayListUpdates,
     subscribeGroupMembershipRosterUpdates: (seedRelayUrls) =>
@@ -2206,6 +2232,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     },
     resetContactSubscriptionsRuntimeState,
     resetEventSinceForFreshLogin,
+    resetBlossomServerListRuntimeState,
     resetCalls: () => {
       useCallStore().reset();
       useCallRoomStore().reset();
@@ -2381,6 +2408,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
         subscribePrivateContactListUpdates(relayUrls),
         subscribeGroupMembershipRosterUpdatesRuntime(relayUrls),
         subscribeContactProfileUpdates(relayUrls),
+        subscribeMyBlossomServerListUpdates(relayUrls),
       ]);
     },
     setIsReconnectHealing: (value) => {
@@ -2603,6 +2631,9 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     set contactListVersion(value) {
       contactListVersion = value;
     },
+    get blossomServerListVersion() {
+      return blossomServerListVersion;
+    },
     get developerDiagnosticsEnabled() {
       return developerDiagnosticsEnabled;
     },
@@ -2777,6 +2808,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     sendDirectMessage,
     ensureBlossomUploadAuthentication,
     getBlossomServerUrl,
+    getBlossomServerOrigin,
     saveBlossomServerUrl,
     getIrohRelays,
     getIrohRelaySettings,

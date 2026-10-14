@@ -39,7 +39,11 @@ function installLocalStorage(): void {
 }
 
 function createSessionInitializationRuntime(
-  options: { restoreMyRelayListError?: Error; resumeError?: Error } = {},
+  options: {
+    blossomServerListError?: Error;
+    restoreMyRelayListError?: Error;
+    resumeError?: Error;
+  } = {},
 ) {
   let restoreStartupStatePromise: Promise<void> | null = null;
   let syncLoggedInContactProfilePromise: Promise<void> | null = null;
@@ -58,6 +62,11 @@ function createSessionInitializationRuntime(
   };
   const startPrivateMessagesHistoryRestore = vi.fn();
   const ensureRelayConnections = vi.fn(async () => {});
+  const subscribeBlossomServerListUpdates = options.blossomServerListError
+    ? vi.fn(async () => {
+        throw options.blossomServerListError;
+      })
+    : vi.fn(async () => {});
   const restoreMyRelayList = options.restoreMyRelayListError
     ? vi.fn(async () => {
         throw options.restoreMyRelayListError;
@@ -110,6 +119,7 @@ function createSessionInitializationRuntime(
     setSyncRecentChatContactsPromise: (promise) => {
       syncRecentChatContactsPromise = promise;
     },
+    subscribeBlossomServerListUpdates,
     subscribeContactProfileUpdates: task(),
     subscribeContactRelayListUpdates: task(),
     subscribeGroupMembershipRosterUpdates: task(),
@@ -125,6 +135,7 @@ function createSessionInitializationRuntime(
     beginStartupStep,
     runLightweightSessionResume,
     runtime,
+    subscribeBlossomServerListUpdates,
   };
 }
 
@@ -205,6 +216,7 @@ describe('startup contact sync runtime', () => {
       setSyncRecentChatContactsPromise: (promise) => {
         syncRecentChatContactsPromise = promise;
       },
+      subscribeBlossomServerListUpdates: vi.fn(async () => {}),
       subscribeContactProfileUpdates: task('contact-profile-subscribe'),
       subscribeContactRelayListUpdates: task('contact-relay-list-subscribe'),
       subscribeGroupMembershipRosterUpdates: task('group-rosters-subscribe'),
@@ -299,6 +311,7 @@ describe('startup contact sync runtime', () => {
       setSyncRecentChatContactsPromise: (promise) => {
         syncRecentChatContactsPromise = promise;
       },
+      subscribeBlossomServerListUpdates: vi.fn(async () => {}),
       subscribeContactProfileUpdates: task('contact-profile-subscribe'),
       subscribeContactRelayListUpdates: task('contact-relay-list-subscribe'),
       subscribeGroupMembershipRosterUpdates: task('group-rosters-subscribe'),
@@ -369,6 +382,34 @@ describe('startup contact sync runtime', () => {
     await runtime.restoreStartupState();
 
     expect(warnSpy).toHaveBeenCalledWith('Failed to restore My Relays on startup', queryError);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('reads the published Blossom server list during startup', async () => {
+    const { runtime, subscribeBlossomServerListUpdates } = createSessionInitializationRuntime();
+
+    await runtime.restoreStartupState(['wss://relay.example/']);
+
+    expect(subscribeBlossomServerListUpdates).toHaveBeenCalledWith(['wss://relay.example/']);
+  });
+
+  it('keeps startup successful when the published Blossom server list cannot be read', async () => {
+    const queryError = new RelayQueryTimeoutError(2_500);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { runtime, subscribeBlossomServerListUpdates } = createSessionInitializationRuntime({
+      blossomServerListError: queryError,
+    });
+
+    await expect(runtime.restoreStartupState()).resolves.toBeUndefined();
+
+    expect(subscribeBlossomServerListUpdates).toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Failed to read the published Blossom server list',
+        queryError,
+      );
+    });
     expect(errorSpy).not.toHaveBeenCalled();
   });
 });

@@ -133,6 +133,7 @@ interface StartupContactSyncRuntimeDeps {
   setRestoreStartupStatePromise: (promise: Promise<void> | null) => void;
   setSyncLoggedInContactProfilePromise: (promise: Promise<void> | null) => void;
   setSyncRecentChatContactsPromise: (promise: Promise<void> | null) => void;
+  subscribeBlossomServerListUpdates: (seedRelayUrls?: string[], force?: boolean) => Promise<void>;
   subscribeContactProfileUpdates: (seedRelayUrls?: string[], force?: boolean) => Promise<void>;
   subscribeContactRelayListUpdates: (
     seedRelayUrls?: string[],
@@ -192,6 +193,7 @@ export function createStartupContactSyncRuntime(state: StartupContactSyncRuntime
     startPrivateMessagesHistoryRestore,
     setRestoreStartupStatePromise,
     setSyncLoggedInContactProfilePromise,
+    subscribeBlossomServerListUpdates,
     subscribeContactProfileUpdates,
     subscribeContactRelayListUpdates,
     subscribeGroupMembershipRosterUpdates,
@@ -404,6 +406,12 @@ export function createStartupContactSyncRuntime(state: StartupContactSyncRuntime
         return;
       case 'contact-relay-list-subscribe':
         await subscribeContactRelayListUpdates(seedRelayUrls, forceSubscriptions);
+        // Future uploads are the only thing this decides, so a slow or empty relay response
+        // must neither hold up startup nor fail the step: the saved setting and the built-in
+        // default already cover the gap.
+        void subscribeBlossomServerListUpdates(seedRelayUrls).catch((error) => {
+          console.warn('Failed to read the published Blossom server list', error);
+        });
         return;
       case 'message-history-restore':
         startPrivateMessagesHistoryRestore();

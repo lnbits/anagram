@@ -18,18 +18,33 @@
   export let section: string;
   const nostr = useNostrStore();
   const startup = toStore(() => nostr.isRestoringStartupState);
+  const publishedServerList = toStore(() => nostr.blossomServerListVersion);
   let dark = readDarkModePreference() ?? document.body.classList.contains('body--dark');
   let layout = readDesktopMessageLayoutPreference();
   let accent = readThemeAccent();
   let saved = nostr.getBlossomServerUrl(),
+    source = nostr.getBlossomServerOrigin(),
     server = saved,
     busy = false,
     error = '',
     notice = '';
+  let appliedPublishedList = -1;
   $: normalized = normalizeBlossomServerUrl(server);
-  $: if (!$startup && !busy && server === saved) {
+  function reloadServerFromStore(): void {
     saved = nostr.getBlossomServerUrl();
+    source = nostr.getBlossomServerOrigin();
     server = saved;
+  }
+  $: if (!$startup && !busy && server === saved) {
+    reloadServerFromStore();
+  }
+  // The published server list can arrive while this screen is open, and it decides the
+  // server the next upload uses.
+  $: if (appliedPublishedList !== $publishedServerList) {
+    appliedPublishedList = $publishedServerList;
+    if (!$startup && !busy && server === saved) {
+      reloadServerFromStore();
+    }
   }
   async function persist(value: string) {
     if (busy) return;
@@ -38,6 +53,7 @@
     notice = '';
     try {
       saved = await nostr.saveBlossomServerUrl(value);
+      source = nostr.getBlossomServerOrigin();
       server = saved;
       notice = $translate('mediaDataStorage.serverSaved');
     } catch {
@@ -49,8 +65,7 @@
   function sync() {
     accent = readThemeAccent();
     if (!busy && server === saved) {
-      saved = nostr.getBlossomServerUrl();
-      server = saved;
+      reloadServerFromStore();
     }
   }
   onMount(() => {
@@ -157,6 +172,11 @@
           autocapitalize="none"
         /></label
       ><small class="settings-caption">{$translate('mediaDataStorage.serverUrlHint')}</small>
+      {#if source === 'published'}<small
+          class="settings-caption"
+          data-testid="settings-blossom-server-source"
+          >{$translate('mediaDataStorage.serverUrlFromPublishedList')}</small
+        >{/if}
       {#if !normalized}<p class="error">
           {$translate(
             server.trim()
@@ -169,9 +189,7 @@
           type="button"
           class="outline"
           data-testid="settings-blossom-restore-default"
-          disabled={busy ||
-            $startup ||
-            (server === DEFAULT_BLOSSOM_SERVER_URL && saved === DEFAULT_BLOSSOM_SERVER_URL)}
+          disabled={busy || $startup || source !== 'preference'}
           onclick={() => persist(DEFAULT_BLOSSOM_SERVER_URL)}
           >{$translate('mediaDataStorage.restoreDefault')}</button
         ><button

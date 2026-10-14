@@ -443,6 +443,7 @@
   "mediaDataStorage.serverSaved": "已保存 Blossom 服务器。",
   "mediaDataStorage.serverUrl": "服务器网址",
   "mediaDataStorage.serverUrlHint": "输入不含上传路径的 HTTPS 基础网址。",
+  "mediaDataStorage.serverUrlFromPublishedList": "Using the first server from the Blossom list published to your relays.",
   "mediaDataStorage.serverUrlInvalid": "请输入有效的 HTTPS 服务器网址，不含路径、查询参数或片段。",
   "mediaDataStorage.serverUrlRequired": "必须提供 Blossom 服务器网址。",
   "mediaDataStorage.title": "媒体与数据存储",

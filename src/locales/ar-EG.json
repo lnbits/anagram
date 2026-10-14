@@ -443,6 +443,7 @@
   "mediaDataStorage.serverSaved": "تم حفظ خادم Blossom.",
   "mediaDataStorage.serverUrl": "عنوان URL للخادم",
   "mediaDataStorage.serverUrlHint": "أدخل عنوان HTTPS الأساسي دون مسار الرفع.",
+  "mediaDataStorage.serverUrlFromPublishedList": "Using the first server from the Blossom list published to your relays.",
   "mediaDataStorage.serverUrlInvalid": "أدخل عنوان HTTPS صالحًا للخادم دون مسار أو استعلام أو جزء.",
   "mediaDataStorage.serverUrlRequired": "يجب إدخال عنوان URL لخادم Blossom.",
   "mediaDataStorage.title": "تخزين الوسائط والبيانات",

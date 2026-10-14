@@ -38,6 +38,7 @@ import { useNip65RelayStore } from '#src/stores/nip65RelayStore.ts';
 import { createAppLifecycleRuntime } from '#src/stores/nostr/appLifecycleRuntime.ts';
 import { createAuthIdentityRuntime } from '#src/stores/nostr/authIdentityRuntime.ts';
 import { createAuthSessionRuntime } from '#src/stores/nostr/authSessionRuntime.ts';
+import { createBlobMediaRecoveryRuntime } from '#src/stores/nostr/blobMediaRecoveryRuntime.ts';
 import { createBlossomSettingsRuntime } from '#src/stores/nostr/blossomSettingsRuntime.ts';
 import { createCallSignalingRuntime } from '#src/stores/nostr/callSignalingRuntime.ts';
 import {
@@ -142,7 +143,11 @@ import {
   shouldPreserveExistingGroupRelaysValue,
 } from '#src/stores/nostr/valueUtils.ts';
 import { useRelayStore } from '#src/stores/relayStore.ts';
-import type { ChatGroupEpochKey, MessageRelayStatus } from '#src/types/chat.ts';
+import type {
+  ChatGroupEpochKey,
+  MessageAttachmentMetadata,
+  MessageRelayStatus,
+} from '#src/types/chat.ts';
 import type { ContactRecord } from '#src/types/contact.ts';
 import {
   buildBlossomUploadAuthorization,
@@ -1992,6 +1997,28 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
       getOwnPubkey: getLoggedInPublicKeyHex,
     });
 
+  const { recoverMedia: recoverBlossomMediaBlob, resetBlobMediaRecoveryRuntimeState } =
+    createBlobMediaRecoveryRuntime({
+      ensureRelayConnections,
+      getLoggedInPublicKeyHex,
+      ndk,
+      resolveLoggedInReadRelayUrls,
+    });
+
+  // NIP-B7: when a stored Blossom link is dead, look the same file up on the other servers
+  // the author published, and hand back only bytes whose hash matches the link.
+  function recoverBlossomMedia(
+    authorPublicKey: string,
+    attachment: MessageAttachmentMetadata,
+  ): Promise<Blob | null> {
+    return recoverBlossomMediaBlob({
+      authorPublicKey,
+      sha256: attachment.sha256,
+      size: attachment.size,
+      url: attachment.url,
+    });
+  }
+
   const { getBlossomServerUrl, saveBlossomServerUrl } = createBlossomSettingsRuntime({
     ensurePrivatePreferences,
     publishPrivatePreferences,
@@ -2206,6 +2233,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     },
     resetContactSubscriptionsRuntimeState,
     resetEventSinceForFreshLogin,
+    resetBlobMediaRecoveryRuntimeState,
     resetCalls: () => {
       useCallStore().reset();
       useCallRoomStore().reset();
@@ -2778,6 +2806,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     ensureBlossomUploadAuthentication,
     getBlossomServerUrl,
     saveBlossomServerUrl,
+    recoverBlossomMedia,
     getIrohRelays,
     getIrohRelaySettings,
     saveIrohRelaySettings,

@@ -241,6 +241,7 @@ function createAuthSessionHarness() {
     },
     resetContactSubscriptionsRuntimeState: vi.fn(),
     resetCalls: vi.fn(),
+    resetBlobMediaRecoveryRuntimeState: vi.fn(),
     resetEventSinceForFreshLogin: vi.fn(),
     resetGroupRosterSubscriptionRuntimeState: vi.fn(),
     resetMyRelayListRuntimeState: vi.fn(),

@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
   import { publicGroupLinkTarget } from '#src/utils/publicGroupLink.ts';
-  import type { Message } from '#src/types/chat.ts';
+  import type { Message, MessageAttachmentMetadata } from '#src/types/chat.ts';
   import {
     formatMessage,
     collapseFormattedMessage,
@@ -14,6 +15,7 @@
   import { parseRoomLink } from '#src/utils/callRoom.ts';
   import { readCallHistory, callHistoryDuration } from '#src/utils/callHistory.ts';
   import { useTrustedMediaStore } from '#src/stores/trustedMediaStore.svelte.ts';
+  import { useNostrStore } from '#src/stores/nostrStore.svelte.ts';
   import { portal } from '#src/lib/actions/portal.ts';
   import { toStore } from 'svelte/store';
   import { Notify } from '#src/lib/platform/ui.ts';
@@ -54,9 +56,37 @@
     onroom,
   }: Props = $props();
   const trusted = useTrustedMediaStore();
+  const nostr = useNostrStore();
   const trust = toStore(() => trusted.trustedImageSenderPublicKeys);
   let imageUrl = $state('');
   let imageName = $state('');
+  // NIP-B7: a stored Blossom link that no longer loads is looked for on the other servers
+  // the author published, and only hash-matching bytes are shown.
+  let recoveredMedia = $state<Record<string, string>>({});
+  const recoveredObjectUrls = new Set<string>();
+  const mediaRecoveryAttempted = new Set<string>();
+  function resolvedMediaUrl(url: string): string {
+    return recoveredMedia[url] ?? url;
+  }
+  function recoverMedia(attachment: MessageAttachmentMetadata): void {
+    if (mediaRecoveryAttempted.has(attachment.url)) return;
+    mediaRecoveryAttempted.add(attachment.url);
+    void nostr
+      .recoverBlossomMedia(message.authorPublicKey, attachment)
+      .then((blob) => {
+        if (!blob) return;
+        const objectUrl = URL.createObjectURL(blob);
+        recoveredObjectUrls.add(objectUrl);
+        recoveredMedia[attachment.url] = objectUrl;
+      })
+      .catch(() => {
+        // A link that cannot be recovered stays as it was.
+      });
+  }
+  onDestroy(() => {
+    for (const objectUrl of recoveredObjectUrls) URL.revokeObjectURL(objectUrl);
+    recoveredObjectUrls.clear();
+  });
   let expanded = $state(false),
     showMedia = $state(false);
   async function open(url: string) {
@@ -259,20 +289,22 @@
                   rel="noopener noreferrer"
                   onclick={(e) => {
                     e.preventDefault();
-                    imageUrl = attachment.url;
+                    imageUrl = resolvedMediaUrl(attachment.url);
                     imageName = attachment.name ?? 'attachment';
                   }}
                   ><img
-                    src={attachment.url}
+                    src={resolvedMediaUrl(attachment.url)}
                     alt={attachment.name ?? 'Attachment'}
                     loading="lazy"
                     referrerpolicy="no-referrer"
+                    onerror={() => recoverMedia(attachment)}
                   /></a
                 >
               {:else}<!-- svelte-ignore a11y_media_has_caption --><video
-                  src={attachment.url}
+                  src={resolvedMediaUrl(attachment.url)}
                   controls
                   preload="none"
+                  onerror={() => recoverMedia(attachment)}
                 ></video>{/if}
               <div class="media-footer">
                 <button
@@ -288,9 +320,10 @@
               </div>
             </div>
           {:else if attachment.mimeType.startsWith('audio/')}<audio
-              src={attachment.url}
+              src={resolvedMediaUrl(attachment.url)}
               controls
               preload="none"
+              onerror={() => recoverMedia(attachment)}
             ></audio>
           {:else}<a
               href={attachment.url}

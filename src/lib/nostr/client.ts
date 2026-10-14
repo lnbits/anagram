@@ -43,6 +43,7 @@ export const NostrKind = {
   RelayList: 10002,
   DirectMessageReceiveRelayList: 10050,
   PrivateStorageRelayList: 10013,
+  BlossomServerList: 10063,
   FollowSet: 30000,
 } as const;
 export enum NostrRelayStatus {

@@ -81,6 +81,7 @@ interface AuthSessionRuntimeDeps {
   relayStatusVersion: number;
   resetContactSubscriptionsRuntimeState: (reason?: string) => void;
   resetCalls?: () => void;
+  resetBlobMediaRecoveryRuntimeState: () => void;
   resetEventSinceForFreshLogin: () => void;
   resetGroupRosterSubscriptionRuntimeState: (reason?: string) => void;
   resetMyRelayListRuntimeState: (reason?: string) => void;
@@ -140,6 +141,7 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
     relayConnectPromises,
     resetContactSubscriptionsRuntimeState,
     resetCalls,
+    resetBlobMediaRecoveryRuntimeState,
     resetEventSinceForFreshLogin,
     resetGroupRosterSubscriptionRuntimeState,
     resetMyRelayListRuntimeState,
@@ -465,6 +467,7 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
       console.error('Failed to clear developer trace entries.', error);
     });
     resetContactSubscriptionsRuntimeState('clear-private-key');
+    resetBlobMediaRecoveryRuntimeState();
     resetGroupRosterSubscriptionRuntimeState('clear-private-key');
     resetMyRelayListRuntimeState('clear-private-key');
     resetMuteListRuntimeState();

@@ -1,0 +1,20 @@
+{
+  "name": "anagram-github-issue-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A standalone Anagram bot that drafts GitHub issues with a local Ollama model and publishes them only after explicit confirmation.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env bot.js",
+    "review": "node --env-file-if-exists=.env review.js",
+    "test": "node --test test/*.test.js",
+    "check": "for f in *.js; do node --check \"$f\" || exit 1; done"
+  },
+  "dependencies": {
+    "nostr-tools": "2.25.2",
+    "ws": "8.22.0"
+  }
+}

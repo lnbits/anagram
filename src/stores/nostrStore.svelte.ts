@@ -145,6 +145,7 @@ import { useRelayStore } from '#src/stores/relayStore.ts';
 import type { ChatGroupEpochKey, MessageRelayStatus } from '#src/types/chat.ts';
 import type { ContactRecord } from '#src/types/contact.ts';
 import {
+  type BlossomAuthAction,
   buildBlossomUploadAuthorization,
   requireBlossomServerUrl,
 } from '#src/utils/blossomServer.ts';
@@ -1992,7 +1993,12 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
       getOwnPubkey: getLoggedInPublicKeyHex,
     });
 
-  const { getBlossomServerUrl, saveBlossomServerUrl } = createBlossomSettingsRuntime({
+  const {
+    getBlossomServerUrl,
+    getPrivateMediaBlossomServerUrl,
+    saveBlossomServerUrl,
+    savePrivateMediaBlossomServerUrl,
+  } = createBlossomSettingsRuntime({
     ensurePrivatePreferences,
     publishPrivatePreferences,
     readPrivatePreferencesFromStorage,
@@ -2124,6 +2130,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
   async function signBlossomUploadAuthHeader(input: {
     serverUrl: string;
     sha256: string;
+    action?: BlossomAuthAction;
   }): Promise<string> {
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
     if (!loggedInPubkeyHex) {
@@ -2132,7 +2139,12 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
 
     const serverUrl = requireBlossomServerUrl(input.serverUrl);
     const createdAt = Math.floor(Date.now() / 1000);
-    const authorization = buildBlossomUploadAuthorization(serverUrl, input.sha256, createdAt);
+    const authorization = buildBlossomUploadAuthorization(
+      serverUrl,
+      input.sha256,
+      createdAt,
+      input.action,
+    );
     const authEvent = new ClientEvent(ndk, {
       kind: 24242,
       created_at: createdAt,
@@ -2777,7 +2789,9 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     sendDirectMessage,
     ensureBlossomUploadAuthentication,
     getBlossomServerUrl,
+    getPrivateMediaBlossomServerUrl,
     saveBlossomServerUrl,
+    savePrivateMediaBlossomServerUrl,
     getIrohRelays,
     getIrohRelaySettings,
     saveIrohRelaySettings,

@@ -1,11 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import {
-  bootstrapUser,
-  navigateToChat,
-  disposeUsers,
-  navigateInApp,
-  TEST_ACCOUNTS,
-} from './parity/helpers';
+import { bootstrapUser, navigateToChat, disposeUsers, TEST_ACCOUNTS } from './parity/helpers';
 
 const server = 'https://images.example.org';
 const image = {
@@ -16,14 +10,22 @@ const image = {
     'base64',
   ),
 };
+// A Blossom server for encrypted private media: it stores what it receives and serves it back,
+// so the client can only show the image if it decrypts what it uploaded.
 async function uploads(page: Page, account: string) {
-  let count = 0;
-  let fail = false;
+  const bodies: Buffer[] = [];
+  const contentTypes: string[] = [];
   let hold: Promise<void> | undefined;
   let release = () => {};
   await page.route(`${server}/**`, async (route) => {
     if (route.request().method() !== 'PUT') {
-      await route.fulfill({ contentType: 'image/png', body: image.buffer });
+      const number = Number(new URL(route.request().url()).pathname.slice(1));
+      const body = bodies[number - 1];
+      await route.fulfill(
+        body
+          ? { contentType: 'application/octet-stream', body }
+          : { status: 404, body: 'Not found' },
+      );
       return;
     }
     expect(route.request().url()).toBe(`${server}/upload`);
@@ -33,31 +35,29 @@ async function uploads(page: Page, account: string) {
     );
     expect(auth.kind).toBe(24242);
     expect(auth.pubkey).toBe(account);
-    const number = ++count;
+    const body = route.request().postDataBuffer()!;
+    bodies.push(body);
+    contentTypes.push(headers['content-type']);
+    const number = bodies.length;
     await hold;
-    if (fail) {
-      await route.fulfill({ status: 500, body: 'Image upload failed' });
-      return;
-    }
     await route.fulfill({
       status: 201,
       json: {
-        url: `${server}/${number}.png`,
+        url: `${server}/${number}`,
         sha256: headers['x-sha-256'],
-        size: image.buffer.length,
-        type: 'image/png',
+        size: body.length,
+        type: 'application/octet-stream',
       },
     });
   });
   await page.evaluate(async (server) => {
     const { useNostrStore } = await import('/src/stores/nostrStore.svelte.ts');
-    await useNostrStore().saveBlossomServerUrl(server);
+    await useNostrStore().savePrivateMediaBlossomServerUrl(server);
   }, server);
   return {
-    count: () => count,
-    fail: (value: boolean) => {
-      fail = value;
-    },
+    count: () => bodies.length,
+    bodies,
+    contentTypes,
     hold: () => {
       hold = new Promise<void>((resolve) => {
         release = resolve;
@@ -69,8 +69,9 @@ async function uploads(page: Page, account: string) {
     },
   };
 }
-
-test('private upload can be cancelled and adds its link to a caption draft before sending', async ({
+// Private media is encrypted and sent as its own NIP-17 kind 15 message, which has no caption:
+// the composer text stays in the draft and is sent separately.
+test('private upload can be cancelled, sends encrypted kind 15 media, and keeps the caption draft', async ({
   browser,
 }) => {
   const user = await bootstrapUser(browser, TEST_ACCOUNTS.composerUpload);
@@ -84,20 +85,29 @@ test('private upload can be cancelled and adds its link to a caption draft befor
     upload.hold();
     await page.locator('input[type="file"]').setInputFiles(image);
     const dialog = page.getByRole('dialog', { name: 'upload', exact: true });
+    await expect(dialog).toContainText(image.name);
+    await expect(dialog).toContainText('Text in the composer is not included');
     await dialog.getByRole('button', { name: 'Upload', exact: true }).click();
     await expect.poll(upload.count).toBe(1);
     await dialog.getByRole('button', { name: 'Close dialog', exact: true }).click();
     upload.release();
+    await page.waitForTimeout(500);
     await expect(input).toHaveValue('My caption');
     await expect(rows).toHaveCount(0);
     await page.locator('input[type="file"]').setInputFiles(image);
     await dialog.getByRole('button', { name: 'Upload', exact: true }).click();
-    await expect(input).toHaveValue('My caption\nhttps://images.example.org/2.png');
-    await expect(rows).toHaveCount(0);
-    await input.fill('My finished caption\nhttps://images.example.org/2.png');
+    await expect(dialog).toBeHidden({ timeout: 30_000 });
+    await expect(rows).toHaveCount(1);
+    await expect(rows.getByTestId('message-encrypted-image')).toBeVisible({ timeout: 30_000 });
+    await expect(rows).not.toContainText('My caption');
+    expect(upload.count()).toBe(2);
+    expect(upload.contentTypes).toEqual(['application/octet-stream', 'application/octet-stream']);
+    for (const body of upload.bodies) expect(body.includes(image.buffer)).toBe(false);
+    await expect(input).toHaveValue('My caption');
+    await input.fill('My finished caption');
     await page.getByTestId('message-send-button').click();
-    await expect(rows).toContainText('My finished caption');
-    await expect(rows.locator('img[src="https://images.example.org/2.png"]')).toBeVisible();
+    await expect(rows).toHaveCount(2);
+    await expect(rows.last()).toContainText('My finished caption');
     await expect(input).toHaveValue('');
   } finally {
     await disposeUsers(user);

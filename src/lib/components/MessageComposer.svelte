@@ -25,7 +25,8 @@
   export let attachLabel = 'Attach media';
   export let maxlength: number | undefined = undefined;
   export let onsend: () => void;
-  export let onfile: (file?: File) => void;
+  // Where the file came from: pasted and dropped files always need explicit confirmation.
+  export let onfile: (file?: File, source?: 'picker' | 'paste' | 'drop') => void;
   export let pasteContext: () => string = () => '';
   export let onchange: () => void = () => {};
   let mobileKeyboard = false;
@@ -42,8 +43,8 @@
     fileInput.accept = types;
     fileInput.click();
   }
-  function prepareUpload(file?: File) {
-    if (allowAttachments && !disabled && !busy && !attachDisabled) onfile(file);
+  function prepareUpload(file?: File, source: 'picker' | 'paste' | 'drop' = 'picker') {
+    if (allowAttachments && !disabled && !busy && !attachDisabled) onfile(file, source);
   }
   function insertEmoji(value: string) {
     const start = input?.selectionStart ?? draft.length,
@@ -211,14 +212,14 @@
       use:nativeImagePaste={{
         enabled: () => allowAttachments && !disabled && !busy && !attachDisabled,
         context: () => pasteContext(),
-        onfile: prepareUpload,
+        onfile: (file) => prepareUpload(file, 'paste'),
       }}
       {disabled}
       onpaste={(event) => {
         const file = event.clipboardData?.files[0];
         if (file && allowAttachments && !attachDisabled) {
           event.preventDefault();
-          prepareUpload(file);
+          prepareUpload(file, 'paste');
         }
       }}
       ondragover={(event) => {
@@ -226,7 +227,7 @@
       }}
       ondrop={(event) => {
         event.preventDefault();
-        prepareUpload(event.dataTransfer?.files[0]);
+        prepareUpload(event.dataTransfer?.files[0], 'drop');
       }}
       aria-label={label}
       {placeholder}

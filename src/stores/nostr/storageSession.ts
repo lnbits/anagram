@@ -222,6 +222,15 @@ export function createStorageSessionRuntime(state: StorageSessionRuntimeDeps) {
       delete preferences.blossomServerUrl;
     }
 
+    const normalizedPrivateMediaServerUrl = normalizeBlossomServerUrl(
+      value.privateMediaBlossomServerUrl
+    );
+    if (normalizedPrivateMediaServerUrl) {
+      preferences.privateMediaBlossomServerUrl = normalizedPrivateMediaServerUrl;
+    } else {
+      delete preferences.privateMediaBlossomServerUrl;
+    }
+
     const irohSettings = normalizeIrohRelaySettings(value.irohRelaySettings);
     if (irohSettings) preferences.irohRelaySettings = irohSettings;
     else delete preferences.irohRelaySettings;

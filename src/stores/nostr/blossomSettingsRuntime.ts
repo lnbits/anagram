@@ -1,6 +1,7 @@
 import type { PrivatePreferences } from '#src/stores/nostr/types.ts';
 import {
   DEFAULT_BLOSSOM_SERVER_URL,
+  DEFAULT_PRIVATE_MEDIA_BLOSSOM_SERVER_URL,
   normalizeBlossomServerUrl,
   requireBlossomServerUrl,
 } from '#src/utils/blossomServer.ts';
@@ -18,27 +19,29 @@ export function createBlossomSettingsRuntime({
   readPrivatePreferencesFromStorage,
   writePrivatePreferencesToStorage,
 }: BlossomSettingsRuntimeDeps) {
-  function getBlossomServerUrl(): string {
-    return (
-      normalizeBlossomServerUrl(readPrivatePreferencesFromStorage()?.blossomServerUrl) ??
-      DEFAULT_BLOSSOM_SERVER_URL
-    );
+  type ServerPreferenceKey = 'blossomServerUrl' | 'privateMediaBlossomServerUrl';
+
+  function readServerUrl(key: ServerPreferenceKey, defaultUrl: string): string {
+    return normalizeBlossomServerUrl(readPrivatePreferencesFromStorage()?.[key]) ?? defaultUrl;
   }
 
-  async function saveBlossomServerUrl(value: string): Promise<string> {
+  async function saveServerUrl(
+    key: ServerPreferenceKey,
+    defaultUrl: string,
+    value: string
+  ): Promise<string> {
     const serverUrl = requireBlossomServerUrl(value);
     const preferences = await ensurePrivatePreferences();
-    const currentServerUrl =
-      normalizeBlossomServerUrl(preferences.blossomServerUrl) ?? DEFAULT_BLOSSOM_SERVER_URL;
+    const currentServerUrl = normalizeBlossomServerUrl(preferences[key]) ?? defaultUrl;
     if (currentServerUrl === serverUrl) {
       return serverUrl;
     }
 
     const nextPreferences: PrivatePreferences = { ...preferences };
-    if (serverUrl === DEFAULT_BLOSSOM_SERVER_URL) {
-      delete nextPreferences.blossomServerUrl;
+    if (serverUrl === defaultUrl) {
+      delete nextPreferences[key];
     } else {
-      nextPreferences.blossomServerUrl = serverUrl;
+      nextPreferences[key] = serverUrl;
     }
 
     await publishPrivatePreferences(nextPreferences);
@@ -46,8 +49,32 @@ export function createBlossomSettingsRuntime({
     return serverUrl;
   }
 
+  // Regular (plaintext) media, e.g. video and audio.
+  function getBlossomServerUrl(): string {
+    return readServerUrl('blossomServerUrl', DEFAULT_BLOSSOM_SERVER_URL);
+  }
+
+  function saveBlossomServerUrl(value: string): Promise<string> {
+    return saveServerUrl('blossomServerUrl', DEFAULT_BLOSSOM_SERVER_URL, value);
+  }
+
+  // End-to-end encrypted private media. The server must preserve ciphertext bytes exactly.
+  function getPrivateMediaBlossomServerUrl(): string {
+    return readServerUrl('privateMediaBlossomServerUrl', DEFAULT_PRIVATE_MEDIA_BLOSSOM_SERVER_URL);
+  }
+
+  function savePrivateMediaBlossomServerUrl(value: string): Promise<string> {
+    return saveServerUrl(
+      'privateMediaBlossomServerUrl',
+      DEFAULT_PRIVATE_MEDIA_BLOSSOM_SERVER_URL,
+      value
+    );
+  }
+
   return {
     getBlossomServerUrl,
+    getPrivateMediaBlossomServerUrl,
     saveBlossomServerUrl,
+    savePrivateMediaBlossomServerUrl,
   };
 }

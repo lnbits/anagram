@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Message, MessageRelayStatus } from '#src/types/chat.ts';
   import { translate } from '#src/i18n.ts';
+  import { redactFileMessageSecretTags } from '#src/utils/messageAttachments.ts';
   export let message: Message;
   export let onretry: (status: MessageRelayStatus) => Promise<void>;
   let error = '';
@@ -42,6 +43,14 @@
   </p>{/each}
 {#if message.nostrEvent?.event}<details>
     <summary>Event JSON</summary>
-    <pre class="event-json">{JSON.stringify(message.nostrEvent.event, null, 2)}</pre>
+    <pre class="event-json">{JSON.stringify(
+        {
+          ...message.nostrEvent.event,
+          // Kind 15 decryption material is not shown in the copyable event view.
+          tags: redactFileMessageSecretTags(message.nostrEvent.event.tags ?? []),
+        },
+        null,
+        2,
+      )}</pre>
   </details>{/if}
 {#if error}<p role="alert" class="error">{error}</p>{/if}

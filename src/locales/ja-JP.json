@@ -443,6 +443,7 @@
   "mediaDataStorage.serverSaved": "Blossom サーバーを保存しました。",
   "mediaDataStorage.serverUrl": "サーバー URL",
   "mediaDataStorage.serverUrlHint": "アップロード先のパスを含めず、HTTPS のベース URL を入力してください。",
+  "mediaDataStorage.serverUrlFromPublishedList": "Using the first server from the Blossom list published to your relays.",
   "mediaDataStorage.serverUrlInvalid": "パス、クエリ、フラグメントを含まない有効な HTTPS サーバー URL を入力してください。",
   "mediaDataStorage.serverUrlRequired": "Blossom サーバーの URL が必要です。",
   "mediaDataStorage.title": "メディアとデータの保存",

@@ -443,6 +443,7 @@
   "mediaDataStorage.serverSaved": "Blossom सर्वर सहेजा गया।",
   "mediaDataStorage.serverUrl": "सर्वर URL",
   "mediaDataStorage.serverUrlHint": "अपलोड पथ के बिना मूल HTTPS URL दर्ज करें।",
+  "mediaDataStorage.serverUrlFromPublishedList": "Using the first server from the Blossom list published to your relays.",
   "mediaDataStorage.serverUrlInvalid": "पथ, क्वेरी या फ़्रैगमेंट के बिना मान्य HTTPS सर्वर URL दर्ज करें।",
   "mediaDataStorage.serverUrlRequired": "Blossom सर्वर URL आवश्यक है।",
   "mediaDataStorage.title": "मीडिया और डेटा भंडारण",

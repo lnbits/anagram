@@ -213,6 +213,7 @@ export type SubscriptionLogName =
   | 'contact-profile'
   | 'contact-relay-list'
   | 'group-roster'
+  | 'my-blossom-server-list'
   | 'my-relay-list'
   | 'private-contact-list'
   | 'private-messages';

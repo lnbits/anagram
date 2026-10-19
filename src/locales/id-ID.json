@@ -443,6 +443,7 @@
   "mediaDataStorage.serverSaved": "Server Blossom disimpan.",
   "mediaDataStorage.serverUrl": "URL server",
   "mediaDataStorage.serverUrlHint": "Masukkan URL dasar HTTPS tanpa jalur unggahan.",
+  "mediaDataStorage.serverUrlFromPublishedList": "Using the first server from the Blossom list published to your relays.",
   "mediaDataStorage.serverUrlInvalid": "Masukkan URL server HTTPS yang valid tanpa jalur, kueri, atau fragmen.",
   "mediaDataStorage.serverUrlRequired": "URL server Blossom wajib diisi.",
   "mediaDataStorage.title": "Penyimpanan Media dan Data",

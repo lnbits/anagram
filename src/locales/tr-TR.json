@@ -443,6 +443,7 @@
   "mediaDataStorage.serverSaved": "Blossom sunucusu kaydedildi.",
   "mediaDataStorage.serverUrl": "Sunucu URL’si",
   "mediaDataStorage.serverUrlHint": "Yükleme yolu olmadan temel HTTPS URL’sini girin.",
+  "mediaDataStorage.serverUrlFromPublishedList": "Using the first server from the Blossom list published to your relays.",
   "mediaDataStorage.serverUrlInvalid": "Yol, sorgu veya parça içermeyen geçerli bir HTTPS sunucu URL’si girin.",
   "mediaDataStorage.serverUrlRequired": "Blossom sunucu URL’si gereklidir.",
   "mediaDataStorage.title": "Medya ve Veri Depolama",

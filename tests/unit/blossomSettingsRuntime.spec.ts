@@ -5,7 +5,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 const CONTACT_SECRET = 'a'.repeat(64);
 
-function createHarness(storedPreferences: PrivatePreferences | null = null) {
+function createHarness(
+  storedPreferences: PrivatePreferences | null = null,
+  publishedServerUrls: string[] = [],
+) {
   let stored = storedPreferences;
   const ensurePrivatePreferences = vi.fn(async () => stored ?? { contactSecret: CONTACT_SECRET });
   const publishPrivatePreferences = vi.fn(async () => undefined);
@@ -17,6 +20,7 @@ function createHarness(storedPreferences: PrivatePreferences | null = null) {
     ensurePrivatePreferences,
     publishPrivatePreferences,
     readPrivatePreferencesFromStorage,
+    readPublishedBlossomServerUrls: () => publishedServerUrls,
     writePrivatePreferencesToStorage,
   });
 
@@ -33,6 +37,7 @@ describe('Blossom settings runtime', () => {
     const { runtime } = createHarness();
 
     expect(runtime.getBlossomServerUrl()).toBe(DEFAULT_BLOSSOM_SERVER_URL);
+    expect(runtime.getBlossomServerOrigin()).toBe('default');
   });
 
   it('publishes and caches a normalized server in private preferences', async () => {
@@ -42,7 +47,7 @@ describe('Blossom settings runtime', () => {
     });
 
     await expect(runtime.saveBlossomServerUrl(' HTTPS://Media.Example.com/ ')).resolves.toBe(
-      'https://media.example.com'
+      'https://media.example.com',
     );
     const expectedPreferences = {
       contactSecret: CONTACT_SECRET,
@@ -52,6 +57,7 @@ describe('Blossom settings runtime', () => {
     expect(publishPrivatePreferences).toHaveBeenCalledWith(expectedPreferences);
     expect(writePrivatePreferencesToStorage).toHaveBeenCalledWith(expectedPreferences);
     expect(runtime.getBlossomServerUrl()).toBe('https://media.example.com');
+    expect(runtime.getBlossomServerOrigin()).toBe('preference');
   });
 
   it('removes the override when restoring the default server', async () => {
@@ -67,6 +73,7 @@ describe('Blossom settings runtime', () => {
       contactSecret: CONTACT_SECRET,
     });
     expect(runtime.getBlossomServerUrl()).toBe(DEFAULT_BLOSSOM_SERVER_URL);
+    expect(runtime.getBlossomServerOrigin()).toBe('default');
   });
 
   it('does not cache a change when encrypted publication fails', async () => {
@@ -76,9 +83,55 @@ describe('Blossom settings runtime', () => {
     publishPrivatePreferences.mockRejectedValueOnce(new Error('relay unavailable'));
 
     await expect(runtime.saveBlossomServerUrl('https://media.example.com')).rejects.toThrow(
-      'relay unavailable'
+      'relay unavailable',
     );
     expect(writePrivatePreferencesToStorage).not.toHaveBeenCalled();
     expect(runtime.getBlossomServerUrl()).toBe(DEFAULT_BLOSSOM_SERVER_URL);
+  });
+
+  describe('published server list', () => {
+    it('uses the first server published to relays when nothing is saved', () => {
+      const { runtime } = createHarness(null, [
+        'https://from-relays.example.com',
+        'https://second.example.com',
+      ]);
+
+      expect(runtime.getBlossomServerUrl()).toBe('https://from-relays.example.com');
+      expect(runtime.getBlossomServerOrigin()).toBe('published');
+    });
+
+    it('prefers the saved setting over the published list', () => {
+      const { runtime } = createHarness(
+        { contactSecret: CONTACT_SECRET, blossomServerUrl: 'https://media.example.com' },
+        ['https://from-relays.example.com'],
+      );
+
+      expect(runtime.getBlossomServerUrl()).toBe('https://media.example.com');
+      expect(runtime.getBlossomServerOrigin()).toBe('preference');
+    });
+
+    it('skips unusable published entries and falls back to the default', () => {
+      const { runtime } = createHarness(null, [
+        'http://insecure.example.com',
+        'https://example.com/upload',
+        '',
+      ]);
+
+      expect(runtime.getBlossomServerUrl()).toBe(DEFAULT_BLOSSOM_SERVER_URL);
+      expect(runtime.getBlossomServerOrigin()).toBe('default');
+    });
+
+    it('falls back to the published list once the saved override is removed', async () => {
+      const { runtime } = createHarness(
+        { contactSecret: CONTACT_SECRET, blossomServerUrl: 'https://media.example.com' },
+        ['https://from-relays.example.com'],
+      );
+      expect(runtime.getBlossomServerOrigin()).toBe('preference');
+
+      await runtime.saveBlossomServerUrl(DEFAULT_BLOSSOM_SERVER_URL);
+
+      expect(runtime.getBlossomServerUrl()).toBe('https://from-relays.example.com');
+      expect(runtime.getBlossomServerOrigin()).toBe('published');
+    });
   });
 });

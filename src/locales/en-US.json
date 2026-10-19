@@ -443,6 +443,7 @@
   "mediaDataStorage.serverSaved": "Blossom server saved.",
   "mediaDataStorage.serverUrl": "Server URL",
   "mediaDataStorage.serverUrlHint": "Enter the HTTPS base URL without an upload path.",
+  "mediaDataStorage.serverUrlFromPublishedList": "Using the first server from the Blossom list published to your relays.",
   "mediaDataStorage.serverUrlInvalid": "Enter a valid HTTPS server URL without a path, query, or fragment.",
   "mediaDataStorage.serverUrlRequired": "A Blossom server URL is required.",
   "mediaDataStorage.title": "Media & Data Storage",

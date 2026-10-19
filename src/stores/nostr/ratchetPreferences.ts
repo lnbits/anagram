@@ -100,7 +100,7 @@ export function createRatchetPreferences(deps: {
             if (
               !latest ||
               capability.createdAt > latest.createdAt ||
-              (capability.createdAt === latest.createdAt && capability.id > latest.id)
+              (capability.createdAt === latest.createdAt && capability.id < latest.id)
             )
               latest = capability;
             if (!initial) apply();

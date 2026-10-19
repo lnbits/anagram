@@ -125,3 +125,14 @@ it('keeps new incoming NIP-17 conversations in Auto for later capability upgrade
   receive!(roster());
   await vi.waitFor(() => expect(get(preferences.mode).protocol).toBe('ndr'));
 });
+
+it.each([false, true])(
+  'chooses the lowest event ID for equal-time capability snapshots (reversed=%s)',
+  async (reverse) => {
+    const active = roster(true);
+    const empty = roster(false);
+    events = reverse ? [empty, active] : [active, empty];
+    await preferences.watch(peer);
+    expect(await preferences.resolve(peer)).toBe(active.id < empty.id ? 'ndr' : 'nip17');
+  },
+);

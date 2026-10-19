@@ -75,7 +75,10 @@ export function authenticatedRatchetMessage(
   }
   // Only authenticated sibling devices may choose a remote conversation through a p tag.
   const peer =
-    sender === owner ? event.tags.find((tag) => tag[0] === 'p' && tag[1] !== owner)?.[1] : sender;
+    sender === owner
+      ? (event.tags.find((tag) => tag[0] === 'p' && tag[1] !== owner)?.[1] ??
+        event.tags.find((tag) => tag[0] === 'p' && tag[1] === owner)?.[1])
+      : sender;
   if (!peer || !/^[a-f0-9]{64}$/.test(peer)) return null;
   return {
     ...event,

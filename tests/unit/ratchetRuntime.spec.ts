@@ -55,6 +55,20 @@ function rumor(author: string, tags: string[][]): Rumor {
 }
 
 describe('optional double-ratchet transport', () => {
+  it('routes authenticated sibling notes to the owner self conversation', () => {
+    const [owner, peer] = owners.map((entry) => entry.publicKey);
+    const event = rumor(owner, [['p', owner]]);
+    expect(
+      authenticatedRatchetMessage(event, owner, { senderOwnerPubkey: owner }, owner)?.tags,
+    ).toEqual([['p', owner]]);
+    // An external sender cannot use the same tag to impersonate a sibling note.
+    expect(
+      authenticatedRatchetMessage(event, peer, { senderOwnerPubkey: peer }, owner)?.pubkey,
+    ).toBe(peer);
+    expect(
+      authenticatedRatchetMessage(event, peer, { senderOwnerPubkey: peer }, owner)?.tags,
+    ).toEqual([['p', owner]]);
+  });
   it('uses authenticated owner and canonical routing, not arbitrary rumor p tags', () => {
     const [owner, peer] = owners.map((entry) => entry.publicKey);
     const event = rumor(peer, [['p', 'c'.repeat(64)]]);

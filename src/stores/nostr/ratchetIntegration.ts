@@ -121,21 +121,59 @@ export function createRatchetIntegration(deps: {
           );
         },
         subscribe: (filter: Filter, onEvent: (event: VerifiedEvent) => void) => {
-          let stop: (() => void) | undefined;
+          let subscription: ReturnType<NostrClient['subscribe']> | undefined;
+          let retry: ReturnType<typeof setTimeout> | undefined;
+          let retryDelay = 1000;
           let cancelled = false;
-          void deps
-            .relays()
-            .then((relays) => {
-              if (cancelled || !current()) return;
-              const sub = deps.client.subscribe(filter, { relayUrls: relays });
-              sub.on('event', (event: ClientEvent) => onEvent(event.rawEvent() as VerifiedEvent));
-              stop = () => sub.stop();
-            })
-            .catch(() => {});
-          return () => {
+          const active = () => !cancelled && !controller.signal.aborted && current();
+          function stop() {
             cancelled = true;
-            stop?.();
-          };
+            clearTimeout(retry);
+            controller.signal.removeEventListener('abort', stop);
+            const previous = subscription;
+            subscription = undefined;
+            previous?.stop();
+          }
+          function retryLater() {
+            if (!active()) return stop();
+            if (retry !== undefined) return;
+            retry = setTimeout(() => {
+              retry = undefined;
+              void start();
+            }, retryDelay);
+            retryDelay = Math.min(retryDelay * 2, 30000);
+          }
+          async function start() {
+            if (!active()) return stop();
+            try {
+              const relays = await deps.relays();
+              if (!active()) return stop();
+              if (!relays.length) return retryLater();
+              const sub = deps.client.subscribe(filter, { relayUrls: relays });
+              subscription = sub;
+              sub.on('event', (event: ClientEvent) => {
+                if (!active()) return stop();
+                if (subscription !== sub) return;
+                retryDelay = 1000;
+                onEvent(event.rawEvent() as VerifiedEvent);
+              });
+              sub.on('eose', () => {
+                if (active() && subscription === sub && sub.eosesSeen.size > 0) retryDelay = 1000;
+              });
+              sub.on('close', () => {
+                if (subscription !== sub) return;
+                subscription = undefined;
+                // The client recovers partial failures. An all-relay close ends
+                // its reconnect listeners, so retain this logical NDR interest.
+                retryLater();
+              });
+            } catch {
+              retryLater();
+            }
+          }
+          controller.signal.addEventListener('abort', stop, { once: true });
+          void start();
+          return stop;
         },
         receive: async (event, _from, meta) => {
           if (!current()) throw new Error('Messaging account changed.');

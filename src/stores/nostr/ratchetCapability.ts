@@ -1,12 +1,14 @@
 import { verifyEvent, type VerifiedEvent } from 'nostr-tools';
 
 export type RatchetCapability = { createdAt: number; id: string; available: boolean };
+export type RatchetDevice = { identityPubkey: string; createdAt: number };
+export type RatchetRoster = { createdAt: number; id: string; devices: RatchetDevice[] };
 
 // A roster is public capability evidence; checking it must not register our device.
-export async function parseRatchetCapability(
+export async function parseRatchetRoster(
   event: VerifiedEvent,
   peer: string,
-): Promise<RatchetCapability | null> {
+): Promise<RatchetRoster | null> {
   try {
     if (
       event.kind !== 37368 ||
@@ -24,9 +26,19 @@ export async function parseRatchetCapability(
     return {
       createdAt: event.created_at,
       id: event.id,
-      available: devices.some((device) => /^[a-f0-9]{64}$/.test(device.identityPubkey)),
+      devices: devices.filter((device) => /^[a-f0-9]{64}$/.test(device.identityPubkey)),
     };
   } catch {
     return null;
   }
+}
+
+export async function parseRatchetCapability(
+  event: VerifiedEvent,
+  peer: string,
+): Promise<RatchetCapability | null> {
+  const roster = await parseRatchetRoster(event, peer);
+  return (
+    roster && { createdAt: roster.createdAt, id: roster.id, available: roster.devices.length > 0 }
+  );
 }

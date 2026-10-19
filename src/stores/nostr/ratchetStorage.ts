@@ -1,5 +1,40 @@
 import type { StorageAdapter } from 'nostr-double-ratchet';
 
+// Settings reads only the existing public identity. An uninitialized browser stays uninitialized.
+export function readRatchetDevicePublicKey(owner: string): Promise<string | null> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('anagram-ratchet');
+    let missing = false;
+    request.onupgradeneeded = () => {
+      missing = true;
+      request.transaction?.abort();
+    };
+    request.onerror = () => (missing ? resolve(null) : reject(request.error));
+    request.onsuccess = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains('state')) {
+        db.close();
+        resolve(null);
+        return;
+      }
+      const tx = db.transaction('state', 'readonly');
+      const value = tx.objectStore('state').get(`${owner}:v1/device-manager/identity-public-key`);
+      tx.oncomplete = () => {
+        db.close();
+        resolve(
+          typeof value.result === 'string' && /^[a-f0-9]{64}$/.test(value.result)
+            ? value.result
+            : null,
+        );
+      };
+      tx.onabort = tx.onerror = () => {
+        db.close();
+        reject(tx.error);
+      };
+    };
+  });
+}
+
 // Separate, account-scoped state: no chat history scans, JSON conversion, or localStorage keys.
 export class RatchetStorage implements StorageAdapter {
   private database?: Promise<IDBDatabase>;

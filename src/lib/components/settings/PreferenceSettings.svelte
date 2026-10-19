@@ -14,6 +14,7 @@
   import { useNostrStore } from '#src/stores/nostrStore.svelte.ts';
   import { toStore } from 'svelte/store';
   import Icon from '../Icon.svelte';
+  import MessagingDevices from './MessagingDevices.svelte';
   import { THEME_ACCENTS, readThemeAccent, saveThemeAccent } from '#src/utils/themeAccent.ts';
   export let section: string;
   const nostr = useNostrStore();
@@ -70,6 +71,7 @@
     </label>
     <small>Auto checks for a compatible device in new chats. You can choose a mode in each contact's Private messages settings. Existing double-ratchet chats keep their mode.</small>
   </div>
+  <MessagingDevices />
 {:else if section === 'theme'}
   <div class="settings-card theme-card">
     <div class="theme-setting">

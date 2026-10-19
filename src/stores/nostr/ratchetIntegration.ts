@@ -242,6 +242,19 @@ export function createRatchetIntegration(deps: {
     return rumor;
   }
   return {
+    async readMessagingDevices(signal?: AbortSignal) {
+      const owner = deps.owner();
+      const version = generation;
+      if (!owner) throw new Error('Sign in to view messaging devices.');
+      const { readMessagingDevices } = await import('./ratchetDevices.ts');
+      return readMessagingDevices({
+        client: deps.client,
+        owner,
+        isCurrent: () => deps.owner() === owner && version === generation,
+        relays: () => deps.relays(),
+        signal,
+      });
+    },
     getDirectMessageProtocol: protocols.getPreference,
     setDirectMessageProtocol,
     directMessageMode: protocols.mode,

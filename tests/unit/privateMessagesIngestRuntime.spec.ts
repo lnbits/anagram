@@ -1,4 +1,5 @@
-import { type ClientEvent, NostrKind, nip19 } from '#src/lib/nostr/client.ts';
+import { getEventHash } from 'nostr-tools';
+import { ClientEvent, NostrKind, nip19 } from '#src/lib/nostr/client.ts';
 import { onLiveThreadMessage } from '#src/lib/state/threadActivity.ts';
 import { createPrivateMessagesIngestRuntime } from '#src/stores/nostr/privateMessagesIngestRuntime.ts';
 import { CALL_PROTOCOL, CALL_SIGNAL_KIND } from '#src/types/call.ts';
@@ -712,6 +713,44 @@ describe('privateMessagesIngestRuntime', () => {
       'queued-background',
       'last-background',
     ]);
+  });
+
+  it('preserves the authenticated NDR event ID after recipient tag normalization', async () => {
+    const owner = 'b'.repeat(64), peer = 'a'.repeat(64);
+    const wire = {
+      kind: 14, pubkey: peer, content: 'Native mutation original', created_at: 1700000000,
+      tags: [['ms', '1700000000500'], ['iris-message-id', 'native-message'], ['p', owner]],
+    };
+    const originalId = getEventHash(wire);
+    const normalized = new ClientEvent(undefined, {
+      ...wire, id: originalId,
+      tags: [['p', owner], ...wire.tags.filter((tag) => tag[0] !== 'p')],
+    });
+    expect(getEventHash(normalized.rawEvent())).not.toBe(originalId);
+    const deps = createDeps();
+    // Production serialization recalculates hashes. NDR already authenticated
+    // the original rumor; edits, replies and deletions still refer to its ID.
+    deps.toStoredNostrEvent.mockImplementation(async (event: ClientEvent) => ({
+      ...(await event.toNostrEvent()), sig: '',
+    }));
+    serviceMocks.chatDataService.createChat.mockResolvedValue({
+      id: peer, public_key: peer, type: 'user', name: 'Native peer',
+      last_message: '', last_message_at: '', unread_count: 0, meta: {},
+    });
+    serviceMocks.chatDataService.createMessage.mockResolvedValue({
+      id: 41, chat_public_key: peer, author_public_key: peer,
+      message: wire.content, created_at: '2023-11-14T22:13:20.000Z',
+      event_id: originalId, meta: { protocol: 'ndr' },
+    });
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+    await runtime.processIncomingRatchetMessage(normalized, owner, 'c'.repeat(64));
+    expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(expect.objectContaining({
+      event_id: originalId, meta: expect.objectContaining({ protocol: 'ndr' }),
+    }));
+    expect(serviceMocks.nostrEventDataService.upsertEvent).toHaveBeenCalledWith(expect.objectContaining({
+      event: expect.objectContaining({ id: originalId }),
+    }));
+    expect(normalized.id).toBe(originalId);
   });
 
   it.each([false, true])('only signals incoming live arrivals (live=%s)', async (live) => {

@@ -878,7 +878,11 @@ export function createPrivateMessagesIngestRuntime({
 
     const uiThrottleMs = normalizeThrottleMs(options.uiThrottleMs);
 
-    const rumorNostrEvent = await toStoredNostrEvent(rumorEvent);
+    // NDR already verified the wire rumor ID before normalizing its author and
+    // recipient tags. Rehashing that routed view breaks remote edit/reply targets.
+    const rumorNostrEvent = wrappedEvent.kind === 1060
+      ? rumorEvent.rawEvent()
+      : await toStoredNostrEvent(rumorEvent);
     const loggedRumorEvent = buildLoggedNostrEvent(rumorEvent, rumorNostrEvent);
     const receivedRelayStatuses = buildInboundRelayStatuses(wrappedRelayUrls);
     const direction: NostrEventDirection = isSelfSentMessage ? 'out' : 'in';

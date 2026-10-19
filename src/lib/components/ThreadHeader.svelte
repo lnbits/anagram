@@ -33,7 +33,7 @@
           onclick={oncopy}><Icon name="content_copy" /></button
         >{/if}
     </div>
-    <small>{#if messagingMode}<span data-testid="dm-mode">{messagingMode}</span> · {/if}{subtitle}</small>
+    <small>{#if messagingMode}<span data-testid="dm-mode" data-protocol={messagingMode === 'Double ratchet' ? 'ndr' : 'nip17'} title={messagingMode}>Encrypted</span> · {/if}{subtitle}</small>
   </div>
   <div class="header-actions">{@render actions?.()}</div>
 </header>

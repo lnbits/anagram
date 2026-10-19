@@ -23,7 +23,7 @@ test('Auto upgrades new DMs when a device appears, persists across reload and ho
     await alice.page.getByTestId('prefer-ratchet').check();
     await navigateInApp(alice.page, '/chats');
     await establishAcceptedDirectChat(alice, bob);
-    await expect(alice.page.getByTestId('dm-mode')).toHaveText('NIP-17');
+    await expect(alice.page.getByTestId('dm-mode')).toHaveAttribute('data-protocol', 'nip17');
     for (const [user, peer] of [[bob, alice]]) {
       await navigateInApp(user.page, `/contacts/${peer.session.publicKey}`);
       await user.page.getByText('Private messages', { exact: true }).click();
@@ -36,7 +36,7 @@ test('Auto upgrades new DMs when a device appears, persists across reload and ho
         .getByRole('button', { name: 'Open Chat', exact: true })
         .click();
     }
-    await expect(alice.page.getByTestId('dm-mode')).toHaveText('Double ratchet', {
+    await expect(alice.page.getByTestId('dm-mode')).toHaveAttribute('data-protocol', 'ndr', {
       timeout: 20000,
     });
     await alice.page.getByTestId('message-composer-input').fill('Ratchet hello');
@@ -74,7 +74,7 @@ test('Auto upgrades new DMs when a device appears, persists across reload and ho
       .getByTestId('contact-details')
       .getByRole('button', { name: 'Open Chat', exact: true })
       .click();
-    await expect(alice.page.getByTestId('dm-mode')).toHaveText('NIP-17');
+    await expect(alice.page.getByTestId('dm-mode')).toHaveAttribute('data-protocol', 'nip17');
     await alice.page.getByTestId('message-composer-input').fill('NIP-17 still works');
     await alice.page.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect(

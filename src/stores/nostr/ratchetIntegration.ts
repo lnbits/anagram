@@ -48,7 +48,7 @@ export function createRatchetIntegration(deps: {
   });
   async function ensure(): Promise<Runtime> {
     const owner = deps.owner();
-    if (!owner) throw new Error('Sign in to enable double-ratchet messages.');
+    if (!owner) throw new Error('Sign in to enable encrypted messaging.');
     if (active?.owner === owner) return active.runtime;
     if (active) await close();
     const version = generation;

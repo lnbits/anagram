@@ -1,4 +1,5 @@
 import { resolvePreferredContactRelayUrls } from '#src/utils/contactRelayUrls.ts';
+import { ratchetRelayUrls } from '#src/stores/nostr/ratchetRelays.ts';
 import { createRatchetIntegration } from '#src/stores/nostr/ratchetIntegration.ts';
 import { contactsService } from '#src/services/contactsService.ts';
 import { getPublicProfile, rememberPublicProfile } from '#src/lib/state/publicProfiles.ts';
@@ -2316,7 +2317,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     signer: getOrCreateSigner,
     relays: async (peer) => {
       const contact = peer ? await contactsService.getContactByPublicKey(peer) : null;
-      return [...new Set([...relayStore.relays, ...resolvePreferredContactRelayUrls(contact?.relays)])];
+      return ratchetRelayUrls([...relayStore.relays, ...resolvePreferredContactRelayUrls(contact?.relays)]);
     },
     receive: processIncomingRatchetMessage,
   });

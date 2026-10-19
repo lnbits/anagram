@@ -182,12 +182,14 @@ export function createRatchetIntegration(deps: {
   async function setDirectMessageProtocol(peer: string, protocol: DirectMessagePreference) {
     const owner = deps.owner();
     if (!owner || !/^[a-f0-9]{64}$/.test(peer)) throw new Error('Invalid conversation.');
+    // Keep the explicit choice even if device registration needs another attempt.
+    await protocols.setPreference(peer, protocol);
+    if (owner !== deps.owner()) throw new Error('Messaging account changed.');
     if (protocol === 'ndr') {
       await ensure();
+      if (owner !== deps.owner()) throw new Error('Messaging account changed.');
       localStorage.setItem(`${key(owner)}:enabled`, '1');
     }
-    if (owner !== deps.owner()) throw new Error('Messaging account changed.');
-    await protocols.setPreference(peer, protocol);
   }
   async function resume() {
     if (active && active.owner !== deps.owner()) await close();

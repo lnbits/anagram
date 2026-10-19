@@ -183,7 +183,6 @@
     })),
   );
   let section: 'chats' | 'contacts' | 'settings' = 'chats';
-  const directMessageMode = nostr.directMessageMode;
   let watchedDirectPeer: string | null = null;
   $: selectedDirectPeer = section === 'chats' && $state.selected?.type === 'user' ? $state.selected.publicKey : null;
   $: if (selectedDirectPeer !== watchedDirectPeer) {
@@ -1524,7 +1523,6 @@
                 month: 'short',
                 day: 'numeric',
               })}
-          messagingMode={$state.selected.type === 'user' ? ($directMessageMode.peer === $state.selected.publicKey && $directMessageMode.protocol === 'ndr' ? 'Double ratchet' : 'NIP-17') : ''}
           publicKey={$state.selected.publicKey}
           picture={String($state.selected.meta.picture ?? '')}
           privateGroup={$state.selected.type === 'group'}

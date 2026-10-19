@@ -24,15 +24,10 @@
     refreshing = false,
     saving = false,
     hex = false;
-  let protocol: 'auto' | 'nip17' | 'ndr' = nostr.getDirectMessageProtocol(publicKey);
-  let protocolSaving = false;
-  async function changeProtocol(event: Event) {
-    const value = (event.target as HTMLSelectElement).value as 'auto' | 'nip17' | 'ndr';
-    protocolSaving = true; error = '';
-    try { await nostr.setDirectMessageProtocol(publicKey, value); protocol = value; }
-    catch (cause) { (event.target as HTMLSelectElement).value = protocol; error = cause instanceof Error && cause.message.startsWith('Double-ratchet messaging') ? cause.message : 'Could not enable this messaging mode. Please try again.'; }
-    finally { protocolSaving = false; }
-  }
+  const directMessageMode = nostr.directMessageMode;
+  $: protocol = $directMessageMode.peer === publicKey
+    ? $directMessageMode.protocol
+    : nostr.getCurrentDirectMessageProtocol(publicKey);
   let error = '',
     notice = '',
     qr = '';
@@ -61,7 +56,7 @@
     const request = ++revision;
     try {
       const next = await contactsService.getContactByPublicKey(publicKey);
-      if (mounted && request === revision) { contact = next; protocol = nostr.getDirectMessageProtocol(publicKey); }
+      if (mounted && request === revision) contact = next;
     } catch {
       if (mounted) error = 'Could not load contact details.';
     } finally {
@@ -205,15 +200,7 @@
       {:else}
         <details class="profile-section">
           <summary>Private messages</summary>
-          <label>Messaging mode
-            <select data-testid="dm-protocol" value={protocol} onchange={changeProtocol} disabled={protocolSaving || contact.meta.blocked}>
-              <option value="auto">Auto (prefer double ratchet)</option>
-              <option value="nip17">NIP-17</option>
-              <option value="ndr">Double ratchet (Iris compatible)</option>
-            </select>
-          </label>
-          <p>Auto uses double ratchet when a compatible device is found. Your first double-ratchet send registers this browser as a messaging device. Existing messages keep their original mode.</p>
-          {#if protocolSaving}<p role="status">Preparing messaging device…</p>{/if}
+          <p>Encryption: <strong data-testid="contact-protocol" data-protocol={protocol}>{protocol === 'ndr' ? 'Double ratchet' : 'NIP-17'}</strong></p>
         </details>
       {/if}
       <details open class="profile-section">

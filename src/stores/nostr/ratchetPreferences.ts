@@ -170,6 +170,7 @@ export function createRatchetPreferences(deps: {
   return {
     mode,
     getPreference,
+    getProtocol: effective,
     setPreference,
     getPreferRatchet,
     setPreferRatchet,

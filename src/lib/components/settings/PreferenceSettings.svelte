@@ -69,7 +69,7 @@
         checked={preferRatchet}
         onchange={(event) => { preferRatchet = event.currentTarget.checked; void nostr.setPreferRatchet(preferRatchet); }} />
     </label>
-    <small>Auto checks for a compatible device in new chats. You can choose a mode in each contact's Private messages settings. Existing double-ratchet chats keep their mode.</small>
+    <small>Automatically use double ratchet when a compatible device is found. Existing double-ratchet chats keep their encryption.</small>
   </div>
   <MessagingDevices />
 {:else if section === 'theme'}

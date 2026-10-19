@@ -296,6 +296,7 @@ export function createRatchetIntegration(deps: {
       });
     },
     getDirectMessageProtocol: protocols.getPreference,
+    getCurrentDirectMessageProtocol: protocols.getProtocol,
     setDirectMessageProtocol,
     directMessageMode: protocols.mode,
     watchDirectMessagePeer: protocols.watch,

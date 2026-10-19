@@ -52,6 +52,7 @@ it('selects advertised double ratchet and does no per-message discovery', async 
   await preferences.watch(peer);
   expect(get(preferences.mode)).toEqual({ peer, protocol: 'ndr' });
   expect(preferences.getPreference(peer)).toBe('auto');
+  expect(preferences.getProtocol(peer)).toBe('ndr');
   expect(await preferences.resolve(peer)).toBe('ndr');
   expect(await preferences.resolve(peer)).toBe('ndr');
   expect(subscribe).toHaveBeenCalledTimes(1);

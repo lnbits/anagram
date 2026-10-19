@@ -2731,6 +2731,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
       await logoutImpl();
     },
     getDirectMessageProtocol: ratchet.getDirectMessageProtocol,
+    getCurrentDirectMessageProtocol: ratchet.getCurrentDirectMessageProtocol,
     readMessagingDevices: ratchet.readMessagingDevices,
     directMessageMode: ratchet.directMessageMode,
     watchDirectMessagePeer: ratchet.watchDirectMessagePeer,

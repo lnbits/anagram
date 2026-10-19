@@ -11,6 +11,7 @@ const PENDING_LOGOUT_CLEANUP_SESSION_KEY = 'nostr-chat-pending-logout-cleanup';
 
 export const KNOWN_APP_INDEXED_DB_NAMES = [
   'anagram-hydration-inbox',
+  'anagram-ratchet',
   'anagram-private-relays',
   'chat-data-indexeddb-v2',
   'contacts-indexeddb-v1',

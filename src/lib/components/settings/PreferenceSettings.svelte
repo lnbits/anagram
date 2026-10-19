@@ -21,6 +21,7 @@
   let dark = readDarkModePreference() ?? document.body.classList.contains('body--dark');
   let layout = readDesktopMessageLayoutPreference();
   let accent = readThemeAccent();
+  let preferRatchet = nostr.getPreferRatchet();
   let saved = nostr.getBlossomServerUrl(),
     server = saved,
     busy = false,
@@ -59,7 +60,17 @@
   });
 </script>
 
-{#if section === 'theme'}
+{#if section === 'messaging'}
+  <div class="settings-card">
+    <label class="settings-switch">
+      <span>Prefer double ratchet when available</span>
+      <input type="checkbox" role="switch" data-testid="prefer-ratchet"
+        checked={preferRatchet}
+        onchange={(event) => { preferRatchet = event.currentTarget.checked; void nostr.setPreferRatchet(preferRatchet); }} />
+    </label>
+    <small>Auto checks for a compatible device in new chats. You can choose a mode in each contact's Private messages settings. Existing double-ratchet chats keep their mode.</small>
+  </div>
+{:else if section === 'theme'}
   <div class="settings-card theme-card">
     <div class="theme-setting">
       <div>

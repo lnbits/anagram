@@ -183,6 +183,14 @@
     })),
   );
   let section: 'chats' | 'contacts' | 'settings' = 'chats';
+  const directMessageMode = nostr.directMessageMode;
+  let watchedDirectPeer: string | null = null;
+  $: selectedDirectPeer = section === 'chats' && $state.selected?.type === 'user' ? $state.selected.publicKey : null;
+  $: if (selectedDirectPeer !== watchedDirectPeer) {
+    watchedDirectPeer = selectedDirectPeer;
+    void nostr.watchDirectMessagePeer(selectedDirectPeer).catch(() => {});
+  }
+  onDestroy(() => { void nostr.watchDirectMessagePeer(null); });
   let mobileThread = false;
   let mobileViewport = matchMedia('(max-width: 767px)').matches;
   let query = '';
@@ -1516,6 +1524,7 @@
                 month: 'short',
                 day: 'numeric',
               })}
+          messagingMode={$state.selected.type === 'user' ? ($directMessageMode.peer === $state.selected.publicKey && $directMessageMode.protocol === 'ndr' ? 'Double ratchet' : 'NIP-17') : ''}
           publicKey={$state.selected.publicKey}
           picture={String($state.selected.meta.picture ?? '')}
           privateGroup={$state.selected.type === 'group'}
@@ -1785,6 +1794,7 @@
     >
       {#if modal === 'info' && inspectedMessage}<MessageInfo
           message={inspectedMessage}
+          directMessage={$state.selected?.type === 'user'}
           onretry={async (status) => {
             await nostr.retryDirectMessageRelay(
               Number(inspectedMessage!.id),

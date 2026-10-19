@@ -5,6 +5,7 @@
   export let name: string;
   export let subtitle: string;
   export let picture = '';
+  export let messagingMode = '';
   export let publicKey = '';
   export let privateGroup = false;
   export let publicGroup = false;
@@ -32,7 +33,7 @@
           onclick={oncopy}><Icon name="content_copy" /></button
         >{/if}
     </div>
-    <small>{subtitle}</small>
+    <small>{#if messagingMode}<span data-testid="dm-mode">{messagingMode}</span> · {/if}{subtitle}</small>
   </div>
   <div class="header-actions">{@render actions?.()}</div>
 </header>

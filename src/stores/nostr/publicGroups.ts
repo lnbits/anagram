@@ -6,6 +6,7 @@ export const ROOM_KIND = 34550;
 export const ROOM_PAGE = 50;
 export const ROOM_WINDOW = 300;
 export const MAX_ROOM_MEMBERS = 1024;
+export const MAX_PUBLIC_MESSAGE_LENGTH = 4000;
 export interface RoomAddress {
   address: string;
   owner: string;
@@ -169,7 +170,7 @@ export function validRoomMessage(event: NostrEvent, address: string): boolean {
   return (
     event.kind === 9 &&
     event.content.length > 0 &&
-    event.content.length <= 8000 &&
+    event.content.length <= MAX_PUBLIC_MESSAGE_LENGTH &&
     refs.length === 1 &&
     refs[0][1] === address &&
     verifiedPublicEvent(signed)

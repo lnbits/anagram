@@ -1,5 +1,6 @@
 import { isTauri } from '@tauri-apps/api/core';
 import { callCaptureTrack } from './callSharedCapture.ts';
+import { watchCallAudioContext } from './callAudioRecovery.ts';
 import workerUrl from './callAudio.worker.ts?worker&url';
 import workletUrl from './callAudio.worklet.js?url';
 import { registerCallStream } from './callStreamRegistry.ts';
@@ -16,6 +17,7 @@ interface Engine {
   worker: Worker;
   listeners: Map<number, Listener>;
   refs: number;
+  recovery: ReturnType<typeof watchCallAudioContext>;
 }
 let engine: Engine | undefined;
 let preparing: Promise<Engine> | undefined;
@@ -79,7 +81,8 @@ export async function prepareCallPacketAudio(): Promise<(() => void) | undefined
           worker.onerror = () => {
             for (const listener of [...listeners.values()]) listener({ type: 'error' });
           };
-          return (engine = { context, worker, listeners, refs: 0 });
+          const recovery = watchCallAudioContext(context);
+          return (engine = { context, worker, listeners, refs: 0, recovery });
         } catch (error) {
           clearTimeout(deadline);
           worker?.terminate();
@@ -94,6 +97,7 @@ export async function prepareCallPacketAudio(): Promise<(() => void) | undefined
       if (released) return;
       released = true;
       if (--current.refs === 0) {
+        current.recovery.close();
         current.worker.terminate();
         current.listeners.clear();
         diagnostics.clear();
@@ -233,6 +237,8 @@ function recordPacketAudioSource(
     }
   });
   const source = state.current.context.createMediaStreamSource(stream);
+  const track = stream.getAudioTracks()[0];
+  track.addEventListener('unmute', state.current.recovery.resume);
   source.connect(state.node);
   // A connected, silent output keeps capture processing alive in WebKit.
   state.node.connect(state.current.context.destination);
@@ -240,6 +246,7 @@ function recordPacketAudioSource(
     if (stopped) return;
     stopped = true;
     latest = undefined;
+    track.removeEventListener('unmute', state.current.recovery.resume);
     source.disconnect();
     state.close();
   }

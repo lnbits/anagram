@@ -1,4 +1,8 @@
 {
+  "auth.joinNamedGroup": "Gabung {name}",
+  "auth.chatWithName": "Mengobrol dengan {name}",
+  "auth.joinThisGroup": "Gabung grup ini",
+  "auth.chatWithPerson": "Mengobrol dengan orang ini",
   "auth.independence": "Anagram sepenuhnya gratis dan bersumber terbuka serta tidak dikendalikan oleh perusahaan mana pun",
   "call.relayApproval.title": "Izinkan relay panggilan khusus?",
   "call.relayApproval.message": "Panggilan ini memakai relay khusus: {url}. Izinkan koneksi ke server ini? Hanya izinkan server tepercaya. Agar diizinkan otomatis pada panggilan berikutnya, tambahkan ke pengaturan relay Iroh Anda.",

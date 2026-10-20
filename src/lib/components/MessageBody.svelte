@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { getContext } from 'svelte';
+  import { BOT_KEYBOARD_LAYOUT, type BotKeyboardLayout } from '#src/lib/botKeyboardLayout.ts';
   import { goto } from '$app/navigation';
   import { publicGroupLinkTarget } from '#src/utils/publicGroupLink.ts';
   import type { Message } from '#src/types/chat.ts';
@@ -17,7 +19,7 @@
   import { portal } from '#src/lib/actions/portal.ts';
   import { appViewportBounds } from '#src/lib/platform/viewportBounds.ts';
   import { toStore } from 'svelte/store';
-  import { Notify } from '#src/lib/platform/ui.ts';
+  import { diagnosticText } from '#src/utils/diagnosticExport.ts';
   import { translate } from '#src/i18n.ts';
   import type { NostrMentionProfile } from '#src/utils/nostrMentions.ts';
   import Icon from './Icon.svelte';
@@ -26,6 +28,7 @@
   import LinkPreview from './LinkPreview.svelte';
   import { previewUrl } from '#src/utils/linkPreview.ts';
   import { shouldCollapseMessageText } from '#src/utils/messageTextExpansion.ts';
+  import { collapseKeyboardSections } from '#src/utils/keyboardTextExpansion.ts';
   import type { CallMode } from '#src/types/call.ts';
 
   interface Props {
@@ -55,12 +58,21 @@
     onroom,
   }: Props = $props();
   const trusted = useTrustedMediaStore();
+  const keyboardLayout = getContext<BotKeyboardLayout | undefined>(BOT_KEYBOARD_LAYOUT);
+  const keyboardSections = $derived(
+    keyboardLayout?.messageId === message.id ? keyboardLayout.sections : null,
+  );
   const trust = toStore(() => trusted.trustedImageSenderPublicKeys);
+  let actionError = $state('');
   let imageUrl = $state('');
   let imageName = $state('');
   let expanded = $state(false),
     showMedia = $state(false);
+  const visibleKeyboardSections = $derived(
+    expanded ? keyboardSections : collapseKeyboardSections(keyboardSections),
+  );
   async function open(url: string) {
+    actionError = '';
     const publicGroup = publicGroupLinkTarget(url);
     if (publicGroup) {
       await goto(publicGroup);
@@ -73,7 +85,7 @@
     try {
       await openExternalHttpUrl(url);
     } catch (error) {
-      Notify.create({ message: String(error), type: 'negative' });
+      actionError = diagnosticText(String(error));
     }
   }
   let linkMenu: { href: string; x: number; y: number; media?: boolean } | null = $state(null);
@@ -123,13 +135,14 @@
     };
   }
   async function copyLink() {
+    actionError = '';
     const href = linkMenu?.href;
     closeLinkMenu(true);
     if (!href) return;
     try {
       await navigator.clipboard.writeText(href);
     } catch {
-      Notify.create({ message: 'Could not copy link.', type: 'negative' });
+      actionError = 'Could not copy link.';
     }
   }
   let history = $derived(readCallHistory(message.meta.call_history));
@@ -173,6 +186,8 @@
           .slice(0, 2),
   );
 </script>
+
+{#if actionError}<p class="error" role="alert">{actionError}</p>{/if}
 
 {#if linkMenu && !message.meta.deleted}<div
     use:portal
@@ -229,7 +244,20 @@
           /^(image|video)\//.test(attachment.mimeType) && /^https:\/\//.test(attachment.url),
       )}
   >
-    {#if parts.length}<span
+    {#if visibleKeyboardSections}
+      {#each visibleKeyboardSections as section}
+        <div class="keyboard-section" data-testid="bot-keyboard-section">
+          <span class="message-text"
+            ><FormattedMessage
+              parts={formatMessage(section.text, profiles)}
+              onopen={open}
+              {oncontact}
+            /></span
+          >
+          {#if section.row.length}{@render keyboardLayout!.buttons(section.row)}{/if}
+        </div>
+      {/each}
+    {:else if parts.length}<span
         class="message-text"
         class:single-emoji={isSingleEmoji(message.text) && !message.meta.attachments?.length}
         ><FormattedMessage
@@ -330,6 +358,14 @@
   />{/if}
 
 <style>
+  .keyboard-section {
+    display: grid;
+    gap: 0.4rem;
+    min-width: 0;
+  }
+  .keyboard-section + .keyboard-section {
+    margin-top: 1rem;
+  }
   .message-body {
     display: contents;
   }

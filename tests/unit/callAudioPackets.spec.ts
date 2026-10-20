@@ -47,6 +47,28 @@ describe('packet call audio', () => {
     buffer.push(packet(101), 2120);
     expect(buffer.pull(2300)?.packet?.sequence).toBe(100);
   });
+  it('does not count the outage as continuing jitter when the capture clock resumes', () => {
+    const buffer = new CallAudioJitterBuffer();
+    buffer.push(packet(0), 0);
+    buffer.pull(40);
+    for (let now = 60; now <= 120; now += 20) buffer.pull(now);
+    buffer.push(packet(10), 1000);
+    buffer.push(packet(11), 1020);
+    expect(buffer.stats.jitterMs).toBe(0);
+    expect(buffer.stats.targetMs).toBe(40);
+    expect(buffer.pull(1040)).toEqual({ packet: packet(10), fec: false });
+  });
+  it('catches up to the current target after a burst without adding a second cushion', () => {
+    const buffer = new CallAudioJitterBuffer();
+    for (let i = 0; i < 3; i++) buffer.push(packet(i), i * 20);
+    buffer.pull(40);
+    for (let i = 3; i <= 10; i++) buffer.push(packet(i), 240 + i - 3);
+    const frame = buffer.pull(248);
+    expect(frame?.packet).not.toBeNull();
+    expect(frame?.fec).toBe(false);
+    expect(frame?.packet?.sequence).toBeGreaterThanOrEqual(5);
+    expect((10 - frame!.packet!.sequence) * 20).toBeLessThanOrEqual(buffer.stats.targetMs + 60);
+  });
   it('handles the sequence wrap and keeps a long, jittery call bounded', () => {
     const buffer = new CallAudioJitterBuffer();
     buffer.push(packet(0xfffffffe), 0);
@@ -62,4 +84,31 @@ describe('packet call audio', () => {
     }
     expect(buffer.stats.targetMs).toBeLessThanOrEqual(160);
   });
+  it.each([0, 0xfffffff0])(
+    'resumes fresh audio after an underrun across sequence wrap (base %i)',
+    (base) => {
+      const buffer = new CallAudioJitterBuffer();
+      const frame = (sequence: number) => packet((base + sequence) >>> 0);
+      for (let i = 0; i < 50; i++) {
+        buffer.push(frame(i), i * 20);
+        buffer.pull(i * 20);
+      }
+      for (let now = 1000; now < 1260; now += 20) buffer.pull(now);
+      expect(buffer.stats.concealed).toBe(4);
+      buffer.push(frame(49), 1260);
+      expect(buffer.stats.late).toBe(1);
+      buffer.push(frame(63), 1260);
+      buffer.push(frame(64), 1280);
+      buffer.push(frame(65), 1300);
+      expect(buffer.pull(1300)).toEqual({ packet: frame(63), fec: false });
+      expect(buffer.stats.targetMs).toBe(40);
+      expect(buffer.stats.jitterMs).toBe(0);
+      // The old run's loss count must not discard the resumed stream on one loss.
+      buffer.pull(1320);
+      buffer.pull(1340);
+      expect(buffer.pull(1360)).toEqual({ packet: null, fec: false });
+      buffer.push(frame(67), 1380);
+      expect(buffer.pull(1380)).toEqual({ packet: frame(67), fec: false });
+    },
+  );
 });

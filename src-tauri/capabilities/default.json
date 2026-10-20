@@ -7,6 +7,10 @@
   "permissions": [
     "core:default",
     "opener:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "magnet:*" }]
+    },
     "allow-read-private-key",
     "allow-write-private-key",
     "allow-remove-private-key"

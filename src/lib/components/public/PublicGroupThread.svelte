@@ -1,6 +1,7 @@
 <script lang="ts">
   import { orderThreadMessages } from '#src/utils/threadMessageOrder.ts';
   import MessageActions from '../MessageActions.svelte';
+  import { botCommandVisibility } from '#src/utils/botCommandVisibility.ts';
   import ComposerContext from '../ComposerContext.svelte';
   import MessageReply from '../MessageReply.svelte';
   import { buildMessageReplyPreviewContent } from '#src/utils/messageAttachments.ts';
@@ -30,6 +31,7 @@
   import {
     roomPolicy,
     publicGroupShareLink,
+    MAX_PUBLIC_MESSAGE_LENGTH,
     type PublicRoom,
   } from '#src/stores/nostr/publicGroups.ts';
   import type { PublicGroupMessage } from '#src/services/publicGroupData.ts';
@@ -54,7 +56,6 @@
     draft = '',
     sending = false,
     error = '',
-    notice = '',
     nearBottom = true;
   let paging = false;
   let searching = false;
@@ -68,6 +69,7 @@
       const target = await runtime.jumpToMessage(id, signal);
       if (signal.aborted) return;
       if (!target) throw new Error('Message is no longer available.');
+      revealedBotCommands = new Set([...revealedBotCommands, target.id!].slice(-300));
       await tick();
       if (signal.aborted) return;
       highlightedMessage = target.id!;
@@ -180,6 +182,16 @@
   }
   async function messageAction(action: string, message: Message) {
     closeActions();
+    if (action === 'show-command' || action === 'hide-command') {
+      const command = botCommands.commands.get(message.id);
+      if (command) {
+        const next = new Set(revealedBotCommands);
+        if (action === 'show-command') next.add(command.id);
+        else next.delete(command.id);
+        revealedBotCommands = new Set([...next].slice(-300));
+      }
+      return;
+    }
     if (action === 'pin' || action === 'unpin')
       await setPin(action === 'unpin' ? null : message.id);
     if (action === 'info') inspectedId = message.id;
@@ -219,7 +231,6 @@
     if (action === 'copy') {
       try {
         await navigator.clipboard.writeText(message.text);
-        notice = 'Message copied';
       } catch {
         error = 'Could not copy message.';
       }
@@ -322,8 +333,16 @@
       : [],
     ({ message }) => message,
   );
-  $: visible = entries.map(({ event }) => event);
-  $: displayed = entries.map(({ message }) => message);
+  let revealedBotCommands = new Set<string>();
+  $: botCommandChatId = `${own}:${room?.address}:${$state.history}`;
+  $: if (botCommandChatId) revealedBotCommands = new Set();
+  $: botCommands = botCommandVisibility(
+    entries.map(({ message }) => message),
+    revealedBotCommands,
+  );
+  $: visibleEntries = entries.filter(({ message }) => !botCommands.hidden.has(message.id));
+  $: visible = visibleEntries.map(({ event }) => event);
+  $: displayed = visibleEntries.map(({ message }) => message);
   function date(value: string) {
     return chatDate(value, $locale);
   }
@@ -379,7 +398,6 @@
   async function share() {
     try {
       await navigator.clipboard.writeText(publicGroupShareLink(room!));
-      notice = 'Group link copied';
     } catch {
       error = 'Could not copy the group link.';
     }
@@ -560,7 +578,6 @@
   </ThreadTimeline>
   <div class="thread-feedback">
     <div class="thread-feedback-content">
-      {#if notice}<p class="status" role="status">{notice}</p>{/if}
       {#if error}<p class="status error" role="alert">
           {error}
         </p>{/if}
@@ -623,7 +640,7 @@
     label="Public message"
     placeholder="Write a public message"
     attachLabel="Attach public media"
-    maxlength={8000}
+    maxlength={MAX_PUBLIC_MESSAGE_LENGTH}
     onsend={() => void send()}
     onfile={(file) => uploader.choose(file)}
     pasteContext={uploadContext}
@@ -658,6 +675,11 @@
 />
 {#if actionMessage}<MessageActions
     message={actionMessage}
+    botCommandAction={botCommands.commands.has(actionMessage.id)
+      ? revealedBotCommands.has(botCommands.commands.get(actionMessage.id)!.id)
+        ? 'hide-command'
+        : 'show-command'
+      : ''}
     x={contextPosition.x}
     y={contextPosition.y}
     allowedActions={writable

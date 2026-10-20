@@ -13,6 +13,7 @@ Public groups use signed, unencrypted events on ordinary Nostr relays.
 ## Messages
 
 - NIP-C7 `kind:9` messages carry one `a` room address. Replies use `q`; attachments use NIP-92 `imeta`.
+- Posts and edits are limited to 4,000 UTF-16 code units.
 - NIP-25 `kind:7` reactions and NIP-09 `kind:5` deletion requests reference message IDs with `e` tags. Anagram adds an `h` room hint. Deletions never target the room address and require the original author.
 - Edits delete the old version and publish a replacement with the same author, room and timestamp. Anagram's `e` tag marked `edit` links versions; an ordinary `e` preserves the original ID. This extends the NIP-17 edit flow to public messages.
 
@@ -33,8 +34,8 @@ Trust, blocking and transfer tags are tags used by anagram specifically. NIP-72 
 
 Verified public events are journaled in the account's public-group IndexedDB before processing. Duplicate deliveries merge relay receipts, and messages and actions drain in batches of at most 64 with a yield between batches. Entries are acknowledged only after processing succeeds; a receipt arriving during processing remains pending. Reopening a room resumes its unfinished inbox without requiring the relay to resend those events. Replay does not generate live-message scroll signals.
 
-The journal is independent of history pagination: opening a room still requests a bounded recent page, and older messages load on demand. Background connection/storage failures are indicated in the existing header rather than overlays over the thread. Disk failures still require recovery or a refresh; a committed inbox does not protect against clearing browser storage.
+The journal is independent of history pagination: opening a room still requests a bounded recent page, and older messages load on demand. The thread header shows connection and storage failures. Disk failures still require recovery or a refresh; a committed inbox does not protect against clearing browser storage.
 
 History follows the private-group paging approach without key discovery or decryption: independent per-relay cursors use the shared exhaustive `HistoryPager`, advance only after real EOSE and a successful storage commit, and retain unfinished reads for retry. Each paging action schedules at most four history page requests; healthy replicas can finish without waiting for a stalled one. There is no background archive scan. Fetched messages remain in IndexedDB, with batches of at most 64 writes and at most 200 displayed messages.
 
-The pinned message is fetched separately as soon as the room is available. A pin, reply lookup, search jump, or sparse local cache never establishes history coverage or moves a relay cursor. Paging reconciles gaps inside the visible interval as well as loading its next edge, so caches made by earlier versions can recover without clearing account data. Private-group fetching is unchanged.
+The pinned message is fetched separately as soon as the room is available. A pin, reply lookup, search jump, or sparse local cache never establishes history coverage or moves a relay cursor. Paging reconciles gaps inside the visible interval as well as loading its next edge, so caches made by earlier versions can recover without clearing account data.

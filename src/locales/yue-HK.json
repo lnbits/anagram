@@ -1,4 +1,8 @@
 {
+  "auth.joinNamedGroup": "加入{name}",
+  "auth.chatWithName": "同{name}傾偈",
+  "auth.joinThisGroup": "加入呢個群組",
+  "auth.chatWithPerson": "同呢個人傾偈",
   "auth.independence": "Anagram 完全免費、開源，唔受任何公司控制",
   "call.relayApproval.title": "允許自訂通話中繼？",
   "call.relayApproval.message": "呢個通話使用自訂中繼：{url}。允許連接呢個伺服器？請只批准你信任嘅伺服器。如果想之後嘅通話自動允許，請將佢加入 Iroh 中繼設定。",

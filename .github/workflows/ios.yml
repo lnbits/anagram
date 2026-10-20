@@ -18,7 +18,9 @@ concurrency:
 jobs:
   webkit:
     if: vars.IOS_BUILDS_ENABLED == 'true'
-    runs-on: macos-15
+    # Match call-checks: the macOS 15 WebKit build stalls on the first VP8 append.
+    # This browser runner is independent of the native Xcode build toolchain below.
+    runs-on: macos-26
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -31,8 +33,6 @@ jobs:
       - name: Test iPhone layout and WebKit streaming media
         # Browser tests cover viewport/codec behavior, not native permissions,
         # Keychain, audio routing or delivery while the device is locked.
-        env:
-          ANAGRAM_MEDIA_DIAGNOSTICS: '1'
         run: npm run test:e2e:local -- --browser webkit e2e/ios-layout.spec.ts e2e/call-playback.spec.ts
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -62,19 +62,26 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
           key: ios-${{ matrix.target }}
       - run: npm ci
       - name: Test iPhone packaging and simulator guards
-        run: python3 -B -m unittest discover -s scripts/release-smoke -p 'test_ios*.py'
+        run: |
+          python3 -B -m unittest discover -s scripts/release-smoke -p 'test_ios*.py'
+          xcrun clang -Wall -Wextra -Werror scripts/release-smoke/test_ios_dns.c -o /tmp/anagram-ios-dns-test
+          /tmp/anagram-ios-dns-test
       - name: Set release version
         if: inputs.release_tag != '' || github.ref_type == 'tag'
         run: npm run release:version
         env:
-          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+          RELEASE_TAG: ${{ (github.ref_type == 'tag' && github.ref_name) || inputs.release_tag }}
+      - name: Check build versions
+        run: npm run release:check
+        env:
+          RELEASE_TAG: ${{ (github.ref_type == 'tag' && github.ref_name) || inputs.release_tag || '' }}
       - run: npm run verify:iroh
       - name: Install Xcode tooling
         run: |
@@ -87,7 +94,7 @@ jobs:
           if [[ -z "${APPLE_DEVELOPMENT_TEAM:-}" ]]; then unset APPLE_DEVELOPMENT_TEAM; fi
           npm run tauri -- ios init --ci
           node scripts/mobile-version.mjs
-          npm run tauri -- icon src-tauri/icons/icon.png --output src-tauri/icons
+          node scripts/prepare-ios.mjs
       - name: Build and package iPhone app
         if: matrix.target == 'device'
         env:
@@ -97,7 +104,7 @@ jobs:
         run: bash scripts/package-ios.sh
       - name: Build iPhone simulator app
         if: matrix.target == 'simulator'
-        run: npm run tauri -- ios build --ci --target aarch64-sim --no-sign --archive-only --config src-tauri/mobile-version.json -- --locked
+        run: node scripts/build-ios-simulator.mjs
       - name: Launch the packaged app in the iPhone simulator
         if: matrix.target == 'simulator'
         run: python3 scripts/release-smoke/ios.py

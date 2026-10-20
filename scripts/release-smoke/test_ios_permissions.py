@@ -9,10 +9,16 @@ from ios_permissions import CAPTURE_DESCRIPTIONS, validate_ipa
 
 
 class IosPermissionPackaging(unittest.TestCase):
-    def ipa(self, info, fmt=plistlib.FMT_BINARY, path='Payload/Anagram.app/Info.plist'):
+    def ipa(self, info, fmt=plistlib.FMT_BINARY, path='Payload/Anagram.app/Info.plist',
+            privacy_path='Payload/Anagram.app/PrivacyInfo.xcprivacy', privacy=None):
         output = io.BytesIO()
         with zipfile.ZipFile(output, 'w') as archive:
             archive.writestr(path, plistlib.dumps(info, fmt=fmt))
+            if privacy_path is not None:
+                if privacy is None:
+                    source = Path(__file__).resolve().parents[2] / 'src-tauri/mobile/ios/PrivacyInfo.xcprivacy'
+                    privacy = plistlib.loads(source.read_bytes())
+                archive.writestr(privacy_path, plistlib.dumps(privacy, fmt=fmt))
         output.seek(0)
         return output
 
@@ -48,6 +54,25 @@ class IosPermissionPackaging(unittest.TestCase):
         output.seek(0)
         with self.assertRaisesRegex(ValueError, 'exactly one main application'):
             validate_ipa(output)
+
+    def test_rejects_missing_or_nested_privacy_manifest(self):
+        info = dict.fromkeys(CAPTURE_DESCRIPTIONS, 'Call permissions')
+        for path in (None, 'Payload/Anagram.app/assets/PrivacyInfo.xcprivacy'):
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(ValueError, 'root of the app bundle'):
+                    validate_ipa(self.ipa(info, privacy_path=path))
+
+    def test_rejects_manifest_without_file_metadata_reason(self):
+        info = dict.fromkeys(CAPTURE_DESCRIPTIONS, 'Call permissions')
+        for privacy in ({}, {'NSPrivacyAccessedAPITypes': []}, {
+            'NSPrivacyAccessedAPITypes': [{
+                'NSPrivacyAccessedAPIType': 'NSPrivacyAccessedAPICategoryFileTimestamp',
+                'NSPrivacyAccessedAPITypeReasons': ['DDA9.1'],
+            }],
+        }):
+            with self.subTest(privacy=privacy):
+                with self.assertRaisesRegex(ValueError, 'C617.1'):
+                    validate_ipa(self.ipa(info, privacy=privacy))
 
 
 if __name__ == '__main__':

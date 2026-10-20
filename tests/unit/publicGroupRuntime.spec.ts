@@ -1306,6 +1306,25 @@ it('searches the selected ownership history under the current owner policy', asy
   await db.close();
 });
 
+it('bounds outgoing posts and edits to 4,000 characters before publishing anything', async () => {
+  const key = generateSecretKey();
+  const metadata = room(key, 'message-length');
+  const { runtime, published } = setup([metadata], key);
+  await runtime.open(encodeRoomLink(parsePublicRoom(metadata)));
+  await expect(runtime.send('x'.repeat(4001))).rejects.toThrow('1–4,000 characters');
+  expect(published).toHaveLength(0);
+  await runtime.send('x'.repeat(4000));
+  const root = get(runtime.state).messages[0];
+  expect(root.content).toHaveLength(4000);
+  const before = published.length;
+  await expect(runtime.editMessage(root.id!, 'y'.repeat(4001))).rejects.toThrow(
+    '1–4,000 characters',
+  );
+  expect(published).toHaveLength(before);
+  await runtime.editMessage(root.id!, 'y'.repeat(4000));
+  expect(published.at(-1)!.event.content).toBe('y'.repeat(4000));
+});
+
 it('publishes public replies, edits, reactions and deletions and restores their state after reopening', async () => {
   const key = generateSecretKey(),
     metadata = room(key, 'message-actions');

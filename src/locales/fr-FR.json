@@ -1,4 +1,8 @@
 {
+  "auth.joinNamedGroup": "Rejoindre {name}",
+  "auth.chatWithName": "Discuter avec {name}",
+  "auth.joinThisGroup": "Rejoindre ce groupe",
+  "auth.chatWithPerson": "Discuter avec cette personne",
   "auth.independence": "Anagram est entièrement gratuit et open source, et n’est contrôlé par aucune entreprise",
   "call.relayApproval.title": "Autoriser ce relais d’appel personnalisé ?",
   "call.relayApproval.message": "Cet appel utilise un relais personnalisé : {url}. Autoriser la connexion à ce serveur ? N’autorisez que les serveurs de confiance. Pour l’autoriser automatiquement lors de futurs appels, ajoutez-le aux paramètres de relais Iroh.",

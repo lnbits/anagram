@@ -1,5 +1,5 @@
 import { diagnosticText } from '#src/utils/diagnosticExport.ts';
-import { Notify } from '#src/lib/platform/ui.ts';
+import { reportActionFeedback } from '#src/lib/platform/ui.ts';
 
 function resolveErrorMessage(error: unknown, fallbackMessage: string): string {
   if (error instanceof Error && !(error instanceof SyntaxError)) {
@@ -19,10 +19,8 @@ export function reportUiError(
 ): void {
   console.error(diagnosticText(context));
 
-  Notify.create({
+  reportActionFeedback({
     type: 'negative',
     message: resolveErrorMessage(error, fallbackMessage),
-    position: 'top',
-    timeout: 3200,
   });
 }

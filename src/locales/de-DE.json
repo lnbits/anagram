@@ -1,4 +1,8 @@
 {
+  "auth.joinNamedGroup": "{name} beitreten",
+  "auth.chatWithName": "Mit {name} chatten",
+  "auth.joinThisGroup": "Dieser Gruppe beitreten",
+  "auth.chatWithPerson": "Mit dieser Person chatten",
   "auth.independence": "Anagram ist völlig kostenlos und quelloffen und wird von keinem Unternehmen kontrolliert",
   "call.relayApproval.title": "Benutzerdefiniertes Anruf-Relay erlauben?",
   "call.relayApproval.message": "Dieser Anruf verwendet ein benutzerdefiniertes Relay: {url}. Verbindung mit diesem Server erlauben? Genehmige nur vertrauenswürdige Server. Füge es deinen Iroh-Relay-Einstellungen hinzu, um es bei zukünftigen Anrufen automatisch zu erlauben.",

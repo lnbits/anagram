@@ -1,6 +1,6 @@
 # Telegram Bridge
 
-A standalone Node.js bot connecting **one Telegram public supergroup** to **one Anagram public group**. Everything it needs lives in this directory; no changes to the Anagram app and no NDK.
+A standalone Node.js bot connecting **one Telegram public supergroup** to **one Anagram public group**. Copy this directory to install and run it independently.
 
 New Telegram messages appear in Anagram as:
 
@@ -38,7 +38,7 @@ Requires Node.js 24 or later and npm.
 4. Run `npm start`. Copy the printed `npub`.
 5. As the Anagram group owner, open **Public group settings → Trusted → Add trusted users**, find the bot by its `npub`, and add it. The bridge activates when it receives that signed group update. Send a new Telegram message to test it.
 
-Removing the bot from Trusted or blocking it stops bridging when the updated room metadata arrives. Blocked Anagram authors cannot send replies through it. The bot never subscribes to DMs or accepts private-group invitations. It cannot change the app's contact picker; adding its identity to a private group does not activate it.
+Removing the bot from Trusted or blocking it stops bridging when the updated room metadata arrives. Blocked Anagram authors cannot send replies through it. The bot never subscribes to DMs or accepts private-group invitations.
 
 One process and one Telegram polling consumer per token. An existing webhook must be removed by the operator before starting; this bot does not alter webhook configuration. Use another bot token and another `DATA_DIR` for another group pair. Changing the saved Telegram account, Telegram group, Anagram group, or Nostr identity requires a separate data directory.
 
@@ -51,18 +51,11 @@ TELEGRAM_API_ID=12345678
 TELEGRAM_API_HASH=your_32_character_api_hash
 ```
 
-Keep `TELEGRAM_BOT_TOKEN`, `PUBLIC_GROUP`, and your existing `data/` directory. No new bot, personal-account login, phone code, or separate process is needed. Run `npm ci` after updating the bot, then restart it. Your existing systemd service needs no changes:
-
-```sh
-cd /root/anagram/bot-example/telegram-bridge
-npm ci
-systemctl restart telegram-bridge.service
-journalctl -u telegram-bridge.service -f
-```
+Keep the existing bot token and `data/` directory. Run `npm ci` after updating, then restart the bot. MTProto authenticates as the bot; no personal Telegram account is required.
 
 The [Bot API update feed](https://core.telegram.org/bots/api#update) does not report ordinary group deletions. A separate MTProto module uses the same bot identity to watch the configured group for deletion updates. With both API settings empty, the existing message/reply bridge runs without deletion syncing. Partial or invalid settings stop startup with a configuration error.
 
-At every startup and MTProto reconnect, it checks the **50 most recently bridged Telegram message IDs** still in its saved mappings, including posts imported before this feature was enabled. It requests those exact IDs using [channels.getMessages](https://core.telegram.org/method/channels.getMessages); it does not import or scan group history. Only explicit `MessageEmpty` responses for requested IDs cause cleanup. Permission/network errors, omitted results, and inaccessible groups do not cause deletions. A failed startup check stops startup so the supervisor can retry.
+At every startup and MTProto reconnect, it checks the **50 most recently bridged Telegram message IDs** still in its saved mappings. It requests those exact IDs using [channels.getMessages](https://core.telegram.org/method/channels.getMessages); it does not import or scan group history. Only explicit `MessageEmpty` responses for requested IDs cause cleanup. Permission/network errors, omitted results, and inaccessible groups do not cause deletions. A failed startup check stops startup so the supervisor can retry.
 
 Live deletion updates can remove any imported message whose mapping is still saved, not just the latest 50. The module uses Teleproto's channel update recovery while connected; the 50-message check covers restarts and reconnects. This is bounded recovery: older deletions missed during downtime may remain, and pruned mappings cannot be recovered. Keep `data/state.json` and the original Nostr identity.
 

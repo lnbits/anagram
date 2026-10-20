@@ -3,7 +3,7 @@ import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 import { finishOnboarding } from './auth-helpers';
 import { E2E_RELAY_URL, navigateToChat } from './parity/helpers';
 
-test('relay rejection stays on the message status bar without a popup; other send errors still notify', async ({
+test('relay rejection stays on the message status bar without a popup; other send errors remain inline', async ({
   page,
 }) => {
   // Intercept only after onboarding; all other relay traffic continues normally.
@@ -71,7 +71,7 @@ test('relay rejection stays on the message status bar without a popup; other sen
   rejections.splice(0).forEach((reject) => reject());
   await expect(status.locator('.bubble__status-segment--red')).toBeVisible();
   await expect(composer).toHaveValue('Keep the failed message visible');
-  await expect(page.locator('.notices .error')).toHaveCount(0);
+  await expect(page.getByTestId('action-feedback')).toHaveCount(0);
   await status.click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toContainText('blocked: test relay rejection');
@@ -86,7 +86,10 @@ test('relay rejection stays on the message status bar without a popup; other sen
   });
   await composer.fill('Local save failure');
   await page.getByTestId('message-send-button').click();
-  await expect(page.locator('.notices .error')).toContainText(
+  await expect(page.getByTestId('action-feedback')).toContainText(
     'Failed to persist outbound message.',
   );
+  await expect(page.locator('.message-banner')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Dismiss message', exact: true }).click();
+  await expect(page.getByTestId('action-feedback')).toHaveCount(0);
 });

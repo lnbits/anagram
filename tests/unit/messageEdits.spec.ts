@@ -106,3 +106,14 @@ describe('message edit helpers', () => {
 
 import NostrClient from '#src/lib/nostr/client.ts';
 import { createMessageEventRuntime } from '#src/stores/nostr/messageEventRuntime.ts';
+
+it('drops an old inline keyboard unless the replacement supplies its own signed keyboard', () => {
+  const original = { inline_keyboard: { inline_keyboard: [[{ text: 'Old', callback_data: 'old' }]] },
+    inline_keyboard_version: 'a'.repeat(64), inline_keyboard_chat_type: 'dm', bot_command: 'c'.repeat(64), source: 'nostr' };
+  const edited = buildEditedMessageMeta(original, { source: 'nostr' }, 'a'.repeat(64), '2026-01-01T00:00:00Z');
+  expect(edited).not.toHaveProperty('inline_keyboard');
+  expect(edited).not.toHaveProperty('inline_keyboard_version');
+  expect(edited).not.toHaveProperty('bot_command');
+  const replacement = { ...original, inline_keyboard_version: 'b'.repeat(64) };
+  expect(buildEditedMessageMeta(original, replacement, 'a'.repeat(64), '2026-01-01T00:00:00Z').inline_keyboard_version).toBe('b'.repeat(64));
+});

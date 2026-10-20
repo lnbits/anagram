@@ -63,10 +63,41 @@ public final class CallNotificationsDeviceTest {
         return new JSONObject(context.getSharedPreferences("anagram-call-notifications", Context.MODE_PRIVATE).getString("pending", "{}"));
     }
     private void waitForNotifications(int count) throws Exception {
-        long deadline = System.currentTimeMillis() + 3000;
-        while (calls().length != count && System.currentTimeMillis() < deadline) Thread.sleep(20);
-        assertEquals(count, calls().length);
-        if (count == 0) waitForListener();
+        // Submit the queued service refresh before observing Android's separate
+        // notification queue. A zero count can precede a pending call-card post.
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {});
+        long deadline = android.os.SystemClock.uptimeMillis() + 3000;
+        long matchedSince = -1;
+        while (android.os.SystemClock.uptimeMillis() < deadline) {
+            android.service.notification.StatusBarNotification[] shown =
+                context.getSystemService(NotificationManager.class).getActiveNotifications();
+            int callCount = 0;
+            boolean listener = false;
+            for (android.service.notification.StatusBarNotification n : shown) {
+                Notification notification = n.getNotification();
+                if (Notification.CATEGORY_CALL.equals(notification.category)) callCount++;
+                else if ((notification.flags & Notification.FLAG_FOREGROUND_SERVICE) != 0) listener = true;
+            }
+            long now = android.os.SystemClock.uptimeMillis();
+            if (callCount == count && (count != 0 || listener)) {
+                if (matchedSince < 0) matchedSince = now;
+                // Do not succeed on the brief gap between an in-flight post and
+                // cancellation. Assert the same snapshots used by the poll.
+                if (now - matchedSince >= 100) return;
+            } else matchedSince = -1;
+            Thread.sleep(20);
+        }
+        fail("Expected " + count + " settled call notifications"
+            + (count == 0 ? " and the foreground listener. " : ". ") + notificationSummary());
+    }
+    private String notificationSummary() {
+        StringBuilder summary = new StringBuilder("Active notifications:");
+        for (android.service.notification.StatusBarNotification n : context.getSystemService(NotificationManager.class).getActiveNotifications()) {
+            Notification notification = n.getNotification();
+            summary.append(" id=").append(n.getId()).append(" category=").append(notification.category)
+                .append(" flags=").append(notification.flags).append(" channel=").append(notification.getChannelId());
+        }
+        return summary.toString();
     }
     private void invite() throws Exception { CallNotifications.receive(context, owner, peer, signal("invite"), new JSONObject().put("content", "ciphertext"), ""); }
     @Test public void notificationIsPrivateAndHasAnswerDeclineActions() throws Exception {
@@ -104,6 +135,17 @@ public final class CallNotificationsDeviceTest {
         invite(); assertEquals(0, pending().length());
         waitForNotifications(0);
         assertTrue(CallNotifications.isClosed(context, owner, peer, id));
+    }
+    @Test public void cancellationDuringForegroundNotificationHandoffRemovesCallCard() throws Exception {
+        for (int attempt = 0; attempt < 30; attempt++) {
+            CallNotifications.clear(context);
+            invite();
+            // Let the app submit the call card without waiting for Android to display it.
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {});
+            CallNotifications.receive(context, owner, peer, signal("end"), new JSONObject(), "");
+            assertEquals(0, pending().length());
+            waitForNotifications(0);
+        }
     }
     @Test public void blockedAccountSwitchAndExpiryInvalidateAnswer() throws Exception {
         invite(); String token = pending().getString("token");

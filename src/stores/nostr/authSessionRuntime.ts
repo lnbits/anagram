@@ -573,6 +573,9 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
   }
 
   async function logout(): Promise<void> {
+    const botInteractionOwner = hasStorage()
+      ? window.localStorage.getItem(PUBLIC_KEY_STORAGE_KEY)
+      : null;
     clearPrivateKey({ clearSecureStorage: false });
     await removePersistedSecurePrivateKey();
     state.eventSince = 0;
@@ -599,7 +602,7 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
     clearRelayStoreState();
     clearNip65RelayStoreState();
 
-    await clearPersistedAppState();
+    await clearPersistedAppState({ botInteractionOwner });
   }
 
   return {

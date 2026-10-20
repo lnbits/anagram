@@ -22,20 +22,42 @@ export async function setCallSpeaker(element: HTMLMediaElement, deviceId: string
 
 // Players call this on timeupdate as well as progress: WebKit may append MSE
 // segments without emitting progress, leaving a playing call behind live audio.
+const catchingUpAudio = new WeakSet<HTMLMediaElement>();
+function resetAudioRate(element: HTMLMediaElement): void {
+  if (catchingUpAudio.delete(element)) element.playbackRate = 1;
+}
 export function followCallLive(
   element: HTMLMediaElement | null,
   kind: 'audio' | 'video' = 'video',
 ) {
-  if (!element?.buffered.length || element.seeking) return;
+  // A pause can keep receiving chunks. Catch up once playback resumes instead
+  // of repeatedly moving the paused cursor on every timer/progress event.
+  if (!element) return;
+  if (element.paused || element.seeking || !element.buffered.length) {
+    resetAudioRate(element);
+    return;
+  }
   const latest = element.buffered.length - 1;
+  const start = element.buffered.start(latest);
   const end = element.buffered.end(latest);
-  // Audio can recover closer to live; video (including legacy combined media)
-  // retains its existing cushion. Leave headroom for chunk arrival jitter.
-  const cushion = kind === 'audio' ? 0.2 : 0.35;
-  // Leave room for 200 ms chunk bursts before seeking again.
-  const threshold = kind === 'audio' ? 0.45 : 0.6;
-  if (end - element.currentTime > threshold)
-    element.currentTime = Math.max(element.buffered.start(latest), end - cushion);
+  const lag = end - element.currentTime;
+  if (kind === 'audio') {
+    // Repeated seeks make the decoder rebuffer and can add as much delay as
+    // they remove. Drain modest backlog smoothly, with hysteresis so chunk
+    // arrival jitter does not keep changing the rate. Pitch is preserved by
+    // the media element. A large backlog or a buffer gap still needs a seek.
+    if (lag > 0.75 || element.currentTime < start) {
+      resetAudioRate(element);
+      element.currentTime = Math.max(start, end - 0.2);
+    } else if (lag > 0.35) {
+      if (!catchingUpAudio.has(element)) {
+        catchingUpAudio.add(element);
+        element.playbackRate = 1.1;
+      }
+    } else if (lag <= 0.25) resetAudioRate(element);
+    return;
+  }
+  if (lag > 0.6) element.currentTime = Math.max(start, end - 0.35);
 }
 
 // A stalled WebView can stop emitting both progress and timeupdate. Keep the
@@ -45,5 +67,8 @@ export function watchCallLive(
   kind: 'audio' | 'video' = 'video',
 ): () => void {
   const timer = setInterval(() => followCallLive(element, kind), 250);
-  return () => clearInterval(timer);
+  return () => {
+    clearInterval(timer);
+    resetAudioRate(element);
+  };
 }

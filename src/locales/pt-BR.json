@@ -1,4 +1,8 @@
 {
+  "auth.joinNamedGroup": "Entrar em {name}",
+  "auth.chatWithName": "Conversar com {name}",
+  "auth.joinThisGroup": "Entrar neste grupo",
+  "auth.chatWithPerson": "Conversar com esta pessoa",
   "auth.independence": "O Anagram é totalmente gratuito e de código aberto, e não é controlado por nenhuma empresa",
   "call.relayApproval.title": "Permitir retransmissor de chamadas personalizado?",
   "call.relayApproval.message": "Esta chamada usa um retransmissor personalizado: {url}. Permitir conexão com este servidor? Autorize apenas servidores confiáveis. Para permiti-lo automaticamente nas próximas chamadas, adicione-o às configurações de retransmissores Iroh.",

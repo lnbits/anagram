@@ -1,3 +1,4 @@
+import { BOT_CONTROL_KIND, keyboardFromTags, commandFromTags } from './botKeyboardProtocol.ts';
 import { disposeCryptoWorker } from '#src/lib/nostr/cryptoWorker.ts';
 import { notifyLiveThreadMessage } from '#src/lib/state/threadActivity.ts';
 import { messageInbox, type InboxRecord } from '#src/lib/nostr/inbox.ts';
@@ -62,6 +63,7 @@ export function createPrivateMessagesIngestRuntime({
   normalizeThrottleMs,
   normalizeTimestamp,
   persistIncomingGroupEpochTicket,
+  processIncomingBotControl,
   processIncomingCallSignal,
   processIncomingRoomSignal,
   processIncomingDeletionRumorEvent,
@@ -714,6 +716,16 @@ export function createPrivateMessagesIngestRuntime({
 
     if (await findGroupChatEpochContextByRecipientPubkey(senderPubkeyHex)) return;
     if (processingGeneration !== ingestQueueGeneration) return false;
+
+    // Bot controls are authenticated personal envelopes, never timeline activity.
+    if (rumorEvent.kind === BOT_CONTROL_KIND) {
+      if (!isSelfSentMessage && !recipientContext.groupChatPublicKey &&
+          recipientContext.recipientPubkey === loggedInPubkeyHex &&
+          recipients.length === 1 && recipients[0] === loggedInPubkeyHex &&
+          !isPubkeyBlocked(senderPubkeyHex))
+        await processIncomingBotControl?.(rumorEvent.rawEvent());
+      return;
+    }
 
     // Call controls never enter chat, contact, message, unread, or notification persistence.
     // Only one-to-one rumors addressed to the active account can negotiate a call.
@@ -1462,9 +1474,13 @@ export function createPrivateMessagesIngestRuntime({
     const attachments = extractMediaAttachmentsFromTags(rumorEvent.tags);
     const editTargetEventId = readMessageEditTargetEventId(rumorEvent.tags);
     const callHistory = !resolvedGroupChatPublicKey ? callHistoryFromTags(rumorEvent.tags) : null;
+    const inlineKeyboard = keyboardFromTags(rumorEvent.tags);
     let messageMeta: Record<string, unknown> = {
       source: 'nostr',
       protocol: wrappedEvent.kind === 1060 ? 'ndr' : 'nip17',
+      ...(inlineKeyboard ? { inline_keyboard: inlineKeyboard, inline_keyboard_version: rumorEvent.id,
+        inline_keyboard_chat_type: resolvedGroupChatPublicKey ? 'private' : 'dm',
+        bot_command: commandFromTags(rumorEvent.tags) } : {}),
       ...(callHistory ? { call_history: callHistory } : {}),
       kind: NostrKind.PrivateDirectMessage,
       wrapper_event_id: wrappedEvent.id ?? '',

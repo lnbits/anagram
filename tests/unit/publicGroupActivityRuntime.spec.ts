@@ -9,6 +9,7 @@ import { createPublicGroupActivityRuntime } from '#src/stores/nostr/publicGroupA
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const stop of cleanup.splice(0)) await stop();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 async function setup() {
@@ -98,6 +99,8 @@ async function setup() {
 }
 
 it('counts messages with notifications off, deduplicates replicas, and persists read state', async () => {
+  // This case explicitly tests arrivals within one second, even on a slow runner.
+  vi.useFakeTimers({ toFake: ['Date'] });
   const s = await setup(),
     event = s.message('hello');
   await Promise.all([

@@ -1,9 +1,11 @@
 import { test, expect } from '@playwright/test';
 
 const cards = [
-  { path: '/', title: 'A Nostr Alternative Gram', card: 'anagram' },
-  { path: '/join/chat.html', title: 'Join chat · Anagram', card: 'chat' },
-  { path: '/join/call.html', title: 'Join call · Anagram', card: 'call' },
+  { path: '/', card: 'anagram' },
+  { path: '/join/chat.html', card: 'chat' },
+  { path: '/join/call.html', card: 'call' },
+  { path: '/chats/' + 'a'.repeat(64), card: 'profile' },
+  { path: '/public/naddr1qqqq', card: 'public group' },
 ];
 for (const card of cards) {
   test(`crawler receives the ${card.card} card without JavaScript`, async ({ browser }) => {
@@ -16,30 +18,31 @@ for (const card of cards) {
       const response = await page.goto(`http://127.0.0.1:5189${card.path}`);
       expect(response!.status()).toBe(200);
       await expect(page.locator('meta[property="og:title"]')).toHaveCount(1);
-      await expect(page.locator('meta[property="og:title"]')).toHaveAttribute(
-        'content',
-        card.title,
-      );
+      await expect(page.locator('meta[property="og:title"]')).toHaveAttribute('content', 'Anagram');
       await expect(page.locator('meta[name="twitter:title"]')).toHaveAttribute(
         'content',
-        card.title,
+        'Anagram',
       );
       await expect(page.locator('meta[name="twitter:card"]')).toHaveAttribute(
         'content',
         'summary_large_image',
       );
-      const image = `https://anagram.chat/social/${card.card}-v1.jpg`;
+      const image = 'https://anagram.chat/social/anagram-v2.jpg';
       await expect(page.locator('meta[property="og:image"]')).toHaveAttribute('content', image);
       await expect(page.locator('meta[name="twitter:image"]')).toHaveAttribute('content', image);
       const asset = await page.request.get(`http://127.0.0.1:5189${new URL(image).pathname}`);
       expect(asset.headers()['content-type']).toBe('image/jpeg');
       expect((await asset.body()).subarray(0, 2).toString('hex')).toBe('ffd8');
-      if (card.card === 'anagram')
-        await expect(page.locator('meta[property="og:description"]')).toHaveAttribute(
+      for (const selector of [
+        'meta[property="og:description"]',
+        'meta[name="twitter:description"]',
+      ])
+        await expect(page.locator(selector)).toHaveAttribute(
           'content',
-          'join us!',
+          'Private Groups, Chats & Calls',
         );
-      else await expect(page.getByRole('link', { name: 'Open Anagram' })).toBeVisible();
+      if (card.path.startsWith('/join/'))
+        await expect(page.getByRole('link', { name: 'Open Anagram' })).toBeVisible();
     } finally {
       await context.close();
     }

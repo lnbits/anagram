@@ -2,6 +2,7 @@ import { getEventHash } from 'nostr-tools';
 import { ClientEvent, NostrKind, nip19 } from '#src/lib/nostr/client.ts';
 import { onLiveThreadMessage } from '#src/lib/state/threadActivity.ts';
 import { createPrivateMessagesIngestRuntime } from '#src/stores/nostr/privateMessagesIngestRuntime.ts';
+import { BOT_CONTROL_KIND } from '#src/stores/nostr/botKeyboardProtocol.ts';
 import { CALL_PROTOCOL, CALL_SIGNAL_KIND } from '#src/types/call.ts';
 import { ROOM_PROTOCOL } from '#src/types/callRoom.ts';
 import type { MessageRelayStatus } from '#src/types/chat.ts';
@@ -163,6 +164,7 @@ function createDeps() {
       typeof value === 'string' && value.trim() ? value.trim() : null,
     ),
     persistIncomingGroupEpochTicket: vi.fn().mockResolvedValue(undefined),
+    processIncomingBotControl: vi.fn().mockResolvedValue(undefined),
     processIncomingCallSignal: vi.fn().mockResolvedValue(undefined),
     processIncomingRoomSignal: vi.fn().mockResolvedValue(undefined),
     processIncomingDeletionRumorEvent: vi.fn().mockResolvedValue(undefined),
@@ -545,6 +547,22 @@ describe('privateMessagesIngestRuntime', () => {
     await expect(
       runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64)),
     ).resolves.toBe(false);
+  });
+
+  it.each([false, true])('keeps bot controls out of messages, unread activity and notifications (blocked: %s)', async (blocked) => {
+    const deps = createDeps();
+    deps.isPubkeyBlocked.mockReturnValue(blocked);
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+    const event = makeRumorEvent({ recipientPubkey: 'b'.repeat(64), kind: BOT_CONTROL_KIND });
+    event.rawEvent = () => ({ id: event.id, pubkey: event.pubkey, kind: event.kind!, created_at: event.created_at!, tags: event.tags, content: event.content });
+    ndkMocks.giftUnwrap.mockResolvedValue(event);
+    await runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64));
+    expect(deps.processIncomingBotControl).toHaveBeenCalledTimes(blocked ? 0 : 1);
+    expect(serviceMocks.chatDataService.createChat).not.toHaveBeenCalled();
+    expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
+    expect(serviceMocks.nostrEventDataService.upsertEvent).not.toHaveBeenCalled();
+    expect(deps.chatStore.recordIncomingActivity).not.toHaveBeenCalled();
+    expect(deps.showIncomingMessageBrowserNotification).not.toHaveBeenCalled();
   });
 
   it('routes authenticated call controls without touching chat or event persistence', async () => {

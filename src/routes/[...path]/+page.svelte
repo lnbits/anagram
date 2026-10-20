@@ -7,7 +7,7 @@
   import Auth from '#src/lib/components/Auth.svelte';
   import Shell from '#src/lib/components/Shell.svelte';
   import { applyThemeAccent, readThemeAccent, ACCENT_STORAGE_KEY } from '#src/utils/themeAccent.ts';
-  import { notices } from '#src/lib/platform/ui.ts';
+  import { incomingMessageBanner } from '#src/lib/platform/ui.ts';
   import { updateAppBadge } from '#src/lib/platform/appBadge.ts';
   import '#src/app.css';
   import '#src/lib/components/shell.css';
@@ -43,8 +43,6 @@
 {#if ready}{#if authenticated}<Shell />{:else}<Auth
       onlogin={() => (authenticated = true)}
     />{/if}{/if}
-<div class="notices" aria-live="polite">
-  {#each $notices as notice (notice.id)}<div class:error={notice.type === 'negative'}>
-      {notice.message}
-    </div>{/each}
-</div>
+{#if $incomingMessageBanner}<div class="message-banner" role="status">
+    {$incomingMessageBanner}
+  </div>{/if}

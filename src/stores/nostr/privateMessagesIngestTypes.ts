@@ -55,6 +55,7 @@ export interface InboundTraceOptions {
 }
 
 export interface PrivateMessagesIngestRuntimeDeps {
+  processIncomingBotControl?: (event: NostrEvent) => Promise<void>;
   verifyIncomingGroupMessage: (rumor: ClientEvent, recipient: string) => Promise<boolean>;
   processIncomingRoomSignal?: (senderPubkey: string, signal: CallRoomSignal) => Promise<void>;
   processIncomingCallSignal?: (senderPubkey: string, signal: CallSignal) => Promise<void>;

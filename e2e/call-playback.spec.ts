@@ -206,20 +206,54 @@ for (const kind of ['audio', 'video'] as const) {
             await waitForPlayback(pausedAt + 0.25);
             stage('playback resumed');
             await delay(1000);
-            const start = element.currentTime;
-            const framesBefore = displayedFrames;
-            const lags: number[] = [];
-            for (let i = 0; i < 20; i++) {
+            // Audio drains modest backlog at 1.1x rather than seeking it away.
+            // Allow bounded recovery, but require a full two-second window of
+            // low median lag and continued playback, not one favourable timer sample.
+            // Draining 0.75s toward 0.25s can take five seconds at that rate;
+            // eight seconds includes the measurement window and timer headroom.
+            const recoveryStarted = performance.now();
+            const sample = () => ({
+              elapsed: performance.now() - recoveryStarted,
+              time: element.currentTime,
+              frames: displayedFrames,
+              rate: element.playbackRate,
+              lag: element.buffered.length
+                ? element.buffered.end(element.buffered.length - 1) - element.currentTime
+                : Number.POSITIVE_INFINITY,
+            });
+            const samples = [sample()];
+            let lag = Number.POSITIVE_INFINITY;
+            let advanced = 0;
+            let frames = 0;
+            do {
               await delay(100);
-              lags.push(element.buffered.end(element.buffered.length - 1) - element.currentTime);
-            }
-            lags.sort((a, b) => a - b);
+              if (errors.length) throw new Error(JSON.stringify(snapshot()));
+              samples.push(sample());
+              if (samples.length > 21) samples.shift();
+              const latest = samples[samples.length - 1];
+              advanced = latest.time - samples[0].time;
+              frames = latest.frames - samples[0].frames;
+              const lags = samples
+                .slice(1)
+                .map((entry) => entry.lag)
+                .sort((a, b) => a - b);
+              lag = lags[Math.floor(lags.length / 2)];
+              if (
+                samples.length === 21 &&
+                lag < (kind === 'audio' ? 0.45 : 0.75) &&
+                advanced > 1.5 &&
+                (kind === 'audio' || frames > 5)
+              )
+                break;
+            } while (performance.now() - recoveryStarted < 8000);
             return {
               errors,
               seeks: seeks - before,
-              lag: lags[10],
-              advanced: element.currentTime - start,
-              displayedFrames: displayedFrames - framesBefore,
+              lag,
+              advanced,
+              displayedFrames: frames,
+              recoveryMs: performance.now() - recoveryStarted,
+              samples,
             };
           } finally {
             clearInterval(heartbeat);
@@ -272,10 +306,19 @@ for (const kind of ['audio', 'video'] as const) {
           contentType: 'text/plain',
         });
       });
+      await testInfo.attach('playback-measurements', {
+        body: JSON.stringify({ kind, managed, slowSend, unevenSend, result }, null, 2),
+        contentType: 'application/json',
+      });
+      console.log(
+        '[call playback]',
+        JSON.stringify({ kind, managed, slowSend, unevenSend, ...result, samples: undefined }),
+      );
       expect(result.errors).toEqual([]);
       // Browsers may catch up themselves; require low lag and sustained playback,
       // not an unnecessary application seek. Unit tests exercise forced drift.
       expect(result.seeks).toBeLessThanOrEqual(3);
+      expect(result.samples).toHaveLength(21);
       expect(result.lag).toBeLessThan(kind === 'audio' ? 0.45 : 0.75);
       expect(result.advanced).toBeGreaterThan(1.5);
       if (kind === 'video') expect(result.displayedFrames).toBeGreaterThan(5);

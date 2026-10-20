@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+    <meta name="description" content="How Anagram Chat handles identity keys, messages, media, calls, and local data." />
+    <title>Privacy policy — Anagram Chat</title>
+    <link rel="stylesheet" href="/legal.css" />
+    <link rel="icon" href="/favicon.ico" />
+  </head>
+  <body>
+    <main>
+      <nav aria-label="Site navigation">
+        <a href="/">Open Anagram</a>
+        <a href="/support.html">Support</a>
+      </nav>
+      <h1>Anagram Chat privacy policy</h1>
+      <p class="updated">Updated <time datetime="2026-10-19">19 October 2026</time></p>
+      <p>Anagram Chat is a Nostr messaging and calling app published by LNBITS, INC LIMITED. This policy describes the official app and web client. Anagram connects to Nostr relays, media hosts, remote signers, and call relays. Some of these services are run by independent operators with their own data practices.</p>
+      <h2>Your identity and device storage</h2>
+      <p>Anagram uses a Nostr public and private key pair rather than a central Anagram account. You can create a key on your device, use an existing key, or connect a compatible signer. Your public key identifies you on Nostr.</p>
+      <p>The iOS app saves a locally supplied private key in Apple Keychain. The web client saves a locally supplied private key in browser local storage. The app uses that key in memory while signed in. A remote signer keeps the account key separately, but Anagram retains the connection credentials needed to use it. An exported key backup is a readable file that you must protect.</p>
+      <p>Messages, contacts, preferences, cached images, and diagnostic information are stored on your device. Saved message history includes decrypted content; it is not separately encrypted by Anagram. Protect access to your device and browser profile.</p>
+      <h2>Messages and public information</h2>
+      <p>Direct-message and private-group message content is encrypted before being sent to Nostr relays. Relay services still receive connection information, including your IP address, and the public fields needed to store and deliver events. Recipients can read, save, or share messages they receive.</p>
+      <p>Public-room messages and profile information you publish are public. Relays and other people can copy, index, and retain them. Only add profile details that you intend to publish. Settings and discovery requests may also be sent to your configured relays and the app's discovery services.</p>
+      <h2>Media and external services</h2>
+      <p class="notice"><strong>Uploaded photos, video, and audio are not encrypted by this client.</strong> The selected media host receives the original file and its upload authorization. Putting the returned link in an encrypted message does not encrypt the hosted file. Anyone with access to that link may be able to retrieve it.</p>
+      <p>The default media host is <a href="https://blossom.nostr.build" rel="noopener noreferrer">blossom.nostr.build</a>. You can change it in Settings → Media, Data &amp; Storage. Hosts serving profile pictures, message images, link previews, or other external content may receive your IP address and request details when that content is loaded.</p>
+      <p>The web host and the relay, discovery, media, and signer services you use may keep access logs under their own policies. Their locations and retention periods depend on the provider. Anagram does not control independent providers or copies held by message recipients.</p>
+      <h2>Calls, camera, and microphone</h2>
+      <p>Anagram requests microphone access for calls and camera access for video calls or QR scanning. Call media is sent to the other participants using encrypted Iroh connections. Call relays handle connection metadata and encrypted traffic. Direct connections, when used, can expose your network address to the other participants.</p>
+      <p>You can choose call relays in Settings → Relays → Iroh. The default pool includes iroh.nostr.com and public Iroh relays. You can revoke camera and microphone permissions in your device settings.</p>
+      <h2>Diagnostics and support</h2>
+      <p>The client does not include advertising or background analytics SDKs. Diagnostic logs are kept locally and are not automatically uploaded by the client. If you export diagnostics or contact support, review what you share. A support report contains the information you choose to include; a GitHub issue is public.</p>
+      <h2>Retention and your choices</h2>
+      <p>Local app data remains until you remove it. Settings → Log out removes the saved sign-in credentials and the app's local message and contact databases. Keep a secure backup of your key before logging out if you need to access the same identity again.</p>
+      <p>Logging out does not delete your Nostr identity, events stored by relays, uploaded media, or copies kept by recipients. Deletion requests and profile updates cannot guarantee removal of copies across Nostr. Contact the relevant relay or media operator about its retention and deletion options. Revoke remote-signer access with your signer when you no longer need it.</p>
+      <p>You can change your relay and media-host choices in Settings, stop using a service, and remove local app data. For questions about this policy or privacy requests, email <a href="mailto:vlad@lnbits.com">vlad@lnbits.com</a> or visit the <a href="/support.html">Anagram support page</a>.</p>
+      <h2>Changes</h2>
+      <p>We will update this page when the app's data practices change. The date above identifies the current policy.</p>
+      <footer><a href="/support.html">Anagram Chat support</a> · <a href="https://github.com/lnbits/anagram" rel="noopener noreferrer">Source code</a></footer>
+    </main>
+  </body>
+</html>

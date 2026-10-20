@@ -79,6 +79,17 @@
   $: meter(activity, url);
   onMount(() => {
     if (primary) registerCallAudio(audio);
+    const resume = () => {
+      if (document.visibilityState === 'visible' && audio?.paused && url) void play();
+    };
+    document.addEventListener('visibilitychange', resume);
+    window.addEventListener('pageshow', resume);
+    window.addEventListener('focus', resume);
+    return () => {
+      document.removeEventListener('visibilitychange', resume);
+      window.removeEventListener('pageshow', resume);
+      window.removeEventListener('focus', resume);
+    };
   });
   onDestroy(() => {
     attempt++;

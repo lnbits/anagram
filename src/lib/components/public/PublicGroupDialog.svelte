@@ -40,7 +40,6 @@
   let tab = 'Profile',
     busy = false,
     error = '',
-    notice = '',
     picker: '' | 'trusted' | 'blocked' = '';
   let join = '',
     predecessor = '',
@@ -52,7 +51,6 @@
     if (busy || imageUploading) return;
     busy = true;
     error = '';
-    notice = '';
     try {
       await fn();
     } catch (e) {
@@ -169,7 +167,6 @@
         onclick={() =>
           act(async () => {
             await navigator.clipboard.writeText(publicGroupShareLink(room!));
-            notice = 'Group link copied';
           })}>Copy group link</button
       >
     </div>
@@ -295,7 +292,7 @@
         })}>Transfer ownership</button
     >
   {/if}
-  {#if notice}<p role="status">{notice}</p>{/if}{#if error}<p class="error" role="alert">
+  {#if error}<p class="error" role="alert">
       {error}
     </p>{/if}
 </ModalFrame>

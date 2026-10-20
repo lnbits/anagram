@@ -57,11 +57,14 @@ for (const userAgent of ['iPhone', 'Macintosh']) {
 
     await page.getByRole('button', { name: 'Chat options' }).click();
     await page.getByTestId('new-chat-button').click();
-    await page
-      .getByTestId('contact-identifier-input')
-      .fill(nip19.npubEncode(getPublicKey(generateSecretKey())));
+    const contactPubkey = getPublicKey(generateSecretKey());
+    await page.getByTestId('contact-identifier-input').fill(nip19.npubEncode(contactPubkey));
     await page.getByLabel('Name (optional)').fill('iPhone contact');
     await page.getByRole('button', { name: 'Add contact', exact: true }).click();
+    await expect(page.getByTestId('chat-thread')).toHaveAttribute(
+      'data-chat-public-key',
+      contactPubkey,
+    );
     const composer = page.getByTestId('message-composer-input');
     await expect(composer).toBeVisible();
     await composer.fill('Keyboard draft');

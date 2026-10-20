@@ -1,6 +1,10 @@
-import { resolvePreferredContactRelayUrls } from '#src/utils/contactRelayUrls.ts';
 import { ratchetRelayUrls } from '#src/stores/nostr/ratchetRelays.ts';
 import { createRatchetIntegration } from '#src/stores/nostr/ratchetIntegration.ts';
+import { get } from 'svelte/store';
+import { createReadyRelaySet, fetchEventWithRelayTimeout } from './nostr/relayQueryUtils.ts';
+import { createBotKeyboardRuntime } from './nostr/botKeyboardRuntime.ts';
+import { createBotKeyboardAccess } from './nostr/botKeyboardAccess.ts';
+import { resolvePreferredContactRelayUrls } from '#src/utils/contactRelayUrls.ts';
 import { contactsService } from '#src/services/contactsService.ts';
 import { getPublicProfile, rememberPublicProfile } from '#src/lib/state/publicProfiles.ts';
 import { STARTER_PUBLIC_GROUP } from '#src/constants/starterPublicGroup.ts';
@@ -20,6 +24,7 @@ import { Capacitor } from '#src/lib/platform/legacyNative.ts';
 import NostrClient, {
   ClientEvent,
   NostrKind,
+  NostrSubscriptionCacheUsage,
   NostrPrivateKeySigner,
   NostrNip46Signer,
   type NostrSigner,
@@ -136,6 +141,7 @@ import {
   readContactProfileEventSinceValue,
   readContactRelayListEventSinceValue,
   relayEntriesFromRelayListValue,
+  relayEntriesFromDirectMessageReceiveRelayEventValue,
   resolveCurrentGroupChatEpochEntryValue,
   resolveGroupChatEpochEntriesValue,
   resolveGroupDisplayNameValue,
@@ -1452,6 +1458,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     normalizeThrottleMs,
     normalizeTimestamp,
     persistIncomingGroupEpochTicket,
+    processIncomingBotControl: (event) => botKeyboards.receive(event),
     processIncomingCallSignal: (peer, signal) => useCallStore().receiveSignal(peer, signal),
     processIncomingRoomSignal: (peer, signal) => useCallRoomStore().receive(peer, signal),
     processIncomingDeletionRumorEvent,
@@ -2211,6 +2218,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     resetContactSubscriptionsRuntimeState,
     resetEventSinceForFreshLogin,
     resetCalls: () => {
+      botKeyboards.reset();
       useCallStore().reset();
       useCallRoomStore().reset();
     },
@@ -2567,7 +2575,73 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     }),
   });
 
+  const botKeyboards = createBotKeyboardRuntime({
+    client: ndk,
+    account: getLoggedInPublicKeyHex,
+    blocked: (key) => isPubkeyBlockedRuntime(key),
+    signer: () => getOrCreateSignerRuntime(),
+    containsSecret: containsSessionSecret,
+    authorize: createBotKeyboardAccess({
+      account: getLoggedInPublicKeyHex,
+      blocked: (key) => isPubkeyBlockedRuntime(key),
+      decrypt: decryptPrivateStringContent,
+      publicKeyboard: (target) => publicGroups.botKeyboard(target),
+      derivePublicKey: derivePublicKeyFromPrivateKey,
+      issueOwnInvitation: (group, epoch) => groupRecovery.issueOwnInvitation(group, epoch),
+    }),
+    publish: async (event, target, isActive) => {
+      const peer = target.bot;
+      const [contact, groupContact] = await Promise.all([
+        contactsService.getContactByPublicKey(peer),
+        target.type === 'private' ? contactsService.getContactByPublicKey(target.chat) : null,
+      ]);
+      const seeds =
+        target.type === 'public'
+          ? (get(publicGroups.sidebar).rooms.find((room) => room.address === target.chat)?.room
+              .relays ?? [])
+          : (groupContact?.relays.map((relay) => relay.url) ?? []);
+      const discoveryUrls = normalizeRelayStatusUrlsValue([
+        ...seeds,
+        ...getAppRelayUrls(),
+        ...resolvePreferredContactRelayUrls(contact?.relays),
+      ]);
+      if (!isActive()) throw new Error('Account changed');
+      await ensureRelayConnections(discoveryUrls);
+      if (!isActive()) throw new Error('Account changed');
+      // A public author need not be a contact. Use a bounded, read-only inbox lookup;
+      // callbacks must not create contacts or advance another account's restore cursor.
+      const inbox = await fetchEventWithRelayTimeout(
+        ndk,
+        {
+          kinds: [NostrKind.DirectMessageReceiveRelayList],
+          authors: [peer],
+          limit: 1,
+        },
+        { cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY, allowPartialResults: true },
+        createReadyRelaySet(ndk, discoveryUrls),
+      ).catch(() => null);
+      const inboxUrls =
+        inbox?.pubkey === peer
+          ? relayEntriesFromDirectMessageReceiveRelayEventValue(inbox).map((relay) => relay.url)
+          : [];
+      const urls = normalizeRelayStatusUrlsValue([...inboxUrls, ...discoveryUrls]);
+      if (!isActive()) throw new Error('Account changed');
+      // Waiting on the combined list would return immediately for an already-open
+      // app relay, before the newly discovered inbox is ready to receive anything.
+      await ensureRelayConnections(inboxUrls.length ? inboxUrls : urls);
+      if (!isActive() || contact?.type === 'group') throw new Error('Bot unavailable');
+      const result = await publishEventWithRelayStatuses(
+        new ClientEvent(ndk, event),
+        urls,
+        'recipient',
+        true,
+      );
+      if (result.error) throw new Error('Delivery unconfirmed. Retry when connected.');
+    },
+  });
+
   return {
+    botKeyboards,
     publicGroups,
     containsSessionSecret,
     searchPublicGroups: async (

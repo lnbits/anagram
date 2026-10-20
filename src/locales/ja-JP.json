@@ -1,4 +1,8 @@
 {
+  "auth.joinNamedGroup": "{name}に参加",
+  "auth.chatWithName": "{name}とチャット",
+  "auth.joinThisGroup": "このグループに参加",
+  "auth.chatWithPerson": "この人とチャット",
   "auth.independence": "Anagramは完全に無料のオープンソースで、どの企業にも管理されていません",
   "call.relayApproval.title": "カスタム通話リレーを許可しますか？",
   "call.relayApproval.message": "この通話はカスタムリレー {url} を使用します。このサーバーへの接続を許可しますか？信頼できるサーバーのみ許可してください。今後の通話で自動的に許可するには、Iroh リレー設定に追加してください。",

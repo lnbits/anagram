@@ -1,4 +1,8 @@
 {
+  "auth.joinNamedGroup": "{name} grubuna katıl",
+  "auth.chatWithName": "{name} ile sohbet et",
+  "auth.joinThisGroup": "Bu gruba katıl",
+  "auth.chatWithPerson": "Bu kişiyle sohbet et",
   "auth.independence": "Anagram tamamen ücretsiz ve açık kaynaklıdır ve hiçbir şirket tarafından kontrol edilmez",
   "call.relayApproval.title": "Özel arama aktarıcısına izin verilsin mi?",
   "call.relayApproval.message": "Bu arama özel bir aktarıcı kullanıyor: {url}. Bu sunucuya bağlanılsın mı? Yalnızca güvendiğiniz sunucuları onaylayın. Gelecekteki aramalarda otomatik izin vermek için Iroh aktarıcı ayarlarınıza ekleyin.",

@@ -31,3 +31,5 @@ Thumbs.db
 keystore.properties
 src-tauri/mobile-version.json
 mobile-assets/
+# Other
+bot-example/temp

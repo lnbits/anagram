@@ -1,4 +1,8 @@
 {
+  "auth.joinNamedGroup": "Únete a {name}",
+  "auth.chatWithName": "Chatea con {name}",
+  "auth.joinThisGroup": "Únete a este grupo",
+  "auth.chatWithPerson": "Chatea con esta persona",
   "auth.independence": "Anagram es completamente gratis y de código abierto, y no está controlado por ninguna empresa",
   "call.relayApproval.title": "¿Permitir este repetidor de llamadas personalizado?",
   "call.relayApproval.message": "Esta llamada usa un repetidor personalizado: {url}. ¿Permitir la conexión a este servidor? Autoriza solo servidores de confianza. Para permitirlo automáticamente en futuras llamadas, añádelo a tus ajustes de repetidores Iroh.",

@@ -640,7 +640,7 @@ p {
   display: block;
   margin: 16px auto;
 }
-.notices {
+.message-banner {
   color: var(--nc-text);
   position: fixed;
   bottom: calc(var(--app-safe-bottom, 0px) + 24px);
@@ -648,8 +648,6 @@ p {
   transform: translateX(-50%);
   z-index: 100;
   max-width: 90vw;
-}
-.notices > div {
   padding: 14px 22px;
   background: var(--nc-menu-bg);
   border: 1px solid var(--nc-border);

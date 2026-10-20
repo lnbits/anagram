@@ -2,12 +2,17 @@ package com.nostr.anagram
 
 import android.app.Activity
 import android.content.Context
+import android.content.ComponentName
+import android.content.Intent
+import android.content.ServiceConnection
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.IBinder
+import android.view.WindowManager
 import androidx.appcompat.app.AppCompatActivity
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
@@ -111,14 +116,76 @@ class PhoneCallAudio(context: Context) {
 
 @TauriPlugin
 class CallAudioPlugin(private val activity: Activity) : Plugin(activity) {
-    private val routing = PhoneCallAudio(activity)
+    private var service: CallAudioService? = null
+    private var binding: ServiceConnection? = null
+    private var pending: Invoke? = null
+    private var keptScreenOn = false
+    private val handler = Handler(Looper.getMainLooper())
+    private val timeout = Runnable { close(); }
+
+    private fun close() {
+        handler.removeCallbacks(timeout)
+        pending?.reject("Call audio service stopped")
+        pending = null
+        (activity as? MainActivity)?.keepCallAudioRunning(false)
+        try { service?.release() } finally {
+            service = null
+            binding?.let {
+                try { activity.unbindService(it) } catch (_: IllegalArgumentException) { /* already disconnected */ }
+            }
+            binding = null
+            if (keptScreenOn) activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            keptScreenOn = false
+        }
+    }
+    private fun configureService(invoke: Invoke, speaker: Boolean) {
+        try {
+            service!!.configure(speaker)
+            (activity as? MainActivity)?.keepCallAudioRunning(true)
+            if (activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON == 0) {
+                activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                keptScreenOn = true
+            }
+            invoke.resolve()
+        } catch (_: RuntimeException) {
+            if (service?.isActive != true) close()
+            invoke.reject("Call audio service unavailable")
+        }
+    }
     @Command
     fun configure(invoke: Invoke) {
         val args = invoke.parseArgs(CallAudioArgs::class.java)
         activity.runOnUiThread {
-            try { routing.configure(args.active, args.speaker); invoke.resolve() }
-            catch (_: RuntimeException) { invoke.reject("Call audio routing failed") }
+            if (!args.active) { close(); invoke.resolve(); return@runOnUiThread }
+            if (service != null) { configureService(invoke, args.speaker); return@runOnUiThread }
+            if (binding != null) { invoke.reject("Call audio service is starting"); return@runOnUiThread }
+            val connection = object : ServiceConnection {
+                override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+                    if (binding !== this) return
+                    handler.removeCallbacks(timeout)
+                    val request = pending ?: return
+                    pending = null
+                    service = (binder as CallAudioService.CallBinder).service
+                    configureService(request, args.speaker)
+                }
+                override fun onServiceDisconnected(name: ComponentName) { if (binding === this) close() }
+                override fun onBindingDied(name: ComponentName) { if (binding === this) close() }
+                override fun onNullBinding(name: ComponentName) { if (binding === this) close() }
+            }
+            pending = invoke
+            try {
+                if (!activity.bindService(Intent(activity, CallAudioService::class.java), connection, Context.BIND_AUTO_CREATE)) {
+                    pending = null
+                    invoke.reject("Call audio service unavailable")
+                    return@runOnUiThread
+                }
+                binding = connection
+                handler.postDelayed(timeout, 5000)
+            } catch (_: RuntimeException) {
+                pending = null
+                invoke.reject("Call audio service unavailable")
+            }
         }
     }
-    override fun onDestroy(activity: AppCompatActivity) { routing.close() }
+    override fun onDestroy(activity: AppCompatActivity) { close() }
 }

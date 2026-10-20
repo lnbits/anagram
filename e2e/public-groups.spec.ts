@@ -120,11 +120,17 @@ test('create, share, edit and moderate public groups without rich hydration for 
 }, info) => {
   const owner = await login(page);
   const room = await create(page);
+  await expect(page.getByLabel('Public message', { exact: true })).toHaveAttribute(
+    'maxlength',
+    '4000',
+  );
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.getByRole('button', { name: 'Copy public group link' }).click();
   await expect
     .poll(() => page.evaluate(() => navigator.clipboard.readText()))
     .toContain(`/join/chat.html#/public/${room.naddr}`);
+  await expect(page.getByText('Group link copied', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.message-banner')).toHaveCount(0);
   const sharedLink = await page.evaluate(() => navigator.clipboard.readText());
   await page.goto(sharedLink);
   await expect(page).toHaveURL(new RegExp(`/public/${room.naddr}$`));
@@ -966,7 +972,7 @@ test('public chats render trusted group invitations with the shared Join chat bu
   await page.getByTestId('message-composer-input').fill(`Welcome here: ${link}`);
   await page.getByRole('button', { name: 'Send message' }).click();
   const message = page.getByTestId('public-message').filter({ hasText: 'Welcome here:' });
-  await expect(message.getByRole('link', { name: 'Join chat', exact: true })).toHaveClass(
+  await expect(message.getByRole('link', { name: 'Join chat Invite card room', exact: true })).toHaveClass(
     /room-link/,
   );
   await expect(message.locator('.link-preview')).toHaveCount(0);

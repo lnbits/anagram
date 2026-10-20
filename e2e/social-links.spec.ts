@@ -35,12 +35,26 @@ test('public group invitations reuse call buttons in DMs and private groups and 
   const alice = await bootstrapUser(browser, TEST_ACCOUNTS.publicInvitationAlice);
   const bob = await bootstrapUser(browser, TEST_ACCOUNTS.publicInvitationBob);
   try {
+    const picture = 'https://images.example.org/invitation.png';
+    for (const user of [alice, bob])
+      await user.page.route(picture, (route) =>
+        route.fulfill({ path: 'static/anagram.png', contentType: 'image/png' }),
+      );
     await alice.page.getByRole('button', { name: 'Chat options' }).click();
     await alice.page.getByRole('button', { name: 'New public group', exact: true }).click();
     const dialog = alice.page.getByRole('dialog', { name: 'New public group' });
     await dialog.getByLabel('Group name', { exact: true }).fill('Invitation lounge');
     await dialog.getByRole('button', { name: 'Create public group', exact: true }).click();
     await expect(alice.page).toHaveURL(/\/public\/naddr/);
+    await alice.page.evaluate(async (picture) => {
+      const { useNostrStore } = await import('/src/stores/nostrStore.svelte.ts');
+      const runtime = useNostrStore().publicGroups;
+      const room = await new Promise<any>((resolve) => {
+        const stop = runtime.state.subscribe((state) => resolve(state.room));
+        stop();
+      });
+      await runtime.update({ name: room.name, about: room.about, picture }, room.event.id!);
+    }, picture);
     const target = new URL(alice.page.url()).pathname;
     const direct = `http://127.0.0.1:5173${target}`;
     const shared = `https://anagram.chat/join/chat.html#${target}`;
@@ -49,9 +63,11 @@ test('public group invitations reuse call buttons in DMs and private groups and 
     await alice.page.getByTestId('message-composer-input').fill(`Come chat: ${direct}`);
     await alice.page.getByTestId('message-send-button').click();
     const incoming = threadMessage(bob.page, 'Come chat:');
-    const button = incoming.getByRole('link', { name: 'Join chat', exact: true });
+    const button = incoming.getByRole('link', { name: 'Join chat Invitation lounge', exact: true });
     await expect(button).toHaveClass(/room-link/);
     await expect(button).toHaveAttribute('href', direct);
+    await expect(button.locator('strong')).toHaveText('Invitation lounge');
+    await expect(button.locator('img')).toHaveAttribute('src', picture);
     await expect(incoming).not.toContainText('naddr1');
     await button.click();
     await expect(bob.page).toHaveURL(new RegExp(`${target}$`));
@@ -68,11 +84,13 @@ test('public group invitations reuse call buttons in DMs and private groups and 
     await alice.page.getByTestId('message-composer-input').fill(`Public invitation: ${shared}`);
     await alice.page.getByTestId('message-send-button').click();
     const message = threadMessage(alice.page, 'Public invitation:');
-    await expect(message.getByRole('link', { name: 'Join chat', exact: true })).toHaveClass(
-      /room-link/,
-    );
+    await expect(
+      message.getByRole('link', { name: 'Join chat Invitation lounge', exact: true }),
+    ).toHaveClass(/room-link/);
     await expect(message.locator('.link-preview')).toHaveCount(0);
-    await message.getByRole('link', { name: 'Join chat', exact: true }).click({ button: 'right' });
+    await message
+      .getByRole('link', { name: 'Join chat Invitation lounge', exact: true })
+      .click({ button: 'right' });
     await expect(alice.page.getByTestId('message-link-copy')).toBeVisible();
     await alice.page.keyboard.press('Escape');
     await alice.page.evaluate(async () => {
@@ -81,12 +99,16 @@ test('public group invitations reuse call buttons in DMs and private groups and 
     });
     for (const dark of [false, true]) {
       await alice.page.evaluate((dark) => document.body.classList.toggle('body--dark', dark), dark);
-      await expect(message.getByRole('link', { name: 'Join chat', exact: true })).toBeVisible();
+      await expect(
+        message.getByRole('link', { name: 'Join chat Invitation lounge', exact: true }),
+      ).toBeVisible();
     }
     await alice.page.setViewportSize({ width: 390, height: 844 });
-    await expect(message.getByRole('link', { name: 'Join chat', exact: true })).toBeVisible();
+    await expect(
+      message.getByRole('link', { name: 'Join chat Invitation lounge', exact: true }),
+    ).toBeVisible();
     await alice.page.screenshot({ path: info.outputPath('public-invitation-mobile.png') });
-    await message.getByRole('link', { name: 'Join chat', exact: true }).click();
+    await message.getByRole('link', { name: 'Join chat Invitation lounge', exact: true }).click();
     await expect(alice.page).toHaveURL(new RegExp(`${target}$`));
     await expect(alice.page.getByRole('button', { name: 'Public group settings' })).toContainText(
       'Invitation lounge',

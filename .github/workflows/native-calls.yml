@@ -6,12 +6,18 @@ on:
       - 'src/**/*Call*'
       - 'src/**/*iroh*'
       - 'src/**/*Iroh*'
+      - 'src/lib/platform/**'
       - 'iroh-calls/**'
+      - 'static/iroh/**'
       - 'src-tauri/**'
       - 'scripts/native-calls/**'
+      - 'scripts/verify-iroh.mjs'
       - '.github/workflows/native-calls.yml'
+      - '.node-version'
+      - 'package.json'
       - 'package-lock.json'
-  # A deliberately separate, non-publishing validation branch; iPhone stays disabled.
+      - 'vite.config.ts'
+  # A separate, non-publishing validation branch.
   push:
     branches: ['call-validation/**']
   workflow_dispatch:
@@ -43,7 +49,9 @@ jobs:
       - run: npm run verify:iroh
       - run: npm run build
       - name: Install local Iroh relay
-        run: cargo install iroh-relay --version 1.3.0 --locked
+        run: |
+          cargo install iroh-relay --version 1.3.0 --locked --features server --bin iroh-relay
+          iroh-relay --version
       - name: Exercise calls in the native WebView
         run: node scripts/native-calls/run.mjs
       - uses: actions/upload-artifact@v4

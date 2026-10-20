@@ -1,4 +1,8 @@
 {
+  "auth.joinNamedGroup": "Join {name}",
+  "auth.chatWithName": "Chat with {name}",
+  "auth.joinThisGroup": "Join this group",
+  "auth.chatWithPerson": "Chat with this person",
   "auth.independence": "Anagram dey completely free and open-source, and no company dey control am",
   "call.relayApproval.title": "Allow custom call relay?",
   "call.relayApproval.message": "This call dey use custom relay: {url}. Make we connect to this server? Approve only servers wey you trust. To allow am automatically for future calls, add am to your Iroh relay settings.",

@@ -1,3 +1,4 @@
+import { keyboardFromTags, commandFromTags } from './botKeyboardProtocol.ts';
 import { buildMessageReplyPreviewContent } from '#src/utils/messageAttachments.ts';
 import { readMessageEditTargetEventId, buildEditedMessageMeta } from '#src/utils/messageEdits.ts';
 import type { NostrEvent } from '#src/lib/nostr/client.ts';
@@ -142,6 +143,14 @@ export function publicMessageState(root: PublicGroupMessage, room: PublicRoom, o
   const current = edits[0] ?? root;
   const removal = deleted(current, actions);
   const message = publicMessageForDisplay(current, own);
+  const keyboard = !removal && roomPolicy(room, root.pubkey) === 'trusted'
+    ? keyboardFromTags(current.tags) : null;
+  if (keyboard) {
+    message.meta.inline_keyboard = keyboard;
+    message.meta.inline_keyboard_version = current.id;
+    message.meta.inline_keyboard_chat_type = 'public';
+    message.meta.bot_command = commandFromTags(current.tags);
+  }
   message.id = root.id!;
   message.chatId = address;
   message.sentAt = new Date(root.created_at * 1000).toISOString();

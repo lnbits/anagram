@@ -2,12 +2,47 @@ package com.nostr.anagram
 
 import android.os.Bundle
 import android.view.View
+import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 
 class MainActivity : TauriActivity() {
+  private var callWebView: WebView? = null
+  private var callAudioActive = false
+  private var paused = false
+
+  override fun onWebViewCreate(webView: WebView) {
+    super.onWebViewCreate(webView)
+    callWebView = webView
+  }
+
+  fun keepCallAudioRunning(active: Boolean) {
+    callAudioActive = active
+    if (paused) {
+      if (active) callWebView?.onResume() else callWebView?.onPause()
+    }
+  }
+
+  override fun onPause() {
+    super.onPause()
+    paused = true
+    // Wry pauses the WebView in super.onPause(). The foreground microphone
+    // service grants background capture, but the worklet must keep running too.
+    if (callAudioActive) callWebView?.onResume()
+  }
+
+  override fun onResume() {
+    paused = false
+    super.onResume()
+  }
+
+  override fun onDestroy() {
+    callWebView = null
+    super.onDestroy()
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)

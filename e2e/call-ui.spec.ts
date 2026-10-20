@@ -145,11 +145,13 @@ test('original incoming choices, compact call, controls tray, devices and presen
     true,
   );
   await page.setViewportSize({ width: 390, height: 844 });
-  expect(
-    await page
-      .getByTestId('call-panel')
-      .evaluate((panel) => panel.scrollWidth <= window.innerWidth),
-  ).toBe(true);
+  await expect
+    .poll(() =>
+      page
+        .getByTestId('call-panel')
+        .evaluate((panel) => window.innerWidth === 390 && panel.scrollWidth <= window.innerWidth),
+    )
+    .toBe(true);
   await page.screenshot({ path: 'test-results/call-ui-mobile.png' });
   await page.getByTestId('call-hangup').click();
   await expect.poll(() => popup.isClosed()).toBe(true);

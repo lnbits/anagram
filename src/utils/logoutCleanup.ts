@@ -6,6 +6,8 @@ import { developerTraceDataService } from '#src/services/developerTraceDataServi
 import { imageCacheService } from '#src/services/imageCacheService.ts';
 import { nostrEventDataService } from '#src/services/nostrEventDataService.ts';
 import { deleteAllIndexedDbDatabases } from '#src/utils/indexedDbStorage.ts';
+import { clearBotInteractionData } from '#src/services/botInteractionData.ts';
+import { PUBLIC_KEY_STORAGE_KEY } from '#src/stores/nostr/constants.ts';
 
 const PENDING_LOGOUT_CLEANUP_SESSION_KEY = 'nostr-chat-pending-logout-cleanup';
 
@@ -73,8 +75,14 @@ async function clearIndexedDbDatabases(): Promise<void> {
 }
 
 export async function clearPersistedAppState(
-  options: { preservePendingLogoutCleanup?: boolean } = {},
+  options: { preservePendingLogoutCleanup?: boolean; botInteractionOwner?: string | null } = {},
 ): Promise<void> {
+  // Read the deletion index before clearing localStorage. Keep it if deletion fails
+  // so a retry can still find databases without indexedDB.databases().
+  await clearBotInteractionData(
+    options.botInteractionOwner ??
+      (hasLocalStorage() ? window.localStorage.getItem(PUBLIC_KEY_STORAGE_KEY) : null),
+  );
   clearBrowserStorage(options);
   await clearIndexedDbDatabases();
 }

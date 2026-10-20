@@ -13,9 +13,13 @@ static NSString *previousMode;
 static AVAudioSessionCategoryOptions previousOptions;
 static id routeObserver;
 static id resetObserver;
+static id interruptionObserver;
+static id foregroundObserver;
+static BOOL interrupted = NO;
+static BOOL previousIdleTimerDisabled;
 
 static BOOL applyRoute(void) {
-    if (!callActive || applying) return YES;
+    if (!callActive || applying || interrupted) return YES;
     applying = YES;
     AVAudioSession *session = AVAudioSession.sharedInstance;
     NSError *error = nil;
@@ -50,7 +54,12 @@ bool anagram_set_call_audio(bool active, bool speaker) {
         callActive = NO;
         [NSNotificationCenter.defaultCenter removeObserver:routeObserver];
         [NSNotificationCenter.defaultCenter removeObserver:resetObserver];
+        [NSNotificationCenter.defaultCenter removeObserver:interruptionObserver];
+        [NSNotificationCenter.defaultCenter removeObserver:foregroundObserver];
         routeObserver = resetObserver = nil;
+        interruptionObserver = foregroundObserver = nil;
+        interrupted = NO;
+        UIApplication.sharedApplication.idleTimerDisabled = previousIdleTimerDisabled;
         [session overrideOutputAudioPort:AVAudioSessionPortOverrideNone error:NULL];
         [session setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:NULL];
         BOOL ok = [session setCategory:previousCategory mode:previousMode options:previousOptions error:NULL];
@@ -62,6 +71,8 @@ bool anagram_set_call_audio(bool active, bool speaker) {
         previousCategory = session.category;
         previousMode = session.mode;
         previousOptions = session.categoryOptions;
+        previousIdleTimerDisabled = UIApplication.sharedApplication.idleTimerDisabled;
+        UIApplication.sharedApplication.idleTimerDisabled = YES;
         callActive = YES;
         void (^changed)(NSNotification *) = ^(NSNotification *notification) {
             if (callActive) applyRoute();
@@ -70,6 +81,16 @@ bool anagram_set_call_audio(bool active, bool speaker) {
             object:session queue:NSOperationQueue.mainQueue usingBlock:changed];
         resetObserver = [NSNotificationCenter.defaultCenter addObserverForName:AVAudioSessionMediaServicesWereResetNotification
             object:session queue:NSOperationQueue.mainQueue usingBlock:changed];
+        foregroundObserver = [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification
+            object:nil queue:NSOperationQueue.mainQueue usingBlock:changed];
+        interruptionObserver = [NSNotificationCenter.defaultCenter addObserverForName:AVAudioSessionInterruptionNotification
+            object:session queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *notification) {
+                if (!callActive) return;
+                interrupted = [notification.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue]
+                    == AVAudioSessionInterruptionTypeBegan;
+                if (!interrupted && ([notification.userInfo[AVAudioSessionInterruptionOptionKey] unsignedIntegerValue]
+                    & AVAudioSessionInterruptionOptionShouldResume)) applyRoute();
+            }];
     }
     BOOL previous = loudspeaker;
     loudspeaker = speaker;

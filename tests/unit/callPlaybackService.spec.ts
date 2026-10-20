@@ -14,6 +14,7 @@ function media(currentTime: number, ranges: number[][], seeking = false) {
       end: (index: number) => ranges[index][1],
     },
     seeking,
+    playbackRate: 1,
     get currentTime() {
       return currentTime;
     },
@@ -25,25 +26,104 @@ function media(currentTime: number, ranges: number[][], seeking = false) {
 }
 
 describe('live call playback recovery', () => {
-  it('brings audio closer to live without repeatedly seeking or changing video policy', () => {
+  it('waits for playback to resume before catching up a paused stream', () => {
+    vi.useFakeTimers();
+    const ranges = [[0, 10]];
+    const { element, seek } = media(9.5, ranges);
+    Object.defineProperty(element, 'paused', { value: true, writable: true });
+    const stop = watchCallLive(element, 'audio');
+    for (let i = 0; i < 4; i++) {
+      ranges[0][1] += 0.25;
+      followCallLive(element, 'audio');
+      vi.advanceTimersByTime(250);
+    }
+    expect(seek).not.toHaveBeenCalled();
+    Object.defineProperty(element, 'paused', { value: false });
+    vi.advanceTimersByTime(250);
+    expect(seek).toHaveBeenCalledExactlyOnceWith(10.8);
+    stop();
+  });
+
+  it('drains modest audio backlog without seeking or changing video policy', () => {
     const audio = media(9.5, [[0, 10]]);
     const video = media(9.5, [[0, 10]]);
     followCallLive(audio.element, 'audio');
     followCallLive(video.element);
-    expect(audio.element.currentTime).toBeCloseTo(9.8);
+    expect(audio.element.playbackRate).toBe(1.1);
+    expect(audio.seek).not.toHaveBeenCalled();
+    expect(video.element.playbackRate).toBe(1);
     expect(video.seek).not.toHaveBeenCalled();
-    for (let i = 0; i < 10; i++) followCallLive(audio.element, 'audio');
-    expect(audio.seek).toHaveBeenCalledOnce();
-    for (const time of [9.7, 9.57]) {
-      const jitter = media(time, [[0, 10]]);
-      followCallLive(jitter.element, 'audio');
-      expect(jitter.seek).not.toHaveBeenCalled();
+    // Keep draining through the hysteresis band, then restore normal speed.
+    audio.element.currentTime = 9.7;
+    followCallLive(audio.element, 'audio');
+    expect(audio.element.playbackRate).toBe(1.1);
+    audio.element.currentTime = 9.8;
+    followCallLive(audio.element, 'audio');
+    expect(audio.element.playbackRate).toBe(1);
+    audio.element.currentTime = 9.7;
+    followCallLive(audio.element, 'audio');
+    expect(audio.element.playbackRate).toBe(1);
+  });
+
+  it('seeks a large audio backlog immediately and restores normal speed', () => {
+    const ranges = [[0, 10]];
+    const { element, seek } = media(9.5, ranges);
+    followCallLive(element, 'audio');
+    expect(element.playbackRate).toBe(1.1);
+    ranges[0][1] = 11;
+    followCallLive(element, 'audio');
+    expect(seek).toHaveBeenCalledExactlyOnceWith(10.8);
+    expect(element.playbackRate).toBe(1);
+    followCallLive(element, 'audio');
+    expect(seek).toHaveBeenCalledOnce();
+  });
+
+  it('drains a sub-threshold audio backlog over several seconds without a seek', () => {
+    vi.useFakeTimers();
+    const ranges = [[0, 10]];
+    const { element, seek } = media(9.3, ranges);
+    const stop = watchCallLive(element, 'audio');
+    const advance = (steps: number) => {
+      for (let i = 0; i < steps; i++) {
+        ranges[0][1] += 0.1;
+        element.currentTime += 0.1 * element.playbackRate;
+        seek.mockClear(); // The assignment above models the playback clock.
+        vi.advanceTimersByTime(100);
+        expect(seek).not.toHaveBeenCalled();
+      }
+    };
+    advance(10);
+    expect(ranges[0][1] - element.currentTime).toBeGreaterThan(0.45);
+    advance(50);
+    expect(ranges[0][1] - element.currentTime).toBeLessThanOrEqual(0.25);
+    expect(element.playbackRate).toBe(1);
+    stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('restores normal audio speed on pause, seek, buffer loss and detach', () => {
+    vi.useFakeTimers();
+    for (const reason of ['pause', 'seek', 'empty', 'detach']) {
+      const { element } = media(9.5, [[0, 10]]);
+      const stop = watchCallLive(element, 'audio');
+      vi.advanceTimersByTime(250);
+      expect(element.playbackRate).toBe(1.1);
+      if (reason === 'detach') stop();
+      else {
+        if (reason === 'pause') Object.defineProperty(element, 'paused', { value: true });
+        if (reason === 'seek') Object.defineProperty(element, 'seeking', { value: true });
+        if (reason === 'empty') Object.defineProperty(element.buffered, 'length', { value: 0 });
+        followCallLive(element, 'audio');
+      }
+      expect(element.playbackRate).toBe(1);
+      stop();
     }
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('uses the audio cushion on stalled-event recovery and preserves seek/gap guards', () => {
     vi.useFakeTimers();
-    const { element } = media(9.5, [[0, 10]]);
+    const { element } = media(9, [[0, 10]]);
     const stop = watchCallLive(element, 'audio');
     vi.advanceTimersByTime(250);
     expect(element.currentTime).toBeCloseTo(9.8);
@@ -52,8 +132,8 @@ describe('live call playback recovery', () => {
     const seeking = media(8, [[0, 10]], true);
     followCallLive(seeking.element, 'audio');
     expect(seeking.seek).not.toHaveBeenCalled();
-    const gap = media(5, [
-      [0, 6],
+    const gap = media(9.7, [
+      [0, 9.8],
       [9.9, 10],
     ]);
     followCallLive(gap.element, 'audio');

@@ -214,3 +214,18 @@ it('applies reply trust, author and deletion rules to edited parents', () => {
     'Message deleted',
   );
 });
+
+it('only exposes keyboards from a trusted current card version, never a deleted or untrusted card', () => {
+  const { room, action } = fixture();
+  const keyboard = { inline_keyboard: [[{ text: 'Vote', callback_data: 'vote' }]] };
+  const card = action(9, 'A poll', [['anagram-inline-keyboard', '1', JSON.stringify(keyboard)], ['anagram-bot-command', '1', 'c'.repeat(64)]]);
+  expect(publicMessageState(card, room).meta.inline_keyboard).toEqual(keyboard);
+  expect(publicMessageState(card, room).meta.bot_command).toBe('c'.repeat(64));
+  expect(publicMessageState(card, { ...room, owner: 'f'.repeat(64), trusted: [] }).meta.bot_command).toBeUndefined();
+  expect(publicMessageState(card, { ...room, owner: 'f'.repeat(64), trusted: [] }).meta.inline_keyboard).toBeUndefined();
+  const edit = action(9, 'Poll closed', [['e', card.id, '', 'edit']]);
+  expect(publicMessageState({ ...card, activity: [edit] }, room).meta.inline_keyboard).toBeUndefined();
+  expect(publicMessageState({ ...card, activity: [edit] }, room).meta.bot_command).toBeUndefined();
+  const deletion = action(5, '', [['e', card.id]]);
+  expect(publicMessageState({ ...card, activity: [deletion] }, room).meta.inline_keyboard).toBeUndefined();
+});

@@ -1,4 +1,8 @@
 {
+  "auth.joinNamedGroup": "انضم إلى {name}",
+  "auth.chatWithName": "دردش مع {name}",
+  "auth.joinThisGroup": "انضم إلى هذه المجموعة",
+  "auth.chatWithPerson": "دردش مع هذا الشخص",
   "auth.independence": "Anagram مجاني بالكامل ومفتوح المصدر ولا تتحكم فيه أي شركة",
   "call.relayApproval.title": "السماح بمرحل مخصص للمكالمات؟",
   "call.relayApproval.message": "تستخدم هذه المكالمة مرحلًا مخصصًا: {url}. هل تسمح بالاتصال بهذا الخادم؟ وافق فقط على الخوادم التي تثق بها. للسماح به تلقائيًا في المكالمات القادمة، أضفه إلى إعدادات مرحلات Iroh.",

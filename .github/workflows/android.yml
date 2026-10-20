@@ -39,10 +39,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - run: npm ci
       - name: Set release version
-        if: inputs.release_tag != ''
+        if: inputs.release_tag != '' || github.ref_type == 'tag'
         run: npm run release:version
         env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TAG: ${{ (github.ref_type == 'tag' && github.ref_name) || inputs.release_tag }}
+      - name: Check build versions
+        run: npm run release:check
+        env:
+          RELEASE_TAG: ${{ (github.ref_type == 'tag' && github.ref_name) || inputs.release_tag || '' }}
       - run: npm run verify:iroh
       - name: Install NDK
         run: |
@@ -110,6 +114,8 @@ jobs:
           adb shell pm grant com.nostr.anagram android.permission.POST_NOTIFICATIONS
           adb shell am instrument -w -e class com.nostr.anagram.CallNotificationsDeviceTest com.nostr.anagram.test/androidx.test.runner.AndroidJUnitRunner | tee android-startup-results/call-notifications.txt
           grep -Eq '^OK \([0-9]+ tests?\)' android-startup-results/call-notifications.txt
+          adb shell am instrument -w -e class com.nostr.anagram.CallAudioDeviceTest com.nostr.anagram.test/androidx.test.runner.AndroidJUnitRunner | tee android-startup-results/call-audio.txt
+          grep -Eq '^OK \([0-9]+ tests?\)' android-startup-results/call-audio.txt
           node scripts/test-android-call-notifications.mjs | tee android-startup-results/call-notification-relay.txt
       - name: Upload startup diagnostics
         if: always()

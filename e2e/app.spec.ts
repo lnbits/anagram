@@ -27,6 +27,8 @@ async function contact(page: Page, pubkey: string, name: string) {
   await page.getByLabel('Name (optional)').fill(name);
   await page.getByRole('button', { name: 'Add contact', exact: true }).click();
   await expect(page.getByRole('dialog')).toBeHidden();
+  // The previous chat's composer can remain visible while navigation commits.
+  await expect(page.getByTestId('chat-thread')).toHaveAttribute('data-chat-public-key', pubkey);
   await expect(page.getByTestId('message-composer-input')).toBeVisible();
 }
 // Fresh sessions can learn older epoch keys after the initial message page.
@@ -208,7 +210,12 @@ test('encrypted DM, reaction, edit, reload and private group', async ({ browser 
   ).toBeVisible();
   // Accepted private groups retain numeric badges independently of notification opt-in.
   await b.getByTestId('chat-item').filter({ hasText: 'My Self' }).click();
+  await expect(b.getByTestId('chat-thread')).toHaveAttribute('data-chat-public-key', bob.pubkey);
   const groupRow = b.getByTestId('chat-item').filter({ hasText: 'Private test group' });
+  // Read cursors use Nostr's whole-second timestamps. This badge test needs
+  // activity strictly newer than the messages Bob just read.
+  const nextMessageSecond = (Math.floor(Date.now() / 1000) + 1) * 1000;
+  await expect.poll(() => Date.now()).toBeGreaterThanOrEqual(nextMessageSecond);
   await a.getByTestId('message-composer-input').fill('Unread private group message');
   await a.getByTestId('message-send-button').click();
   await expect(groupRow.getByLabel('1 unread messages')).toBeVisible();
@@ -494,6 +501,9 @@ test('switching cached groups renders and positions messages before history chec
       nostr.prioritizeThreadHistory(null);
       (window as any).__historyChecks = [];
       nostr.prioritizeThreadHistory = (id) => {
+        // Startup may still request history for an unrelated empty chat.
+        // Only these fixture groups are expected to contain cached messages.
+        if (id && !groups.includes(id)) return;
         if (!id) {
           nostr.groupHistoryState.loading = false;
           nostr.groupHistoryState.chat = '';
@@ -502,6 +512,8 @@ test('switching cached groups renders and positions messages before history chec
         const thread = document.querySelector('[data-testid="chat-thread"]');
         (window as any).__historyChecks.push({
           id,
+          threadId: thread?.getAttribute('data-chat-public-key'),
+          count: thread?.querySelectorAll('.message-row').length,
           rendered:
             thread?.getAttribute('data-chat-public-key') === id &&
             thread.querySelectorAll('.message-row').length > 0,
@@ -558,11 +570,12 @@ test('switching cached groups renders and positions messages before history chec
       )
       .toBeLessThanOrEqual(1);
   }
-  expect(
-    await page.evaluate(() =>
-      (window as any).__historyChecks.every((entry: { rendered: boolean }) => entry.rendered),
-    ),
-  ).toBe(true);
+  const historyChecks = await page.evaluate(() => (window as any).__historyChecks);
+  expect(historyChecks.map((entry: { id: string }) => entry.id)).toEqual(
+    expect.arrayContaining(groups),
+  );
+  for (const entry of historyChecks)
+    expect(entry, JSON.stringify(entry)).toMatchObject({ rendered: true });
   // A cache load finishing after another selection must not start stale relay work.
   await page.evaluate(async (key) => {
     const { useMessageStore } = await import('/src/stores/messageStore.svelte.ts');
@@ -1159,8 +1172,33 @@ test('all 1,200 DM and group threads remain available after reload', async ({ pa
   await expect(page.getByRole('button', { name: 'Contact profile', exact: true })).toBeVisible();
   await page.getByPlaceholder('Search', { exact: true }).fill('Group 1199');
   await expect(page.getByTestId('chat-item')).toHaveCount(1);
+  // Reproduce editing the persistent sidebar while a chat navigation commits.
+  // A navigation-wide focus reset must not steal the selection before Delete.
+  const target = (1200).toString(16).padStart(64, '0');
+  await page.evaluate((target) => {
+    const pushState = history.pushState;
+    history.pushState = function (...args) {
+      pushState.apply(this, args);
+      if (new URL(String(args[2]), location.href).pathname !== `/chats/${target}`) return;
+      history.pushState = pushState;
+      const search = document.querySelector<HTMLInputElement>('[data-testid="chat-search-input"]')!;
+      search.focus();
+      search.select();
+    };
+  }, target);
   await page.getByTestId('chat-item').click();
-  await page.getByPlaceholder('Search', { exact: true }).fill('');
+  await expect(page.getByTestId('chat-thread')).toHaveAttribute('data-chat-public-key', target);
+  const search = page.getByTestId('chat-search-input');
+  await expect(search).toBeFocused();
+  expect(
+    await search.evaluate((input: HTMLInputElement) => [input.selectionStart, input.selectionEnd]),
+  ).toEqual([0, 'Group 1199'.length]);
+  await page.keyboard.press('Delete');
+  await expect(search).toHaveValue('');
+  await expect(page.getByTestId('chat-item')).toHaveCount(1202);
+  await search.fill('DM 0000');
+  await expect(page.getByTestId('chat-item')).toHaveCount(1);
+  await search.fill('');
   await expect(page.getByTestId('chat-item')).toHaveCount(1202);
 });
 

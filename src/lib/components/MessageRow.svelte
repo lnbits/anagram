@@ -7,6 +7,7 @@
   import Avatar from './Avatar.svelte';
   import MessageRelayStatus from './MessageRelayStatus.svelte';
   import MessageReactions from './MessageReactions.svelte';
+  import BotKeyboard from './BotKeyboard.svelte';
   interface Props {
     message: Message;
     author: { name: string; picture?: string };
@@ -111,7 +112,11 @@
         style:color={`var(--bubble-author-${(Number.parseInt(message.authorPublicKey.slice(0, 8), 16) || 0) % 6})`}
         onclick={() => onauthor(message.authorPublicKey)}>{@render name()}</button
       >{/if}
-    {@render children()}
+    {#if message.meta.inline_keyboard && !message.meta.deleted}
+      <BotKeyboard {message} {children} />
+    {:else}
+      {@render children()}
+    {/if}
     <div
       class:bubble-footer={bubbleLayout &&
         !message.meta.deleted &&

@@ -3,16 +3,29 @@ on:
   pull_request:
     paths:
       [
-        'src/**/call*',
-        'src/**/Call*',
+        'src/**/*call*',
+        'src/**/*Call*',
         'src/**/*iroh*',
         'src/**/*Iroh*',
+        'src/lib/platform/**',
+        'src/lib/components/shell.css',
+        'src/app.css',
         'iroh-calls/**',
+        'static/iroh/**',
         'src-tauri/**',
         'e2e/*call*',
+        'e2e/ios-layout.spec.ts',
+        'e2e/auth-helpers.ts',
+        'e2e/fixtures/**',
         'scripts/native-calls/**',
+        'scripts/test-relay.mjs',
+        'scripts/verify-iroh.mjs',
         '.github/workflows/call-checks.yml',
+        '.node-version',
+        'package.json',
         'package-lock.json',
+        'playwright.config.ts',
+        'vite.config.ts',
       ]
   push:
     branches: ['main', 'call-validation/**']
@@ -34,7 +47,7 @@ jobs:
             browser: chromium
           - os: ubuntu-24.04
             browser: firefox
-          - os: macos-latest
+          - os: macos-26
             browser: webkit
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20

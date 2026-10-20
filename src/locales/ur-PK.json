@@ -1,4 +1,8 @@
 {
+  "auth.joinNamedGroup": "{name} میں شامل ہوں",
+  "auth.chatWithName": "{name} سے چیٹ کریں",
+  "auth.joinThisGroup": "اس گروپ میں شامل ہوں",
+  "auth.chatWithPerson": "اس شخص سے چیٹ کریں",
   "auth.independence": "Anagram مکمل طور پر مفت اور اوپن سورس ہے اور کسی بھی کمپنی کے کنٹرول میں نہیں ہے",
   "call.relayApproval.title": "کسٹم کال ریلے کی اجازت دیں؟",
   "call.relayApproval.message": "یہ کال کسٹم ریلے استعمال کرتی ہے: {url}۔ اس سرور سے اتصال کی اجازت دیں؟ صرف قابلِ اعتماد سرور منظور کریں۔ آئندہ کالوں میں خودکار اجازت کے لیے اسے Iroh ریلے کی ترتیبات میں شامل کریں۔",

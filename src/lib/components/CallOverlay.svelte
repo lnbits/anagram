@@ -17,7 +17,6 @@
   import { createActiveSpeakerSelector } from '#src/utils/callActiveSpeaker.ts';
   import { toStore } from 'svelte/store';
   import { translate } from '#src/i18n.ts';
-  import { Notify } from '#src/lib/platform/ui.ts';
   import CallRelayPrompt from './CallRelayPrompt.svelte';
   import Icon from './Icon.svelte';
   import Avatar from './Avatar.svelte';
@@ -275,7 +274,6 @@
   async function copyLink() {
     try {
       await navigator.clipboard.writeText($state.link);
-      Notify.create($translate('room.linkCopied'));
     } catch {
       inviteError = 'room.copyManually';
       showInviteLink = true;

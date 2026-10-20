@@ -48,6 +48,7 @@ export class CallAudioJitterBuffer {
   private packets = new Map<number, AudioPacket>();
   private generation: number | undefined;
   private expected: number | undefined;
+  private resumeSequence: number | undefined;
   private newest = 0;
   private startAt = 0;
   private previousArrival: { at: number; timestamp: number } | undefined;
@@ -74,6 +75,7 @@ export class CallAudioJitterBuffer {
       this.packets.clear();
       this.generation = packet.generation;
       this.expected = undefined;
+      this.resumeSequence = undefined;
       this.previousArrival = undefined;
       this.playing = false;
       this.misses = 0;
@@ -82,9 +84,19 @@ export class CallAudioJitterBuffer {
     }
     this.stats.received++;
     if (this.expected === undefined) {
+      // An underrun must not let a delayed pre-stall packet restart playback
+      // behind the sequence we already played or concealed.
+      if (this.resumeSequence !== undefined && distance(packet.sequence, this.resumeSequence) < 0) {
+        this.stats.late++;
+        return;
+      }
       this.expected = packet.sequence;
+      this.resumeSequence = undefined;
       this.newest = packet.sequence;
       this.startAt = now;
+      this.previousArrival = undefined;
+      this.misses = 0;
+      this.growthFrames = 0;
     }
     if (distance(packet.sequence, this.expected) < 0) {
       this.stats.late++;
@@ -120,7 +132,10 @@ export class CallAudioJitterBuffer {
       this.previousArrival = { at: now, timestamp: packet.timestamp };
     this.packets.set(packet.sequence, packet);
     // A relay/WebSocket stall must never replay seconds of obsolete speech.
-    if (distance(this.newest, this.expected) > 12 || this.packets.size > 24) {
+    if (
+      distance(this.newest, this.expected) * AUDIO_PACKET_MS > this.stats.targetMs + 60 ||
+      this.packets.size > 24
+    ) {
       const next = (this.newest - Math.ceil(this.stats.targetMs / 20)) >>> 0;
       this.stats.skipped += Math.max(0, distance(next, this.expected));
       this.expected = next;
@@ -147,8 +162,13 @@ export class CallAudioJitterBuffer {
       this.lastAdjustment = now;
     }
     if (this.growthFrames > 0) {
-      this.growthFrames--;
-      return { packet: null, fec: false };
+      // A burst may have already supplied the extra cushion. Inserting more
+      // concealment then would add delay on top of the buffered audio.
+      if (distance(this.newest, this.expected) * AUDIO_PACKET_MS < this.stats.targetMs) {
+        this.growthFrames--;
+        return { packet: null, fec: false };
+      }
+      this.growthFrames = 0;
     }
     const sequence = this.expected;
     const packet = this.packets.get(sequence);
@@ -167,6 +187,7 @@ export class CallAudioJitterBuffer {
     }
     this.stats.concealed++;
     if (++this.misses > 3) {
+      this.resumeSequence = this.expected;
       this.expected = undefined;
       this.playing = false;
       this.packets.clear();

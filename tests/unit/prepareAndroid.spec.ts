@@ -47,10 +47,16 @@ it('regenerates Android notification sources, permissions and tests without dupl
       'POST_NOTIFICATIONS',
       'RECEIVE_BOOT_COMPLETED',
       'FOREGROUND_SERVICE_SPECIAL_USE',
+      'FOREGROUND_SERVICE_MICROPHONE',
+      'FOREGROUND_SERVICE_MEDIA_PLAYBACK',
+      'WAKE_LOCK',
     ])
       expect(manifest).toContain(`android.permission.${name}`);
     expect(manifest).toContain('android:name=".RelayNotificationService" android:exported="false"');
     expect(manifest).toContain('android:name=".CallNotificationReceiver" android:exported="false"');
+    expect(manifest).toContain(
+      'android:name=".CallAudioService" android:exported="false" android:foregroundServiceType="microphone|mediaPlayback" android:stopWithTask="true"',
+    );
     expect(gradle).toContain(
       'testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"',
     );

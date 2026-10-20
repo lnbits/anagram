@@ -34,10 +34,11 @@ jobs:
       - name: Set build version
         id: version
         env:
-          REQUESTED_VERSION: ${{ inputs.version || (github.ref_type == 'tag' && github.ref_name) || '' }}
+          REQUESTED_VERSION: ${{ (github.ref_type == 'tag' && github.ref_name) || inputs.version || '' }}
         run: |
           export RELEASE_TAG="${REQUESTED_VERSION:-v$(node -p 'require("./package.json").version')}"
           npm run release:version
+          npm run release:check
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
       - name: Determine release visibility
         id: policy
@@ -48,18 +49,30 @@ jobs:
       - run: npm run verify:iroh
       - run: npm run quality:all
       - run: npm run test:unit
+      - name: Test standalone poll bot and encrypted interactions
+        run: |
+          cmp src/stores/nostr/botKeyboardProtocol.ts bot-example/poll/vendor/botKeyboardProtocol.ts
+          poll_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$poll_dir"' EXIT
+          cp bot-example/poll/{bot.js,package.json,package-lock.json,LICENSE,.env.example} "$poll_dir/"
+          cp -R bot-example/poll/{vendor,test} "$poll_dir/"
+          npm --prefix "$poll_dir" ci
+          npm --prefix "$poll_dir" test
       - name: Check iOS permission packaging guard
         run: python3 -B -m unittest discover -s scripts/release-smoke -p 'test_ios_permissions.py'
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e:pwa
       - name: Test messaging and browser interactions
-        run: npm run test:e2e:local -- e2e/app.spec.ts e2e/dm-relay-discovery.spec.ts e2e/group-history.spec.ts e2e/public-groups.spec.ts e2e/message-formatting.spec.ts e2e/parity/dm/link-preview.spec.ts
+        run: npm run test:e2e:local -- e2e/bot-keyboards.spec.ts e2e/app.spec.ts e2e/dm-relay-discovery.spec.ts e2e/group-history.spec.ts e2e/public-groups.spec.ts e2e/message-formatting.spec.ts e2e/parity/dm/link-preview.spec.ts
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: release-web-browser-failures
-          path: test-results/
+          path: |
+            test-results/
+            .artifacts/pwa-results/
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
       - uses: actions/upload-artifact@v4
@@ -126,18 +139,22 @@ jobs:
       - name: Use portable media runtime for bundling
         if: runner.os == 'Linux'
         run: |
-          echo "ANAGRAM_GSTREAMER_PREFIX=$RUNNER_TEMP/anagram-gstreamer" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/anagram-gstreamer/lib" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=$RUNNER_TEMP/anagram-gstreamer/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "GSTREAMER_PLUGINS_DIR=$RUNNER_TEMP/anagram-gstreamer/lib/gstreamer-1.0" >> "$GITHUB_ENV"
-          echo "GSTREAMER_HELPERS_DIR=$RUNNER_TEMP/anagram-gstreamer/libexec/gstreamer-1.0" >> "$GITHUB_ENV"
+          {
+            echo "ANAGRAM_GSTREAMER_PREFIX=$RUNNER_TEMP/anagram-gstreamer"
+            echo "LD_LIBRARY_PATH=$RUNNER_TEMP/anagram-gstreamer/lib"
+            echo "PKG_CONFIG_PATH=$RUNNER_TEMP/anagram-gstreamer/lib/pkgconfig"
+            echo "GSTREAMER_PLUGINS_DIR=$RUNNER_TEMP/anagram-gstreamer/lib/gstreamer-1.0"
+            echo "GSTREAMER_HELPERS_DIR=$RUNNER_TEMP/anagram-gstreamer/libexec/gstreamer-1.0"
+          } >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
           key: ${{ matrix.target }}
       - run: npm ci
       - name: Set version from tag
-        run: npm run release:version
+        run: |
+          npm run release:version
+          npm run release:check
         env:
           RELEASE_TAG: ${{ needs.verify.outputs.tag }}
       - run: npm run verify:iroh
@@ -216,17 +233,15 @@ jobs:
     with:
       release_tag: ${{ needs.verify.outputs.tag }}
     secrets: inherit
-  # Temporarily disabled; restore this job and the iPhone publish entries below together.
-  # ios:
-  #   needs: [verify, call-checks]
-  #   if: vars.IOS_BUILDS_ENABLED == 'true'
-  #   uses: ./.github/workflows/ios.yml
-  #   with:
-  #     release_tag: ${{ needs.verify.outputs.tag }}
-  #   secrets: inherit
+  ios:
+    needs: [verify, call-checks]
+    if: vars.IOS_BUILDS_ENABLED == 'true'
+    uses: ./.github/workflows/ios.yml
+    with:
+      release_tag: ${{ needs.verify.outputs.tag }}
+    secrets: inherit
   publish:
-    # needs: [verify, call-checks, desktop, android, ios]
-    needs: [verify, call-checks, desktop, android]
+    needs: [verify, call-checks, desktop, android, ios]
     # iPhone validation is optional while device/signing support is being set up.
     # Preserve every existing release gate, including cancellation handling.
     if: ${{ !cancelled() && needs.verify.result == 'success' && needs.call-checks.result == 'success' && needs.desktop.result == 'success' && needs.android.result == 'success' }}
@@ -235,11 +250,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      # - name: Report unavailable iPhone package
-      #   if: vars.IOS_BUILDS_ENABLED == 'true' && needs.ios.result != 'success'
-      #   run: |
-      #     echo '::warning::iPhone build did not succeed; this release will omit the IPA. See the iOS jobs for diagnostics.'
-      #     echo 'iPhone build did not succeed. Other platforms passed their required checks; this release omits the IPA.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Report unavailable iPhone package
+        if: vars.IOS_BUILDS_ENABLED == 'true' && needs.ios.result != 'success'
+        run: |
+          echo '::warning::iPhone build did not succeed; this release will omit the IPA. See the iOS jobs for diagnostics.'
+          echo 'iPhone build did not succeed. Other platforms passed their required checks; this release omits the IPA.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/download-artifact@v4
         with:
           pattern: desktop-*
@@ -247,17 +262,20 @@ jobs:
           merge-multiple: true
       - uses: actions/download-artifact@v4
         with:
-          pattern: mobile-*
+          name: mobile-android
           path: release-assets
-          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        if: needs.ios.result == 'success'
+        with:
+          name: mobile-ios
+          path: release-assets
       - uses: actions/download-artifact@v4
         with:
           name: web-app
           path: web-app
       - name: Package web app and checksums
         env:
-          # IOS_BUILD_RESULT: ${{ needs.ios.result }}
-          IOS_BUILD_RESULT: skipped
+          IOS_BUILD_RESULT: ${{ needs.ios.result }}
         run: |
           shopt -s nullglob
           exes=(release-assets/*.exe)

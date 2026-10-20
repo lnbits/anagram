@@ -17,14 +17,13 @@ for (const { nativeAck, startupDelay } of [
       const { prepareCallPacketAudio, recordCallMedia, createCallMediaReceiver } =
         await import('/src/services/callMediaService.ts');
       const { OPUS_CALL_MIME } = await import('/src/services/callAudioPackets.ts');
-      const { attachCallMedia, getCallStream } =
-        await import('/src/services/callStreamRegistry.ts');
+      const { attachCallMedia } = await import('/src/services/callStreamRegistry.ts');
       const { callPacketAudioDiagnostics } = await import('/src/services/callPacketAudio.ts');
       const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
       const run = async () => {
-        const context = new AudioContext();
-        const monitorContext = new AudioContext();
-        const resumed = Promise.all([context.resume(), monitorContext.resume()]);
+        // Match the negotiated packet sample rate for the synthetic microphone.
+        const context = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+        const resumed = context.resume();
         const release = await prepareCallPacketAudio();
         if (!release) throw new Error('Packet audio unavailable');
         await resumed;
@@ -34,25 +33,40 @@ for (const { nativeAck, startupDelay } of [
         tone.connect(destination);
         tone.start();
         const errors: string[] = [];
-        const receiver = createCallMediaReceiver(OPUS_CALL_MIME, () => errors.push('decoder'));
+        // Tap the real playback worklet on its own clock. Routing the probe
+        // through another AudioContext measures an extra device queue, which
+        // can drift independently after stalls in WebKit. The constructor still
+        // creates the real node, and the normal audio element remains connected.
+        const WorkletNode = globalThis.AudioWorkletNode;
+        let output: AudioWorkletNode | undefined;
+        globalThis.AudioWorkletNode = class extends WorkletNode {
+          constructor(...args: ConstructorParameters<typeof WorkletNode>) {
+            super(...args);
+            output = this;
+          }
+        };
+        let receiver: ReturnType<typeof createCallMediaReceiver>;
+        try {
+          receiver = createCallMediaReceiver(OPUS_CALL_MIME, () => errors.push('decoder'));
+        } finally {
+          globalThis.AudioWorkletNode = WorkletNode;
+        }
+        if (!output) throw new Error('Missing playback worklet');
+        const playback = output as AudioWorkletNode;
         const audio = document.createElement('audio');
         document.body.append(audio);
         attachCallMedia(audio, receiver.url);
-        const analyser = monitorContext.createAnalyser();
+        const analyser = playback.context.createAnalyser();
         analyser.fftSize = 2048;
         analyser.smoothingTimeConstant = 0;
-        const silent = monitorContext.createGain();
+        const silent = playback.context.createGain();
         silent.gain.value = 0;
-        monitorContext
-          .createMediaStreamSource(getCallStream(receiver.url)!)
-          .connect(analyser)
-          .connect(silent)
-          .connect(monitorContext.destination);
+        playback.connect(analyser).connect(silent).connect(playback.context.destination);
         const spectrum = new Float32Array(analyser.frequencyBinCount);
         const waitForTone = async (frequency: number, timeout = 2000) => {
           const other = frequency === 440 ? 880 : 440;
           const bin = (hz: number) =>
-            Math.round((hz * analyser.fftSize) / monitorContext.sampleRate);
+            Math.round((hz * analyser.fftSize) / playback.context.sampleRate);
           const start = performance.now();
           while (performance.now() - start < timeout) {
             analyser.getFloatFrequencyData(spectrum);
@@ -129,6 +143,7 @@ for (const { nativeAck, startupDelay } of [
           return {
             timings,
             startupMs,
+            played: audio.currentTime,
             errors,
             packets: count,
             maxInFlight,
@@ -138,13 +153,16 @@ for (const { nativeAck, startupDelay } of [
         } finally {
           stop();
           timers.forEach(clearTimeout);
+          playback.disconnect(analyser);
+          analyser.disconnect();
+          silent.disconnect();
           receiver.close();
           release();
           audio.pause();
           audio.srcObject = null;
           tone.stop();
           destination.stream.getTracks().forEach((track) => track.stop());
-          await Promise.all([context.close(), monitorContext.close()]);
+          await context.close();
         }
       };
       document.querySelector('button')!.onclick = () => {
@@ -160,6 +178,7 @@ for (const { nativeAck, startupDelay } of [
     });
     expect(result.errors).toEqual([]);
     expect(result.packets).toBeGreaterThan(100);
+    expect(result.played).toBeGreaterThan(1);
     expect(result.timings).toHaveLength(6);
     if (startupDelay) expect(result.startupMs).toBeGreaterThanOrEqual(startupDelay);
     expect(Math.max(...result.timings)).toBeLessThan(400);

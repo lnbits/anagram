@@ -13,6 +13,7 @@
   export let onreact: (emoji: string, message: Message) => void = () => {};
   export let allowedActions: string[] = ['reply', 'copy', 'forward', 'edit', 'info', 'delete'];
   export let allowReactions = true;
+  export let botCommandAction: '' | 'show-command' | 'hide-command' = '';
   export let onclose: () => void;
   let menu: HTMLDivElement;
   let left = x,
@@ -25,6 +26,8 @@
     ['forward', 'Forward', 'forward'],
     ['edit', 'Edit', 'edit'],
     ['info', 'Nostr info', 'info'],
+    ['show-command', 'Show original command', 'eye'],
+    ['hide-command', 'Hide original command', 'minimize'],
     ['pin', 'Pin message', 'pin'],
     ['unpin', 'Unpin message', 'pin'],
     ['delete', 'Delete', 'delete'],
@@ -110,7 +113,7 @@
   {:else}
     <div class="action-list">
       {#each actions as [action, label, icon]}
-        {#if allowedActions.includes(action) && (message.sender === 'me' || (action !== 'edit' && action !== 'delete'))}
+        {#if (allowedActions.includes(action) || action === botCommandAction) && (message.sender === 'me' || (action !== 'edit' && action !== 'delete'))}
           <button
             role="menuitem"
             aria-label={label}

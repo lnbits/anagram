@@ -17,6 +17,7 @@
     "build:desktop": "tauri build",
     "test:e2e:pwa": "playwright test --config playwright.pwa.config.ts",
     "release:version": "node scripts/set-release-version.mjs",
+    "release:check": "node scripts/set-release-version.mjs --check",
     "verify:iroh": "node scripts/verify-iroh.mjs",
     "assets:social": "node scripts/render-social-cards.mjs"
   },

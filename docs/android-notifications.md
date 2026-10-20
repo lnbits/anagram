@@ -4,7 +4,7 @@ In the APK, enable **Settings → Notifications → Android notifications**, all
 
 A temporary setup failure or unavailable saved relay selection preserves the notification preference. The app retries when the selected routes become available and checks for a stopped listener when returning to the foreground. Explicit opt-out and denied Android permission remain respected.
 
-This ports the `iroh_call` relay listener to Tauri: verified NIP-59 envelopes, conversation mute/block rules, private-group epoch subscriptions, notification taps and bounded recovery into the normal message-ingestion path. Private and public group alerts are opt-in through each group's three-dot menu. Direct-message notification rules are unchanged.
+The listener supports verified NIP-59 envelopes, conversation mute/block rules, private-group epoch subscriptions, notification taps and bounded recovery into the normal message-ingestion path. Private and public group alerts are opt-in through each group's three-dot menu.
 
 For enabled public groups, the same service subscribes to signed kind-9 messages on the configured and group relays. It checks the room address, signature, cached moderation policy and message timestamp, and excludes self-authored messages and edits. Public messages need no decryption keys. Notification taps open the public room; pending public events restore into its account-specific IndexedDB. Mute, block, disabling notifications or leaving the group removes it from the native watch plan.
 

@@ -1,4 +1,8 @@
 {
+  "auth.joinNamedGroup": "انضم إلى {name}",
+  "auth.chatWithName": "دردش مع {name}",
+  "auth.joinThisGroup": "انضم إلى هذه المجموعة",
+  "auth.chatWithPerson": "دردش مع هذا الشخص",
   "auth.independence": "Anagram مجاني بالكامل ومفتوح المصدر ومش تحت سيطرة أي شركة",
   "call.relayApproval.title": "تسمح بمرحل مخصص للمكالمات؟",
   "call.relayApproval.message": "المكالمة دي بتستخدم مرحل مخصص: {url}. تسمح بالاتصال بالسيرفر ده؟ وافق بس على السيرفرات اللي بتثق فيها. عشان تسمح بيه تلقائيًا في المكالمات الجاية، ضيفه لإعدادات مرحلات Iroh.",

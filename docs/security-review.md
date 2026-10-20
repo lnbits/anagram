@@ -1,4 +1,4 @@
-# Security review — 2026-10-06
+# Security review (2026-10-06)
 
 This was a source review and automated regression audit of the `brutal` rebuild, using generated test identities. It does not establish whether an older deployment or a user's device has ever been compromised. No real account keys were read or exported for the audit.
 
@@ -8,12 +8,12 @@ Production static HTML includes a hash-based Content Security Policy that blocks
 
 Remaining privacy boundaries:
 
-- Browser/PWA private-key login deliberately retains the original plaintext localStorage behavior previously requested. IndexedDB also contains decrypted chat history. Device/profile access or a compromised same-origin script can read that data. Use a dedicated origin and NIP-07/NIP-46 if you do not want the account nsec held by the web app. NIP-46 still stores a sensitive local connection credential; the remote signer controls its permissions and revocation.
+- Browser/PWA private-key login stores the account key in plaintext localStorage. IndexedDB also contains decrypted chat history. Device/profile access or a compromised same-origin script can read that data. Use a dedicated origin and NIP-07/NIP-46 if you do not want the account nsec held by the web app. NIP-46 still stores a sensitive local connection credential; the remote signer controls its permissions and revocation.
 - Tauri stores the account key in the OS keychain, but an unlocked session uses it in frontend memory. This review does not certify OS keychain prompts or installer security across platforms.
-- Account creation's explicit secret download intentionally creates a plaintext backup file. It is not a network upload.
+- Account creation can download a plaintext secret-key backup file.
 - Blossom media uploads are **not encrypted by this client**: the selected media host receives the file, while its link travels in an encrypted DM. Relays receive encrypted DM envelopes and public routing metadata. Remote image hosts can observe requests/IP addresses. No background telemetry service was found in the reviewed application source.
 - The VPS operator controls the JavaScript delivered to browsers. HTTPS and CSP do not protect against a compromised deployment that replaces the application itself. Legacy `?bunker=...` login links also send the connection token to the web host in the initial request, where access logs may retain it; removing the query after startup cannot undo that. Paste the connection string into the signer form to avoid putting it in the page URL.
 
 `npm audit` reported zero advisories at review time. Cargo audit reported no entries in its vulnerability category, but it did report the upstream [GLib iterator unsoundness advisory](https://rustsec.org/advisories/RUSTSEC-2024-0429.html) in Tauri's GTK dependency tree, plus unmaintained [proc-macro-error](https://rustsec.org/advisories/RUSTSEC-2024-0370.html) and [paste](https://rustsec.org/advisories/RUSTSEC-2024-0436.html) dependencies. GLib's published fix is in 0.20+, while this Tauri/GTK tree requires 0.18; it cannot be fixed by a compatible lockfile-only update. Anagram does not directly call the affected iterator. This remains an upstream dependency risk, not a clean security certificate. The checked-in Iroh Wasm hash manifest was verified; auditing its Cargo lockfile does not prove binary/source reproducibility.
 
-CI and release checks now run `npm audit --audit-level=high`. Repeat the native dependency checks with `cargo audit --file src-tauri/Cargo.lock` and `cargo audit --file iroh-calls/Cargo.lock`. Keep the operating system, browser/WebView, dependencies and hosted build updated.
+CI and release checks run `npm audit --audit-level=high`. Repeat the native dependency checks with `cargo audit --file src-tauri/Cargo.lock` and `cargo audit --file iroh-calls/Cargo.lock`. Keep the operating system, browser/WebView, dependencies and hosted build updated.

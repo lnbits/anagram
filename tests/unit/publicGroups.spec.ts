@@ -46,6 +46,24 @@ function definition(tags: string[][] = [], key = owner) {
   );
 }
 describe('public groups', () => {
+  it('accepts 4,000-character posts and rejects longer incoming posts and edits', () => {
+    const address = `34550:${pubkey}:lounge`;
+    for (const tags of [
+      [['a', address]],
+      [
+        ['a', address],
+        ['e', 'a'.repeat(64), '', 'edit'],
+      ],
+    ]) {
+      for (const length of [4000, 4001]) {
+        const event = finalizeEvent(
+          { kind: 9, created_at: Math.floor(Date.now() / 1000), tags, content: 'x'.repeat(length) },
+          other,
+        );
+        expect(validRoomMessage(event, address)).toBe(length === 4000);
+      }
+    }
+  });
   it('reuses public signature proofs without trusting mutated fields, IDs or signatures', () => {
     const event = definition([['name', 'Signature cache test']]);
     const verify = vi.spyOn(ClientEvent.prototype, 'verifySignature');

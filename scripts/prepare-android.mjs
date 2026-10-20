@@ -70,6 +70,9 @@ export function prepareAndroid(root = new URL('../', import.meta.url)) {
     'RECEIVE_BOOT_COMPLETED',
     'FOREGROUND_SERVICE',
     'FOREGROUND_SERVICE_SPECIAL_USE',
+    'FOREGROUND_SERVICE_MICROPHONE',
+    'FOREGROUND_SERVICE_MEDIA_PLAYBACK',
+    'WAKE_LOCK',
   ]) {
     if (!xml.includes(`android.permission.${name}`))
       xml = xml.replace(
@@ -110,6 +113,11 @@ export function prepareAndroid(root = new URL('../', import.meta.url)) {
       '</application>',
       '<receiver android:name=".CallNotificationReceiver" android:exported="false" />\n    </application>',
     );
+  if (!xml.includes('android:name=".CallAudioService"'))
+    xml = xml.replace(
+      '</application>',
+      '<service android:name=".CallAudioService" android:exported="false" android:foregroundServiceType="microphone|mediaPlayback" android:stopWithTask="true" />\n    </application>',
+    );
   writeFileSync(manifest, xml);
   const java = new URL('src-tauri/gen/android/app/src/main/java/com/nostr/anagram/', root);
   mkdirSync(java, { recursive: true });
@@ -124,6 +132,9 @@ export function prepareAndroid(root = new URL('../', import.meta.url)) {
     new URL('src-tauri/gen/android/app/src/androidTest/java/com/nostr/anagram/', root),
     { recursive: true },
   );
+  cpSync(new URL('debug/', native), new URL('src-tauri/gen/android/app/src/debug/', root), {
+    recursive: true,
+  });
   cpSync(
     new URL('tests/', native),
     new URL('src-tauri/gen/android/app/src/test/java/com/nostr/anagram/', root),

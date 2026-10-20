@@ -47,3 +47,4 @@ See [Public groups](../docs/public-groups.md) for the format and limitations.
 
 - **Message edits:** NIP-17 delete-and-replace messages include an `e` tag marked `edit` to link the replacement to the original.
 - **Calls:** Iroh call signalling uses encrypted `kind:21117` messages; call-history messages use an `anagram-call` tag. These are application extensions, not assigned Nostr standards. See [Iroh call protocol](iroh-calls.md).
+- **Bot inline keyboards:** Telegram-compatible callback/URL button markup in versioned tags, with encrypted personal `kind:21118` controls. An application extension, not an assigned NIP. See [Bot keyboards](../docs/bot-keyboards.md).

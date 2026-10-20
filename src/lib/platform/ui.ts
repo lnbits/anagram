@@ -1,19 +1,21 @@
 import { diagnosticText } from '#src/utils/diagnosticExport.ts';
 import { writable } from 'svelte/store';
-export const notices = writable<{ id: number; message: string; type?: string }[]>([]);
-export const Notify = {
-  create(options: string | { message: string; type?: string; [key: string]: unknown }) {
-    const item = {
-      id: Date.now() + Math.random(),
-      ...(typeof options === 'string' ? { message: options } : options),
-    };
-    item.message = diagnosticText(item.message);
-    notices.update((items) => [...items, item]);
-    setTimeout(() => notices.update((items) => items.filter((x) => x.id !== item.id)), 6000);
-    return () => notices.update((items) => items.filter((x) => x.id !== item.id));
-  },
-};
-export type QVueGlobals = { notify: typeof Notify.create; dialog: typeof Dialog.create };
+type ActionFeedback = { message: string; type?: string; [key: string]: unknown };
+export const actionFeedback = writable<ActionFeedback | null>(null);
+export function reportActionFeedback(options: string | ActionFeedback) {
+  const item = typeof options === 'string' ? { message: options } : options;
+  actionFeedback.set({ ...item, message: diagnosticText(item.message) });
+}
+export const incomingMessageBanner = writable('');
+export function showIncomingMessageBanner(message: string) {
+  incomingMessageBanner.set(diagnosticText(message));
+  const timer = setTimeout(() => incomingMessageBanner.set(''), 6000);
+  return () => {
+    clearTimeout(timer);
+    incomingMessageBanner.set('');
+  };
+}
+export type QVueGlobals = { notify: typeof reportActionFeedback; dialog: typeof Dialog.create };
 export interface CallRelayPrompt {
   id: number;
   title: string;

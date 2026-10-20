@@ -1,4 +1,4 @@
-"""Check capture usage descriptions in the final IPA, without extracting it."""
+"""Check capture descriptions and the privacy manifest in the final IPA."""
 import argparse
 import plistlib
 import re
@@ -21,6 +21,19 @@ def validate_ipa(path):
             value = info.get(key)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f'Packaged iOS app is missing a non-empty {key}')
+        privacy_path = plists[0].rsplit('/', 1)[0] + '/PrivacyInfo.xcprivacy'
+        if privacy_path not in archive.namelist():
+            raise ValueError('Missing PrivacyInfo.xcprivacy at the root of the app bundle')
+        privacy = plistlib.loads(archive.read(privacy_path))
+        accessed = privacy.get('NSPrivacyAccessedAPITypes') if isinstance(privacy, dict) else None
+        if not isinstance(accessed, list) or not any(
+            isinstance(entry, dict)
+            and entry.get('NSPrivacyAccessedAPIType') == 'NSPrivacyAccessedAPICategoryFileTimestamp'
+            and isinstance(entry.get('NSPrivacyAccessedAPITypeReasons'), list)
+            and 'C617.1' in entry['NSPrivacyAccessedAPITypeReasons']
+            for entry in accessed
+        ):
+            raise ValueError('PrivacyInfo.xcprivacy must declare app-container file metadata (C617.1)')
 
 
 if __name__ == '__main__':
@@ -31,4 +44,4 @@ if __name__ == '__main__':
         validate_ipa(args.ipa)
     except (OSError, ValueError, zipfile.BadZipFile, plistlib.InvalidFileException) as error:
         parser.exit(1, f'iOS permission validation failed: {error}\n')
-    print('Packaged iOS microphone and camera usage descriptions verified.')
+    print('Packaged iOS capture descriptions and required-reason privacy manifest verified.')

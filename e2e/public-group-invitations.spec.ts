@@ -77,6 +77,9 @@ for (const scenario of [
     }, relay);
     await page.goto(`${scenario.entry}${target}`);
     await expect(page.getByTestId('auth-create-account-button')).toBeVisible();
+    await expect(page.getByTestId('auth-link-banner').locator('.name')).toHaveText(
+      'Invited public ...',
+    );
     if (scenario.signup) {
       await page.getByTestId('auth-create-account-button').click();
       await page.getByRole('button', { name: 'Login Now', exact: true }).click();
@@ -99,6 +102,7 @@ for (const scenario of [
     await expect(notifications.or(group)).toBeVisible();
     if (await notifications.isVisible()) await notifications.click();
     await expect(group).toContainText('Invited public group');
+    await expect(page.getByTestId('auth-link-banner')).toHaveCount(0);
     await expect(page).toHaveURL(new RegExp(`${target}$`));
     await expect(
       page.getByTestId('public-message').filter({ hasText: 'Welcome from the invitation' }),

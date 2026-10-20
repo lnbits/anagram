@@ -1,6 +1,15 @@
 # Releases
 
-Push a version tag to run [release.yml](../.github/workflows/release.yml). Versions are derived from the tag; no manual version-file edits are required.
+Before creating a release tag, update and check the app version:
+
+```sh
+npm run release:version -- v0.9.1
+npm run release:check -- v0.9.1
+```
+
+Commit the changes to `package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and `src-tauri/Cargo.lock`, then tag that commit and push the tag to run [release.yml](../.github/workflows/release.yml). CI checks every committed app version against the tag before changing any version files and fails on a mismatch. Branch and pull-request CI also checks that these files agree with `package.json`.
+
+`release:version` updates all five files, including both root version fields in `package-lock.json`. If `src-tauri/mobile-version.json` exists locally, it also updates its numeric marketing version while preserving the mobile build numbers. Generated native projects and web bundles get their versions during generation/build; rebuild them after a version bump instead of editing the generated outputs. `release:check` is read-only; with no version argument, it checks against `package.json`.
 
 | Tag                           | Result                             |
 | ----------------------------- | ---------------------------------- |
@@ -40,7 +49,7 @@ See Tauri’s [Android](https://v2.tauri.app/distribute/sign/android/), [iOS](ht
 
 ## Manual builds
 
-Run **Release** from the Actions tab to validate all active platforms without publishing. Pushes to `build-validation/**` branches also validate using the package version. Only version-tag pushes can publish a release. Download the `complete-release` artifact to inspect the installers before tagging.
+Run **Release** from the Actions tab to validate all active platforms without publishing. On an untagged ref, the optional version input overrides the build version after checking that the committed versions agree; on a tagged ref, the Git tag takes precedence and must match the committed versions. Pushes to `build-validation/**` branches also validate using the package version. Only version-tag pushes can publish a release. Download the `complete-release` artifact to inspect the installers before tagging.
 
 Run **Android APK** for an Android-only build or **iPhone app** for an iOS-only build. The iPhone workflow uploads a `mobile-ios` artifact containing the IPA. Native projects are generated from committed sources. Mobile versions omit RC suffixes, retain the full tag in asset names, and use the workflow run number as the build number. Reruns reuse that number.
 

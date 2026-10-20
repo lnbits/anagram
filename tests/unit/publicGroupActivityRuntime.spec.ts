@@ -111,7 +111,7 @@ it('counts messages with notifications off, deduplicates replicas, and persists 
   await s.runtime.ingest(s.room.address, event);
   expect(s.saved().unreadCount).toBe(0);
   expect((await s.db.list())[0].unreadCount).toBe(0);
-  await s.runtime.ingest(s.room.address, s.message('another, same second'));
+  await s.runtime.ingest(s.room.address, s.message('another, same second', s.saved().readAt));
   expect(s.saved().unreadCount).toBe(1);
 });
 

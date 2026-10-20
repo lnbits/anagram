@@ -138,9 +138,78 @@ describe('optional double-ratchet transport', () => {
     await expect(initialized).rejects.toThrow();
     expect(publish).not.toHaveBeenCalled();
   }, 20000);
+  it('quarantines pre-upgrade queued envelopes without deleting their stored records', async () => {
+    const key = generateSecretKey();
+    const owner = getPublicKey(key);
+    const seed = new RatchetStorage(owner);
+    const legacy = [1059, 1060].map((kind) =>
+      finalizeEvent(
+        {
+          kind,
+          tags: [['p', owners[1].publicKey]],
+          content: 'old ciphertext',
+          created_at: 1,
+        },
+        key,
+      ),
+    );
+    for (const event of legacy) await seed.put(`outbox/${event.id}`, { event });
+    const safe = finalizeEvent(
+      {
+        kind: 1060,
+        tags: [
+          ['v', '2'],
+          ['header', 'test'],
+        ],
+        content: 'private ciphertext',
+        created_at: 2,
+      },
+      generateSecretKey(),
+    );
+    await seed.put(`outbox/${safe.id}`, { event: safe });
+    await seed.close();
+    const published: VerifiedEvent[] = [];
+    const subscriptions = new Set<{ filter: Filter; receive: (event: VerifiedEvent) => void }>();
+    const runtime = await createRatchetRuntime({
+      owner,
+      isCurrent: () => true,
+      sign: async (event) => finalizeEvent(event, key),
+      publish: async (event) => {
+        published.push(event);
+        for (const sub of subscriptions)
+          if (matchFilter(sub.filter, event)) queueMicrotask(() => sub.receive(event));
+      },
+      fetch: async (filter) => published.filter((event) => matchFilter(filter, event)),
+      registrationRoster: async () =>
+        published.filter((event) => event.kind === 37368 && event.pubkey === owner),
+      subscribe: (filter, receive) => {
+        const sub = { filter, receive };
+        subscriptions.add(sub);
+        for (const event of published.filter((event) => matchFilter(filter, event)))
+          queueMicrotask(() => receive(event));
+        return () => {
+          subscriptions.delete(sub);
+        };
+      },
+      receive: async () => {},
+    });
+    cleanups.push(runtime.close);
+    window.dispatchEvent(new Event('online'));
+    await vi.waitFor(() => expect(published.some((event) => event.id === safe.id)).toBe(true));
+    const reopened = new RatchetStorage(owner);
+    for (const event of legacy) {
+      expect(published.some((candidate) => candidate.id === event.id)).toBe(false);
+      expect(await reopened.get(`outbox/${event.id}`)).toEqual(
+        JSON.parse(JSON.stringify({ event })),
+      );
+    }
+    await reopened.close();
+  }, 20000);
+
   it('sends, receives and resumes persisted sessions without changing identity', async () => {
     const events = new Map<string, VerifiedEvent>();
     const subscriptions = new Set<{ filter: Filter; receive: (event: VerifiedEvent) => void }>();
+    const subscriptionFilters: Filter[] = [];
     const received: Rumor[][] = [[], []];
     let blockAcknowledgement = false;
     let releaseAcknowledgement: (() => void) | undefined;
@@ -165,6 +234,7 @@ describe('optional double-ratchet transport', () => {
             (event) => event.kind === 37368 && event.pubkey === identity.publicKey,
           ),
         subscribe: (filter, receive) => {
+          subscriptionFilters.push(JSON.parse(JSON.stringify(filter)));
           const sub = { filter, receive };
           subscriptions.add(sub);
           for (const event of [...events.values()]
@@ -214,6 +284,31 @@ describe('optional double-ratchet transport', () => {
       owners[0].publicKey,
     );
     expect([...events.values()].some((event) => event.kind === 1060)).toBe(true);
+    const publicIdentityKeys = new Set([
+      ...owners.map((owner) => owner.publicKey),
+      ...[...events.values()]
+        .filter((event) => event.kind === 30078)
+        .flatMap((event) => [
+          event.pubkey,
+          ...event.tags.filter((tag) => tag[0] === 'ephemeralKey').map((tag) => tag[1]),
+        ]),
+    ]);
+    for (const event of [...events.values()].filter((event) => event.kind === 1060)) {
+      expect(
+        publicIdentityKeys.has(event.pubkey),
+        'Message signer must not identify its sender through a public invite',
+      ).toBe(false);
+    }
+    for (const filter of subscriptionFilters) {
+      if (!filter.kinds?.includes(1060)) continue;
+      for (const author of filter.authors ?? []) {
+        expect(
+          publicIdentityKeys.has(author),
+          'Message filters must not disclose a peer identity or public invite key',
+        ).toBe(false);
+      }
+    }
+
     blockAcknowledgement = true;
     await a.send(owners[1].publicKey, { kind: 14, content: 'Pending acknowledgement' });
     await vi.waitFor(() => expect(releaseAcknowledgement).toBeTypeOf('function'));

@@ -15,7 +15,7 @@ import NostrClient, {
   type NostrSubscriptionOptions,
   type NostrSubscription,
 } from '#src/lib/nostr/client.ts';
-import { STARTER_PUBLIC_GROUP } from '#src/constants/starterPublicGroup.ts';
+import { STARTER_PUBLIC_GROUPS } from '#src/constants/starterPublicGroup.ts';
 import { PublicGroupData } from '#src/services/publicGroupData.ts';
 import { createPublicGroupRuntime } from '#src/stores/nostr/publicGroupRuntime.ts';
 import { onLiveThreadMessage } from '#src/lib/state/threadActivity.ts';
@@ -30,7 +30,7 @@ function setup(
   events: Event[],
   key = generateSecretKey(),
   eose: boolean | ((url: string, filters: NostrFilter[]) => boolean) = true,
-  starterRoom?: Event,
+  starterRooms?: Event[],
 ) {
   let account: string | null = getPublicKey(key);
   const listeners = new Set<{
@@ -88,7 +88,7 @@ function setup(
     },
   } as unknown as NostrClient;
   const runtime = createPublicGroupRuntime({
-    starterRoom,
+    starterRooms,
     client,
     account: () => account,
     signer: async () => new NostrPrivateKeySigner(key),
@@ -1684,19 +1684,19 @@ it('loads a remotely pinned old message without changing the message window', as
   expect(get(f.runtime.state).messages.map((m) => m.id)).toEqual(window);
 });
 
-it('seeds the verified starter group offline, once per account, without opening its timeline', async () => {
+it('seeds the verified starter groups offline, once per account, without opening their timelines', async () => {
   const key = generateSecretKey();
-  const seed = STARTER_PUBLIC_GROUP as Event;
-  expect(parsePublicRoom(seed).address).toBe(
+  const seeds = STARTER_PUBLIC_GROUPS as Event[];
+  expect(parsePublicRoom(seeds[0]).address).toBe(
     '34550:c1fc7771f5fa418fd3ac49221a18f19b42ccb7a663da8f04cbbf6c08c80d20b1:c609a674-94c2-4af3-a810-ffbbdd7ac4cb',
   );
-  const { runtime, subscriptions, setAccount } = setup([], key, false, seed);
+  const { runtime, subscriptions, setAccount } = setup([], key, false, seeds);
   await runtime.init();
   expect(get(runtime.state).rooms.map((row) => row.room.name)).toEqual(['Anagram rants']);
   expect(get(runtime.state).room).toBeNull();
   expect(subscriptions).toEqual([]);
-  const address = get(runtime.state).rooms[0].address;
-  await runtime.leave(address);
+  const addresses = get(runtime.state).rooms.map((row) => row.address);
+  for (const address of addresses) await runtime.leave(address);
   runtime.stop();
   await runtime.init();
   expect(get(runtime.state).rooms).toEqual([]);

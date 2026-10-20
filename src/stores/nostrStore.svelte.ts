@@ -5,7 +5,7 @@ import { createBotKeyboardAccess } from './nostr/botKeyboardAccess.ts';
 import { resolvePreferredContactRelayUrls } from '#src/utils/contactRelayUrls.ts';
 import { contactsService } from '#src/services/contactsService.ts';
 import { getPublicProfile, rememberPublicProfile } from '#src/lib/state/publicProfiles.ts';
-import { STARTER_PUBLIC_GROUP } from '#src/constants/starterPublicGroup.ts';
+import { STARTER_PUBLIC_GROUPS } from '#src/constants/starterPublicGroup.ts';
 import { createPrivateGroupPins } from '#src/stores/nostr/privateGroupPins.ts';
 import { searchRelayPublicGroups } from '#src/stores/nostr/publicGroupSearchRuntime.ts';
 import type { PublicRoom } from '#src/stores/nostr/publicGroups.ts';
@@ -2526,7 +2526,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
   }
 
   const publicGroups = createPublicGroupRuntime({
-    starterRoom: STARTER_PUBLIC_GROUP,
+    starterRooms: STARTER_PUBLIC_GROUPS,
     client: ndk,
     account: getLoggedInPublicKeyHex,
     signer: () => getOrCreateSignerRuntime(),

@@ -1,8 +1,8 @@
 import type { NostrEvent } from '#src/lib/nostr/client.ts';
 
-// Owner-signed snapshot of the supplied starter group. This lets the initial
-// sidebar render offline; opening the room refreshes its policy through relays.
-export const STARTER_PUBLIC_GROUP: NostrEvent = {
+// Owner-signed snapshots of the supplied starter groups. These let the initial
+// sidebar render offline; opening a room refreshes its policy through relays.
+export const STARTER_PUBLIC_GROUPS: NostrEvent[] = [{
   content: '',
   created_at: 1791472906,
   id: '56964b136b3ff2b5d8c4927ca81099d7c2ccfd8382c57fb0523c0a254588d3a5',
@@ -25,4 +25,4 @@ export const STARTER_PUBLIC_GROUP: NostrEvent = {
     ['relay', 'wss://nostr.bitcoiner.social/'],
     ['relay', 'wss://nos.lol/'],
   ],
-};
+}];

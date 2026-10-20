@@ -40,6 +40,40 @@ Open `src-tauri/gen/apple/build/anagram_iOS.xcarchive` in Xcode and distribute i
 
 See Tauri’s [Android](https://v2.tauri.app/distribute/sign/android/), [iOS](https://v2.tauri.app/distribute/sign/ios/), and [macOS](https://v2.tauri.app/distribute/sign/macos/) signing guides.
 
+## Mac App Store and Mac TestFlight
+
+Use `src-tauri/tauri.appstore.conf.json` for the sandboxed store build. It packages the privacy manifest and enables the camera, microphone, selected-file, and network permissions. Incoming network access supports Iroh's UDP transport. The deployment target is macOS 11; audio/video calls also depend on the installed WebKit media and codec support. The ordinary DMG build continues to use its existing configuration.
+
+Install both Rust targets and build a universal app. Set a new build number for each upload, keeping the marketing version aligned with App Store Connect:
+
+```sh
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+APPLE_SIGNING_IDENTITY=- npm run tauri -- build \
+  --target universal-apple-darwin \
+  --config src-tauri/tauri.appstore.conf.json \
+  --config '{"bundle":{"macOS":{"bundleVersion":"1"}}}' -- --locked
+python3 scripts/archive-macos-appstore.py --team-id LC2GBL34NL
+```
+
+The archive helper checks the architectures, signature, sandbox entitlement, and privacy manifest. It refuses to overwrite an existing archive. Use `--output` to keep separate release candidates.
+
+Sign into the team's Apple Developer account in Xcode, with permission to use distribution signing. Export the archive through Xcode's automatic signing:
+
+```sh
+xcodebuild -exportArchive \
+  -archivePath .artifacts/macos-appstore/Anagram-0.9.7-1.xcarchive \
+  -exportPath .artifacts/macos-appstore/export \
+  -exportOptionsPlist .artifacts/macos-appstore/ExportOptions.plist \
+  -allowProvisioningUpdates
+pkgutil --check-signature .artifacts/macos-appstore/export/Anagram.pkg
+```
+
+Replace the archive version and build number in these examples for later releases. Xcode can use the team's cloud-managed Mac App Store application and installer certificates and provisioning profile. The ad hoc archive is only an intermediate artifact; use the exported, distribution-signed package for uploading.
+
+To upload to App Store Connect, repeat `xcodebuild -exportArchive` with `UploadOptions.plist` and a separate `-exportPath`. Uploading does not submit a public store release. After processing, complete encryption compliance, attach the build to the intended TestFlight group, and request beta review when needed. Encryption keys are intentionally omitted so Apple's questionnaire is completed for each build; do not set `ITSAppUsesNonExemptEncryption=true` without the matching approved compliance code. See [Apple's encryption key documentation](https://developer.apple.com/documentation/bundleresources/information-property-list/itsappusesnonexemptencryption). Test the actual sandboxed Mac app, including login persistence, relays, attachments, camera/microphone permissions, and calls before submitting it for public review.
+
+Keep archives, packages, provisioning profiles, and logs under the ignored `.artifacts/` directory. Store availability, pricing, screenshots, privacy disclosures, and manual release settings are managed separately in App Store Connect.
+
 ## Manual builds
 
 Run **Release** from the Actions tab to validate all active platforms without publishing. On an untagged ref, the optional version input sets the build version; on a tagged ref, the Git tag takes precedence. Pushes to `build-validation/**` branches validate using the package version. Only version-tag pushes can publish a release. Download the `complete-release` artifact to inspect the installers before tagging.

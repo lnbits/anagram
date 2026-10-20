@@ -5,8 +5,17 @@ import { chatDataService } from '#src/services/chatDataService.ts';
 import { nostrEventDataService } from '#src/services/nostrEventDataService.ts';
 import type { createRatchetRuntime } from './ratchetRuntime.ts';
 import { createRatchetPreferences, type DirectMessagePreference } from './ratchetPreferences.ts';
+import {
+  createPrivateRelayPublisher,
+  isPrivateRelayEvent,
+  isRelayDiscoveryFilter,
+} from 'nostr-pubsub/private-relays';
 
 type Runtime = Awaited<ReturnType<typeof createRatchetRuntime>>;
+
+// The discovery SDK returns immutable events. Nostr protocol consumers cache
+// signature verification on the event itself, including across bundled copies.
+const protocolEvent = (event: NostrEvent) => structuredClone(event) as VerifiedEvent;
 
 export function createRatchetIntegration(deps: {
   client: NostrClient;
@@ -17,6 +26,9 @@ export function createRatchetIntegration(deps: {
 }) {
   let generation = 0;
   let active: { owner: string; runtime: Promise<Runtime>; cancel: () => Promise<void> } | undefined;
+  let sender: ReturnType<typeof createPrivateRelayPublisher> | undefined;
+  const publicDiscovery = () => deps.client.discovery;
+  const privateSender = () => (sender ??= createPrivateRelayPublisher());
   const key = (owner = deps.owner()) => `anagram-ndr:${owner}`;
   const protocols = createRatchetPreferences({
     owner: deps.owner,
@@ -29,15 +41,17 @@ export function createRatchetIntegration(deps: {
         .relays(peer)
         .then((relays) => {
           if (cancelled || deps.owner() !== owner) return;
-          const sub = deps.client.subscribe(
-            { kinds: [37368], authors: [peer], limit: 10 },
-            { relayUrls: relays },
+          const sub = publicDiscovery().subscribe(
+            [{ kinds: [37368], authors: [peer], limit: 10 }],
+            {
+              onEvent: (event) => onEvent(protocolEvent(event)),
+              onEose: (status) => {
+                if (status.sources.some((source) => source.complete)) onReady();
+              },
+            },
+            { relays, cache: 'network-only' },
           );
-          sub.on('event', (event: ClientEvent) => onEvent(event.rawEvent() as VerifiedEvent));
-          sub.on('eose', () => {
-            if (sub.eosesSeen.size > 0) onReady();
-          });
-          stop = () => sub.stop();
+          stop = () => sub.close();
         })
         .catch(onReady);
       return () => {
@@ -75,6 +89,15 @@ export function createRatchetIntegration(deps: {
         publish: async (event, peer) => {
           const relays = await deps.relays(peer);
           if (!current()) throw new Error('Messaging account changed.');
+          if (isPrivateRelayEvent(event)) {
+            const result = await privateSender().publish(event, {
+              relays,
+              requireAck: true,
+              queue: false,
+            });
+            if (!result.remoteAccepted) throw new Error('No messaging relay accepted the event.');
+            return;
+          }
           await Promise.any(deps.client.transport.publish(relays, event));
         },
         published: async (innerId) => {
@@ -96,31 +119,60 @@ export function createRatchetIntegration(deps: {
         registrationRoster: async () => {
           const relays = await deps.relays();
           if (!current() || !relays.length) throw new Error('No messaging relay available.');
-          return new Promise<VerifiedEvent[]>((resolve, reject) => {
-            const events: VerifiedEvent[] = [];
-            const sub = deps.client.subscribe(
-              { kinds: [37368], authors: [owner], limit: 10 },
-              { relayUrls: relays },
-            );
-            const finish = () => {
-              clearTimeout(timer);
-              sub.stop();
-              if (current() && sub.eosesSeen.size > 0) resolve(events);
-              else reject(new Error('Could not verify the existing messaging devices.'));
-            };
-            const timer = setTimeout(finish, 5000);
-            sub.on('event', (event: ClientEvent) => events.push(event.rawEvent() as VerifiedEvent));
-            sub.on('eose', finish);
-          });
+          const result = await publicDiscovery().query(
+            [{ kinds: [37368], authors: [owner], limit: 10 }],
+            {
+              relays,
+              cache: 'network-only',
+              signal: controller.signal,
+              deadline: Date.now() + 5000,
+            },
+          );
+          if (!current() || !result.sources.some((source) => source.complete))
+            throw new Error('Could not verify the existing messaging devices.');
+          return result.events.map(protocolEvent);
         },
         fetch: async (filter) => {
           const relays = await deps.relays();
           if (!current()) return [];
+          if (isRelayDiscoveryFilter(filter)) {
+            const result = await publicDiscovery().query([filter], {
+              relays,
+              cache: 'network-only',
+              signal: controller.signal,
+              deadline: Date.now() + 5000,
+            });
+            return result.events.map(protocolEvent);
+          }
           return [...(await deps.client.fetchEvents(filter, { relayUrls: relays }))].map(
             (event) => event.rawEvent() as VerifiedEvent,
           );
         },
         subscribe: (filter: Filter, onEvent: (event: VerifiedEvent) => void) => {
+          if (isRelayDiscoveryFilter(filter)) {
+            let stopped = false;
+            let subscription: ReturnType<NostrClient['discovery']['subscribe']> | undefined;
+            const stop = () => {
+              stopped = true;
+              subscription?.close();
+            };
+            void deps
+              .relays()
+              .then((relays) => {
+                if (stopped || !current() || controller.signal.aborted) return;
+                subscription = publicDiscovery().subscribe(
+                  [filter],
+                  {
+                    onEvent: (event) => {
+                      if (!stopped && current()) onEvent(protocolEvent(event));
+                    },
+                  },
+                  { relays, cache: 'network-only', signal: controller.signal },
+                );
+              })
+              .catch(() => {});
+            return stop;
+          }
           let subscription: ReturnType<NostrClient['subscribe']> | undefined;
           let retry: ReturnType<typeof setTimeout> | undefined;
           let retryDelay = 1000;
@@ -210,12 +262,15 @@ export function createRatchetIntegration(deps: {
     protocols.close();
     const previous = active;
     active = undefined;
+    const oldSender = sender;
+    sender = undefined;
     if (previous) {
       await previous.cancel();
       // A signer prompt can remain open indefinitely; a late completion is stale
       // and may only clean up its already-cancelled runtime.
       void previous.runtime.then((runtime) => runtime.close()).catch(() => {});
     }
+    await oldSender?.close();
   }
   async function setDirectMessageProtocol(peer: string, protocol: DirectMessagePreference) {
     const owner = deps.owner();

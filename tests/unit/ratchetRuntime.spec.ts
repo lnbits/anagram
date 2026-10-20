@@ -160,6 +160,7 @@ describe('optional double-ratchet transport', () => {
         tags: [
           ['v', '2'],
           ['header', 'test'],
+          ['p', owners[1].publicKey],
         ],
         content: 'private ciphertext',
         created_at: 2,

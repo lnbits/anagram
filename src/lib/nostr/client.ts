@@ -20,6 +20,10 @@ import {
 } from 'nostr-tools';
 import { BunkerSigner, type BunkerPointer } from 'nostr-tools/nip46';
 import { normalizeURL } from 'nostr-tools/utils';
+import {
+  createAnonymousRelayDiscovery,
+  splitRelayDiscoveryFilters,
+} from 'nostr-pubsub/private-relays';
 export { nip19 };
 export type NostrEvent = EventTemplate & { pubkey: string; id?: string; sig?: string };
 export type NostrFilter = Filter;
@@ -715,6 +719,72 @@ export class NostrSubscription extends Emitter {
     const targets = urls.map((url) => this.client.pool.getRelay(url, false));
     this.opts.relaySet ??= new NostrRelaySet(new Set(targets), this.client);
     urls.forEach((url) => this.relayFilters.set(url, this.filters));
+    const scoped = splitRelayDiscoveryFilters(this.filters);
+    if (scoped.discovery.length) {
+      const count = scoped.discovery.length + Number(scoped.receiver.length > 0);
+      const completed = new Map<NostrRelay, Set<number>>();
+      const deliver = (raw: Event, target: NostrRelay) => {
+        if (this.closed || (seen.has(raw.id) && !this.opts.includeRelayDuplicates)) return;
+        seen.add(raw.id);
+        if (seen.size > 10000) seen.delete(seen.values().next().value!);
+        const event = new ClientEvent(this.client, raw);
+        event.relay = target;
+        event.onRelays = [target];
+        this.opts.onEvent?.(event, target);
+        this.opts.onEvents?.([event]);
+        this.emit('event', event, target);
+      };
+      const complete = (target: NostrRelay, route: number) => {
+        if (this.closed) return;
+        const done = completed.get(target) ?? new Set<number>();
+        completed.set(target, done);
+        done.add(route);
+        if (done.size === count) this.eosesSeen.add(target);
+        if (!this.eoseReceived && targets.every((target) => this.eosesSeen.has(target))) {
+          this.eoseReceived = true;
+          this.opts.onEose?.(this);
+          this.emit('eose', this);
+          if (this.opts.closeOnEose) this.stop();
+        }
+      };
+      try {
+        for (const target of targets) {
+          for (const [index, filters] of scoped.discovery.entries())
+            this.closers.push(
+              this.client.discovery.subscribe(
+                filters,
+                {
+                  onEvent: (event) => deliver(event, target),
+                  onEose: (status) => {
+                    if (
+                      status.sources.some((source) => source.id === target.url && source.complete)
+                    )
+                      complete(target, index);
+                  },
+                  onError: (error) => {
+                    if (!this.closed) this.emit('closed', error, target);
+                  },
+                },
+                { relays: [target.url], cache: 'network-only' },
+              ),
+            );
+          if (scoped.receiver.length) {
+            const ordinary = new NostrSubscription(this.client, scoped.receiver, {
+              relayUrls: [target.url],
+              includeRelayDuplicates: this.opts.includeRelayDuplicates,
+              onEvent: (event) => deliver(event.rawEvent() as Event, target),
+              onEose: () => complete(target, count - 1),
+            });
+            this.closers.push({ close: () => ordinary.stop() });
+            ordinary.start();
+          }
+        }
+      } catch (error) {
+        this.emit('closed', error);
+        this.stop();
+      }
+      return;
+    }
     for (const target of targets) {
       // One cleanup slot per relay, not one retained object per reconnect.
       let currentSubscription: { close(): void } | undefined;
@@ -870,6 +940,8 @@ export default class NostrClient {
   // Reconnection belongs to the app scheduler. Transport auto-reconnect rewrites
   // subscription `since` after the last event, which can skip backward history.
   transport = new RelayTransport({ enableReconnect: false });
+  // Public profile/key lookups never share account authentication or other authors.
+  readonly discovery = createAnonymousRelayDiscovery({ historyTimeoutMs: 5000 });
   pool = new RelayPool(this);
   signer?: NostrSigner;
   relayConnectionFilter?: (relay: string) => boolean;
@@ -970,11 +1042,20 @@ export default class NostrClient {
     const urls = relaySet?.relayUrls ??
       options.relaySet?.relayUrls ??
       options.relayUrls ?? [...this.pool.relays.keys()];
-    const results = await Promise.all(
-      (Array.isArray(filters) ? filters : [filters]).map((f) =>
-        this.transport.querySync(urls, f, { maxWait: 5000 }),
+    const scoped = splitRelayDiscoveryFilters(Array.isArray(filters) ? filters : [filters]);
+    const results = await Promise.all([
+      ...scoped.receiver.map((filter) => this.transport.querySync(urls, filter, { maxWait: 5000 })),
+      ...scoped.discovery.map(
+        async (filters) =>
+          (
+            await this.discovery.query(filters, {
+              relays: urls,
+              cache: 'network-only',
+              deadline: Date.now() + 5000,
+            })
+          ).events,
       ),
-    );
+    ]);
     return new Set([
       ...new Map(results.flat().map((raw) => [raw.id, new ClientEvent(this, raw)])).values(),
     ]);

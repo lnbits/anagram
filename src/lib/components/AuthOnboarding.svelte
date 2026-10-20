@@ -1,10 +1,14 @@
 <script lang="ts">
   import { dismissOnBackdrop } from '#src/lib/actions/dismissOnBackdrop.ts';
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { toStore } from 'svelte/store';
   import { useNostrStore } from '#src/stores/nostrStore.svelte.ts';
   import { useRelayStore } from '#src/stores/relayStore.ts';
   import { translate } from '#src/i18n.ts';
+  import { buildMessageTextParts } from '#src/utils/messageTextParts.ts';
+  import { buildMentionProfiles } from '#src/utils/nostrMentions.ts';
+  import { openExternalHttpUrl } from '#src/utils/externalLinks.ts';
+  import { Notify } from '#src/lib/platform/ui.ts';
   import {
     getBrowserNotificationPermission,
     requestBrowserNotificationsAfterLogin,
@@ -12,6 +16,7 @@
   } from '#src/utils/browserNotificationPreference.ts';
   import Avatar from './Avatar.svelte';
   import Icon from './Icon.svelte';
+  import ProfileName from './ProfileName.svelte';
   export let oncomplete: () => void;
   export let onlogout: () => void;
   export let title = 'profile.checkingProfile';
@@ -26,6 +31,54 @@
   });
   let status: 'checking' | 'found' | 'not-found' | 'error' | 'relays' | 'profile' = 'relays';
   let profile: Awaited<ReturnType<typeof nostr.fetchUserProfileFromRelays>> = null;
+  // Bio renders through the same linkify + mention pipeline as messages, so
+  // npubs become @names and links stay clickable instead of overflowing.
+  $: aboutParts = profile?.about
+    ? buildMessageTextParts(
+        profile.about,
+        buildMentionProfiles([
+          {
+            publicKey: profile.publicKey,
+            displayName: profile.displayName || profile.name,
+            picture: profile.picture,
+          },
+        ]),
+      )
+    : [];
+  $: npub = profile ? nostr.encodeNpub(profile.publicKey) : '';
+  let aboutExpanded = false,
+    aboutClamped = false;
+  let aboutEl: HTMLParagraphElement | null = null;
+  $: if (profile) void measureAboutClamp();
+  async function measureAboutClamp() {
+    aboutExpanded = false;
+    aboutClamped = false;
+    await tick();
+    if (!aboutEl) return;
+    aboutClamped = aboutEl.scrollHeight > aboutEl.clientHeight + 4;
+  }
+  function shortNpub(value: string) {
+    return value.length > 20 ? value.slice(0, 14) + '…' + value.slice(-6) : value;
+  }
+  let npubCopied = false;
+  let npubCopyTimer: ReturnType<typeof setTimeout> | undefined;
+  function copyNpub() {
+    navigator.clipboard
+      ?.writeText(npub)
+      .then(() => {
+        npubCopied = true;
+        clearTimeout(npubCopyTimer);
+        npubCopyTimer = setTimeout(() => (npubCopied = false), 2000);
+      })
+      .catch(() => {});
+  }
+  async function openExternal(url: string) {
+    try {
+      await openExternalHttpUrl(url);
+    } catch (error) {
+      Notify.create({ message: String(error), type: 'negative' });
+    }
+  }
   let entries: Array<{ url: string; selected: boolean }> = [];
   let editRelays = false;
   let relayInput = '',
@@ -231,8 +284,44 @@
     <div class="profile">
       <Avatar name={profile.name} picture={profile.picture} size={72} />
       <div>
-        <strong>{profile.name}</strong><small>{nostr.encodeNpub(profile.publicKey)}</small>
-        <p>{profile.about}</p>
+        <strong>{profile.name}</strong>
+        <small>
+          <button
+            class="npub"
+            type="button"
+            title={npub}
+            onclick={copyNpub}>{npubCopied ? $translate('common.copiedLabel', { label: 'npub' }) : shortNpub(npub)}</button
+          >
+        </small>
+        {#if aboutParts.length}
+          <p class="about" class:about-clamp={!aboutExpanded} bind:this={aboutEl}>
+            {#each aboutParts as part (part.key)}
+              {#if part.type === 'url'}
+                <a
+                  href={part.href}
+                  title={part.href}
+                  rel="noopener noreferrer"
+                  onclick={(event) => {
+                    event.preventDefault();
+                    void openExternal(part.href);
+                  }}>{part.text}</a
+                >
+              {:else if part.type === 'mention' && part.publicKey}<span class="mention"
+                  >@<ProfileName
+                    publicKey={part.publicKey}
+                    fallback={part.text.slice(1)}
+                    hydrate /></span
+                >
+              {:else}{part.text}{/if}
+            {/each}
+          </p>
+          {#if aboutClamped}<button
+              class="show-toggle"
+              type="button"
+              onclick={() => (aboutExpanded = !aboutExpanded)}
+              >{$translate(aboutExpanded ? 'Show less' : 'Show more')}</button
+            >{/if}
+        {/if}
         {#if profile.nip05}<small>{profile.nip05}</small>{/if}
       </div>
     </div>
@@ -427,6 +516,8 @@
   }
   .onboarding {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
     gap: 16px;
     padding-top: 6px;
   }
@@ -443,6 +534,9 @@
   .checking strong {
     font-size: 18px;
   }
+  .profile {
+    align-items: flex-start;
+  }
   .profile > div {
     min-width: 0;
   }
@@ -450,6 +544,45 @@
     font-size: 22px;
     line-height: 1.2;
     overflow-wrap: anywhere;
+  }
+  .npub {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+  }
+  .about {
+    margin: 8px 0 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .about a,
+  .about .mention {
+    color: var(--q-primary);
+    overflow-wrap: anywhere;
+  }
+  .about .mention {
+    font-weight: 600;
+  }
+  /* Long bios clamp like sidecar profiles: fade the cut edge, toggle to expand. */
+  .about-clamp {
+    max-height: 168px;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 72%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 72%, transparent 100%);
+  }
+  .show-toggle {
+    padding: 2px 0;
+    border: 0;
+    background: none;
+    color: var(--q-primary);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
   }
   small {
     display: block;
@@ -477,6 +610,12 @@
   .button-row {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .button-row button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     gap: 12px;
   }
   button.primary,

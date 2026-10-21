@@ -666,7 +666,7 @@ export function createPrivateMessagesIngestRuntime({
 
   // This entry point is only called after NdrRuntime authenticates the device's owner.
   async function processIncomingRatchetMessage(rumorEvent: ClientEvent, loggedInPubkeyHex: string, outerEventId: string) {
-    if (![14, 7, 5].includes(rumorEvent.kind) || rumorEvent.tags.some((tag) => tag[0] === 'l' || tag[0] === 'h')) return;
+    if (![14, 7, 5, CALL_SIGNAL_KIND].includes(rumorEvent.kind) || rumorEvent.tags.some((tag) => tag[0] === 'l' || tag[0] === 'h')) return;
     const wrapper = new ClientEvent(rumorEvent.ndk, { id: outerEventId, kind: 1060, pubkey: '', content: '', tags: [], created_at: rumorEvent.created_at });
     return processDecryptedPrivateMessage(wrapper, rumorEvent, loggedInPubkeyHex, { recipientPubkey: loggedInPubkeyHex, groupChatPublicKey: null }, { live: true });
   }

@@ -30,8 +30,8 @@ test('Settings preference persists, contact details show automatic upgrades, and
   browser,
 }) => {
   test.setTimeout(120000);
-  const alice = await bootstrapUser(browser, TEST_ACCOUNTS.ratchetAlice);
-  const bob = await bootstrapUser(browser, TEST_ACCOUNTS.ratchetBob);
+  const alice = await bootstrapUser(browser, TEST_ACCOUNTS.ratchetAlice, { localWebSocketsOnly: true });
+  const bob = await bootstrapUser(browser, TEST_ACCOUNTS.ratchetBob, { localWebSocketsOnly: true });
   try {
     await navigateInApp(alice.page, '/settings/messaging');
     await expect(alice.page.getByTestId('prefer-ratchet')).toBeChecked();
@@ -62,6 +62,42 @@ test('Settings preference persists, contact details show automatic upgrades, and
     await expect(
       bob.page.getByTestId('message-bubble').filter({ hasText: 'Ratchet hello' }),
     ).toBeVisible();
+    await bob.page.evaluate(async () => {
+      const { useCallStore } = await import('/src/stores/callStore.ts');
+      const { useCallRoomStore } = await import('/src/stores/callRoomStore.ts');
+      const controls = ((window as any).__ratchetCallControls = []);
+      const calls = useCallStore(), rooms = useCallRoomStore();
+      const call = calls.receiveSignal, room = rooms.receive;
+      calls.receiveSignal = async (peer, signal) => { controls.push({ peer, protocol: signal.protocol }); await call(peer, signal); };
+      rooms.receive = async (peer, signal) => { controls.push({ peer, protocol: signal.protocol }); await room(peer, signal); };
+    });
+    const controlWire = await alice.page.evaluate(async (peer) => {
+      const { useNostrStore } = await import('/src/stores/nostrStore.svelte.ts');
+      const { CALL_PROTOCOL } = await import('/src/types/call.ts');
+      const { ROOM_PROTOCOL } = await import('/src/types/callRoom.ts');
+      const frames: any[] = [], original = WebSocket.prototype.send;
+      WebSocket.prototype.send = function (data) {
+        if (typeof data === 'string') { try { frames.push(JSON.parse(data)); } catch { /* Other transport frames are unrelated. */ } }
+        return original.call(this, data);
+      };
+      const callId = crypto.randomUUID(), roomId = crypto.randomUUID();
+      try {
+        const store = useNostrStore();
+        await store.sendCallSignal(peer, { protocol: CALL_PROTOCOL, action: 'end', reason: 'hangup',
+          callId, mode: 'audio', expiresAt: new Date(Date.now() + 60_000).toISOString() });
+        await store.sendRoomSignal(peer, { protocol: ROOM_PROTOCOL, action: 'closed', roomId,
+          senderSession: crypto.randomUUID(), expiresAt: new Date(Date.now() + 60_000).toISOString() },
+        ['ws://127.0.0.1:7777/']);
+        return { events: frames.filter(frame => frame[0] === 'EVENT').map(frame => frame[1]), callId, roomId };
+      } finally { WebSocket.prototype.send = original; }
+    }, bob.session.publicKey);
+    await expect.poll(() => bob.page.evaluate(() => (window as any).__ratchetCallControls))
+      .toEqual([{ peer: alice.session.publicKey, protocol: 'anagram/iroh-call/1' },
+        { peer: alice.session.publicKey, protocol: 'anagram/iroh-room/1' }]);
+    expect(controlWire.events.some(event => event.kind === 1060)).toBe(true);
+    expect(controlWire.events.some(event => [1059, 21117].includes(event.kind))).toBe(false);
+    expect(JSON.stringify(controlWire.events)).not.toContain(controlWire.callId);
+    expect(JSON.stringify(controlWire.events)).not.toContain(controlWire.roomId);
     await alice.page.evaluate(async (peer) => {
       const { useMessageStore } = await import('/src/stores/messageStore.svelte.ts');
       const store = useMessageStore();

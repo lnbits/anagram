@@ -45,7 +45,7 @@ export function authenticatedRatchetMessage(
     event.tags.some((tag) => tag[0] === 'l' || tag[0] === 'h')
   )
     return null;
-  if (![14, 7, 5, 1009].includes(event.kind) || getEventHash(event) !== event.id) return null;
+  if (![14, 7, 5, 1009, 21117].includes(event.kind) || getEventHash(event) !== event.id) return null;
   const expiration = event.tags.find((tag) => tag[0] === 'expiration')?.[1];
   if (
     expiration !== undefined &&
@@ -171,7 +171,7 @@ export async function createRatchetRuntime(transport: RatchetTransport) {
       return cleanup;
     },
   });
-  runtime.onDurableSessionEvent([14, 7, 5, 1009], async (event, from, meta) => {
+  runtime.onDurableSessionEvent([14, 7, 5, 1009, 21117], async (event, from, meta) => {
     assertCurrent();
     const normalized = authenticatedRatchetMessage(event, from, meta, transport.owner);
     if (!normalized) return;

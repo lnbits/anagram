@@ -328,7 +328,7 @@ export function createRatchetIntegration(deps: {
         });
         await chatDataService.updateMessageEventId(local.id, prepared.id);
       }
-      await nostrEventDataService.upsertEvent({
+      if (event.kind !== 21117) await nostrEventDataService.upsertEvent({
         event: prepared,
         direction: 'out',
         relay_statuses: [],

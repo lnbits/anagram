@@ -22,6 +22,8 @@ import { BunkerSigner, type BunkerPointer } from 'nostr-tools/nip46';
 import { normalizeURL } from 'nostr-tools/utils';
 import {
   createAnonymousRelayDiscovery,
+  createPrivateRelayPublisher,
+  isPrivateRelayEvent,
   splitRelayDiscoveryFilters,
 } from 'nostr-pubsub/private-relays';
 export { nip19 };
@@ -932,6 +934,29 @@ export function filterFromId(id: string): Filter {
   throw new Error('Invalid event identifier');
 }
 class RelayTransport extends SimplePool {
+  private readonly privateSenders = new Set<ReturnType<typeof createPrivateRelayPublisher>>();
+  // Legacy gift wraps also carry calls; protocol selection cannot bypass this boundary.
+  override publish(...[relays, event, options]: Parameters<SimplePool['publish']>) {
+    if (event.kind === 21117)
+      return relays.map(() => Promise.reject<string>(new Error('Call controls require an encrypted session')));
+    if (!isPrivateRelayEvent(event)) return super.publish(relays, event, options);
+    return relays.map((url) => {
+      const sender = createPrivateRelayPublisher({ publishTimeoutMs: options?.maxWait });
+      this.privateSenders.add(sender);
+      return sender.publish(event, { relays: [url], requireAck: true, queue: false })
+        .then((result) => {
+          if (!result.remoteAccepted) throw new Error('No private message relay accepted the event');
+          return '';
+        }).finally(async () => {
+          this.privateSenders.delete(sender);
+          await sender.close();
+        });
+    });
+  }
+  override close(relays: string[]) {
+    super.close(relays);
+    for (const sender of this.privateSenders) void sender.close();
+  }
   getExistingRelay(url: string) {
     return this.relays.get(url);
   }

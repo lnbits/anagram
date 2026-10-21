@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import type { AddressInfo } from 'node:net';
 import { finalizeEvent, generateSecretKey, getPublicKey, verifyEvent } from 'nostr-tools';
 import { AppKeys, Invite, Session } from 'nostr-double-ratchet';
-import NostrClient, { NostrPrivateKeySigner } from '#src/lib/nostr/client.ts';
+import NostrClient, { ClientEvent, giftWrap, NostrPrivateKeySigner, NostrUser } from '#src/lib/nostr/client.ts';
 import { createRatchetIntegration } from '#src/stores/nostr/ratchetIntegration.ts';
 import type { createRatchetRuntime } from '#src/stores/nostr/ratchetRuntime.ts';
 
@@ -98,6 +98,10 @@ it('isolates actual DR sends, retries and public key discovery from account AUTH
   });
   vi.stubGlobal('localStorage', { getItem: () => '1' });
   const client = new NostrClient({ signer: new NostrPrivateKeySigner(secret) });
+  const legacyCall = await giftWrap(new ClientEvent(client, {
+    kind: 21117, tags: [['p', peer]], content: 'encrypted call control',
+  }), new NostrUser({ pubkey: peer }), client.signer!);
+  privateIds.add(legacyCall.id);
   const integration = createRatchetIntegration({
     client,
     owner: () => owner,
@@ -128,6 +132,13 @@ it('isolates actual DR sends, retries and public key discovery from account AUTH
     await transport.publish(finalizeEvent(Invite.createNew(owner, owner).getEvent(), secret));
     await expect(transport.publish(peerCopy)).rejects.toThrow();
     for (const event of [peerCopy, ownCopy, firstContact]) await transport.publish(event);
+    // Call publication reaches NostrRelay.publish, outside the NDR adapter.
+    await client.pool.getRelay(url, false).publish(legacyCall);
+    await client.pool.getRelay(url, false).publish(legacyCall);
+    const bareCall = finalizeEvent({ kind: 21117, created_at: Math.floor(Date.now() / 1000),
+      tags: [['p', peer]], content: 'private call control' }, secret);
+    await expect(Promise.all(client.transport.publish([url], bareCall))).rejects.toThrow('encrypted session');
+    expect(frames.some(({ message }) => message[0] === 'EVENT' && message[1].id === bareCall.id)).toBe(false);
     await vi.waitFor(() =>
       expect(
         frames.some(({ message }) => message[0] === 'AUTH' && message[1].pubkey === owner),

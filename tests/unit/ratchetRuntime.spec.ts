@@ -270,12 +270,16 @@ describe('optional double-ratchet transport', () => {
     await b.close();
     cleanups.pop();
     await a.send(owners[1].publicKey, { kind: 14, content: 'offline' });
+    const call = await a.send(owners[1].publicKey, { kind: 21117, content: 'private call control' });
     const reopened = await start(1);
     cleanups.push(reopened.close);
     await vi.waitFor(
       () => expect(received[1].some((event) => event.content === 'offline')).toBe(true),
       { timeout: 10000 },
     );
+    await vi.waitFor(() => expect(received[1].find((event) => event.id === call.id))
+      .toMatchObject({ kind: 21117, content: 'private call control', pubkey: owners[0].publicKey }),
+    { timeout: 10000 });
     await reopened.send(owners[0].publicKey, { kind: 14, content: 'reply' });
     await vi.waitFor(
       () => expect(received[0].some((event) => event.content === 'reply')).toBe(true),

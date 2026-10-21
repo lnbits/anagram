@@ -2552,6 +2552,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     refreshRelays: refreshContactRelayList,
     getAppRelays: getAppRelayUrls,
     sendRumor: sendGiftWrappedRumor,
+    sendRatchet: ratchet.send,
   });
 
   function containsSessionSecret(value: string): boolean {

@@ -38,10 +38,13 @@ export async function waitForAppBridge(page: Page) {
 export async function bootstrapUser(
   browser: Browser,
   account: TestAccount,
-  options: { relayUrls?: string[]; passiveRestore?: boolean; callMedia?: boolean } = {},
+  options: { relayUrls?: string[]; passiveRestore?: boolean; callMedia?: boolean; localWebSocketsOnly?: boolean } = {},
 ): Promise<BootstrappedUser> {
   const context = await browser.newContext(
     options.callMedia ? { permissions: ['microphone', 'camera'], ignoreHTTPSErrors: true } : {},
+  );
+  if (options.localWebSocketsOnly) await context.routeWebSocket(
+    url => !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname), socket => socket.close(),
   );
   const page = await context.newPage();
   page.setDefaultTimeout(10000);

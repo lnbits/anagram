@@ -565,7 +565,7 @@ describe('privateMessagesIngestRuntime', () => {
     expect(deps.showIncomingMessageBrowserNotification).not.toHaveBeenCalled();
   });
 
-  it('routes authenticated call controls without touching chat or event persistence', async () => {
+  it.each(['nip17', 'ndr'])('routes authenticated %s call controls without touching chat or event persistence', async (protocol) => {
     const deps = createDeps();
     const runtime = createPrivateMessagesIngestRuntime(deps);
     const signal = {
@@ -577,15 +577,17 @@ describe('privateMessagesIngestRuntime', () => {
       address: { id: 'c'.repeat(64), relayUrl: 'https://relay.example/' },
       mimeType: 'audio/webm;codecs=opus',
     };
-    ndkMocks.giftUnwrap.mockResolvedValue(
-      makeRumorEvent({
+    const rumor = makeRumorEvent({
         recipientPubkey: 'b'.repeat(64),
         kind: CALL_SIGNAL_KIND,
         createdAt: Math.floor(Date.now() / 1000),
         content: JSON.stringify(signal),
-      }),
-    );
-    await runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64));
+      });
+    if (protocol === 'ndr') await runtime.processIncomingRatchetMessage(rumor, 'b'.repeat(64), 'c'.repeat(64));
+    else {
+      ndkMocks.giftUnwrap.mockResolvedValue(rumor);
+      await runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64));
+    }
     expect(deps.processIncomingCallSignal).toHaveBeenCalledWith('a'.repeat(64), signal);
     expect(serviceMocks.chatDataService.createChat).not.toHaveBeenCalled();
     expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
@@ -594,7 +596,7 @@ describe('privateMessagesIngestRuntime', () => {
     expect(deps.showIncomingMessageBrowserNotification).not.toHaveBeenCalled();
   });
 
-  it('routes room controls by the authenticated author without creating chat messages', async () => {
+  it.each(['nip17', 'ndr'])('routes %s room controls by the authenticated author without creating chat messages', async (protocol) => {
     const deps = createDeps();
     const runtime = createPrivateMessagesIngestRuntime(deps);
     const signal = {
@@ -604,15 +606,17 @@ describe('privateMessagesIngestRuntime', () => {
       senderSession: crypto.randomUUID(),
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     };
-    ndkMocks.giftUnwrap.mockResolvedValue(
-      makeRumorEvent({
+    const rumor = makeRumorEvent({
         recipientPubkey: 'b'.repeat(64),
         kind: CALL_SIGNAL_KIND,
         createdAt: Math.floor(Date.now() / 1000),
         content: JSON.stringify(signal),
-      }),
-    );
-    await runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64));
+      });
+    if (protocol === 'ndr') await runtime.processIncomingRatchetMessage(rumor, 'b'.repeat(64), 'c'.repeat(64));
+    else {
+      ndkMocks.giftUnwrap.mockResolvedValue(rumor);
+      await runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64));
+    }
     expect(deps.processIncomingRoomSignal).toHaveBeenCalledWith('a'.repeat(64), signal);
     expect(deps.processIncomingCallSignal).not.toHaveBeenCalled();
     expect(serviceMocks.chatDataService.createChat).not.toHaveBeenCalled();

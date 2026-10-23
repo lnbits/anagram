@@ -7,6 +7,7 @@
   import { resolveChatPreviewAuthorLabel } from '#src/utils/chatPreview.ts';
   import Avatar from './Avatar.svelte';
   import ChatListRow from './ChatListRow.svelte';
+  import { formatUnreadChatBadgeLabel } from '#src/utils/unreadChatBadge.ts';
   export let chat: Chat;
   export let ownPublicKey = '';
   export let active = false;
@@ -76,7 +77,8 @@
           >♥ {reactions > 99 ? '99+' : reactions}</span
         >{/if}{#if chat.unreadCount}<span
           class="badge"
-          aria-label={`${chat.unreadCount} unread messages`}>{chat.unreadCount}</span
+          aria-label={`${chat.unreadCount} unread messages`}
+          >{formatUnreadChatBadgeLabel(chat.unreadCount)}</span
         >{/if}</span
     >{/if}
   {#snippet actions()}

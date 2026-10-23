@@ -3,6 +3,7 @@
   import Avatar from './Avatar.svelte';
   import ChatListRow from './ChatListRow.svelte';
   import ChatRowMenu from './ChatRowMenu.svelte';
+  import { formatUnreadChatBadgeLabel } from '#src/utils/unreadChatBadge.ts';
   export let room: PublicRoom;
   export let active = false;
   export let testId = 'public-chat-item';
@@ -36,7 +37,7 @@
     ></span
   >
   {#if unreadCount > 0}<span class="badge" aria-label={`${unreadCount} unread messages`}
-      >{unreadCount}</span
+      >{formatUnreadChatBadgeLabel(unreadCount)}</span
     >{/if}
   {#snippet actions()}{#if onaction}<ChatRowMenu
         {items}

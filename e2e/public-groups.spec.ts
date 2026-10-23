@@ -2378,3 +2378,16 @@ for (const width of [1280, 390]) {
     await expect(row).toHaveCount(0);
   });
 }
+
+test('public group unread counts above 99 are shown as 99+', async ({ page }) => {
+  await login(page);
+  const group = await create(page, 'Busy public group');
+  await navigateInApp(page, '/chats');
+  const row = page.getByTestId('public-chat-item').filter({ hasText: 'Busy public group' });
+  const author = generateSecretKey();
+  const now = Math.floor(Date.now() / 1000);
+  for (let index = 0; index < 100; index += 1)
+    await publish(finalizeEvent({ kind: 9, content: `Busy ${index}`, created_at: now,
+      tags: [['a', group.address]] }, author));
+  await expect(row.getByLabel('100 unread messages')).toHaveText('99+', { timeout: 60000 });
+});

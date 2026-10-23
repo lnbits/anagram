@@ -8,7 +8,7 @@ This is an overview of the protocols Anagram uses, not a claim of full support f
 | 05  | Resolving `name@domain` identifiers to public keys.                                                                        |
 | 07  | Browser-extension login and signing.                                                                                       |
 | 11  | Displaying relay information.                                                                                              |
-| 17  | Private messages, reactions, deletions and edits.                                                                          |
+| 17  | Private messages, reactions, deletions and edits; encrypted file messages (`kind:15`) for private media.                   |
 | 19  | `nsec`, `npub`, `nprofile` and `naddr` identifiers.                                                                        |
 | 24  | Additional profile fields, such as display name, website and banner.                                                       |
 | 44  | Encrypting private messages and account data.                                                                              |
@@ -18,7 +18,7 @@ This is an overview of the protocols Anagram uses, not a claim of full support f
 | 59  | Gift-wrapping private messages and group invitations.                                                                      |
 | 65  | Relay lists for users, contacts and groups.                                                                                |
 | 78  | Encrypted account preferences, group secrets and recovery records.                                                         |
-| B7  | Blossom uploads with signed upload authorization. The server choice stays private; Anagram does not publish a server list. |
+| B7  | Blossom uploads with signed upload authorization. Private media goes, encrypted, to a separate encrypted-media server. Server choices stay private; Anagram does not publish a server list. |
 
 ## Chat protocol specs
 

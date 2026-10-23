@@ -9,6 +9,7 @@
   } from '#src/utils/themeStorage.ts';
   import {
     DEFAULT_BLOSSOM_SERVER_URL,
+    DEFAULT_PRIVATE_MEDIA_BLOSSOM_SERVER_URL,
     normalizeBlossomServerUrl,
   } from '#src/utils/blossomServer.ts';
   import { useNostrStore } from '#src/stores/nostrStore.svelte.ts';
@@ -46,12 +47,60 @@
       busy = false;
     }
   }
+  // Encrypted private media server, saved separately from the regular Blossom server.
+  let privateSaved = nostr.getPrivateMediaBlossomServerUrl(),
+    privateServer = privateSaved,
+    privateBusy = false,
+    privateError = '',
+    privateNotice = '';
+  // Reset for "Don't ask again" on the plaintext media confirmation. It never sends anything
+  // without encryption by itself.
+  let askBeforePlaintext = !nostr.isPlaintextMediaConfirmationSkipped(),
+    askBusy = false;
+  $: if (!$startup && !askBusy) askBeforePlaintext = !nostr.isPlaintextMediaConfirmationSkipped();
+  async function setAskBeforePlaintext(ask: boolean) {
+    askBusy = true;
+    privateError = '';
+    try {
+      await nostr.setPlaintextMediaConfirmationSkipped(!ask);
+    } catch {
+      privateError = $translate('mediaDataStorage.settingSaveFailed');
+    } finally {
+      askBeforePlaintext = !nostr.isPlaintextMediaConfirmationSkipped();
+      askBusy = false;
+    }
+  }
+  $: privateNormalized = normalizeBlossomServerUrl(privateServer);
+  $: if (!$startup && !privateBusy && privateServer === privateSaved) {
+    privateSaved = nostr.getPrivateMediaBlossomServerUrl();
+    privateServer = privateSaved;
+  }
+  async function persistPrivate(value: string) {
+    if (privateBusy) return;
+    privateBusy = true;
+    privateError = '';
+    privateNotice = '';
+    try {
+      privateSaved = await nostr.savePrivateMediaBlossomServerUrl(value);
+      privateServer = privateSaved;
+      privateNotice = $translate('mediaDataStorage.privateMediaServerSaved');
+    } catch {
+      privateError = $translate('mediaDataStorage.privateMediaServerSaveFailed');
+    } finally {
+      privateBusy = false;
+    }
+  }
   function sync() {
     accent = readThemeAccent();
     if (!busy && server === saved) {
       saved = nostr.getBlossomServerUrl();
       server = saved;
     }
+    if (!privateBusy && privateServer === privateSaved) {
+      privateSaved = nostr.getPrivateMediaBlossomServerUrl();
+      privateServer = privateSaved;
+    }
+    if (!askBusy) askBeforePlaintext = !nostr.isPlaintextMediaConfirmationSkipped();
   }
   onMount(() => {
     window.addEventListener('storage', sync);
@@ -136,6 +185,76 @@
     >
   </div>
 {:else}
+  <div class="settings-card media-card" data-testid="settings-private-media-card">
+    <div>
+      <h3>{$translate('mediaDataStorage.privateMediaServer')}</h3>
+      <small>{$translate('mediaDataStorage.privateMediaServerDescription')}</small>
+    </div>
+    <form
+      onsubmit={(e) => {
+        e.preventDefault();
+        if (privateNormalized && privateNormalized !== privateSaved)
+          void persistPrivate(privateNormalized);
+      }}
+    >
+      <label class="settings-field settings-field--tall"
+        ><span>{$translate('mediaDataStorage.serverUrl')}</span><input
+          data-testid="settings-private-media-server-input"
+          type="url"
+          bind:value={privateServer}
+          disabled={privateBusy || $startup}
+          spellcheck="false"
+          autocapitalize="none"
+        /></label
+      >
+      {#if !privateNormalized}<p class="error">
+          {$translate(
+            privateServer.trim()
+              ? 'mediaDataStorage.serverUrlInvalid'
+              : 'mediaDataStorage.serverUrlRequired',
+          )}
+        </p>{/if}
+      <div class="settings-actions end">
+        <button
+          type="button"
+          class="outline"
+          data-testid="settings-private-media-restore-default"
+          disabled={privateBusy ||
+            $startup ||
+            (privateServer === DEFAULT_PRIVATE_MEDIA_BLOSSOM_SERVER_URL &&
+              privateSaved === DEFAULT_PRIVATE_MEDIA_BLOSSOM_SERVER_URL)}
+          onclick={() => persistPrivate(DEFAULT_PRIVATE_MEDIA_BLOSSOM_SERVER_URL)}
+          >{$translate('mediaDataStorage.restoreDefault')}</button
+        ><button
+          class="primary"
+          data-testid="settings-private-media-save"
+          disabled={privateBusy ||
+            $startup ||
+            !privateNormalized ||
+            privateNormalized === privateSaved}>{$translate('common.save')}</button
+        >
+      </div>
+    </form>
+    <label class="settings-switch"
+      ><span>{$translate('mediaDataStorage.askBeforePlaintextMedia')}</span><input
+        type="checkbox"
+        role="switch"
+        data-testid="settings-plaintext-media-ask-toggle"
+        aria-label={$translate('mediaDataStorage.askBeforePlaintextMedia')}
+        checked={askBeforePlaintext}
+        disabled={askBusy || $startup}
+        onchange={(e) => void setAskBeforePlaintext(e.currentTarget.checked)}
+      /></label
+    >
+    <div class="settings-actions settings-caption">
+      <Icon name="lock" />{$translate('mediaDataStorage.encryptedPreference')}
+    </div>
+    {#if privateError}<p class="error" role="alert">{privateError}</p>{/if}{#if privateNotice}<p
+        role="status"
+      >
+        {privateNotice}
+      </p>{/if}
+  </div>
   <div class="settings-card media-card">
     <div>
       <h3>{$translate('mediaDataStorage.blossomServer')}</h3>

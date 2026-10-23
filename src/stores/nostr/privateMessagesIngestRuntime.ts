@@ -24,6 +24,9 @@ import { parseCallSignal } from '#src/utils/callSignal.ts';
 import {
   buildImageAttachmentPreviewText,
   extractMediaAttachmentsFromTags,
+  FILE_MESSAGE_KIND,
+  isChatMessageRumorKind,
+  parseNip17FileMessageAttachment,
 } from '#src/utils/messageAttachments.ts';
 import {
   buildEditedMessageMeta,
@@ -814,9 +817,14 @@ export function createPrivateMessagesIngestRuntime({
     let preflightChat: ChatRow | null | undefined;
     let preflightMessage:
       Awaited<ReturnType<typeof chatDataService.getMessageByEventIdOrEditReference>> | undefined;
+    // Edits are a kind 14 text convention; kind 15 file messages are never replacements.
+    const rumorEditTargetEventId =
+      rumorEvent.kind === NostrKind.PrivateDirectMessage
+        ? readMessageEditTargetEventId(rumorEvent.tags)
+        : null;
     const canReadMessageContext =
-      rumorEvent.kind === NostrKind.PrivateDirectMessage &&
-      !readMessageEditTargetEventId(rumorEvent.tags) &&
+      isChatMessageRumorKind(rumorEvent.kind) &&
+      !rumorEditTargetEventId &&
       !stagedEvents.has(rumorEvent.id);
     if (!isSelfSentMessage) {
       await Promise.all([chatDataService.init(), contactsService.init()]);
@@ -861,8 +869,8 @@ export function createPrivateMessagesIngestRuntime({
     if (preflightChat?.meta.deleted_locally === true && rumorEvent.kind !== 1014) return;
 
     if (
-      rumorEvent.kind !== NostrKind.PrivateDirectMessage ||
-      readMessageEditTargetEventId(rumorEvent.tags) ||
+      !isChatMessageRumorKind(rumorEvent.kind) ||
+      rumorEditTargetEventId ||
       stagedEvents.has(rumorEvent.id)
     ) {
       await commitTail;
@@ -1099,7 +1107,7 @@ export function createPrivateMessagesIngestRuntime({
       return;
     }
 
-    if (rumorEvent.kind !== NostrKind.PrivateDirectMessage) {
+    if (!isChatMessageRumorKind(rumorEvent.kind)) {
       logInboundEvent('drop', {
         reason: 'unsupported-rumor-kind',
         direction,
@@ -1117,6 +1125,29 @@ export function createPrivateMessagesIngestRuntime({
     }
 
     const messageText = rumorEvent.content.trim();
+    const isFileMessage = rumorEvent.kind === FILE_MESSAGE_KIND;
+    // Kind 15 rumors must carry a complete, valid set of decryption tags; anything else is dropped
+    // rather than shown as a plaintext link.
+    const fileMessageAttachment = isFileMessage
+      ? parseNip17FileMessageAttachment(messageText, rumorEvent.tags)
+      : null;
+    if (isFileMessage && !fileMessageAttachment) {
+      logInboundEvent('drop', {
+        reason: 'invalid-file-message',
+        direction,
+        ...buildInboundTraceDetails({
+          wrappedEvent,
+          rumorEvent,
+          loggedInPubkeyHex,
+          senderPubkeyHex,
+          chatPubkey,
+          relayUrls: wrappedRelayUrls,
+          recipients,
+        }),
+      });
+      return;
+    }
+
     if (!messageText) {
       logInboundEvent('drop', {
         reason: 'empty-content',
@@ -1448,17 +1479,20 @@ export function createPrivateMessagesIngestRuntime({
           },
         )
       : null;
-    const attachments = extractMediaAttachmentsFromTags(rumorEvent.tags);
-    const editTargetEventId = readMessageEditTargetEventId(rumorEvent.tags);
-    const callHistory = !resolvedGroupChatPublicKey ? callHistoryFromTags(rumorEvent.tags) : null;
-    const inlineKeyboard = keyboardFromTags(rumorEvent.tags);
+    const attachments = fileMessageAttachment
+      ? [fileMessageAttachment]
+      : extractMediaAttachmentsFromTags(rumorEvent.tags);
+    const editTargetEventId = rumorEditTargetEventId;
+    const callHistory =
+      !resolvedGroupChatPublicKey && !isFileMessage ? callHistoryFromTags(rumorEvent.tags) : null;
+    const inlineKeyboard = isFileMessage ? null : keyboardFromTags(rumorEvent.tags);
     let messageMeta: Record<string, unknown> = {
       source: 'nostr',
       ...(inlineKeyboard ? { inline_keyboard: inlineKeyboard, inline_keyboard_version: rumorEvent.id,
         inline_keyboard_chat_type: resolvedGroupChatPublicKey ? 'private' : 'dm',
         bot_command: commandFromTags(rumorEvent.tags) } : {}),
       ...(callHistory ? { call_history: callHistory } : {}),
-      kind: NostrKind.PrivateDirectMessage,
+      kind: isFileMessage ? FILE_MESSAGE_KIND : NostrKind.PrivateDirectMessage,
       wrapper_event_id: wrappedEvent.id ?? '',
       ...buildMentionMetadata(messageText, loggedInPubkeyHex),
       ...(replyPreview ? { reply: replyPreview } : {}),
@@ -1477,7 +1511,7 @@ export function createPrivateMessagesIngestRuntime({
       editTargetMessage = null;
     }
 
-    if (!editTargetMessage) {
+    if (!editTargetMessage && !isFileMessage) {
       editTargetMessage = await chatDataService.findDeletedMessageInSecond(
         chat.public_key,
         senderPubkeyHex,

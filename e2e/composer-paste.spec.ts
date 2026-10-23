@@ -13,6 +13,12 @@ test('existing image paste opens upload confirmation in private and public chats
   try {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await openDirectChatFromIdentifier(page, user.session.npub, 'My Self');
+    // Pasted media needs explicit confirmation, and cancelling it uploads nothing.
+    let uploadRequests = 0;
+    await page.route('**/upload', async (route) => {
+      uploadRequests += 1;
+      await route.abort();
+    });
     async function pasteImage() {
       await page.evaluate(async () => {
         const canvas = document.createElement('canvas');
@@ -25,7 +31,7 @@ test('existing image paste opens upload confirmation in private and public chats
       });
       const input = page.getByTestId('message-composer-input');
       await input.fill('Draft kept while pasting');
-      await input.press('Control+v');
+      await input.press('ControlOrMeta+v');
       const dialog = page.getByRole('dialog');
       await expect(dialog.getByRole('button', { name: 'Upload', exact: true })).toBeVisible();
       await expect(dialog).toContainText('image.png');
@@ -34,6 +40,8 @@ test('existing image paste opens upload confirmation in private and public chats
       await expect(dialog).toHaveCount(0);
     }
     await pasteImage();
+    expect(uploadRequests).toBe(0);
+    await expect(page.getByTestId('message-bubble')).toHaveCount(0);
     await navigateInApp(page, '/chats');
     await page.getByRole('button', { name: 'Chat options' }).click();
     await page.getByRole('button', { name: 'New public group', exact: true }).click();
@@ -44,8 +52,10 @@ test('existing image paste opens upload confirmation in private and public chats
     await pasteImage();
     await page.evaluate(() => navigator.clipboard.writeText(' plain text'));
     const input = page.getByTestId('message-composer-input');
-    await input.press('Control+v');
+    await input.press('ControlOrMeta+v');
     await expect(input).toHaveValue('Draft kept while pasting plain text');
+    // Checked again after the public group paste, so a delayed private upload would show.
+    expect(uploadRequests).toBe(0);
     expect(user.browserErrors).toEqual([]);
   } finally {
     await context.close();
@@ -80,6 +90,11 @@ test('Linux native fallback opens the existing confirmation without sending', as
       await navigator.clipboard.writeText('');
     });
     await openDirectChatFromIdentifier(page, user.session.npub, 'My Self');
+    let uploadRequests = 0;
+    await page.route('**/upload', async (route) => {
+      uploadRequests += 1;
+      await route.abort();
+    });
     const input = page.getByTestId('message-composer-input');
     await input.fill('Native caption');
     await input.press('Control+v');
@@ -89,6 +104,7 @@ test('Linux native fallback opens the existing confirmation without sending', as
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
     await expect(input).toHaveValue('Native caption');
     await expect(page.getByTestId('message-bubble')).toHaveCount(0);
+    expect(uploadRequests).toBe(0);
     await page.evaluate(() => navigator.clipboard.writeText(' plus text'));
     await input.press('Control+v');
     await expect(input).toHaveValue('Native caption plus text');

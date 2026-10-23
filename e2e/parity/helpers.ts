@@ -1,4 +1,4 @@
-import { test, expect, type Browser, type Page } from '@playwright/test';
+import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 import { finishOnboarding } from '../auth-helpers';
 export const E2E_RELAY_URL = 'ws://127.0.0.1:7777/';
@@ -38,11 +38,18 @@ export async function waitForAppBridge(page: Page) {
 export async function bootstrapUser(
   browser: Browser,
   account: TestAccount,
-  options: { relayUrls?: string[]; passiveRestore?: boolean; callMedia?: boolean } = {},
+  options: {
+    relayUrls?: string[];
+    passiveRestore?: boolean;
+    callMedia?: boolean;
+    // Runs before the app loads, e.g. to route relay sockets through the test.
+    prepareContext?: (context: BrowserContext) => Promise<void>;
+  } = {},
 ): Promise<BootstrappedUser> {
   const context = await browser.newContext(
     options.callMedia ? { permissions: ['microphone', 'camera'], ignoreHTTPSErrors: true } : {},
   );
+  await options.prepareContext?.(context);
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
   const browserErrors: string[] = [];

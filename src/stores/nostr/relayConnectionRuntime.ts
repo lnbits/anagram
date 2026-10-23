@@ -52,6 +52,7 @@ interface RelayConnectionRuntimeDeps {
   relayConnectRetryStateByUrl: Map<string, RelayConnectRetryState>;
   relayConnectPromises: Map<string, Promise<void>>;
   queueOutboundMessageReplay: (relayUrl: string) => void;
+  recoverLiveSubscriptions?: () => void;
   setCachedSigner: (signer: NostrSigner | null) => void;
   setCachedSignerSessionKey: (sessionKey: string | null) => void;
   setConnectPromise: (promise: Promise<void> | null) => void;
@@ -253,6 +254,7 @@ export function createRelayConnectionRuntime({
   relayConnectRetryStateByUrl,
   relayConnectPromises,
   queueOutboundMessageReplay,
+  recoverLiveSubscriptions,
   setCachedSigner,
   setCachedSignerSessionKey,
   setConnectPromise,
@@ -464,6 +466,8 @@ export function createRelayConnectionRuntime({
       logRelayLifecycle('connect', relay);
       if (getLoggedInPublicKeyHex()) {
         queueOutboundMessageReplay(relay.url);
+        // A relay restart can close every relay of a live subscription without any healing run.
+        recoverLiveSubscriptions?.();
       }
       if (isPrivateMessagesSubscriptionRelayTracked(relay.url)) {
         queuePrivateMessagesWatchdog(0);

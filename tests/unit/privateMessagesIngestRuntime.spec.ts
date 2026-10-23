@@ -886,6 +886,58 @@ describe('privateMessagesIngestRuntime', () => {
     expect(deps.queuePrivateMessagesUiRefresh).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['a visible chat', true, '', true],
+    ['a background chat', false, '', false],
+    ['restored history behind the read boundary', true, '2023-11-14T22:13:21.000Z', false],
+  ])('marks a persisted incoming message read for %s', async (_, visible, seenAt, marks) => {
+    const deps = { ...createDeps(), markVisibleChatRead: vi.fn() };
+    const runtime = createPrivateMessagesIngestRuntime(deps);
+    const chatPublicKey = 'a'.repeat(64);
+    deps.chatStore.visibleChatId = visible ? chatPublicKey : null;
+    deps.resolveIncomingChatInboxStateValue.mockReturnValue('accepted');
+    ndkMocks.giftUnwrap.mockResolvedValue(
+      makeRumorEvent({ recipientPubkey: 'b'.repeat(64), senderPubkey: chatPublicKey }),
+    );
+    serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue({
+      id: chatPublicKey,
+      public_key: chatPublicKey,
+      type: 'user',
+      name: 'Alice',
+      last_message: '',
+      last_message_at: '',
+      unread_count: 0,
+      meta: {
+        inbox_state: 'accepted',
+        accepted_at: '2023-11-14T22:13:19.000Z',
+        ...(seenAt ? { last_seen_received_activity_at: seenAt } : {}),
+      },
+    });
+    serviceMocks.chatDataService.createMessage.mockImplementation(async () => {
+      // Reading must wait for the durable row; markAsRead derives the cursor from storage.
+      expect(deps.markVisibleChatRead).not.toHaveBeenCalled();
+      return {
+        id: 44,
+        chat_public_key: chatPublicKey,
+        author_public_key: chatPublicKey,
+        created_at: '2023-11-14T22:13:20.000Z',
+        event_id: 'rumor-event',
+        meta: {},
+      };
+    });
+
+    runtime.queuePrivateMessageIngestion(makeWrappedEvent(), 'b'.repeat(64));
+    await runtime.getPrivateMessagesIngestQueue();
+
+    expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_activity: expect.objectContaining({ unreadCount: visible ? 0 : 1 }),
+      }),
+    );
+    if (marks) expect(deps.markVisibleChatRead).toHaveBeenCalledExactlyOnceWith(chatPublicKey);
+    else expect(deps.markVisibleChatRead).not.toHaveBeenCalled();
+  });
+
   it('uses the local chat name for incoming foreground notification presentation', async () => {
     const deps = createDeps();
     const runtime = createPrivateMessagesIngestRuntime(deps);

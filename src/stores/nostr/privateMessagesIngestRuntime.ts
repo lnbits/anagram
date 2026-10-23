@@ -59,6 +59,7 @@ export function createPrivateMessagesIngestRuntime({
   logInboundEvent,
   logInvalidIncomingEpochNumber,
   logSubscription,
+  markVisibleChatRead,
   normalizeEventId,
   normalizeThrottleMs,
   normalizeTimestamp,
@@ -1766,6 +1767,15 @@ export function createPrivateMessagesIngestRuntime({
       }
 
       await useMessageStore().upsertPersistedMessage(nextMessageRow);
+      // A new message lands on screen; advance and sync the read cursor like a manual read.
+      if (
+        !isSelfSentMessage &&
+        !isBlockedChat &&
+        isAfterSeenBoundary &&
+        chatStore.visibleChatId === chat.public_key
+      ) {
+        markVisibleChatRead?.(chat.public_key);
+      }
     })();
     commitTail = commit.then(() => undefined);
     // The tail rejection is observed here as well as by the event's durable result.

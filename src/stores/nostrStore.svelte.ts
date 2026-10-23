@@ -289,6 +289,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
   let queuePrivateMessagesWatchdogRuntime: (delayMs?: number) => void = () => {};
   let queueOutboundMessageReplayRuntime: (reason: string, delayMs?: number) => void = () => {};
   let notifyOutboundMessageReplayRelayConnectedRuntime: (relayUrl: string) => void = () => {};
+  let recoverContactCursorSubscriptionRuntime: () => Promise<void> = async () => {};
   let notifyReconnectHealingBrowserOnlineRuntime: () => void = () => {};
   let notifyReconnectHealingVisibilityHiddenRuntime: () => void = () => {};
   let notifyReconnectHealingVisibilityRegainRuntime: () => void = () => {};
@@ -970,21 +971,26 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     setVisibleChatId: (chatId) => {
       const previous = chatStore.visibleChatId;
       chatStore.setVisibleChatId(chatId);
-      if (chatId && chatId !== previous) {
-        void chatStore
-          .markAsRead(chatId)
-          .then((cursor) => {
-            if (cursor) scheduleContactCursorPublish(chatId, cursor);
-          })
-          .catch(() => {
-            /* A later focus or incoming message retries the read cursor. */
-          });
-      }
+      if (chatId && chatId !== previous) markVisibleChatRead(chatId, false);
     },
   });
   resetAppLifecycleRuntimeStateRuntime = resetAppLifecycleRuntimeStateImpl;
   setAppLifecycleRouteChatIdRuntime = setAppLifecycleRouteChatIdImpl;
   startAppLifecycleRuntimeRuntime = startAppLifecycleRuntimeImpl;
+
+  // Opening a chat publishes its cursor at once; messages landing in it defer theirs.
+  function markVisibleChatRead(chatId: string, deferred: boolean): void {
+    const account = getLoggedInPublicKeyHex();
+    void chatStore
+      .markAsRead(chatId)
+      .then((cursor) => {
+        if (cursor && account === getLoggedInPublicKeyHex())
+          scheduleContactCursorPublish(chatId, cursor, { deferred });
+      })
+      .catch(() => {
+        /* A later focus or incoming message retries the read cursor. */
+      });
+  }
 
   const {
     buildInboundTraceDetails,
@@ -1112,6 +1118,9 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     },
     queueOutboundMessageReplay: (relayUrl) => {
       notifyOutboundMessageReplayRelayConnectedRuntime(relayUrl);
+    },
+    recoverLiveSubscriptions: () => {
+      void recoverContactCursorSubscriptionRuntime();
     },
     relayAuthFailureListenerUrls,
     relayConnectRetryBaseDelayMs: RELAY_CONNECT_RETRY_BASE_DELAY_MS,
@@ -1451,6 +1460,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     logInboundEvent,
     logInvalidIncomingEpochNumber,
     logSubscription,
+    markVisibleChatRead: (chatId) => markVisibleChatRead(chatId, true),
     normalizeEventId,
     normalizeThrottleMs,
     normalizeTimestamp,
@@ -1927,7 +1937,10 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     restoreGroupIdentitySecrets,
     restoreGroupMembershipRoster,
     restorePrivatePreferences,
+    recoverContactCursorSubscription,
+    resetContactCursorSyncState,
     scheduleContactCursorPublish,
+    subscribeContactCursorUpdates,
   } = createPrivateStateRuntime({
     createRecoverableGroup: groupRecovery.create,
     beginStartupStep,
@@ -1982,6 +1995,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     scheduleChatChecks,
     sha256Hex,
     shouldApplyPrivateContactListEvent,
+    subscribeWithReqLogging,
     toComparableTimestamp,
     toIsoTimestampFromUnix,
     updateStoredEventSinceFromCreatedAt,
@@ -1990,6 +2004,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
   publishGroupIdentitySecretRuntime = publishGroupIdentitySecretImpl;
   publishGroupMembershipFollowSetRuntime = publishGroupMembershipFollowSetImpl;
   publishGroupMembershipRosterFollowSetRuntime = publishGroupMembershipRosterFollowSetImpl;
+  recoverContactCursorSubscriptionRuntime = recoverContactCursorSubscription;
 
   const { getIrohRelays, getIrohRelaySettings, saveIrohRelaySettings } =
     createIrohSettingsRuntime({
@@ -2093,6 +2108,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     setSyncRecentChatContactsPromise: (promise) => {
       syncRecentChatContactsPromise = promise;
     },
+    subscribeContactCursorUpdates,
     subscribeContactProfileUpdates,
     subscribeContactRelayListUpdates,
     subscribeGroupMembershipRosterUpdates: (seedRelayUrls) =>
@@ -2212,6 +2228,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     set relayStatusVersion(value) {
       relayStatusVersion = value;
     },
+    resetContactCursorSyncState,
     resetContactSubscriptionsRuntimeState,
     resetEventSinceForFreshLogin,
     resetCalls: () => {
@@ -2379,6 +2396,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     queuePrivateMessagesWatchdog: (delayMs) => {
       queuePrivateMessagesWatchdogRuntime(delayMs);
     },
+    recoverLiveSubscriptions: () => recoverContactCursorSubscription(),
     refreshDeveloperPendingQueues: () => refreshDeveloperPendingQueuesRuntime(),
     refreshDirectMessages: (options) =>
       refreshPrivateMessagesLiveSubscriptionForReconnect({
@@ -2392,6 +2410,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
         subscribePrivateContactListUpdates(relayUrls),
         subscribeGroupMembershipRosterUpdatesRuntime(relayUrls),
         subscribeContactProfileUpdates(relayUrls),
+        subscribeContactCursorUpdates(relayUrls),
       ]);
     },
     setIsReconnectHealing: (value) => {

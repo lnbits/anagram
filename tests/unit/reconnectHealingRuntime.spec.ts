@@ -59,6 +59,7 @@ describe('reconnectHealingRuntime', () => {
         })),
     );
     const restartSessionSubscriptions = vi.fn(async (_relayUrls: string[]) => {});
+    const recoverLiveSubscriptions = vi.fn(async () => {});
     const waitForPrivateMessagesIngestQueue = vi.fn(async () => {});
     let isRestoringStartupState = options.isRestoringStartupState ?? false;
 
@@ -76,6 +77,7 @@ describe('reconnectHealingRuntime', () => {
       },
       queueOutboundMessageReplay,
       queuePrivateMessagesWatchdog,
+      recoverLiveSubscriptions,
       refreshDeveloperPendingQueues,
       refreshDirectMessages,
       restartSessionSubscriptions,
@@ -114,6 +116,7 @@ describe('reconnectHealingRuntime', () => {
       },
       queueOutboundMessageReplay,
       queuePrivateMessagesWatchdog,
+      recoverLiveSubscriptions,
       refreshDeveloperPendingQueues,
       refreshDirectMessages,
       restartSessionSubscriptions,
@@ -253,6 +256,33 @@ describe('reconnectHealingRuntime', () => {
       'sync.finishing',
       null,
     ]);
+  });
+
+  it.each(['browser-online', 'visibility-regain', 'window-focus', 'relay-connected'] as const)(
+    'recovers closed live subscriptions on %s without restarting healthy ones',
+    async (reason) => {
+      const { recoverLiveSubscriptions, restartSessionSubscriptions, runtime } = createRuntime();
+
+      const runPromise = runtime.runReconnectHealing(reason);
+      await runQueuedTimersForStatusSteps(8);
+      await runPromise;
+
+      expect(recoverLiveSubscriptions).toHaveBeenCalledTimes(1);
+      expect(restartSessionSubscriptions).not.toHaveBeenCalled();
+    },
+  );
+
+  it('leaves subscription restarts to the session resume path', async () => {
+    const { recoverLiveSubscriptions, restartSessionSubscriptions, runtime } = createRuntime();
+
+    const runPromise = runtime.runReconnectHealing('session-resume', {
+      sessionRelayUrls: ['wss://relay.one/'],
+    });
+    await runQueuedTimersForStatusSteps(8);
+    await runPromise;
+
+    expect(restartSessionSubscriptions).toHaveBeenCalledTimes(1);
+    expect(recoverLiveSubscriptions).not.toHaveBeenCalled();
   });
 
   it('waits for live private-message EOSE after a recreated subscription', async () => {

@@ -87,6 +87,7 @@ function createRuntimeHarness(
   const relayAuthFailureListenerUrls = new Set<string>();
   const queueOutboundMessageReplay = vi.fn();
   const queuePrivateMessagesWatchdog = vi.fn();
+  const recoverLiveSubscriptions = vi.fn();
   const pool = {
     getRelay: vi.fn(() => relay),
     on: vi.fn(),
@@ -137,6 +138,7 @@ function createRuntimeHarness(
     ndk: ndk as never,
     queueOutboundMessageReplay,
     queuePrivateMessagesWatchdog,
+    recoverLiveSubscriptions,
     relayAuthFailureListenerUrls,
     relayConnectRetryBaseDelayMs: 10000,
     relayConnectRetryJitterRatio: 0,
@@ -164,6 +166,7 @@ function createRuntimeHarness(
     queuePrivateMessagesWatchdog,
     queueOutboundMessageReplay,
     rawConnect,
+    recoverLiveSubscriptions,
     relay,
     relayConnectPromises,
     relayConnectRetryStateByUrl,
@@ -364,6 +367,26 @@ describe('relayConnectionRuntime', () => {
     expect(queueOutboundMessageReplay).toHaveBeenCalledTimes(1);
     expect(queuePrivateMessagesWatchdog).toHaveBeenCalledWith(0);
   });
+
+  it.each([
+    ['logged in', 'f'.repeat(64), 1],
+    ['logged out', null, 0],
+  ] as const)(
+    'asks live subscriptions to recover when a relay reconnects while %s',
+    async (_label, loggedInPublicKeyHex, expectedCalls) => {
+      const { pool, recoverLiveSubscriptions, relay, runtime } = createRuntimeHarness({
+        loggedInPublicKeyHex,
+      });
+
+      await runtime.ensureRelayConnections(['wss://relay.example']);
+      const relayConnectHandler = pool.on.mock.calls.find(
+        ([eventName]) => eventName === 'relay:connect',
+      )?.[1] as ((nextRelay: FakeRelay) => void) | undefined;
+      relayConnectHandler?.(relay);
+
+      expect(recoverLiveSubscriptions).toHaveBeenCalledTimes(expectedCalls);
+    },
+  );
 
   it('becomes usable as soon as the first requested relay connects', async () => {
     const { rawConnect, relay, runtime } = createRuntimeHarness({

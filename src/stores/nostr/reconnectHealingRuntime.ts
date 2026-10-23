@@ -55,6 +55,7 @@ interface ReconnectHealingRuntimeDeps {
     options?: RefreshDirectMessagesOptions,
   ) => Promise<RefreshDirectMessagesResult>;
   restartSessionSubscriptions: (relayUrls: string[]) => Promise<void>;
+  recoverLiveSubscriptions?: () => Promise<void>;
   setIsReconnectHealing: (value: boolean) => void;
   setReconnectHealingStatusLabel: (value: string | null) => void;
   waitForPrivateMessagesIngestQueue: () => Promise<void>;
@@ -152,6 +153,7 @@ export function createReconnectHealingRuntime(state: ReconnectHealingRuntimeDeps
     getPrivateMessagesLiveEoseAt,
     getVisibleChatTarget,
     queuePrivateMessagesWatchdog,
+    recoverLiveSubscriptions,
     refreshDeveloperPendingQueues,
     refreshDirectMessages,
     restartSessionSubscriptions,
@@ -543,6 +545,9 @@ export function createReconnectHealingRuntime(state: ReconnectHealingRuntimeDeps
         await restartSessionSubscriptions(
           inputSanitizerService.normalizeStringArray(options.sessionRelayUrls ?? []),
         );
+      } else {
+        // Sleep or a network loss can close every relay of a live subscription.
+        await recoverLiveSubscriptions?.();
       }
 
       await showReconnectHealingStatusLabel(

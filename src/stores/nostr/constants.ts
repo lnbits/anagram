@@ -37,7 +37,13 @@ export const GROUP_INVITE_REQUEST_MESSAGE = 'This is an invitation to a group.';
 export const INVITATION_PROOF_TAG = 'invitation_proof';
 export const CONTACT_CURSOR_VERSION = '0.1';
 export const CONTACT_CURSOR_PUBLISH_DELAY_MS = 5000;
+// Automatic reads wait a random extra delay so relays cannot time them against message arrival.
+export const CONTACT_CURSOR_PUBLISH_JITTER_MS = 3000;
+// Publishing waits at most this long for the live cursor subscription to finish its replay.
+export const CONTACT_CURSOR_SYNC_TIMEOUT_MS = 4000;
 export const CONTACT_CURSOR_FETCH_BATCH_SIZE = 100;
+// Live cursor sync overlaps the startup fetch and tolerates modest device clock skew.
+export const CONTACT_CURSOR_LIVE_LOOKBACK_SECONDS = 600;
 export const LAST_SEEN_RECEIVED_ACTIVITY_AT_META_KEY = 'last_seen_received_activity_at';
 export const PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS = 2000;
 export const PRIVATE_MESSAGES_STARTUP_LIVE_LOOKBACK_SECONDS = 2 * 24 * 60 * 60;

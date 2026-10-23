@@ -1,4 +1,5 @@
 import type NostrClient from '#src/lib/nostr/client.ts';
+import type { NostrFilter, NostrSubscriptionOptions } from '#src/lib/nostr/client.ts';
 import {
   ClientEvent,
   NostrKind,
@@ -12,7 +13,11 @@ import { contactsService } from '#src/services/contactsService.ts';
 import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
 import {
   CONTACT_CURSOR_FETCH_BATCH_SIZE,
+  CONTACT_CURSOR_LIVE_LOOKBACK_SECONDS,
   CONTACT_CURSOR_PUBLISH_DELAY_MS,
+  CONTACT_CURSOR_PUBLISH_JITTER_MS,
+  CONTACT_CURSOR_SYNC_TIMEOUT_MS,
+  CONTACT_CURSOR_VERSION,
   GROUP_IDENTITY_SECRET_TAG,
   GROUP_MEMBERS_FOLLOW_SET_D_TAG,
   GROUP_SHARED_ROSTER_FOLLOW_SET_D_TAG,
@@ -20,6 +25,10 @@ import {
   PRIVATE_PREFERENCES_D_TAG,
   PRIVATE_PREFERENCES_KIND,
 } from '#src/stores/nostr/constants.ts';
+import {
+  createDesiredSubscriptions,
+  subscriptionSignature,
+} from '#src/stores/nostr/desiredSubscriptions.ts';
 import {
   createReadyRelaySet,
   fetchEventsWithRelayTimeout,
@@ -31,10 +40,12 @@ import type {
   CreateGroupChatInput,
   CreateGroupChatResult,
   GroupIdentitySecretContent,
+  MessageRow,
   PrivatePreferences,
   RelaySaveStatus,
 } from '#src/stores/nostr/types.ts';
 import {
+  normalizeRelayStatusUrlsValue,
   resolveCurrentGroupChatEpochEntryValue,
   resolveGroupPublishRelayUrlsValue,
   resolveGroupReadRelayUrlsValue,
@@ -77,7 +88,7 @@ interface PrivateStateRuntimeDeps {
   buildFreshPrivatePreferences: (existing?: Record<string, unknown>) => PrivatePreferences;
   buildRelaySaveStatus: (relayStatuses: any[]) => RelaySaveStatus;
   bumpContactListVersion: () => void;
-  chatStore: { reload: () => Promise<void> };
+  chatStore: { reload: () => Promise<void>; refreshChat: (chatId: string) => Promise<void> };
   chunkValues: <T>(values: T[], chunkSize: number) => T[][];
   compareReplaceableEventState: (
     first: Pick<ClientEvent, 'created_at' | 'id'> | null | undefined,
@@ -170,6 +181,17 @@ interface PrivateStateRuntimeDeps {
   scheduleChatChecks: (chatIds?: string[], options?: { allChats?: boolean }) => void;
   sha256Hex: (value: string) => Promise<string>;
   shouldApplyPrivateContactListEvent: (event: ClientEvent) => boolean;
+  subscribeWithReqLogging: (
+    label: string,
+    requestLabel: string,
+    filters: NostrFilter | NostrFilter[],
+    options: NostrSubscriptionOptions & {
+      onEvent?: (event: ClientEvent) => void;
+      onEose?: () => void;
+      onClose?: () => void;
+    },
+    details?: Record<string, unknown>,
+  ) => ReturnType<NostrClient['subscribe']>;
   toComparableTimestamp: (value: string | null | undefined) => number;
   toIsoTimestampFromUnix: (value: number | undefined) => string;
   updateStoredEventSinceFromCreatedAt: (value: unknown) => void;
@@ -200,6 +222,7 @@ export function createPrivateStateRuntime({
   ensureRelayConnections,
   failStartupStep,
   fetchContactPreviewByPublicKey,
+  getFilterSince,
   getLoggedInPublicKeyHex,
   getStartupStepSnapshot,
   ndk,
@@ -221,12 +244,46 @@ export function createPrivateStateRuntime({
   restoreState,
   scheduleChatChecks,
   sha256Hex,
+  subscribeWithReqLogging,
   toComparableTimestamp,
   toIsoTimestampFromUnix,
   updateStoredEventSinceFromCreatedAt,
   writePrivatePreferencesToStorage,
 }: PrivateStateRuntimeDeps) {
   const lastReplaceableCreatedAtByStream = new Map<string, number>();
+  // Newest cursor per contact known to be on relays, whether restored, received live or
+  // published here. Publishing never goes below it, so older devices cannot rewind reads.
+  const knownContactCursors = new Map<string, ContactCursorState>();
+  // Newest cursor event seen per contact, by created_at. Relays keep the newest event, so
+  // this is our best view of what they serve; it lets devices heal a buried newer cursor.
+  const latestContactCursorEvents = new Map<
+    string,
+    { cursor: ContactCursorState; createdAt: number }
+  >();
+  const contactCursorPublishQueues = new Map<string, Promise<void>>();
+  const deferredContactCursorPublishes = new Set<string>();
+  const contactCursorSubscriptions = createDesiredSubscriptions();
+  // Last cursor event handled per d-tag. Relays keep one event per d-tag, so replays and the
+  // echo of our own publish repeat the cached id and skip decryption.
+  const contactCursorEvents = new Map<string, { id: string; cursor: ContactCursorContent }>();
+  let contactCursorDTagIndex: {
+    secret: string;
+    contacts: Map<string, string>;
+    publicKeys: Set<string>;
+  } | null = null;
+  let contactCursorApplyQueue = Promise.resolve();
+  let contactCursorGeneration = 0;
+  let contactCursorSince = 0;
+  // Every relay in `relays` finished replaying its history and then stayed subscribed, so later
+  // subscriptions to only those relays need events from `since` on. Other relays start from
+  // `contactCursorSince`, as they never delivered their history here.
+  let contactCursorResume: { relays: string[]; since: number } | null = null;
+  // A cursor failed to apply. Until a replay from `contactCursorSince` starts, no resume point
+  // is recorded, so that replay delivers the event again.
+  let contactCursorApplyFailed = false;
+  // The open subscription's filter, reused so a repeated call does not restart it.
+  let contactCursorLiveFilter: { relays: string[]; since: number } | null = null;
+  let contactCursorSeedRelayUrls: string[] | null = null;
 
   function allocateReplaceableCreatedAt(streamKey: string): number {
     const nowInSeconds = Math.floor(Date.now() / 1000);
@@ -1866,6 +1923,7 @@ export function createPrivateStateRuntime({
   async function applyContactCursorStateToContact(
     contact: ContactRecord,
     cursor: ContactCursorContent,
+    updatedMessageRows?: MessageRow[],
   ): Promise<boolean> {
     const normalizedContactPubkey = inputSanitizerService.normalizeHexKey(contact.public_key);
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
@@ -1873,6 +1931,12 @@ export function createPrivateStateRuntime({
       return false;
     }
 
+    // Remembered once stored, so a failed apply is retried when relays replay the event.
+    const rememberApplied = () =>
+      rememberContactCursor(normalizedContactPubkey, {
+        at: cursor.last_seen_incoming_activity_at,
+        eventId: normalizeEventId(cursor.last_seen_incoming_activity_event_id),
+      });
     let didChange = false;
     const contactMeta =
       contact.meta && typeof contact.meta === 'object' && !Array.isArray(contact.meta)
@@ -1918,6 +1982,7 @@ export function createPrivateStateRuntime({
 
     const chatRow = await chatDataService.getChatByPublicKey(normalizedContactPubkey);
     if (!chatRow) {
+      rememberApplied();
       return didChange;
     }
 
@@ -2006,10 +2071,11 @@ export function createPrivateStateRuntime({
           continue;
         }
 
-        await chatDataService.updateMessageMeta(
+        const updatedRow = await chatDataService.updateMessageMeta(
           messageRow.id,
           buildMetaWithReactions(messageRow.meta, nextReactions),
         );
+        if (updatedRow) updatedMessageRows?.push(updatedRow);
         didChange = true;
       }
 
@@ -2035,6 +2101,7 @@ export function createPrivateStateRuntime({
       scheduleChatChecks([normalizedContactPubkey]);
     }
 
+    rememberApplied();
     return didChange;
   }
 
@@ -2120,44 +2187,412 @@ export function createPrivateStateRuntime({
     return restoreState.restoreContactCursorStatePromise;
   }
 
+  function rememberContactCursor(contactPublicKey: string, cursor: ContactCursorState): void {
+    if (compareContactCursorState(knownContactCursors.get(contactPublicKey), cursor) < 0) {
+      knownContactCursors.set(contactPublicKey, cursor);
+    }
+  }
+
+  function isCurrentContactCursorSession(account: string, generation: number): boolean {
+    return generation === contactCursorGeneration && getLoggedInPublicKeyHex() === account;
+  }
+
+  function observeContactCursorEvent(
+    contactPublicKey: string,
+    cursor: ContactCursorState,
+    createdAt: number,
+  ): void {
+    const latest = latestContactCursorEvents.get(contactPublicKey);
+    // Relays break created_at ties by event id, so a tie keeps the older cursor to stay safe.
+    if (
+      !latest ||
+      createdAt > latest.createdAt ||
+      (createdAt === latest.createdAt && compareContactCursorState(cursor, latest.cursor) < 0)
+    ) {
+      latestContactCursorEvents.set(contactPublicKey, { cursor, createdAt });
+    }
+  }
+
+  async function waitForContactCursorSync(): Promise<void> {
+    // EOSE means each relay sent what it stores, not that relays agree. The wait is bounded,
+    // so a relay that never sends EOSE delays a publish but cannot block it.
+    await contactCursorSubscriptions.waitForEose(CONTACT_CURSOR_SYNC_TIMEOUT_MS).catch(() => {});
+  }
+
+  async function readKnownContactCursor(
+    contactPublicKey: string,
+  ): Promise<ContactCursorState | null> {
+    await contactsService.init();
+    const contactMeta = (await contactsService.getContactByPublicKey(contactPublicKey))?.meta;
+    const storedAt = normalizeTimestamp(contactMeta?.last_seen_incoming_activity_at);
+    const stored = storedAt
+      ? {
+          at: storedAt,
+          eventId: normalizeEventId(contactMeta?.last_seen_incoming_activity_event_id),
+        }
+      : null;
+    const known = knownContactCursors.get(contactPublicKey) ?? null;
+    return compareContactCursorState(known, stored) >= 0 ? known : stored;
+  }
+
   async function publishContactCursor(
     contactPublicKey: string,
     cursor: ContactCursorState,
     seedRelayUrls: string[] = [],
+    options: { republish?: boolean } = {},
   ): Promise<void> {
     const normalizedContactPublicKey = inputSanitizerService.normalizeHexKey(contactPublicKey);
-    if (!normalizedContactPublicKey || !normalizeTimestamp(cursor.at)) {
+    const account = getLoggedInPublicKeyHex();
+    if (!normalizedContactPublicKey || !normalizeTimestamp(cursor.at) || !account) {
       return;
     }
 
-    const preferences = await ensurePrivatePreferences({
-      publishIfCreated: true,
-    });
-    const dTag = await sha256Hex(`${preferences.contactSecret}${normalizedContactPublicKey}`);
-    const relayUrls = await resolveLoggedInPublishRelayUrls(seedRelayUrls);
-    if (relayUrls.length === 0) {
-      throw new Error('Cannot publish contact cursor without at least one relay.');
+    // One publish per contact at a time, so created_at order always matches cursor order.
+    const generation = contactCursorGeneration;
+    const previous = contactCursorPublishQueues.get(normalizedContactPublicKey);
+    const next = (previous ?? Promise.resolve())
+      .catch(() => {})
+      .then(async () => {
+        // A startup restore or live replay may still be applying a newer cursor from another
+        // device. Waiting for them keeps a stale device from replacing it on relays.
+        await restoreState.restoreContactCursorStatePromise?.catch(() => {});
+        await waitForContactCursorSync();
+        if (!isCurrentContactCursorSession(account, generation)) {
+          return;
+        }
+
+        const known = await readKnownContactCursor(normalizedContactPublicKey);
+        const order = compareContactCursorState(known, cursor);
+        if (order > 0 || (order === 0 && !options.republish)) {
+          return;
+        }
+        // A republish is redundant once relays serve this cursor, e.g. another device healed first.
+        const latest = latestContactCursorEvents.get(normalizedContactPublicKey);
+        if (options.republish && latest && compareContactCursorState(latest.cursor, cursor) >= 0) {
+          return;
+        }
+
+        const preferences = await ensurePrivatePreferences({
+          publishIfCreated: true,
+        });
+        const dTag = await sha256Hex(`${preferences.contactSecret}${normalizedContactPublicKey}`);
+        const relayUrls = await resolveLoggedInPublishRelayUrls(seedRelayUrls);
+        if (relayUrls.length === 0) {
+          throw new Error('Cannot publish contact cursor without at least one relay.');
+        }
+
+        await ensureRelayConnections(relayUrls);
+        const user = await ensureLoggedInSignerUser();
+        const content = await encryptContactCursorContent(cursor);
+        if (!isCurrentContactCursorSession(account, generation)) {
+          return;
+        }
+
+        const createdAt = allocateReplaceableCreatedAt(
+          `cursor:${account}:${normalizedContactPublicKey}`,
+        );
+        const cursorEvent = new ClientEvent(ndk, {
+          kind: PRIVATE_PREFERENCES_KIND,
+          created_at: createdAt,
+          pubkey: user.pubkey,
+          content,
+          tags: [['d', dTag]],
+        });
+
+        const relaySet = NostrRelaySet.fromRelayUrls(relayUrls, ndk, false);
+        await cursorEvent.publishReplaceable(relaySet);
+        updateStoredEventSinceFromCreatedAt(cursorEvent.created_at);
+        if (!isCurrentContactCursorSession(account, generation)) {
+          return;
+        }
+
+        rememberContactCursor(normalizedContactPublicKey, cursor);
+        observeContactCursorEvent(normalizedContactPublicKey, cursor, createdAt);
+        if (cursorEvent.id) {
+          contactCursorEvents.set(dTag, {
+            id: cursorEvent.id,
+            cursor: {
+              version: CONTACT_CURSOR_VERSION,
+              last_seen_incoming_activity_at: cursor.at,
+              last_seen_incoming_activity_event_id: cursor.eventId ?? null,
+            },
+          });
+        }
+      });
+    contactCursorPublishQueues.set(normalizedContactPublicKey, next);
+    try {
+      await next;
+    } finally {
+      if (contactCursorPublishQueues.get(normalizedContactPublicKey) === next) {
+        contactCursorPublishQueues.delete(normalizedContactPublicKey);
+      }
     }
-
-    await ensureRelayConnections(relayUrls);
-    const user = await ensureLoggedInSignerUser();
-
-    const cursorEvent = new ClientEvent(ndk, {
-      kind: PRIVATE_PREFERENCES_KIND,
-      created_at: Math.floor(Date.now() / 1000),
-      pubkey: user.pubkey,
-      content: await encryptContactCursorContent(cursor),
-      tags: [['d', dTag]],
-    });
-
-    const relaySet = NostrRelaySet.fromRelayUrls(relayUrls, ndk, false);
-    await cursorEvent.publishReplaceable(relaySet);
-    updateStoredEventSinceFromCreatedAt(cursorEvent.created_at);
   }
 
+  async function resolveContactCursorDTag(dTag: string): Promise<string | null> {
+    const secret = readPrivatePreferencesFromStorage()?.contactSecret ?? '';
+    if (!secret) {
+      return null;
+    }
+
+    if (contactCursorDTagIndex?.secret !== secret) {
+      contactCursorDTagIndex = { secret, contacts: new Map(), publicKeys: new Set() };
+    }
+    const index = contactCursorDTagIndex;
+    const indexed = index.contacts.get(dTag);
+    if (indexed) {
+      return indexed;
+    }
+
+    // Contacts can be added at any time, so an unknown d-tag hashes only contacts not yet
+    // indexed. Other apps' kind 30078 events then cost one contact listing, not a hash each.
+    await contactsService.init();
+    for (const contact of await contactsService.listContacts()) {
+      const contactPublicKey = inputSanitizerService.normalizeHexKey(contact.public_key);
+      if (!contactPublicKey || index.publicKeys.has(contactPublicKey)) {
+        continue;
+      }
+
+      const contactDTag = await deriveContactCursorDTag(contactPublicKey);
+      if (contactDTag) {
+        index.contacts.set(contactDTag, contactPublicKey);
+        index.publicKeys.add(contactPublicKey);
+      }
+    }
+    return index.contacts.get(dTag) ?? null;
+  }
+
+  async function applyLiveContactCursorEvent(
+    event: ClientEvent,
+    account: string,
+    generation: number,
+  ): Promise<void> {
+    const dTag = event.getMatchingTags('d')[0]?.[1]?.trim();
+    if (
+      !dTag ||
+      dTag === PRIVATE_PREFERENCES_D_TAG ||
+      event.getMatchingTags('t').some((tag) => tag[1] === GROUP_IDENTITY_SECRET_TAG) ||
+      inputSanitizerService.normalizeHexKey(event.pubkey ?? '') !== account
+    ) {
+      return;
+    }
+
+    const contactPublicKey = await resolveContactCursorDTag(dTag);
+    if (!contactPublicKey || !isCurrentContactCursorSession(account, generation)) {
+      return;
+    }
+
+    const cached = event.id ? contactCursorEvents.get(dTag) : undefined;
+    let cursor: ContactCursorContent | null =
+      cached && cached.id === event.id ? cached.cursor : null;
+    if (!cursor) {
+      try {
+        cursor = await decryptContactCursorContent(event.content);
+      } catch (error) {
+        console.warn('Failed to decrypt live contact cursor event', error);
+        return;
+      }
+    }
+    const contact = cursor ? await contactsService.getContactByPublicKey(contactPublicKey) : null;
+    if (!cursor || !contact || !isCurrentContactCursorSession(account, generation)) {
+      return;
+    }
+    if (event.id) {
+      contactCursorEvents.set(dTag, { id: event.id, cursor });
+    }
+
+    const eventCreatedAt = event.created_at ?? 0;
+    updateStoredEventSinceFromCreatedAt(eventCreatedAt);
+    // A later publish from this device must replace this event even across clock skew.
+    const streamKey = `cursor:${account}:${contactPublicKey}`;
+    lastReplaceableCreatedAtByStream.set(
+      streamKey,
+      Math.max(lastReplaceableCreatedAtByStream.get(streamKey) ?? 0, eventCreatedAt),
+    );
+    const cursorState = {
+      at: cursor.last_seen_incoming_activity_at,
+      eventId: normalizeEventId(cursor.last_seen_incoming_activity_event_id),
+    };
+    observeContactCursorEvent(contactPublicKey, cursorState, eventCreatedAt);
+    // Our own echo, a replay or a delayed event cannot move the read state, so skip the
+    // chat and reaction scans for cursors this device already applied or published.
+    const updatedMessageRows: MessageRow[] = [];
+    const didChange =
+      compareContactCursorState(cursorState, knownContactCursors.get(contactPublicKey)) > 0 &&
+      (await applyContactCursorStateToContact(contact, cursor, updatedMessageRows));
+
+    // A stale device, a same-second publish or a skewed clock can leave relays serving an older
+    // cursor than one known here. Only the newest event counts, so delayed events are ignored,
+    // and only a device holding a strictly newer cursor answers. Cursors are totally ordered,
+    // so the newest cursor ends up newest on relays and the exchange settles.
+    const latest = latestContactCursorEvents.get(contactPublicKey);
+    const known = await readKnownContactCursor(contactPublicKey);
+    if (
+      latest?.createdAt === eventCreatedAt &&
+      known &&
+      compareContactCursorState(latest.cursor, known) < 0 &&
+      isCurrentContactCursorSession(account, generation)
+    ) {
+      void publishContactCursor(contactPublicKey, known, [], {
+        republish: true,
+      }).catch((error) => {
+        console.error('Failed to republish contact cursor event', contactPublicKey, error);
+      });
+    }
+
+    if (!didChange || !isCurrentContactCursorSession(account, generation)) {
+      return;
+    }
+
+    // Only this contact's chat and the reactions marked seen changed.
+    const { useMessageStore } = await import('#src/stores/messageStore.svelte.ts');
+    const messageStore = useMessageStore();
+    await Promise.all([
+      chatStore.refreshChat(contactPublicKey),
+      ...updatedMessageRows.map((row) => messageStore.upsertPersistedMessage(row)),
+    ]);
+  }
+
+  async function subscribeContactCursorUpdates(seedRelayUrls: string[] = []): Promise<void> {
+    const generation = contactCursorGeneration;
+    const account = getLoggedInPublicKeyHex();
+    if (!account) {
+      contactCursorSubscriptions.stop();
+      return;
+    }
+
+    contactCursorSeedRelayUrls = [...seedRelayUrls];
+
+    const relayUrls = await resolveLoggedInReadRelayUrls(seedRelayUrls);
+    if (!isCurrentContactCursorSession(account, generation)) {
+      return;
+    }
+    if (relayUrls.length === 0) {
+      contactCursorSubscriptions.stop();
+      return;
+    }
+
+    // The filter names only the account and kind. Contact d-tags stay out of the REQ, and
+    // other kind 30078 events are discarded locally. A resumed session starts from the
+    // stored event boundary, so reads made elsewhere while this device was closed arrive.
+    if (!contactCursorSince) {
+      const lookbackSince = Math.floor(Date.now() / 1000) - CONTACT_CURSOR_LIVE_LOOKBACK_SECONDS;
+      const storedSince = getFilterSince();
+      contactCursorSince = storedSince > 0 ? Math.min(storedSince, lookbackSince) : lookbackSince;
+    }
+    const relays = normalizeRelayStatusUrlsValue(relayUrls).sort();
+    const live = contactCursorSubscriptions.size() > 0 ? contactCursorLiveFilter : null;
+    const resume = contactCursorResume;
+    const since =
+      live && live.relays.join(' ') === relays.join(' ')
+        ? live.since
+        : resume && relays.every((url) => resume.relays.includes(url))
+          ? Math.max(contactCursorSince, resume.since)
+          : contactCursorSince;
+    contactCursorLiveFilter = { relays, since };
+    const filters: NostrFilter = {
+      kinds: [PRIVATE_PREFERENCES_KIND],
+      authors: [account],
+      since,
+    };
+    const signature = subscriptionSignature(filters, relayUrls);
+    await contactCursorSubscriptions.reconcile([
+      {
+        key: 'contact-cursors',
+        signature,
+        prepare: async () => {
+          await ensureRelayConnections(relayUrls);
+          await ensureLoggedInSignerUser();
+        },
+        applied: () => contactCursorApplyQueue,
+        start: (onEose, onClose) => {
+          if (since === contactCursorSince) contactCursorApplyFailed = false;
+          const subscription = subscribeWithReqLogging(
+            'contact-cursors',
+            'contact-cursors',
+            filters,
+            {
+              relaySet: NostrRelaySet.fromRelayUrls(relayUrls, ndk, false),
+              cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
+              onEvent: (event) => {
+                if (!isCurrentContactCursorSession(account, generation)) {
+                  return;
+                }
+
+                const wrappedEvent =
+                  event instanceof ClientEvent ? event : new ClientEvent(ndk, event);
+                contactCursorApplyQueue = contactCursorApplyQueue
+                  .then(() => applyLiveContactCursorEvent(wrappedEvent, account, generation))
+                  .catch((error) => {
+                    // A later subscription replays from the boundary to retry this event.
+                    contactCursorApplyFailed = true;
+                    contactCursorResume = null;
+                    console.warn('Failed to apply live contact cursor event', error);
+                  });
+              },
+              onEose,
+              onClose,
+            },
+            { signature },
+          );
+          // The client emits 'eose' only once every relay of the set has finished its replay
+          // and is still subscribed; the onEose above may fire with offline relays pending.
+          // Events from now on arrive live, and the lookback covers skewed clocks.
+          subscription.on('eose', () => {
+            if (!contactCursorApplyFailed && isCurrentContactCursorSession(account, generation)) {
+              contactCursorResume = {
+                relays,
+                since: Math.floor(Date.now() / 1000) - CONTACT_CURSOR_LIVE_LOOKBACK_SECONDS,
+              };
+            }
+          });
+          return subscription;
+        },
+      },
+    ]);
+  }
+
+  // A subscription whose relays all disconnect closes itself. Reconnect healing and relay
+  // reconnects call this to restore it, and the replay from `since` delivers cursors published
+  // meanwhile. A live subscription makes this a no-op.
+  async function recoverContactCursorSubscription(): Promise<void> {
+    const seedRelayUrls = contactCursorSeedRelayUrls;
+    if (!seedRelayUrls || !getLoggedInPublicKeyHex() || contactCursorSubscriptions.size() > 0) {
+      return;
+    }
+
+    try {
+      await subscribeContactCursorUpdates(seedRelayUrls);
+    } catch (error) {
+      // The next relay reconnect or healing pass tries again.
+      console.warn('Failed to recover contact cursor subscription', error);
+    }
+  }
+
+  function resetContactCursorSyncState(): void {
+    contactCursorGeneration += 1;
+    contactCursorSubscriptions.stop();
+    knownContactCursors.clear();
+    latestContactCursorEvents.clear();
+    contactCursorPublishQueues.clear();
+    deferredContactCursorPublishes.clear();
+    contactCursorEvents.clear();
+    contactCursorDTagIndex = null;
+    contactCursorApplyQueue = Promise.resolve();
+    contactCursorSince = 0;
+    contactCursorResume = null;
+    contactCursorApplyFailed = false;
+    contactCursorLiveFilter = null;
+    contactCursorSeedRelayUrls = null;
+  }
+
+  // A manual read publishes at once, then coalesces for a delay. An automatic read from a
+  // focused chat only starts the delay, plus jitter, so incoming messages do not each publish
+  // a cursor right as they arrive. Either way there is at most one timer per contact.
   function scheduleContactCursorPublish(
     contactPublicKey: string,
     cursor: ContactCursorState,
+    options: { deferred?: boolean } = {},
   ): void {
     const normalizedContactPublicKey = inputSanitizerService.normalizeHexKey(contactPublicKey);
     const normalizedCursorAt = normalizeTimestamp(cursor.at);
@@ -2165,38 +2600,59 @@ export function createPrivateStateRuntime({
       return;
     }
 
-    const nextCursorState: ContactCursorState = {
+    let nextCursorState: ContactCursorState = {
       at: normalizedCursorAt,
       eventId: normalizeEventId(cursor.eventId),
     };
+    const deferred = options.deferred === true;
     const existingTimer = pendingContactCursorPublishTimers.get(normalizedContactPublicKey);
-    if (existingTimer) {
-      const pendingCursor = pendingContactCursorPublishStates.get(normalizedContactPublicKey);
-      if (pendingCursor && compareContactCursorState(pendingCursor, nextCursorState) >= 0) {
-        return;
+    const pendingCursor = pendingContactCursorPublishStates.get(normalizedContactPublicKey);
+    if (
+      existingTimer &&
+      (deferred || !deferredContactCursorPublishes.has(normalizedContactPublicKey))
+    ) {
+      if (!pendingCursor || compareContactCursorState(pendingCursor, nextCursorState) < 0) {
+        pendingContactCursorPublishStates.set(normalizedContactPublicKey, nextCursorState);
       }
-
-      pendingContactCursorPublishStates.set(normalizedContactPublicKey, nextCursorState);
       return;
     }
 
-    pendingContactCursorPublishStates.set(normalizedContactPublicKey, nextCursorState);
-    void publishContactCursor(normalizedContactPublicKey, nextCursorState).catch((error) => {
-      console.error('Failed to publish contact cursor event', normalizedContactPublicKey, error);
-    });
+    if (existingTimer) {
+      // A manual read takes over a pending automatic one and publishes now.
+      globalThis.clearTimeout(existingTimer);
+      pendingContactCursorPublishTimers.delete(normalizedContactPublicKey);
+      deferredContactCursorPublishes.delete(normalizedContactPublicKey);
+      if (pendingCursor && compareContactCursorState(pendingCursor, nextCursorState) > 0) {
+        nextCursorState = pendingCursor;
+      }
+    }
 
+    pendingContactCursorPublishStates.set(normalizedContactPublicKey, nextCursorState);
+    const publishedCursor = deferred ? null : nextCursorState;
+    if (publishedCursor) {
+      void publishContactCursor(normalizedContactPublicKey, publishedCursor).catch((error) => {
+        console.error('Failed to publish contact cursor event', normalizedContactPublicKey, error);
+      });
+    } else {
+      deferredContactCursorPublishes.add(normalizedContactPublicKey);
+    }
+
+    const delayMs =
+      CONTACT_CURSOR_PUBLISH_DELAY_MS +
+      (deferred ? Math.floor(Math.random() * CONTACT_CURSOR_PUBLISH_JITTER_MS) : 0);
     const nextTimer = globalThis.setTimeout(() => {
       pendingContactCursorPublishTimers.delete(normalizedContactPublicKey);
+      deferredContactCursorPublishes.delete(normalizedContactPublicKey);
       const cursorToPublish = pendingContactCursorPublishStates.get(normalizedContactPublicKey);
       pendingContactCursorPublishStates.delete(normalizedContactPublicKey);
-      if (!cursorToPublish || compareContactCursorState(cursorToPublish, nextCursorState) <= 0) {
+      if (!cursorToPublish || compareContactCursorState(cursorToPublish, publishedCursor) <= 0) {
         return;
       }
 
       void publishContactCursor(normalizedContactPublicKey, cursorToPublish).catch((error) => {
         console.error('Failed to publish contact cursor event', normalizedContactPublicKey, error);
       });
-    }, CONTACT_CURSOR_PUBLISH_DELAY_MS);
+    }, delayMs);
 
     pendingContactCursorPublishTimers.set(normalizedContactPublicKey, nextTimer);
   }
@@ -2222,6 +2678,9 @@ export function createPrivateStateRuntime({
     restoreGroupIdentitySecrets,
     restoreGroupMembershipRoster,
     restorePrivatePreferences,
+    recoverContactCursorSubscription,
+    resetContactCursorSyncState,
     scheduleContactCursorPublish,
+    subscribeContactCursorUpdates,
   };
 }

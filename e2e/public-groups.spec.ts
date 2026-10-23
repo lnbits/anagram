@@ -2378,3 +2378,86 @@ for (const width of [1280, 390]) {
     await expect(row).toHaveCount(0);
   });
 }
+
+test('trusted public mentions show an @ indicator until read and deletions retract them', async ({
+  page,
+}) => {
+  const owner = await login(page);
+  const room = await create(page, 'Mention indicator room');
+  const member = generateSecretKey(),
+    stranger = generateSecretKey();
+  const now = Math.floor(Date.now() / 1000);
+  await publish(
+    finalizeEvent(
+      {
+        kind: 34550,
+        created_at: now + 1,
+        tags: [
+          ['d', room.slug],
+          ['name', 'Mention indicator room'],
+          ['anagram-room', '1'],
+          ['relay', relay],
+          ['trusted', getPublicKey(member)],
+        ],
+        content: '',
+      },
+      owner.key,
+    ),
+  );
+  const post = (content: string, key = member) =>
+    finalizeEvent({ kind: 9, created_at: now + 1, tags: [['a', room.address]], content }, key);
+  const mention = `nostr:${nip19.npubEncode(owner.pubkey)}`;
+  // Trusted posts render profile links, so this confirms the trust update was saved.
+  await publish(post(`trust check nostr:${nip19.npubEncode(getPublicKey(stranger))}`));
+  await expect(
+    page
+      .getByTestId('public-message')
+      .filter({ hasText: 'trust check' })
+      .getByTestId('message-mention-link'),
+  ).toBeVisible();
+
+  // Leave the room so its inbox watch counts arrivals in the background.
+  await navigateInApp(page, `/chats/${owner.pubkey}`);
+  const row = page.getByTestId('public-chat-item').filter({ hasText: 'Mention indicator room' });
+  const mentionBadge = row.getByTestId('chat-unread-mention-badge');
+  await publish(post('plain public hello'));
+  await expect(row.locator('.badge')).toHaveText('1');
+  await publish(post(`untrusted ${mention}`, stranger));
+  await expect(row.locator('.badge')).toHaveText('2');
+  await expect(mentionBadge).toHaveCount(0);
+
+  const retracted = post(`retracted ${mention}`);
+  await publish(retracted);
+  await expect(mentionBadge).toBeVisible();
+  await publish(
+    finalizeEvent(
+      {
+        kind: 5,
+        created_at: now + 2,
+        tags: [
+          ['h', room.address],
+          ['e', retracted.id],
+          ['k', '9'],
+        ],
+        content: '',
+      },
+      member,
+    ),
+  );
+  await expect(mentionBadge).toHaveCount(0);
+
+  await publish(post(`kept ${mention}`));
+  await expect(mentionBadge).toHaveText('@');
+  await row.click();
+  await expect(page).toHaveURL(/\/public\/naddr/);
+  await expect(
+    page.getByTestId('public-message').filter({ hasText: 'kept' }),
+  ).toHaveAttribute('data-mentions-me', 'true');
+  await expect(
+    page.getByTestId('public-message').filter({ hasText: 'untrusted' }),
+  ).not.toHaveAttribute('data-mentions-me');
+  await navigateInApp(page, `/chats/${owner.pubkey}`);
+  await expect(row).toBeVisible();
+  await expect(mentionBadge).toHaveCount(0);
+  await expect(row.locator('.badge')).toHaveCount(0);
+});

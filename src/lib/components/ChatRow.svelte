@@ -5,6 +5,7 @@
   import { translate, locale } from '#src/i18n.ts';
   import { chatTime } from '#src/utils/chatDate.ts';
   import { resolveChatPreviewAuthorLabel } from '#src/utils/chatPreview.ts';
+  import { hasUnreadChatMention } from '#src/utils/unreadMentions.ts';
   import Avatar from './Avatar.svelte';
   import ChatListRow from './ChatListRow.svelte';
   export let chat: Chat;
@@ -20,6 +21,7 @@
       : String(chat.meta.given_name || $profile?.name || chat.meta.contact_name || chat.name);
   $: author = resolveChatPreviewAuthorLabel(chat, ownPublicKey, $translate('common.you'));
   $: reactions = Math.max(0, Number(chat.meta.unseen_reaction_count) || 0);
+  $: mentioned = hasUnreadChatMention(chat);
   $: lastMessageAt = chat.lastMessageAt;
   $: time = lastMessageAt ? chatTime(lastMessageAt, $locale) : '';
   $: menuItems = [
@@ -74,6 +76,10 @@
   {#if reactions || chat.unreadCount}<span class="row-badges"
       >{#if reactions}<span class="reaction-badge" aria-label={`${reactions} unseen reactions`}
           >♥ {reactions > 99 ? '99+' : reactions}</span
+        >{/if}{#if mentioned}<span
+          class="mention-badge"
+          data-testid="chat-unread-mention-badge"
+          aria-label="Unread mention">@</span
         >{/if}{#if chat.unreadCount}<span
           class="badge"
           aria-label={`${chat.unreadCount} unread messages`}>{chat.unreadCount}</span

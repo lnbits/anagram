@@ -11,6 +11,10 @@ const ndkMocks = vi.hoisted(() => ({
   giftUnwrap: vi.fn(),
 }));
 
+const messageStoreMocks = vi.hoisted(() => ({
+  syncUnreadMentionForMessage: vi.fn().mockResolvedValue(undefined),
+}));
+
 const serviceMocks = vi.hoisted(() => ({
   chatDataService: {
     updateChat: vi.fn(async () => {}),
@@ -56,6 +60,7 @@ vi.mock('#src/lib/nostr/client.ts', async () => {
 vi.mock('#src/stores/messageStore.svelte.ts', () => ({
   useMessageStore: () => ({
     stageIncomingMessage: vi.fn(),
+    syncUnreadMentionForMessage: messageStoreMocks.syncUnreadMentionForMessage,
     upsertPersistedMessage: vi.fn().mockResolvedValue(undefined),
   }),
 }));
@@ -1985,5 +1990,137 @@ describe('privateMessagesIngestRuntime', () => {
       expect.objectContaining({ persistence: 'ignored-edit-predecessor' }),
     );
     runtime.resetPrivateMessagesIngestRuntimeState();
+  });
+  describe('group mentions', () => {
+    const group = 'c'.repeat(64),
+      epoch = 'd'.repeat(64),
+      account = 'b'.repeat(64),
+      member = 'a'.repeat(64);
+    const mentionAccount = `hi nostr:${nip19.npubEncode(account)}`;
+
+    function setupGroupIngest(options: { content: string; sender?: string; visible?: boolean }) {
+      const deps = createDeps();
+      const chat = {
+        public_key: group,
+        type: 'group',
+        name: 'Group',
+        meta: { last_seen_received_activity_at: '2023-11-14T22:00:00.000Z' },
+        unread_count: 0,
+      };
+      deps.chatStore.visibleChatId = options.visible ? group : null;
+      deps.resolveIncomingPrivateMessageRecipientContext.mockResolvedValue({
+        recipientPubkey: epoch,
+        unwrapSigner: {} as never,
+        groupChatPublicKey: group,
+      });
+      deps.findGroupChatEpochContextByRecipientPubkey.mockImplementation(async (key) =>
+        key === epoch ? { chat, epochEntry: { epoch_number: 0, epoch_public_key: epoch } } : null,
+      );
+      ndkMocks.giftUnwrap.mockResolvedValue(
+        makeRumorEvent({
+          recipientPubkey: epoch,
+          senderPubkey: options.sender ?? member,
+          content: options.content,
+        }),
+      );
+      serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue(chat);
+      serviceMocks.chatDataService.createMessage.mockResolvedValue({
+        id: 46,
+        chat_public_key: group,
+        author_public_key: options.sender ?? member,
+        created_at: '2023-11-14T22:13:20.000Z',
+        event_id: 'rumor-event',
+        meta: {},
+      });
+      return deps;
+    }
+
+    it('records an unread mention for another member mentioning the account', async () => {
+      const deps = setupGroupIngest({ content: mentionAccount });
+      const runtime = createPrivateMessagesIngestRuntime(deps);
+      await runtime.queuePrivateMessageIngestion(makeWrappedEvent({ id: crypto.randomUUID() }), account);
+      await runtime.getPrivateMessagesIngestQueue();
+
+      expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          meta: expect.objectContaining({ mentions_me: true }),
+          chat_activity: expect.objectContaining({
+            unreadCount: 1,
+            mentionAt: '2023-11-14T22:13:20.000Z',
+          }),
+        }),
+      );
+      expect(deps.chatStore.applyIncomingMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          meta: expect.objectContaining({ unread_mention_at: '2023-11-14T22:13:20.000Z' }),
+        }),
+      );
+      runtime.resetPrivateMessagesIngestRuntimeState();
+    });
+
+    it.each([
+      ['the focused chat', { content: mentionAccount, visible: true }],
+      ['the account itself', { content: mentionAccount, sender: account }],
+      ['another member mention', { content: `hi nostr:${nip19.npubEncode(member)}` }],
+      ['a plain @handle', { content: 'hi @bob' }],
+      ['an invalid npub', { content: `hi nostr:${nip19.npubEncode(account).slice(0, -1)}q` }],
+    ])('does not record an unread mention for %s', async (_case, options) => {
+      const deps = setupGroupIngest(options);
+      const runtime = createPrivateMessagesIngestRuntime(deps);
+      await runtime.queuePrivateMessageIngestion(makeWrappedEvent({ id: crypto.randomUUID() }), account);
+      await runtime.getPrivateMessagesIngestQueue();
+
+      expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledOnce();
+      expect(serviceMocks.chatDataService.createMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          chat_activity: expect.not.objectContaining({ mentionAt: expect.anything() }),
+        }),
+      );
+      runtime.resetPrivateMessagesIngestRuntimeState();
+    });
+
+    it.each([
+      ['adds', {}, { mentions_me: true }],
+      ['removes', { mentions_me: true }, {}],
+    ])('resynchronizes the unread mention when an edit %s a mention', async (_case, before, after) => {
+      const deps = setupGroupIngest({ content: 'edited' });
+      const originalEventId = 'e'.repeat(64);
+      const original = {
+        id: 98,
+        chat_public_key: group,
+        author_public_key: member,
+        message: 'original',
+        created_at: '2023-11-14T22:13:20.000Z',
+        event_id: originalEventId,
+        meta: before,
+      };
+      ndkMocks.giftUnwrap.mockResolvedValue(
+        makeRumorEvent({
+          recipientPubkey: epoch,
+          senderPubkey: member,
+          eventId: 'f'.repeat(64),
+          content: 'edited',
+          tags: [
+            ['p', epoch],
+            ['e', originalEventId, '', 'edit'],
+          ],
+        }),
+      );
+      serviceMocks.chatDataService.getMessageByEventId.mockImplementation(async (eventId) =>
+        eventId === originalEventId ? original : null,
+      );
+      const edited = { ...original, event_id: 'f'.repeat(64), meta: after };
+      serviceMocks.chatDataService.applyMessageEdit.mockResolvedValue(edited);
+      const runtime = createPrivateMessagesIngestRuntime(deps);
+      await runtime.queuePrivateMessageIngestion(makeWrappedEvent({ id: crypto.randomUUID() }), account);
+      await runtime.getPrivateMessagesIngestQueue();
+
+      expect(serviceMocks.chatDataService.createMessage).not.toHaveBeenCalled();
+      expect(messageStoreMocks.syncUnreadMentionForMessage).toHaveBeenCalledExactlyOnceWith(
+        original,
+        edited,
+      );
+      runtime.resetPrivateMessagesIngestRuntimeState();
+    });
   });
 });

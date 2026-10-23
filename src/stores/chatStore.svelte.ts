@@ -1615,6 +1615,31 @@ export const useChatStore = createStore('chatStore', () => {
     });
   }
 
+  function setUnreadMentionAt(chatId: string, at: string): void {
+    const normalizedChatId = normalizeChatIdentifier(chatId);
+    if (!normalizedChatId) {
+      return;
+    }
+
+    chats = chats.map((chat) => {
+      if (chat.id !== normalizedChatId || (chat.meta.unread_mention_at ?? '') === at) {
+        return chat;
+      }
+
+      const nextMeta = { ...chat.meta };
+      if (at) {
+        nextMeta.unread_mention_at = at;
+      } else {
+        delete nextMeta.unread_mention_at;
+      }
+
+      return {
+        ...chat,
+        meta: nextMeta,
+      };
+    });
+  }
+
   async function setUnreadCount(chatId: string, count: number): Promise<void> {
     const normalizedChatId = normalizeChatIdentifier(chatId);
     if (!normalizedChatId) {
@@ -1965,6 +1990,7 @@ export const useChatStore = createStore('chatStore', () => {
     updateChatPreview,
     setLastSeenReceivedActivityAt,
     setUnreadCount,
+    setUnreadMentionAt,
     setUnseenReactionCount,
     applyIncomingMessage,
     addContact,

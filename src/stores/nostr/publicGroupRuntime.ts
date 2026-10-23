@@ -889,7 +889,7 @@ export function createPublicGroupRuntime(deps: Dependencies) {
         }
       }
       void db.enqueue(address, message, timeline).then(() => {
-        if (active() && timeline && message.kind === 9)
+        if (active() && timeline && (message.kind === 9 || message.kind === 5))
           void activity.ingest(address, message, ready, true).catch(storageFailed);
         arrivals++;
         scheduleDrain();

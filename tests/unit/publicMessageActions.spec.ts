@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools';
+import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 import { parsePublicRoom, roomTags } from '#src/stores/nostr/publicGroups.ts';
 import {
   publicMessageState,
@@ -228,4 +228,31 @@ it('only exposes keyboards from a trusted current card version, never a deleted 
   expect(publicMessageState({ ...card, activity: [edit] }, room).meta.bot_command).toBeUndefined();
   const deletion = action(5, '', [['e', card.id]]);
   expect(publicMessageState({ ...card, activity: [deletion] }, room).meta.inline_keyboard).toBeUndefined();
+});
+
+it('marks trusted current versions that mention the viewer, but not deleted or untrusted ones', () => {
+  const { root, room, other, action } = fixture();
+  const viewer = getPublicKey(generateSecretKey());
+  const mention = `hi nostr:${nip19.npubEncode(viewer)}`;
+  const added = action(9, mention, [['e', root.id, '', 'edit']]);
+  expect(publicMessageState(root, room, viewer).meta.mentions_me).toBeUndefined();
+  expect(publicMessageState({ ...root, activity: [added] }, room, viewer).meta.mentions_me).toBe(
+    true,
+  );
+  const removed = action(9, 'gone', [
+    ['e', added.id, '', 'edit'],
+    ['e', root.id],
+  ]);
+  expect(
+    publicMessageState({ ...root, activity: [added, removed] }, room, viewer).meta.mentions_me,
+  ).toBeUndefined();
+  const deletion = action(5, '', [['e', added.id]]);
+  expect(
+    publicMessageState({ ...root, activity: [added, deletion] }, room, viewer).meta.mentions_me,
+  ).toBeUndefined();
+  const untrusted = finalizeEvent(
+    { kind: 9, created_at: 2, content: mention, tags: [['a', room.address]] },
+    other,
+  );
+  expect(publicMessageState(untrusted, room, viewer).meta.mentions_me).toBeUndefined();
 });

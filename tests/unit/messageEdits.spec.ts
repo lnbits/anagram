@@ -80,6 +80,18 @@ describe('message edit helpers', () => {
     expect(messageEditReferencesEventId(meta, secondEventId)).toBe(true);
   });
 
+  it('takes mentions from the replacement text, never from the original', () => {
+    const original = {
+      mentions: [{ publicKey: 'b'.repeat(64) }],
+      mentions_me: true,
+    };
+    const removed = buildEditedMessageMeta(original, { source: 'nostr' }, 'old-id', 'edited-at');
+    expect(removed.mentions).toBeUndefined();
+    expect(removed.mentions_me).toBeUndefined();
+    const added = buildEditedMessageMeta({}, original, 'old-id', 'edited-at');
+    expect(added.mentions_me).toBe(true);
+  });
+
   it('removes cached replies to edit predecessors without removing genuine replies', () => {
     const meta = {
       edited: { editedAt: '2026-01-01T00:00:00.000Z', previousEventIds: ['old-id'] },

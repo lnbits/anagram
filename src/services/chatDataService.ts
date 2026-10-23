@@ -3,6 +3,11 @@ import type { ChatType } from '#src/types/chat.ts';
 import { closeIndexedDbConnection, deleteIndexedDbDatabase } from '#src/utils/indexedDbStorage.ts';
 import { isIncomingUnreadMessageActivity } from '#src/utils/messageActivity.ts';
 import {
+  UNREAD_MENTION_AT_META_KEY,
+  isAfterChatSeenBoundary,
+  laterMentionAt,
+} from '#src/utils/unreadMentions.ts';
+import {
   areMessageEditTimestampsEqual,
   buildEditedMessageMeta,
   messageEditReferencesEventId,
@@ -84,6 +89,8 @@ export interface CreateMessageInput {
     incomingAt: string;
     unreadCount: number;
     preview?: { text: string; at: string };
+    // Set only when this unread group message mentions the logged-in user.
+    mentionAt?: string;
   };
   chat_public_key: string;
   author_public_key: string;
@@ -1188,6 +1195,14 @@ class ChatDataService {
           meta: {
             ...meta,
             ...(preview ? { last_message_author_public_key: authorPublicKey } : {}),
+            ...(activity.mentionAt && isAfterChatSeenBoundary(meta, activity.mentionAt)
+              ? {
+                  [UNREAD_MENTION_AT_META_KEY]: laterMentionAt(
+                    meta[UNREAD_MENTION_AT_META_KEY],
+                    activity.mentionAt,
+                  ),
+                }
+              : {}),
             last_incoming_message_at:
               activity.incomingAt > currentIncoming ? activity.incomingAt : currentIncoming,
           },

@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { afterEach, expect, it, vi } from 'vitest';
-import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools';
+import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 import NostrClient, { type NostrSubscriptionOptions } from '#src/lib/nostr/client.ts';
 import { PublicGroupData, type SavedPublicRoom } from '#src/services/publicGroupData.ts';
 import { parsePublicRoom } from '#src/stores/nostr/publicGroups.ts';
@@ -228,4 +228,161 @@ it('does not alert for backlog received before notifications were enabled', asyn
   expect(s.notify).not.toHaveBeenCalled();
   await s.runtime.ingest(s.room.address, s.message('after opt-in', s.now + 1));
   expect(s.notify).toHaveBeenCalledOnce();
+});
+
+async function trustedMentionSetup() {
+  const s = await setup();
+  const saved = await s.db.save({
+    ...s.saved(),
+    room: { ...s.room, trusted: [getPublicKey(s.author)] },
+  });
+  s.runtime.sync([saved]);
+  const account = getPublicKey(s.ownerKey);
+  const mention = `hi nostr:${nip19.npubEncode(account)}`;
+  const edit = (target: string, root: string, content: string) =>
+    s.message(content, s.now, [
+      ['a', s.room.address],
+      ['e', target, '', 'edit'],
+      ...(target === root ? [] : [['e', root]]),
+    ]);
+  const remove = (ids: string[], key = s.author) =>
+    finalizeEvent(
+      {
+        kind: 5,
+        created_at: s.now,
+        content: '',
+        tags: [['h', s.room.address], ['k', '9'], ...ids.map((id) => ['e', id])],
+      },
+      key,
+    );
+  return { ...s, mention, edit, remove };
+}
+
+it('counts unread mentions only from trusted posts and clears them on read', async () => {
+  const s = await trustedMentionSetup();
+  expect(s.subscribe.mock.calls[0][0]).toContainEqual(
+    expect.objectContaining({ kinds: [5], '#h': [s.room.address], '#k': ['9'] }),
+  );
+  const stranger = generateSecretKey();
+  await s.runtime.ingest(s.room.address, s.message(s.mention, s.now, undefined, stranger));
+  expect(s.saved()).toMatchObject({ unreadCount: 1, unreadMentionCount: 0 });
+  await s.runtime.ingest(s.room.address, s.message('plain @owner text'));
+  await s.runtime.ingest(
+    s.room.address,
+    s.message(`hi nostr:${nip19.npubEncode(getPublicKey(stranger))}`),
+  );
+  expect(s.saved()).toMatchObject({ unreadCount: 3, unreadMentionCount: 0 });
+  await s.runtime.ingest(s.room.address, s.message(s.mention));
+  await s.preferences({ muted: true });
+  await s.runtime.ingest(s.room.address, s.message(`${s.mention} again`));
+  expect(s.saved()).toMatchObject({ unreadCount: 5, unreadMentionCount: 2 });
+  await s.runtime.markRead(s.room.address);
+  expect(s.saved()).toMatchObject({ unreadCount: 0, unreadMentionCount: 0 });
+
+  vi.stubGlobal('document', { visibilityState: 'visible', hasFocus: () => true });
+  s.runtime.setVisible(s.room.address);
+  await s.runtime.ingest(s.room.address, s.message(`${s.mention} while reading`));
+  expect(s.saved()).toMatchObject({ unreadCount: 0, unreadMentionCount: 0 });
+});
+
+it('applies edits and author deletions to an unread mention in either arrival order', async () => {
+  const s = await trustedMentionSetup();
+  const first = s.message(s.mention);
+  await s.runtime.ingest(s.room.address, first);
+  expect(s.saved().unreadMentionCount).toBe(1);
+
+  const removed = s.edit(first.id, first.id, 'mention removed');
+  await s.runtime.ingest(s.room.address, removed);
+  expect(s.saved().unreadMentionCount).toBe(0);
+  const restored = s.edit(removed.id, first.id, `${s.mention} restored`);
+  await s.runtime.ingest(s.room.address, restored);
+  expect(s.saved().unreadMentionCount).toBe(1);
+  // The first edit's deletion of the root arrives late; the current version survives.
+  await s.runtime.ingest(s.room.address, s.remove([first.id]));
+  expect(s.saved().unreadMentionCount).toBe(1);
+  // Only the author can retract it.
+  await s.runtime.ingest(s.room.address, s.remove([first.id, removed.id, restored.id], s.ownerKey));
+  expect(s.saved().unreadMentionCount).toBe(1);
+  await s.runtime.ingest(s.room.address, s.remove([first.id, removed.id, restored.id]));
+  expect(s.saved().unreadMentionCount).toBe(0);
+
+  // Deletion before its replacement edit: cleared, then raised by the edited text.
+  const second = s.message(`${s.mention} second`);
+  await s.runtime.ingest(s.room.address, second);
+  await s.runtime.ingest(s.room.address, s.remove([second.id]));
+  expect(s.saved().unreadMentionCount).toBe(0);
+  await s.runtime.ingest(s.room.address, s.edit(second.id, second.id, `${s.mention} edited`));
+  expect(s.saved().unreadMentionCount).toBe(1);
+  expect(s.saved().unreadCount).toBe(2);
+
+  // Read messages stay read when an edit adds a mention.
+  await s.runtime.markRead(s.room.address);
+  const plain = s.message('plain');
+  await s.runtime.ingest(s.room.address, plain);
+  await s.runtime.markRead(s.room.address);
+  await s.runtime.ingest(s.room.address, s.edit(plain.id, plain.id, `${s.mention} late`));
+  expect(s.saved().unreadMentionCount).toBe(0);
+});
+
+it('drops mention updates after an account switch', async () => {
+  const s = await trustedMentionSetup();
+  const pending = s.runtime.ingest(s.room.address, s.message(s.mention));
+  s.switchAccount();
+  await pending;
+  await s.runtime.ingest(s.room.address, s.message(`${s.mention} after switch`));
+  expect(s.saved().unreadMentionCount ?? 0).toBe(0);
+});
+
+it('skips edits and deletions that cannot change unread mentions', async () => {
+  const s = await trustedMentionSetup();
+  const update = vi.spyOn(s.db, 'updateMention');
+  const read = s.message('already read');
+  await s.runtime.ingest(s.room.address, read);
+  await s.runtime.markRead(s.room.address);
+  // Nothing unread: neither edits nor deletions touch storage.
+  await s.runtime.ingest(s.room.address, s.edit(read.id, read.id, s.mention));
+  await s.runtime.ingest(s.room.address, s.remove([read.id]));
+  expect(update).not.toHaveBeenCalled();
+
+  // Unread messages without mentions: edits apply, deletions are skipped.
+  const plain = s.message('plain unread');
+  await s.runtime.ingest(s.room.address, plain);
+  await s.runtime.ingest(s.room.address, s.remove([plain.id]));
+  expect(update).not.toHaveBeenCalled();
+  const edit = s.edit(plain.id, plain.id, `${s.mention} added`);
+  await s.runtime.ingest(s.room.address, edit);
+  expect(update).toHaveBeenCalledOnce();
+  expect(s.saved().unreadMentionCount).toBe(1);
+
+  // Reaction deletions never retract a message mention.
+  const reactionDeletion = finalizeEvent(
+    {
+      kind: 5,
+      created_at: s.now,
+      content: '',
+      tags: [['h', s.room.address], ['k', '7'], ['e', plain.id]],
+    },
+    s.author,
+  );
+  await s.runtime.ingest(s.room.address, reactionDeletion);
+  expect(update).toHaveBeenCalledOnce();
+  // Rapid edit then deletion of the current version.
+  await s.runtime.ingest(s.room.address, s.edit(edit.id, plain.id, 'removed again'));
+  await s.runtime.ingest(s.room.address, s.edit(edit.id, plain.id, `${s.mention} stale`));
+  expect(s.saved().unreadMentionCount).toBe(0);
+  expect(s.saved().unreadCount).toBe(1);
+});
+
+it('keeps one subscription per background room and stops it on room or account switch', async () => {
+  const s = await trustedMentionSetup();
+  const live = () => s.subscriptions.filter((sub) => !sub.stopped);
+  expect(live()).toHaveLength(1);
+  s.runtime.sync([s.saved()]);
+  expect(live()).toHaveLength(1);
+  s.runtime.setActive(s.room.address);
+  expect(live()).toHaveLength(0);
+  s.runtime.setActive('');
+  await vi.waitFor(() => expect(live()).toHaveLength(1));
+  s.switchAccount();
+  expect(live()).toHaveLength(0);
 });

@@ -16,6 +16,7 @@ import { PUBLIC_KEY_STORAGE_KEY } from '#src/stores/nostr/constants.ts';
 
 export const KNOWN_APP_INDEXED_DB_NAMES = [
   'anagram-hydration-inbox',
+  'anagram-ratchet',
   'anagram-private-relays',
   'chat-data-indexeddb-v2',
   'contacts-indexeddb-v1',

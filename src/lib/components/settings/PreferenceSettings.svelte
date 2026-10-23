@@ -14,6 +14,7 @@
   import { useNostrStore } from '#src/stores/nostrStore.svelte.ts';
   import { toStore } from 'svelte/store';
   import Icon from '../Icon.svelte';
+  import MessagingDevices from './MessagingDevices.svelte';
   import { THEME_ACCENTS, readThemeAccent, saveThemeAccent } from '#src/utils/themeAccent.ts';
   export let section: string;
   const nostr = useNostrStore();
@@ -21,6 +22,7 @@
   let dark = readDarkModePreference() ?? document.body.classList.contains('body--dark');
   let layout = readDesktopMessageLayoutPreference();
   let accent = readThemeAccent();
+  let preferRatchet = nostr.getPreferRatchet();
   let saved = nostr.getBlossomServerUrl(),
     server = saved,
     busy = false,
@@ -59,7 +61,18 @@
   });
 </script>
 
-{#if section === 'theme'}
+{#if section === 'messaging'}
+  <div class="settings-card">
+    <label class="settings-switch">
+      <span>Prefer double ratchet when available</span>
+      <input type="checkbox" role="switch" data-testid="prefer-ratchet"
+        checked={preferRatchet}
+        onchange={(event) => { preferRatchet = event.currentTarget.checked; void nostr.setPreferRatchet(preferRatchet); }} />
+    </label>
+    <small>Automatically use double ratchet when a compatible device is found. Existing double-ratchet chats keep their encryption.</small>
+  </div>
+  <MessagingDevices />
+{:else if section === 'theme'}
   <div class="settings-card theme-card">
     <div class="theme-setting">
       <div>

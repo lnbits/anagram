@@ -329,6 +329,14 @@ describe('userActions runtime', () => {
     });
   });
 
+  it('never retries a double-ratchet message through NIP-17', async () => {
+    const deps = createDeps();
+    serviceMocks.chatDataService.getMessageById.mockResolvedValue({ id: 7, event_id: 'ratchet-id', meta: { protocol: 'ndr' } });
+    await expect(createUserActions(deps).retryDirectMessageRelay(7, 'wss://relay.example', 'recipient')).rejects.toThrow('original encrypted envelope');
+    expect(ndkMocks.giftWrap).not.toHaveBeenCalled();
+    expect(deps.publishEventWithRelayStatuses).not.toHaveBeenCalled();
+  });
+
   it('rejects unauthorized retries before reusing or publishing a cached envelope', async () => {
     const deps = createDeps();
     deps.prepareOutgoingPrivateMessage.mockRejectedValue(

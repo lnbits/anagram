@@ -1,3 +1,5 @@
+import { ratchetRelayUrls } from '#src/stores/nostr/ratchetRelays.ts';
+import { createRatchetIntegration } from '#src/stores/nostr/ratchetIntegration.ts';
 import { get } from 'svelte/store';
 import { createReadyRelaySet, fetchEventWithRelayTimeout } from './nostr/relayQueryUtils.ts';
 import { createBotKeyboardRuntime } from './nostr/botKeyboardRuntime.ts';
@@ -1419,6 +1421,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
 
   const {
     getPrivateMessagesIngestQueue,
+    processIncomingRatchetMessage,
     queuePrivateMessageIngestion,
     resetPrivateMessagesIngestRuntimeState,
     resumePendingPrivateMessages,
@@ -2283,9 +2286,9 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     retryGroupEpochTicketRelay,
     savePrivateKey,
     savePrivateKeyFromNsec,
-    sendDirectMessage,
-    sendDirectMessageDeletion,
-    sendDirectMessageReaction,
+    sendDirectMessage: sendNip17DirectMessage,
+    sendDirectMessageDeletion: sendNip17Deletion,
+    sendDirectMessageReaction: sendNip17Reaction,
     validateNpub,
     validateNsec,
     validatePrivateKey,
@@ -2318,6 +2321,40 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     sendGiftWrappedRumor,
     toIsoTimestampFromUnix,
   });
+  const ratchet = createRatchetIntegration({
+    client: ndk,
+    owner: getLoggedInPublicKeyHex,
+    signer: getOrCreateSigner,
+    relays: async (peer) => {
+      const contact = peer ? await contactsService.getContactByPublicKey(peer) : null;
+      return ratchetRelayUrls([...relayStore.relays, ...resolvePreferredContactRelayUrls(contact?.relays)]);
+    },
+    receive: processIncomingRatchetMessage,
+  });
+  async function sendDirectMessage(...args: Parameters<typeof sendNip17DirectMessage>) {
+    const [peer, content, , options = {}] = args;
+    const result = await ratchet.send(peer, {
+      pubkey: getLoggedInPublicKeyHex() ?? '', kind: 14, content,
+      created_at: options.createdAt ? Math.floor(Date.parse(options.createdAt) / 1000) : Math.floor(Date.now() / 1000),
+      tags: [['p', peer], ...(options.replyToEventId ? [['e', options.replyToEventId, '', 'reply']] : []), ...(options.additionalTags ?? [])],
+    }, { localMessageId: options.localMessageId, targetEventId: options.replyToEventId });
+    return result ?? sendNip17DirectMessage(...args);
+  }
+  async function sendDirectMessageReaction(...args: Parameters<typeof sendNip17Reaction>) {
+    const [peer, content, target, author, , options = {}] = args;
+    return await ratchet.send(peer, {
+      pubkey: getLoggedInPublicKeyHex() ?? '', kind: 7, content, created_at: Math.floor(Date.now() / 1000),
+      tags: [['p', peer], ['e', target], ['p', author], ['k', String(options.targetKind ?? 14)]],
+    }, { targetEventId: target }) ?? sendNip17Reaction(...args);
+  }
+  async function sendDirectMessageDeletion(...args: Parameters<typeof sendNip17Deletion>) {
+    const [peer, target, kind] = args;
+    return await ratchet.send(peer, {
+      pubkey: getLoggedInPublicKeyHex() ?? '', kind: 5, content: '', created_at: Math.floor(Date.now() / 1000),
+      tags: [['p', peer], ['e', target], ['k', String(kind)]],
+    }, { targetEventId: target }) ?? sendNip17Deletion(...args);
+  }
+
   const {
     queueOutboundMessageReplay: queueOutboundMessageReplayImpl,
     notifyRelayConnected: notifyOutboundMessageReplayRelayConnectedImpl,
@@ -2517,6 +2554,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     refreshRelays: refreshContactRelayList,
     getAppRelays: getAppRelayUrls,
     sendRumor: sendGiftWrappedRumor,
+    sendRatchet: ratchet.send,
   });
 
   function containsSessionSecret(value: string): boolean {
@@ -2715,6 +2753,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     hasNip07Extension,
     async initializeSessionState(seedRelayUrls: string[] = []) {
       await initializeSessionState(seedRelayUrls);
+      void ratchet.resume().catch(() => console.warn('Unable to resume double-ratchet messages.'));
       const account = getLoggedInPublicKeyHex();
       if (account) {
         void resumePendingPrivateMessages(ndk, account).catch(() =>
@@ -2764,7 +2803,18 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     listPrivateMessageRecipientPubkeys,
     loginWithExtension: loginWithExtensionImpl,
     loginWithRemoteSignerBunker: loginWithRemoteSignerBunkerImpl,
-    logout: logoutImpl,
+    async logout() {
+      await ratchet.close();
+      await logoutImpl();
+    },
+    getDirectMessageProtocol: ratchet.getDirectMessageProtocol,
+    getCurrentDirectMessageProtocol: ratchet.getCurrentDirectMessageProtocol,
+    readMessagingDevices: ratchet.readMessagingDevices,
+    directMessageMode: ratchet.directMessageMode,
+    watchDirectMessagePeer: ratchet.watchDirectMessagePeer,
+    getPreferRatchet: ratchet.getPreferRatchet,
+    setPreferRatchet: ratchet.setPreferRatchet,
+    setDirectMessageProtocol: ratchet.setDirectMessageProtocol,
     publishPrivateContactList,
     blockPubkey: (
       pubkey: string,
@@ -2856,6 +2906,14 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     scheduleContactCursorPublish,
     sendGroupEpochTicket,
     sendDirectMessage,
+    async sendRatchetEdit(peer: string, target: string, content: string) {
+      const now = Date.now();
+      return ratchet.send(peer, {
+        pubkey: getLoggedInPublicKeyHex() ?? '', kind: 1009, content,
+        created_at: Math.floor(now / 1000),
+        tags: [['p', peer], ['e', target], ['k', '14'], ['ms', String(now)]],
+      }, { targetEventId: target });
+    },
     ensureBlossomUploadAuthentication,
     getBlossomServerUrl,
     saveBlossomServerUrl,

@@ -28,6 +28,8 @@
     "@tauri-apps/plugin-opener": "^2",
     "jsqr": "1.4.0",
     "libopus-wasm": "0.4.1",
+    "nostr-double-ratchet": "0.0.182",
+    "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.19/nostr-pubsub-0.5.19.tgz",
     "nostr-tools": "^2",
     "qrcode": "^1.5.4"
   },

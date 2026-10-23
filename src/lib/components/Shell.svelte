@@ -192,6 +192,13 @@
     (value) => value.selected?.id,
   );
   let section: 'chats' | 'contacts' | 'settings' = 'chats';
+  let watchedDirectPeer: string | null = null;
+  $: selectedDirectPeer = section === 'chats' && $state.selected?.type === 'user' ? $state.selected.publicKey : null;
+  $: if (selectedDirectPeer !== watchedDirectPeer) {
+    watchedDirectPeer = selectedDirectPeer;
+    void nostr.watchDirectMessagePeer(selectedDirectPeer).catch(() => {});
+  }
+  onDestroy(() => { void nostr.watchDirectMessagePeer(null); });
   let mobileThread = false;
   let mobileViewport = matchMedia('(max-width: 767px)').matches;
   let query = '';
@@ -1867,6 +1874,7 @@
     >
       {#if modal === 'info' && inspectedMessage}<MessageInfo
           message={inspectedMessage}
+          directMessage={$state.selected?.type === 'user'}
           onretry={async (status) => {
             await nostr.retryDirectMessageRelay(
               Number(inspectedMessage!.id),

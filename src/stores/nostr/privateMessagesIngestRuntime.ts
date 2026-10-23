@@ -661,6 +661,25 @@ export function createPrivateMessagesIngestRuntime({
       return false;
     }
 
+    return processDecryptedPrivateMessage(wrappedEvent, rumorEvent, loggedInPubkeyHex, recipientContext, options);
+  }
+
+  // This entry point is only called after NdrRuntime authenticates the device's owner.
+  async function processIncomingRatchetMessage(rumorEvent: ClientEvent, loggedInPubkeyHex: string, outerEventId: string) {
+    if (![14, 7, 5, CALL_SIGNAL_KIND].includes(rumorEvent.kind) || rumorEvent.tags.some((tag) => tag[0] === 'l' || tag[0] === 'h')) return;
+    const wrapper = new ClientEvent(rumorEvent.ndk, { id: outerEventId, kind: 1060, pubkey: '', content: '', tags: [], created_at: rumorEvent.created_at });
+    return processDecryptedPrivateMessage(wrapper, rumorEvent, loggedInPubkeyHex, { recipientPubkey: loggedInPubkeyHex, groupChatPublicKey: null }, { live: true });
+  }
+
+  async function processDecryptedPrivateMessage(
+    wrappedEvent: ClientEvent,
+    rumorEvent: ClientEvent,
+    loggedInPubkeyHex: string,
+    recipientContext: { recipientPubkey: string; groupChatPublicKey: string | null },
+    options: { uiThrottleMs?: number; onStaged?: () => void; live?: boolean },
+  ): Promise<boolean | undefined> {
+    const processingGeneration = ingestQueueGeneration;
+    const wrappedRelayUrls = extractRelayUrlsFromEvent(wrappedEvent);
     const senderPubkeyHex = inputSanitizerService.normalizeHexKey(rumorEvent.pubkey ?? '');
     if (!senderPubkeyHex) {
       logInboundEvent('drop', {
@@ -734,7 +753,7 @@ export function createPrivateMessagesIngestRuntime({
       : null;
     let resolvedGroupChatPublicKey =
       resolvedGroupEpochContext?.chat.public_key ?? recipientContext.groupChatPublicKey;
-    if (!resolvedGroupChatPublicKey) {
+    if (!resolvedGroupChatPublicKey && wrappedEvent.kind !== 1060) {
       for (const recipientPubkey of recipients) {
         const matchingGroupChatContext =
           await findGroupChatEpochContextByRecipientPubkey(recipientPubkey);
@@ -871,7 +890,11 @@ export function createPrivateMessagesIngestRuntime({
 
     const uiThrottleMs = normalizeThrottleMs(options.uiThrottleMs);
 
-    const rumorNostrEvent = await toStoredNostrEvent(rumorEvent);
+    // NDR already verified the wire rumor ID before normalizing its author and
+    // recipient tags. Rehashing that routed view breaks remote edit/reply targets.
+    const rumorNostrEvent = wrappedEvent.kind === 1060
+      ? rumorEvent.rawEvent()
+      : await toStoredNostrEvent(rumorEvent);
     const loggedRumorEvent = buildLoggedNostrEvent(rumorEvent, rumorNostrEvent);
     const receivedRelayStatuses = buildInboundRelayStatuses(wrappedRelayUrls);
     const direction: NostrEventDirection = isSelfSentMessage ? 'out' : 'in';
@@ -1454,6 +1477,7 @@ export function createPrivateMessagesIngestRuntime({
     const inlineKeyboard = keyboardFromTags(rumorEvent.tags);
     let messageMeta: Record<string, unknown> = {
       source: 'nostr',
+      protocol: wrappedEvent.kind === 1060 ? 'ndr' : 'nip17',
       ...(inlineKeyboard ? { inline_keyboard: inlineKeyboard, inline_keyboard_version: rumorEvent.id,
         inline_keyboard_chat_type: resolvedGroupChatPublicKey ? 'private' : 'dm',
         bot_command: commandFromTags(rumorEvent.tags) } : {}),
@@ -1782,6 +1806,7 @@ export function createPrivateMessagesIngestRuntime({
   }
 
   return {
+    processIncomingRatchetMessage,
     getPrivateMessagesIngestQueue,
     queuePrivateMessageIngestion,
     resetPrivateMessagesIngestRuntimeState,

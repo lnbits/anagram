@@ -2146,6 +2146,19 @@ export const useMessageStore = createStore('messageStore', () => {
         : null;
     const replyTargetEventId = normalizeEventId(replyMeta?.eventId);
     const nostrStore = await getNostrStore();
+    if (existingRow.meta.protocol === 'ndr') {
+      const revision = await nostrStore.sendRatchetEdit(deliveryTarget.recipientPublicKey, previousEventId, cleanText);
+      if (!revision) throw new Error('Could not queue message edit.');
+      const updated = await chatDataService.applyMessageEdit(existingRow.id, {
+        message: cleanText, created_at: existingRow.created_at, event_id: previousEventId,
+        previous_event_id: previousEventId, edited_at: editedAt,
+        meta: { ...existingRow.meta, ratchet_edit_at: Number(revision.tags.find((tag) => tag[0] === 'ms')?.[1] ?? revision.created_at * 1000), ratchet_edit_id: revision.id },
+      });
+      if (!updated) throw new Error('Could not save message edit.');
+      const message = await hydrateMessageRow(updated, normalizedChatId);
+      replaceMessageInState(normalizedChatId, message);
+      return message;
+    }
     const deletionEvent = await nostrStore.sendDirectMessageDeletion(
       deliveryTarget.recipientPublicKey,
       previousEventId,

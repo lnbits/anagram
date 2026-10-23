@@ -28,6 +28,7 @@
   const items = [
     ['profile', 'profile.profile', 'face'],
     ['relays', 'relays.title', 'satellite_alt'],
+    ['messaging', 'Private messages', 'lock'],
     ['notifications', 'notifications.notifications', 'notifications'],
     ['media-data-storage', 'mediaDataStorage.title', 'storage'],
     ['theme', 'settings.appearance', 'wallpaper'],

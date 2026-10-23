@@ -461,6 +461,8 @@ export function createUserActions({
         throw new Error('Message is missing a persisted event id.');
       }
 
+      if (message.meta?.protocol === 'ndr') throw new Error('Double-ratchet messages retry automatically using their original encrypted envelope.');
+
       const storedEvent = await nostrEventDataService.getEventById(message.event_id);
       if (!storedEvent || storedEvent.direction !== 'out') {
         throw new Error('No outbound nostr event found for this message.');

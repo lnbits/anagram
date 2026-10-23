@@ -21,6 +21,8 @@
   export let onscroll: () => void = () => {};
   export let onmount: (node: HTMLDivElement) => void = () => {};
   export let children: Snippet;
+  // Floating controls (e.g. jump to reactions) anchored to the thread's bottom edge.
+  export let overlay: Snippet | undefined = undefined;
   let stickyDay = '';
   let frame = 0;
   let dayTimer: ReturnType<typeof setTimeout> | undefined;
@@ -76,6 +78,9 @@
   });
 </script>
 
+<!-- Floating buttons are positioned against the thread viewport, so they always sit
+     just above whatever follows it (reply/edit bar, request banner, growing composer). -->
+<div class="thread-viewport">
 <!-- Preserve native keyboard scrolling in the focusable message log. -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
@@ -132,3 +137,5 @@
 {#if !nearBottom}<button class="jump-latest" aria-label="Jump to latest messages" onclick={onlatest}
     ><Icon name="down" /></button
   >{/if}
+{@render overlay?.()}
+</div>

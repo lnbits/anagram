@@ -1788,22 +1788,24 @@
                 <Icon name="lock" />
                 <p>This is the beginning of your private conversation.</p>
               </div>{/each}
+            {#snippet overlay()}
+              {#if unseenReactionMessages.length}<button
+                  class="jump-reactions"
+                  aria-label="Jump to first new reaction"
+                  onclick={() => jump(unseenReactionMessages[0].id)}
+                  >♥ {unseenReactionMessages.reduce(
+                    (total, message) =>
+                      total +
+                      countUnseenReactionsForAuthor(
+                        message.meta.reactions ?? [],
+                        nostr.getLoggedInPublicKeyHex(),
+                      ),
+                    0,
+                  )}</button
+                >{/if}
+            {/snippet}
           </ThreadTimeline>
         {/key}
-        {#if unseenReactionMessages.length}<button
-            class="jump-reactions"
-            aria-label="Jump to first new reaction"
-            onclick={() => jump(unseenReactionMessages[0].id)}
-            >♥ {unseenReactionMessages.reduce(
-              (total, message) =>
-                total +
-                countUnseenReactionsForAuthor(
-                  message.meta.reactions ?? [],
-                  nostr.getLoggedInPublicKeyHex(),
-                ),
-              0,
-            )}</button
-          >{/if}
         {#if chats.isRequestChat($state.selected.id)}<div class="request-banner">
             Message request <button
               class="primary"

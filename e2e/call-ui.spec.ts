@@ -874,3 +874,662 @@ test('microphone menu keeps system default first and removes only redundant entr
   await page.getByTestId('call-microphone-source-1').click();
   expect(await page.evaluate(() => (window as any).__microphone)).toBe('headset');
 });
+
+test('call avatars follow participant profiles and speaking rings follow live audio levels', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.route('https://call-profile.example/**', (route) =>
+    route.fulfill({
+      contentType: 'image/svg+xml',
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="#326a99"/></svg>',
+    }),
+  );
+  await setup(page);
+  await page.evaluate(() => (window as any).__testCall.dismiss());
+  const peer = 'b'.repeat(64),
+    quiet = 'c'.repeat(64);
+  await page.evaluate(
+    async ({ peer, quiet }) => {
+      const { useCallRoomStore } = await import('/src/stores/callRoomStore.ts');
+      const { useNostrStore } = await import('/src/stores/nostrStore.svelte.ts');
+      const { rememberPublicProfile } = await import('/src/lib/state/publicProfiles.ts');
+      const { registerCallStream } = await import('/src/services/callStreamRegistry.ts');
+      const nostr = useNostrStore();
+      const retained = new Map<string, number>();
+      const retain = nostr.retainVisibleProfileTarget;
+      nostr.retainVisibleProfileTarget = (key: string) => {
+        retained.set(key, (retained.get(key) ?? 0) + 1);
+        const release = retain(key);
+        return () => {
+          retained.set(key, retained.get(key)! - 1);
+          release();
+        };
+      };
+      rememberPublicProfile(
+        peer,
+        { name: 'Profile peer', picture: 'https://call-profile.example/peer.svg' },
+        1,
+      );
+      // Synthetic speech: a tone whose gain the test switches on and off.
+      const audio = new AudioContext();
+      const tone = () => {
+        const gain = audio.createGain();
+        gain.gain.value = 0;
+        const oscillator = audio.createOscillator();
+        const output = audio.createMediaStreamDestination();
+        oscillator.connect(gain).connect(output);
+        oscillator.start();
+        return { gain, stream: output.stream };
+      };
+      const local = tone(),
+        remote = tone();
+      const canvas = document.createElement('canvas');
+      canvas.getContext('2d')!.fillRect(0, 0, 300, 150);
+      const own = {
+        pubkey: nostr.getLoggedInPublicKeyHex()!,
+        sessionId: 'local-speaking',
+        name: 'Host',
+        relays: [],
+      };
+      const member = (pubkey: string, name: string) => ({
+        pubkey,
+        sessionId: `${name}-session`,
+        name,
+        relays: [],
+      });
+      const rooms = useCallRoomStore();
+      const remoteUrl = registerCallStream(remote.stream).url;
+      const tile = (pubkey: string, name: string, audioUrl = '') => ({
+        ...member(pubkey, name),
+        phase: 'active',
+        microphoneMuted: false,
+        audioUrl,
+        videoUrl: '',
+        screenUrl: '',
+      });
+      // UI fixture only: no call transport or signalling is replaced in production.
+      Object.defineProperty(rooms, 'participants', {
+        configurable: true,
+        writable: true,
+        value: [tile(peer, 'Guest', remoteUrl), tile(quiet, 'Quiet guest')],
+      });
+      rooms.localStream = new MediaStream([
+        ...local.stream.getAudioTracks(),
+        ...canvas.captureStream(5).getVideoTracks(),
+      ]);
+      rooms.cameraMuted = true;
+      rooms.microphoneMuted = false;
+      rooms.session = {
+        own,
+        members: [own, member(peer, 'Guest'), member(quiet, 'Quiet guest')],
+        phase: 'active',
+        revision: 1,
+        link: {
+          id: 'speaking-ui',
+          host: own.pubkey,
+          secret: '',
+          relays: [],
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        },
+      };
+      (window as any).__speech = {
+        retained,
+        own: own.pubkey,
+        local: local.gain.gain,
+        remote: remote.gain.gain,
+        remoteUrl,
+        rooms,
+        // Participants are a fixture property; a session update re-reads them.
+        leaveQuiet() {
+          rooms.participants = rooms.participants.filter((entry: any) => entry.pubkey !== quiet);
+          rooms.session = { ...rooms.session };
+        },
+      };
+    },
+    { peer, quiet },
+  );
+  const speech = (expression: string) => page.evaluate(`window.__speech.${expression}`);
+  const retained = (key: string) =>
+    page.evaluate((key) => (window as any).__speech.retained.get(key) ?? 0, key);
+  const local = page.getByTestId('room-local');
+  const remote = page.getByTestId(`room-peer-${peer}`);
+  const silent = page.getByTestId(`room-peer-${quiet}`);
+
+  // Cameras off: real profile pictures, initials as the fallback, no generic icon.
+  await expect(remote.locator('.call-person .avatar img')).toHaveAttribute(
+    'src',
+    'https://call-profile.example/peer.svg',
+  );
+  await expect
+    .poll(() => remote.locator('.avatar img').evaluate((img: HTMLImageElement) => img.naturalWidth))
+    .toBeGreaterThan(0);
+  await expect(silent.locator('.call-person .avatar')).toHaveText('QG');
+  await expect(local.locator('.call-person .avatar')).toBeVisible();
+  // Visible participants are hydrated once each; the account's own profile already is.
+  expect(await retained(peer)).toBe(1);
+  expect(await retained(quiet)).toBe(1);
+  expect(await retained(await speech('own'))).toBe(0);
+  await speech('leaveQuiet()');
+  await expect(silent).toHaveCount(0);
+  expect(await retained(quiet)).toBe(0);
+  expect(await retained(peer)).toBe(1);
+
+  // Gallery view: rings follow speech and clear after a pause.
+  await expect(page.locator('.room-tile--speaking')).toHaveCount(0);
+  await speech('remote.value = 0.5');
+  await expect(remote).toHaveClass(/room-tile--speaking/);
+  await expect(local).not.toHaveClass(/room-tile--speaking/);
+  // Gallery tiles are not promoted, so the active speaker marks no tile.
+  await expect(page.locator('.room-tile--speaker')).toHaveCount(0);
+  await page.screenshot({ path: 'test-results/call-room-speaking.png' });
+  await speech('remote.value = 0');
+  await expect(remote).not.toHaveClass(/room-tile--speaking/);
+  await speech('local.value = 0.5');
+  await expect(local).toHaveClass(/room-tile--speaking/);
+  // The ring stays on the tile when its camera turns on.
+  await speech('rooms.cameraMuted = false');
+  await expect(local.locator('video')).toBeVisible();
+  await expect(local).toHaveClass(/room-tile--speaking/);
+  await speech('rooms.microphoneMuted = true');
+  await expect(local).not.toHaveClass(/room-tile--speaking/);
+  await speech('rooms.cameraMuted = true');
+
+  // Speaker view still promotes the person speaking, and the ring works beside a shared screen.
+  await page.getByTestId('room-view-toggle').click();
+  await expect(page.locator('.room-grid--speaker')).toHaveCount(1);
+  await expect(local).toHaveClass(/room-tile--speaker/);
+  await speech('remote.value = 0.5');
+  await expect(remote).toHaveClass(/room-tile--speaker/);
+  await expect(remote).toHaveClass(/room-tile--speaking/);
+  await speech('rooms.localScreenStream = new MediaStream()');
+  await expect(page.locator('.room-grid--sharing')).toHaveCount(1);
+  await expect(remote).toHaveClass(/room-tile--speaking/);
+  await speech('remote.value = 0');
+  await expect(remote).not.toHaveClass(/room-tile--speaking/);
+  await speech('rooms.localScreenStream = null');
+
+  // Leaving releases every retained profile.
+  await speech('rooms.session = null');
+  await expect(page.getByTestId('room-panel')).toHaveCount(0);
+  expect(await retained(peer)).toBe(0);
+
+  // Direct calls: the caller's avatar rings while they speak, not while they are muted.
+  await page.evaluate((peer) => {
+    const call = (window as any).__testCall;
+    call.remoteMediaUrl = (window as any).__speech.remoteUrl;
+    call.session = {
+      id: 'speaking-direct',
+      peerPubkey: peer,
+      peerName: 'Guest',
+      direction: 'incoming',
+      mode: 'audio',
+      phase: 'active',
+      startedAt: new Date().toISOString(),
+      microphoneMuted: false,
+      cameraMuted: true,
+      mediaVersion: 2,
+      peerConfirmed: true,
+    };
+  }, peer);
+  const avatar = page.locator('.call-peer-avatar');
+  await expect(avatar.locator('.avatar img')).toBeVisible();
+  expect(await retained(peer)).toBe(1);
+  await expect(avatar).not.toHaveClass(/call-speaking/);
+  await speech('remote.value = 0.5');
+  await expect(avatar).toHaveClass(/call-speaking/);
+  await page.screenshot({ path: 'test-results/call-direct-speaking.png' });
+
+  // Beside the local camera the header avatar is hidden; the peer keeps one on stage.
+  const stageAvatar = page.getByTestId('call-remote-avatar');
+  await page.evaluate(() => {
+    const call = (window as any).__testCall;
+    const canvas = document.createElement('canvas');
+    canvas.getContext('2d')!.fillRect(0, 0, 300, 150);
+    (window as any).__speech.camera = () => canvas.captureStream(5);
+    call.localStream = (window as any).__speech.camera();
+    call.session = { ...call.session, cameraMuted: false };
+  });
+  await expect(page.locator('.call-panel__local video')).toBeVisible();
+  await expect(avatar).toBeHidden();
+  await expect(stageAvatar.locator('.avatar img')).toBeVisible();
+  await expect(stageAvatar).toHaveClass(/call-speaking/);
+  await speech('remote.value = 0');
+  await expect(stageAvatar).not.toHaveClass(/call-speaking/);
+  // Max fill keeps its layout: the local camera alone fills the stage.
+  const fillsStage = (selector: string) =>
+    page.evaluate((selector) => {
+      const media = document.querySelector(selector)!.getBoundingClientRect();
+      const stage = document.querySelector('[data-testid="call-stage"]')!.getBoundingClientRect();
+      return Math.abs(media.width - stage.width) < 2 && Math.abs(media.height - stage.height) < 2;
+    }, selector);
+  await page.getByTestId('call-max-fill').click();
+  await expect(stageAvatar).toHaveCount(0);
+  await expect(page.locator('.call-panel__remote')).toHaveCount(0);
+  await expect.poll(() => fillsStage('.call-panel__local')).toBe(true);
+  await page.getByTestId('call-max-fill').click();
+  await expect(stageAvatar).toBeVisible();
+  expect(await fillsStage('.call-panel__local')).toBe(false);
+
+  // The same while only a screen is shared.
+  await page.evaluate(() => {
+    const call = (window as any).__testCall;
+    call.session = { ...call.session, cameraMuted: true };
+    call.localScreenStream = (window as any).__speech.camera();
+  });
+  await expect(page.getByTestId('call-screen-media')).toBeVisible();
+  await expect(page.locator('.call-panel__local')).toHaveCount(0);
+  await expect(stageAvatar).toBeVisible();
+  await speech('remote.value = 0.5');
+  await expect(stageAvatar).toHaveClass(/call-speaking/);
+  await page.screenshot({ path: 'test-results/call-direct-sharing-speaking.png' });
+  // In Max fill the shared screen takes the whole stage, without a camera column.
+  await page.getByTestId('call-max-fill').click();
+  await expect(stageAvatar).toHaveCount(0);
+  await expect(page.locator('.call-stage__cameras')).toBeHidden();
+  await expect.poll(() => fillsStage('.call-stage__screen')).toBe(true);
+  await page.getByTestId('call-max-fill').click();
+  await expect(stageAvatar).toHaveClass(/call-speaking/);
+
+  // The presentation window follows the ring without rebuilding its mirror.
+  const popupPromise = page.waitForEvent('popup');
+  await page.getByTestId('call-open-window').click();
+  const popup = await popupPromise;
+  const mirrored = popup.locator('main > [data-testid="call-stage"]');
+  const popupAvatar = popup.getByTestId('call-remote-avatar');
+  await expect(popupAvatar).toHaveClass(/call-speaking/);
+  await mirrored.evaluate((node) => ((node as any).__mirror = true));
+  await speech('remote.value = 0');
+  await expect(popupAvatar).not.toHaveClass(/call-speaking/);
+  await speech('remote.value = 0.5');
+  await expect(popupAvatar).toHaveClass(/call-speaking/);
+  expect(await mirrored.evaluate((node) => (node as any).__mirror)).toBe(true);
+
+  // Remote video replaces the stage avatar and carries the ring; the window mirrors it in place.
+  await page.evaluate(async () => {
+    const { registerCallStream } = await import('/src/services/callStreamRegistry.ts');
+    const call = (window as any).__testCall;
+    call.remoteVideoUrl = registerCallStream((window as any).__speech.camera()).url;
+  });
+  const remoteFrame = page.locator('.call-panel__remote', {
+    has: page.getByTestId('call-remote-media'),
+  });
+  await expect(stageAvatar).toHaveCount(0);
+  await expect(remoteFrame).toHaveClass(/call-speaking/);
+  await expect(popupAvatar).toHaveCount(0);
+  await expect(popup.locator('.call-panel__remote.call-speaking canvas')).toBeVisible();
+  expect(await mirrored.evaluate((node) => (node as any).__mirror)).toBe(true);
+  await speech('remote.value = 0');
+  await expect(remoteFrame).not.toHaveClass(/call-speaking/);
+  await expect(popup.locator('.call-panel__remote.call-speaking')).toHaveCount(0);
+  await page.getByTestId('call-return-presentation').click();
+  await expect.poll(() => popup.isClosed()).toBe(true);
+  await page.evaluate(() => {
+    const call = (window as any).__testCall;
+    call.localScreenStream = null;
+    call.remoteVideoUrl = '';
+  });
+  await expect(avatar).toBeVisible();
+  await speech('remote.value = 0.5');
+  await expect(avatar).toHaveClass(/call-speaking/);
+
+  // Speech state is dropped, not held, when its audio goes away mid-word, and
+  // it does not return when silent audio comes back within the hold window.
+  const stopped = { timeout: 300 };
+  await page.evaluate(() => ((window as any).__testCall.remoteMediaUrl = ''));
+  await expect(avatar).not.toHaveClass(/call-speaking/, stopped);
+  await speech('remote.value = 0');
+  await page.evaluate(() => {
+    (window as any).__testCall.remoteMediaUrl = (window as any).__speech.remoteUrl;
+  });
+  await page.waitForTimeout(250);
+  await expect(avatar).not.toHaveClass(/call-speaking/);
+  // The same when metering stops and resumes with the overlay minimized.
+  await speech('remote.value = 0.5');
+  await expect(avatar).toHaveClass(/call-speaking/);
+  await page.getByTestId('call-minimize').click();
+  await expect(avatar).not.toHaveClass(/call-speaking/, stopped);
+  await speech('remote.value = 0');
+  await page.getByTestId('call-restore').click();
+  await page.waitForTimeout(250);
+  await expect(avatar).not.toHaveClass(/call-speaking/);
+
+  await speech('remote.value = 0.5');
+  await expect(avatar).toHaveClass(/call-speaking/);
+  await page.evaluate(() => {
+    const call = (window as any).__testCall;
+    call.session = { ...call.session, remoteMicrophoneMuted: true };
+  });
+  await expect(avatar).not.toHaveClass(/call-speaking/);
+  // Hanging up mid-speech clears the ring on the ended screen.
+  await page.evaluate(() => {
+    const call = (window as any).__testCall;
+    call.session = { ...call.session, remoteMicrophoneMuted: false };
+  });
+  await expect(avatar).toHaveClass(/call-speaking/);
+  await page.evaluate(() => {
+    const call = (window as any).__testCall;
+    call.session = { ...call.session, phase: 'ended', endReason: 'hangup' };
+  });
+  await expect(avatar).toBeVisible();
+  await expect(avatar).not.toHaveClass(/call-speaking/, stopped);
+  await speech('remote.value = 0');
+  await page.evaluate(() => {
+    const call = (window as any).__testCall;
+    call.remoteMediaUrl = '';
+    call.session = null;
+  });
+  await expect(page.getByTestId('call-panel')).toHaveCount(0);
+  expect(await retained(peer)).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('speaking meters release their own captures and never divert playback', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await setup(page);
+  await page.evaluate(async () => {
+    (window as any).__testCall.dismiss();
+    const { registerCallStream } = await import('/src/services/callStreamRegistry.ts');
+    const audio = new AudioContext();
+    const gain = audio.createGain();
+    gain.gain.value = 0.5;
+    const oscillator = audio.createOscillator();
+    oscillator.connect(gain);
+    oscillator.start();
+    const output = () => {
+      const destination = audio.createMediaStreamDestination();
+      gain.connect(destination);
+      return destination.stream;
+    };
+    // Element capture stands in for MediaSource playback; each call is a new stream.
+    const captures: MediaStream[] = [];
+    Object.defineProperty(HTMLMediaElement.prototype, 'captureStream', {
+      configurable: true,
+      value() {
+        const stream = output();
+        captures.push(stream);
+        return stream;
+      },
+    });
+    const registered = output();
+    (window as any).__meters = {
+      captures,
+      gain: gain.gain,
+      registered,
+      registeredUrl: registerCallStream(registered).url,
+      firefox() {
+        Object.defineProperty(HTMLMediaElement.prototype, 'captureStream', {
+          configurable: true,
+          value: undefined,
+        });
+        (window as any).__mozCaptures = 0;
+        Object.defineProperty(HTMLMediaElement.prototype, 'mozCaptureStream', {
+          configurable: true,
+          value() {
+            (window as any).__mozCaptures++;
+            return output();
+          },
+        });
+      },
+    };
+    const call = (window as any).__testCall;
+    // An unregistered URL takes the element-capture path, like MediaSource audio.
+    call.remoteMediaUrl =
+      'data:audio/wav;base64,UklGRiYAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQIAAAAAAA==';
+    call.session = {
+      id: 'meter-captures',
+      peerPubkey: 'd'.repeat(64),
+      peerName: 'Capture peer',
+      direction: 'incoming',
+      mode: 'audio',
+      phase: 'active',
+      startedAt: new Date().toISOString(),
+      microphoneMuted: false,
+      cameraMuted: true,
+      mediaVersion: 2,
+      peerConfirmed: true,
+    };
+  });
+  const avatar = page.locator('.call-peer-avatar');
+  // Captures made so far, and how many of them still hold live tracks.
+  const captures = () =>
+    page.evaluate(() => {
+      const streams: MediaStream[] = (window as any).__meters.captures;
+      const live = streams.filter((stream) =>
+        stream.getTracks().some((track) => track.readyState === 'live'),
+      );
+      return { made: streams.length, live: live.length };
+    });
+  const setMuted = (muted: boolean) =>
+    page.evaluate((muted) => {
+      const call = (window as any).__testCall;
+      call.session = { ...call.session, remoteMicrophoneMuted: muted };
+    }, muted);
+
+  // Captured audio is metered; each stop ends that capture, so restarts never accumulate.
+  await expect(avatar).toHaveClass(/call-speaking/);
+  expect((await captures()).live).toBe(1);
+  const first = (await captures()).made;
+  for (let cycle = 0; cycle < 3; cycle++) {
+    await setMuted(true);
+    await expect(avatar).not.toHaveClass(/call-speaking/);
+    await expect.poll(async () => (await captures()).live).toBe(0);
+    await setMuted(false);
+    await expect(avatar).toHaveClass(/call-speaking/);
+    expect((await captures()).live).toBe(1);
+  }
+  expect((await captures()).made).toBeGreaterThan(first);
+
+  // A stream registered by the call is metered but never stopped by the meter.
+  await page.evaluate(() => {
+    (window as any).__testCall.remoteMediaUrl = (window as any).__meters.registeredUrl;
+  });
+  await expect.poll(async () => (await captures()).live).toBe(0);
+  await expect(avatar).toHaveClass(/call-speaking/);
+  await setMuted(true);
+  await expect(avatar).not.toHaveClass(/call-speaking/);
+  expect(
+    await page.evaluate(() =>
+      (window as any).__meters.registered
+        .getTracks()
+        .map((track: MediaStreamTrack) => track.readyState),
+    ),
+  ).toEqual(['live']);
+
+  // Firefox only offers mozCaptureStream, which takes playback from the speakers:
+  // that path plays normally and is not metered.
+  await page.evaluate(() => {
+    (window as any).__meters.firefox();
+    (window as any).__testCall.remoteMediaUrl =
+      'data:audio/wav;base64,UklGRiYAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQIAAAAAAA==';
+  });
+  await setMuted(false);
+  await page.waitForTimeout(400);
+  await expect(avatar).not.toHaveClass(/call-speaking/);
+  expect(await page.evaluate(() => (window as any).__mozCaptures)).toBe(0);
+  const remoteAudio = page.getByTestId('call-remote-audio');
+  await expect(remoteAudio).toHaveJSProperty('muted', false);
+  expect(await remoteAudio.evaluate((audio: HTMLAudioElement) => audio.src)).toMatch(
+    /^data:audio\/wav/,
+  );
+
+  await page.evaluate(() => {
+    const call = (window as any).__testCall;
+    call.remoteMediaUrl = '';
+    call.session = null;
+  });
+  await expect(page.getByTestId('call-panel')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('speaking meters follow the recording window and document visibility', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await setup(page);
+  await page.evaluate(() => (window as any).__testCall.dismiss());
+  const first = 'e'.repeat(64),
+    second = 'f'.repeat(64);
+  await page.evaluate(
+    async ({ first, second }) => {
+      const { useCallRoomStore } = await import('/src/stores/callRoomStore.ts');
+      const { useNostrStore } = await import('/src/stores/nostrStore.svelte.ts');
+      const { registerCallStream } = await import('/src/services/callStreamRegistry.ts');
+      // Only the speaking meters read streams through Web Audio here: count their live sources.
+      const sources = new Set<AudioNode>();
+      const create = AudioContext.prototype.createMediaStreamSource;
+      AudioContext.prototype.createMediaStreamSource = function (stream) {
+        const node = create.call(this, stream);
+        sources.add(node);
+        const disconnect = node.disconnect.bind(node) as () => void;
+        (node as any).disconnect = () => {
+          sources.delete(node);
+          disconnect();
+        };
+        return node;
+      };
+      // The test decides whether this document is hidden.
+      let hidden = false;
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => (hidden ? 'hidden' : 'visible'),
+      });
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+      const audio = new AudioContext();
+      const tone = () => {
+        const gain = audio.createGain();
+        gain.gain.value = 0;
+        const oscillator = audio.createOscillator();
+        const output = audio.createMediaStreamDestination();
+        oscillator.connect(gain).connect(output);
+        oscillator.start();
+        return { gain, stream: output.stream };
+      };
+      const local = tone(),
+        one = tone(),
+        two = tone();
+      const nostr = useNostrStore();
+      const own = {
+        pubkey: nostr.getLoggedInPublicKeyHex()!,
+        sessionId: 'local-meters',
+        name: 'Host',
+        relays: [],
+      };
+      const member = (pubkey: string, name: string) => ({
+        pubkey,
+        sessionId: `${name}-session`,
+        name,
+        relays: [],
+      });
+      const tile = (pubkey: string, name: string, stream: MediaStream) => ({
+        ...member(pubkey, name),
+        phase: 'active',
+        microphoneMuted: false,
+        audioUrl: registerCallStream(stream).url,
+        videoUrl: '',
+        screenUrl: '',
+      });
+      const rooms = useCallRoomStore();
+      // UI fixture only: no call transport or signalling is replaced in production.
+      Object.defineProperty(rooms, 'participants', {
+        configurable: true,
+        writable: true,
+        value: [tile(first, 'First', one.stream), tile(second, 'Second', two.stream)],
+      });
+      rooms.localStream = new MediaStream(local.stream.getAudioTracks());
+      rooms.cameraMuted = true;
+      rooms.microphoneMuted = false;
+      rooms.session = {
+        own,
+        members: [own, member(first, 'First'), member(second, 'Second')],
+        phase: 'active',
+        revision: 1,
+        link: {
+          id: 'meter-lifecycle',
+          host: own.pubkey,
+          secret: '',
+          relays: [],
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        },
+      };
+      (window as any).__lifecycle = {
+        sources,
+        rooms,
+        first: one.gain.gain,
+        second: two.gain.gain,
+        hide(value: boolean) {
+          hidden = value;
+          document.dispatchEvent(new Event('visibilitychange'));
+        },
+      };
+    },
+    { first, second },
+  );
+  const run = (expression: string) => page.evaluate(`window.__lifecycle.${expression}`);
+  const live = () => page.evaluate(() => (window as any).__lifecycle.sources.size);
+  const firstTile = page.getByTestId(`room-peer-${first}`);
+  // The local microphone and both peers are metered while the call is on screen.
+  await expect.poll(live).toBe(3);
+
+  // Hidden with no recording window: every meter stops, and speech is not shown.
+  await run('hide(true)');
+  await expect.poll(live).toBe(0);
+  await run('first.value = 0.5');
+  await page.waitForTimeout(300);
+  await expect(firstTile).not.toHaveClass(/room-tile--speaking/);
+  // Back in the foreground the meters restart once each and pick up the speech.
+  await run('hide(false)');
+  await expect.poll(live).toBe(3);
+  await expect(firstTile).toHaveClass(/room-tile--speaking/);
+  await run('first.value = 0');
+  await expect(firstTile).not.toHaveClass(/room-tile--speaking/);
+  // Repeated transitions never accumulate meters.
+  for (let cycle = 0; cycle < 3; cycle++) {
+    await run('hide(true)');
+    await expect.poll(live).toBe(0);
+    await run('hide(false)');
+    await expect.poll(live).toBe(3);
+  }
+
+  // Recording window open, overlay minimized and this document hidden: the window
+  // still shows who speaks, and speaker view still switches.
+  await page.getByTestId('room-view-toggle').click();
+  const popupPromise = page.waitForEvent('popup');
+  await page.getByTestId('room-open-window').click();
+  const popup = await popupPromise;
+  await page.getByTestId('room-minimize').click();
+  await expect(page.getByTestId('room-compact')).toBeVisible();
+  await run('hide(true)');
+  await page.waitForTimeout(250);
+  expect(await live()).toBe(3);
+  const mirroredFirst = popup.getByTestId(`room-peer-${first}`);
+  const mirroredSecond = popup.getByTestId(`room-peer-${second}`);
+  await run('first.value = 0.5');
+  await expect(mirroredFirst).toHaveClass(/room-tile--speaking/);
+  await expect(mirroredFirst).toHaveClass(/room-tile--speaker/);
+  await run('first.value = 0');
+  await run('second.value = 0.5');
+  await expect(mirroredSecond).toHaveClass(/room-tile--speaking/);
+  await expect(mirroredSecond).toHaveClass(/room-tile--speaker/);
+  await expect(mirroredFirst).not.toHaveClass(/room-tile--speaker/);
+  await run('second.value = 0');
+  await expect(mirroredSecond).not.toHaveClass(/room-tile--speaking/);
+  await run('hide(false)');
+  expect(await live()).toBe(3);
+
+  // Closing the window while minimized stops every meter; restoring restarts them.
+  await popup.close();
+  await expect.poll(live).toBe(0);
+  await page.getByTestId('room-restore').click();
+  await expect.poll(live).toBe(3);
+  await run('first.value = 0.5');
+  await expect(firstTile).toHaveClass(/room-tile--speaking/);
+  await run('first.value = 0');
+
+  // Leaving the call releases every meter.
+  await run('rooms.session = null');
+  await expect(page.getByTestId('room-panel')).toHaveCount(0);
+  await expect.poll(live).toBe(0);
+  expect(errors).toEqual([]);
+});

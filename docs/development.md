@@ -76,6 +76,8 @@ The iPhone workflow runs WebKit playback tests and simulated native viewport tes
 
 The iOS app supports messaging and calls while open. Background notifications, lock-screen answering and closed-app incoming calls are unsupported; background call continuity requires device validation. No APNs or PushKit/CallKit integration is included.
 
+Speaking indicators meter call audio in one shared, output-less `AudioContext`. Remote audio on the WebM/MediaSource path (native Linux, and peers without packet audio) is metered through `HTMLMediaElement.captureStream()`, which WebKit does not provide, so those calls show no speaking indicator on iOS, macOS or Linux. Firefox only offers `mozCaptureStream()`, which can divert the element's playback away from the speakers, so that path is not metered in Firefox either. In Max fill, a direct call without remote video shows its media alone, without the peer's avatar or speaking ring. While a call is on screen this context runs alongside the packet-audio engine; its effect on receiver/loudspeaker and headset routing has not been validated on physical iOS or Android devices.
+
 ## Extra checks
 
 ```sh

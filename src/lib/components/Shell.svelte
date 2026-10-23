@@ -226,6 +226,12 @@
   let reply: MessageReplyPreview | null = null;
   let editing: Message | null = null;
   let beforeEdit: { draft: string; reply: MessageReplyPreview | null } | null = null;
+  function cancelComposerContext() {
+    if (editing) finishEditing();
+    else reply = null;
+    // The cancel button unmounts with the banner; keep the user in the composer.
+    void tick().then(() => composerInput?.focus());
+  }
   function finishEditing() {
     if (beforeEdit) {
       draft = beforeEdit.draft;
@@ -263,6 +269,7 @@
   let menu = false;
   let emoji = false;
   let searching = false;
+  let searchToggle: HTMLButtonElement | undefined;
   let forward: Message | null = null;
   let scrollArea: HTMLDivElement;
   let fileInput: HTMLInputElement;
@@ -323,8 +330,10 @@
     contextMessage = message.id;
   }
   function closeMessageActions() {
+    // Other close paths (choosing an action, outside click, scroll) leave the
+    // trigger behind; only a menu that is still open returns focus to it.
+    if (contextMessage) contextTrigger?.focus({ preventScroll: true });
     contextMessage = '';
-    contextTrigger?.focus({ preventScroll: true });
     contextTrigger = null;
   }
   let groupPin: PrivateGroupPin | null = null;
@@ -1639,8 +1648,10 @@
                 ><Icon name="video" /></button
               >{/if}
             <button
+              bind:this={searchToggle}
               class="icon-button"
               aria-label="Search conversation"
+              aria-expanded={searching}
               onclick={() => (searching = !searching)}><Icon name="search" /></button
             ><button class="icon-button" aria-label="Contact profile" onclick={openProfile}
               ><Icon name="contacts" /></button
@@ -1664,7 +1675,11 @@
                 messages.searchMessages($state.selected!.id, query, signal, before)}
               onselect={jump}
               onclear={() => (highlightedMessage = '')}
-              onclose={() => (searching = false)}
+              onclose={() => {
+                searching = false;
+                // The search field unmounts; return focus to the button that opened it.
+                void tick().then(() => searchToggle?.focus());
+              }}
             />
           {/key}
         {/if}
@@ -1813,14 +1828,7 @@
               >{$translate('Block')}</button
             >
           </div>{/if}
-        <ComposerContext
-          {reply}
-          editing={Boolean(editing)}
-          oncancel={() => {
-            if (editing) finishEditing();
-            else reply = null;
-          }}
-        />
+        <ComposerContext {reply} editing={Boolean(editing)} oncancel={cancelComposerContext} />
         <MessageComposer
           bind:draft
           bind:input={composerInput}
@@ -1832,6 +1840,7 @@
           onsend={() => void send()}
           onfile={prepareUpload}
           pasteContext={uploadContext}
+          oncancel={reply || editing ? cancelComposerContext : undefined}
           {mentionProfiles}
           onchange={() => {
             if (!editing) chats.setComposerDraft(currentId, draft);

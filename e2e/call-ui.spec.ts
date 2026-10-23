@@ -855,8 +855,10 @@ test('microphone menu keeps system default first and removes only redundant entr
 }) => {
   await setup(page);
   await page.evaluate(() => {
-    navigator.mediaDevices.enumerateDevices = async () =>
-      ['default', 'built-in', 'built-in', 'headset'].map(
+    (window as any).__enumerations = 0;
+    navigator.mediaDevices.enumerateDevices = async () => {
+      (window as any).__enumerations++;
+      return ['default', 'built-in', 'built-in', 'headset'].map(
         (deviceId) =>
           ({
             deviceId,
@@ -865,6 +867,7 @@ test('microphone menu keeps system default first and removes only redundant entr
             groupId: 'same-group',
           }) as MediaDeviceInfo,
       );
+    };
   });
   await page.getByTestId('call-accept').click();
   await page.getByTestId('call-microphone-menu').click();
@@ -873,4 +876,12 @@ test('microphone menu keeps system default first and removes only redundant entr
   await expect(menu.getByRole('button').first()).toHaveText('System default');
   await page.getByTestId('call-microphone-source-1').click();
   expect(await page.evaluate(() => (window as any).__microphone)).toBe('headset');
+  // Call state changes that keep the same local stream do not re-enumerate devices.
+  const enumerations = await page.evaluate(() => (window as any).__enumerations);
+  expect(enumerations).toBeGreaterThan(0);
+  await page.getByTestId('call-microphone').click();
+  await expect(page.getByTestId('call-microphone')).toHaveAttribute('aria-pressed', 'true');
+  await page.getByTestId('call-microphone').click();
+  await expect(page.getByTestId('call-microphone')).toHaveAttribute('aria-pressed', 'false');
+  expect(await page.evaluate(() => (window as any).__enumerations)).toBe(enumerations);
 });

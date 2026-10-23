@@ -1,3 +1,4 @@
+import { callCaptureTrack } from '#src/services/callSharedCapture.ts';
 import { createCallRoomRuntime } from '#src/stores/nostr/callRoomRuntime.svelte.ts';
 import {
   type CallRoomLink,
@@ -5,7 +6,7 @@ import {
   type CallRoomSignal,
   ROOM_PROTOCOL,
 } from '#src/types/callRoom.ts';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 class Track {
   enabled = true;
@@ -534,4 +535,262 @@ it('keeps the room roster while a peer reconnects, and lowers video bitrate as t
   expect(h.runtime.session!.members).toEqual(roster);
   expect(h.runtime.session!.phase).toBe('active');
   expect(h.microphone.stop).not.toHaveBeenCalled();
+});
+describe('room controls while a peer link is down', () => {
+  const peer = 'b'.repeat(64);
+  async function activeRoom(beforeConfirm?: (h: ReturnType<typeof setup>) => Promise<void>) {
+    const h = setup();
+    const links: Array<{ send: ReturnType<typeof vi.fn>; drop: () => void }> = [];
+    // Holding the camera start frame keeps a peer link busy mid camera change.
+    let cameraStart = Promise.resolve();
+    h.deps.media.createEndpoint.mockImplementation(
+      async () =>
+        ({
+          id: () => 'a'.repeat(64),
+          relay_url: () => 'https://relay.example/',
+          online: async () => {},
+          close: vi.fn().mockResolvedValue(undefined),
+          connect: vi.fn(async () => {
+            let fail: (cause: Error) => void = () => {};
+            const connection = {
+              send: vi.fn(async (frame: Uint8Array) => {
+                if (frame[0] === 5 && frame[1] === 1) await cameraStart;
+              }),
+              close: vi.fn(),
+              recv: vi
+                .fn()
+                .mockResolvedValueOnce(new Uint8Array([2]))
+                .mockImplementationOnce(
+                  () =>
+                    new Promise((_, reject) => {
+                      fail = reject;
+                    }),
+                )
+                .mockImplementation(() => new Promise(() => {})),
+            };
+            links.push({ send: connection.send, drop: () => fail(new Error('Network changed')) });
+            return connection;
+          }),
+          accept: () => new Promise<never>(() => {}),
+        }) as never,
+    );
+    h.deps.media.getCamera.mockImplementation(
+      async () => new MediaStream([new Track('video')] as unknown as MediaStreamTrack[]),
+    );
+    h.deps.media.getMedia.mockResolvedValueOnce(
+      new MediaStream([h.microphone, new Track('video')] as unknown as MediaStreamTrack[]),
+    );
+    await h.runtime.create('video');
+    const link = h.runtime.session!.link;
+    const request = join(link, peer);
+    await h.runtime.receive(peer, request);
+    const answer = async (action: string) => {
+      let sent: any;
+      await vi.waitFor(() => {
+        sent = h.deps.send.mock.calls.findLast(
+          ([to, body]) => to === peer && body.signal?.action === action,
+        )?.[1];
+        expect(sent).toBeDefined();
+      });
+      await h.runtime.receive(
+        peer,
+        signal(link, {
+          action: 'signal',
+          senderSession: request.senderSession,
+          recipientSession: link.id,
+          signal: {
+            ...sent.signal,
+            action: 'accept',
+            mediaVersion: 2,
+            reconnectSupported: true,
+            videoSupported: true,
+          },
+        }),
+      );
+      await vi.waitFor(() => expect(h.runtime.participants[0]?.phase).toBe('active'));
+    };
+    if (beforeConfirm) {
+      await vi.waitFor(() =>
+        expect(h.deps.send.mock.calls.some(([, body]) => body.signal?.action === 'invite')).toBe(
+          true,
+        ),
+      );
+      await beforeConfirm(h);
+    }
+    await answer('invite');
+    const recorded = (kind: 'audio' | 'video') =>
+      h.deps.media.record.mock.calls
+        .map((args: any[]) => (args[0] as MediaStream).getTracks()[0] as unknown as Track)
+        .filter((track) => track?.kind === kind);
+    await vi.waitFor(() => expect(recorded('video')).toHaveLength(1));
+    return {
+      h,
+      recorded,
+      lastSends: () => links.at(-1)!.send.mock.calls.map(([frame]) => [...frame]),
+      async drop() {
+        links.at(-1)!.drop();
+        await vi.waitFor(() => expect(h.runtime.participants[0]?.phase).toBe('reconnecting'));
+      },
+      restore: () => answer('reconnect'),
+      holdCameraStart() {
+        let release!: () => void;
+        cameraStart = new Promise((resolve) => {
+          release = resolve;
+        });
+        return release;
+      },
+    };
+  }
+  // Reconnects with the room camera on while the link's own camera is off, and holds
+  // the link inside the camera-on it applies on reactivation.
+  async function reactivatingWithCamera() {
+    const room = await activeRoom();
+    await room.drop();
+    await room.h.runtime.toggleCamera();
+    await room.h.runtime.toggleCamera();
+    expect(room.h.runtime.cameraMuted).toBe(false);
+    const release = room.holdCameraStart();
+    await room.restore();
+    await vi.waitFor(() => expect(room.lastSends()).toContainEqual([5, 1]));
+    return { ...room, release };
+  }
+
+  it('stops the camera clone at once, keeps it off after reconnecting, and can turn it on again', async () => {
+    const room = await activeRoom();
+    const clone = room.recorded('video')[0];
+    await room.drop();
+    await room.h.runtime.toggleCamera();
+    expect(room.h.runtime.cameraMuted).toBe(true);
+    expect(clone.stop).toHaveBeenCalled();
+    await room.restore();
+    await vi.waitFor(() => expect(room.lastSends()).toContainEqual([2]));
+    expect(room.lastSends()).not.toContainEqual([5, 1]);
+    expect(room.recorded('video')).toHaveLength(1);
+    await room.h.runtime.toggleCamera();
+    await vi.waitFor(() => expect(room.recorded('video')).toHaveLength(2));
+    expect(room.recorded('video')[1].readyState).toBe('live');
+    expect(room.lastSends()).toContainEqual([5, 1]);
+  });
+
+  it('applies a camera turned off before the link dropped, and one turned on while it was down', async () => {
+    const room = await activeRoom();
+    await room.h.runtime.toggleCamera();
+    expect(room.lastSends()).toContainEqual([5, 0]);
+    await room.drop();
+    await room.restore();
+    await vi.waitFor(() => expect(room.lastSends()).toContainEqual([2]));
+    expect(room.recorded('video')).toHaveLength(1);
+    await room.drop();
+    await room.h.runtime.toggleCamera();
+    expect(room.recorded('video')).toHaveLength(1);
+    await room.restore();
+    await vi.waitFor(() => expect(room.recorded('video')).toHaveLength(2));
+    expect(room.lastSends()).toContainEqual([5, 1]);
+  });
+
+  it.each([
+    ['while the link is down', true],
+    ['before the link drops', false],
+  ])('keeps the microphone muted when muted %s, then unmutes normally', async (_, down) => {
+    const room = await activeRoom();
+    const clone = room.recorded('audio')[0];
+    if (down) await room.drop();
+    room.h.runtime.toggleMicrophone();
+    if (!down) await room.drop();
+    expect(room.h.microphone.enabled).toBe(false);
+    expect(clone.enabled).toBe(false);
+    await room.restore();
+    await vi.waitFor(() => expect(room.lastSends()).toContainEqual([8, 1]));
+    expect(room.recorded('audio').every((track) => !track.enabled)).toBe(true);
+    room.h.runtime.toggleMicrophone();
+    expect(clone.enabled).toBe(true);
+    expect(room.lastSends()).toContainEqual([8, 0]);
+  });
+
+  it('switches the microphone of a link that is down instead of reusing the old input', async () => {
+    const room = await activeRoom();
+    const previous = room.recorded('audio')[0];
+    const replacement = new Track('audio');
+    room.h.deps.media.getMicrophone.mockResolvedValueOnce(
+      new MediaStream([replacement] as unknown as MediaStreamTrack[]),
+    );
+    await room.drop();
+    await room.h.runtime.selectMicrophone('headset');
+    expect(previous.stop).toHaveBeenCalled();
+    await room.restore();
+    await vi.waitFor(() => expect(room.recorded('audio').length).toBeGreaterThan(1));
+    const current = room.recorded('audio').at(-1)!;
+    expect(current).not.toBe(previous);
+    expect(current.readyState).toBe('live');
+  });
+
+  it('turns off a camera clone that a reconnecting link was still turning on', async () => {
+    const room = await reactivatingWithCamera();
+    await room.h.runtime.toggleCamera();
+    expect(room.h.runtime.cameraMuted).toBe(true);
+    room.release();
+    await vi.waitFor(() => expect(room.recorded('video')).toHaveLength(2));
+    await vi.waitFor(() => expect(room.recorded('video')[1].stop).toHaveBeenCalled());
+    expect(room.lastSends().findLast(([kind]) => kind === 5)).toEqual([5, 0]);
+  });
+
+  it('turns off a camera clone that a link was restarting for a new video quality', async () => {
+    const room = await activeRoom();
+    const screen = new Track('video');
+    room.h.deps.media.getScreen.mockResolvedValue(
+      new MediaStream([screen] as unknown as MediaStreamTrack[]),
+    );
+    const cameras = () =>
+      room.recorded('video').filter((track) => callCaptureTrack(track as never) !== screen);
+    // Sharing a screen lowers the camera bitrate, so the link restarts its camera.
+    const release = room.holdCameraStart();
+    const sharing = room.h.runtime.startScreenSharing();
+    await vi.waitFor(() => expect(room.lastSends().filter(([kind]) => kind === 5)).toHaveLength(2));
+    await room.h.runtime.toggleCamera();
+    expect(room.h.runtime.cameraMuted).toBe(true);
+    release();
+    await sharing;
+    await vi.waitFor(() =>
+      expect(cameras().every((track) => track.readyState === 'ended')).toBe(true),
+    );
+    expect(room.lastSends().findLast(([kind]) => kind === 5)).toEqual([5, 0]);
+  });
+
+  it('switches the microphone of a link that was busy turning its camera on', async () => {
+    const room = await reactivatingWithCamera();
+    const previous = room.recorded('audio').at(-1)!;
+    const replacement = new Track('audio');
+    room.h.deps.media.getMicrophone.mockResolvedValueOnce(
+      new MediaStream([replacement] as unknown as MediaStreamTrack[]),
+    );
+    await room.h.runtime.selectMicrophone('headset');
+    expect(room.h.microphone.stop).toHaveBeenCalled();
+    room.release();
+    await vi.waitFor(() => expect(previous.stop).toHaveBeenCalled());
+    const current = room.recorded('audio').at(-1)!;
+    expect(callCaptureTrack(current as never)).toBe(replacement);
+    expect(current.readyState).toBe('live');
+  });
+
+  it('switches the microphone of an outgoing link before the peer confirms the call', async () => {
+    const clone = vi.spyOn(Track.prototype, 'clone');
+    onTestFinished(() => clone.mockRestore());
+    const replacement = new Track('audio');
+    let original: Track | undefined;
+    const room = await activeRoom(async (h) => {
+      original = h.microphone;
+      h.deps.media.getMicrophone.mockResolvedValueOnce(
+        new MediaStream([replacement] as unknown as MediaStreamTrack[]),
+      );
+      await h.runtime.selectMicrophone('headset');
+    });
+    const stale = clone.mock.results
+      .filter((_, index) => clone.mock.contexts[index] === original)
+      .map(({ value }) => value as Track);
+    expect(stale).not.toHaveLength(0);
+    expect(stale.every((track) => track.readyState === 'ended')).toBe(true);
+    const recorded = room.recorded('audio');
+    expect(recorded).not.toHaveLength(0);
+    expect(recorded.every((track) => callCaptureTrack(track as never) === replacement)).toBe(true);
+  });
 });

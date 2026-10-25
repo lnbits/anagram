@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, it } from 'vitest';
 
 it('launches the AppImage from its own usr directory with packaged hooks and display defaults', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'anagram launcher '));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'anagram launcher ')));
   try {
     mkdirSync(join(dir, 'usr/bin'), { recursive: true });
     mkdirSync(join(dir, 'apprun-hooks'));

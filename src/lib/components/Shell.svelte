@@ -223,6 +223,7 @@
     });
   }
   let draft = '';
+  let sendRevision = 0;
   let reply: MessageReplyPreview | null = null;
   let editing: Message | null = null;
   let beforeEdit: { draft: string; reply: MessageReplyPreview | null } | null = null;
@@ -603,6 +604,7 @@
       ? Boolean(contactSelectedKey)
       : section === 'chats' && (/^\/chats?\/[^/]+/.test($page.url.pathname) || !!publicLink);
   $: if ($state.selected?.id && $state.selected.id !== currentId) {
+    sendRevision++;
     currentId = $state.selected.id;
     draft = chats.getComposerDraft(currentId);
     reply = null;
@@ -780,30 +782,46 @@
   async function send() {
     const chat = $state.selected;
     if (!chat || !draft.trim() || busy) return;
-    busy = true;
-    const text = serializeMentionDraft(draft, mentionProfiles);
+    const revision = ++sendRevision;
+    const originalDraft = draft;
+    const text = serializeMentionDraft(originalDraft, mentionProfiles);
     const uploadKey = uploadContext();
-    const attachments = draftAttachments(text, uploadedAttachments.get(uploadKey));
+    const uploads = uploadedAttachments.get(uploadKey);
+    const attachments = draftAttachments(text, uploads);
     const editedMessage = editing;
     const originalReply = reply;
+    // Each new message owns its delivery state. Only edits keep the composer
+    // busy; relay acknowledgements must not block the next message.
+    if (editedMessage) busy = true;
     draft = '';
-    if (!editedMessage) chats.clearComposerDraft(chat.id);
+    if (!editedMessage) {
+      chats.clearComposerDraft(chat.id);
+      reply = null;
+      uploadedAttachments.delete(uploadKey);
+    }
+    const current = () =>
+      revision === sendRevision && currentId === chat.id && uploadKey === uploadContext();
     try {
-      if (editedMessage) await messages.editMessage(chat.id, editedMessage.id, text);
-      else {
+      if (editedMessage) {
+        await messages.editMessage(chat.id, editedMessage.id, text);
+        if (current() && editing === editedMessage) finishEditing();
+      } else {
         scrollThreadToLatest(scrollArea);
         await messages.sendMessage(chat.id, text, originalReply, { attachments });
       }
-      uploadedAttachments.delete(uploadKey);
-      if (currentId === chat.id) {
-        if (editedMessage) finishEditing();
-        else reply = null;
-      }
     } catch (e) {
-      if (currentId === chat.id) draft = text;
-      fail(e);
+      // An older failure must not replace a newer draft, reply, edit or send.
+      if (current() && !draft && editing === editedMessage && (!reply || editedMessage)) {
+        draft = originalDraft;
+        if (!editedMessage) {
+          reply = originalReply;
+          if (uploads) uploadedAttachments.set(uploadKey, uploads);
+          chats.setComposerDraft(chat.id, draft);
+        }
+      }
+      if (uploadKey === uploadContext()) fail(e);
     } finally {
-      busy = false;
+      if (editedMessage) busy = false;
     }
   }
   let olderLoad: { chatId: string } | null = null;

@@ -824,44 +824,75 @@ test('sender names and avatars reuse the private-chat DM action on desktop and m
   ).toBeVisible();
 });
 
-test('keeps the next draft when a previous public post receives a delayed acknowledgement', async ({
-  page,
-}) => {
-  let pendingAck: (() => void) | undefined;
-  await page.routeWebSocket(relay, (socket) => {
-    const server = socket.connectToServer();
-    let pendingId = '';
-    socket.onMessage((raw) => {
-      const data = JSON.parse(String(raw));
-      if (data[0] === 'EVENT' && data[1].kind === 9 && data[1].content === 'First draft')
-        pendingId = data[1].id;
-      server.send(raw);
+for (const width of [1280, 390]) {
+  for (const accepted of [true, false]) {
+    test(`public composer sends again before a delayed relay response (${width}px, accepted: ${accepted})`, async ({
+      page,
+    }) => {
+      let pendingAck: (() => void) | undefined;
+      await page.routeWebSocket(relay, (socket) => {
+        const server = socket.connectToServer();
+        let pendingId = '';
+        socket.onMessage((raw) => {
+          const data = JSON.parse(String(raw));
+          if (data[0] === 'EVENT' && data[1].kind === 9 && data[1].content === 'First draft')
+            pendingId = data[1].id;
+          server.send(raw);
+        });
+        server.onMessage((raw) => {
+          const data = JSON.parse(String(raw));
+          if (data[0] === 'OK' && data[1] === pendingId)
+            pendingAck = () =>
+              socket.send(
+                JSON.stringify([
+                  'OK',
+                  pendingId,
+                  accepted,
+                  accepted ? '' : 'blocked: delayed rejection',
+                ]),
+              );
+          else socket.send(raw);
+        });
+      });
+      await page.setViewportSize({ width, height: 844 });
+      await login(page);
+      await create(page, 'Pending composer');
+      const composer = page.getByLabel('Public message', { exact: true });
+      const send = page.getByRole('button', { name: 'Send message', exact: true });
+      await composer.fill('First draft');
+      await send.click();
+      await expect.poll(() => Boolean(pendingAck)).toBe(true);
+      await expect(composer).toHaveValue('');
+      await composer.fill('Next draft');
+      await expect(send).toBeEnabled();
+      await send.click();
+      await expect(composer).toHaveValue('');
+      const first = page.getByTestId('public-message').filter({ hasText: 'First draft' });
+      const second = page.getByTestId('public-message').filter({ hasText: 'Next draft' });
+      await expect(first).toHaveCount(1);
+      await expect(second).toHaveCount(1);
+      await expect(second.locator('.bubble__status-segment--green')).toBeVisible();
+      // An older failure must not resurrect its draft after a newer send has
+      // already finished, even when the composer is still empty.
+      const rejectBeforeNextDraft = !accepted && width === 1280;
+      if (rejectBeforeNextDraft) {
+        pendingAck!();
+        await expect(first.locator('.bubble__status-segment--red')).toBeVisible();
+        await expect(composer).toHaveValue('');
+      }
+      await second.locator('.message-content').click({ button: 'right' });
+      await page.getByRole('menuitem', { name: 'Reply', exact: true }).click();
+      await composer.fill('Keep this newer reply');
+      if (!rejectBeforeNextDraft) pendingAck!();
+      await expect(
+        first.locator(accepted ? '.bubble__status-segment--green' : '.bubble__status-segment--red'),
+      ).toBeVisible();
+      await expect(composer).toHaveValue('Keep this newer reply');
+      await expect(page.locator('.composer-context')).toContainText('Next draft');
+      await expect(send).toBeEnabled();
     });
-    server.onMessage((raw) => {
-      const data = JSON.parse(String(raw));
-      if (data[0] === 'OK' && data[1] === pendingId) pendingAck = () => socket.send(raw);
-      else socket.send(raw);
-    });
-  });
-  await login(page);
-  await create(page, 'Pending composer');
-  const composer = page.getByLabel('Public message', { exact: true });
-  const send = page.getByRole('button', { name: 'Send message', exact: true });
-  await composer.fill('First draft');
-  await send.click();
-  await expect.poll(() => Boolean(pendingAck)).toBe(true);
-  await expect(send).toBeDisabled();
-  await composer.fill('Next draft');
-  pendingAck!();
-  await expect(send).toBeEnabled();
-  await expect(composer).toHaveValue('Next draft');
-  await send.click();
-  await expect(composer).toHaveValue('');
-  await expect(page.getByTestId('public-message').filter({ hasText: 'First draft' })).toHaveCount(
-    1,
-  );
-  await expect(page.getByTestId('public-message').filter({ hasText: 'Next draft' })).toHaveCount(1);
-});
+  }
+}
 
 test('app relays carry public group creation, moderation and posts when preferred relays fail', async ({
   page,

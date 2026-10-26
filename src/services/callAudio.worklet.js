@@ -6,7 +6,8 @@ class CallAudioProcessor extends AudioWorkletProcessor {
     this.mode = options.processorOptions.mode;
     this.active = true;
     this.link = null;
-    this.credits = 2;
+    this.captureFrames = options.processorOptions.captureFrames;
+    this.credits = this.captureFrames;
     this.sequence = 0;
     this.input = new Float32Array(960);
     this.offset = 0;
@@ -21,7 +22,7 @@ class CallAudioProcessor extends AudioWorkletProcessor {
       }
       this.link = data.port;
       this.link.onmessage = ({ data }) => {
-        if (data.ack) this.credits = Math.min(2, this.credits + 1);
+        if (data.ack) this.credits = Math.min(this.captureFrames, this.credits + 1);
         if (data.pcm) {
           this.pending = false;
           if (this.output.length < 2) this.output.push(data.pcm);

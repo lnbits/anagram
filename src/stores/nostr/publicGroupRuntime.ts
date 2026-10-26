@@ -728,7 +728,10 @@ export function createPublicGroupRuntime(deps: Dependencies) {
           ),
         };
         if (token !== view || owner !== account || owner !== deps.account()) return;
-        state.update((s) => ({ ...s, ...cachedView }));
+        // The signed, joined cache is sufficient for posting while policy
+        // refreshes. New rooms still wait for discovery; refresh failures and
+        // newer live policies retain their existing posting safeguards.
+        state.update((s) => ({ ...s, ...cachedView, stale: false }));
         // Live messages hydrate even while a replica's policy lookup is pending.
         const urls = await relayUrls(cachedRoom.relays);
         if (token !== view || owner !== account) return;

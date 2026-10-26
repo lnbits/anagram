@@ -25,6 +25,7 @@ The pin loads early and opens in a separate preview. Opening it preserves the th
 
 ## Relays and ownership
 
+- Reopening a joined room enables posting from its verified cached definition while metadata refreshes in the background. Cached blocking and media trust still apply, and newer live policy takes effect as it arrives. New rooms wait for discovery; failed refreshes retain the existing read-only fallback.
 - Reads and writes use preferred room relays plus app relays. One responding relay is enough for reads, and one publish acknowledgement is enough for writes. Clients retain the newest verified room definition when a relay returns older or empty metadata; signatures prove authorship, not that a relay returned the latest policy.
 - Transfers require the old owner's signed `successor` and the new owner's reciprocal `predecessor`. Historical messages keep their original addresses and authors.
 

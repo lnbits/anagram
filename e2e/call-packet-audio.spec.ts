@@ -1,22 +1,23 @@
 import { expect, test } from '@playwright/test';
 
-for (const { nativeAck, startupDelay } of [
-  { nativeAck: false, startupDelay: 0 },
-  { nativeAck: true, startupDelay: 0 },
-  { nativeAck: false, startupDelay: 1800 },
+for (const { nativeAck, startupDelay, continuity } of [
+  { nativeAck: false, startupDelay: 0, continuity: false },
+  { nativeAck: true, startupDelay: 0, continuity: false },
+  { nativeAck: false, startupDelay: 1800, continuity: false },
+  { nativeAck: true, startupDelay: 0, continuity: true },
 ]) {
-  test(`Opus worker and AudioWorklet play decoded audio through loss, jitter and a relay stall (native acknowledgements: ${nativeAck}, startup delay: ${startupDelay} ms)`, async ({
+  test(`Opus worker and AudioWorklet play decoded audio through loss, jitter and a relay stall (native acknowledgements: ${nativeAck}, startup delay: ${startupDelay} ms, continuity: ${continuity})`, async ({
     page,
   }, info) => {
     await page.route('**/__packet-audio', (route) =>
       route.fulfill({ contentType: 'text/html', body: '<button>Start</button>' }),
     );
     await page.goto('/__packet-audio');
-    const options = { nativeAck, startupDelay };
-    await page.evaluate(async ({ nativeAck, startupDelay }) => {
+    const options = { nativeAck, startupDelay, continuity };
+    await page.evaluate(async ({ nativeAck, startupDelay, continuity }) => {
       const { prepareCallPacketAudio, recordCallMedia, createCallMediaReceiver } =
         await import('/src/services/callMediaService.ts');
-      const { OPUS_CALL_MIME } = await import('/src/services/callAudioPackets.ts');
+      const { OPUS_CALL_MIME, unpackAudio } = await import('/src/services/callAudioPackets.ts');
       const { attachCallMedia } = await import('/src/services/callStreamRegistry.ts');
       const { callPacketAudioDiagnostics } = await import('/src/services/callPacketAudio.ts');
       const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -81,6 +82,46 @@ for (const { nativeAck, startupDelay } of [
             `No decoded ${frequency} Hz audio; errors=${errors} time=${audio.currentTime} stats=${JSON.stringify(callPacketAudioDiagnostics())} max=${Math.max(...spectrum)}`,
           );
         };
+        // Measure the rendered samples on the audio thread, not a UI timer
+        // that could miss a brief dropout between observations.
+        let probe: AudioWorkletNode | undefined;
+        if (continuity) {
+          const url = URL.createObjectURL(
+            new Blob(
+              [
+                `
+            class ContinuityProbe extends AudioWorkletProcessor {
+              constructor() {
+                super(); this.active = false; this.total = 0; this.quiet = 0; this.longest = 0;
+                this.port.onmessage = ({data}) => {
+                  if (data === 'start') this.active = true;
+                  else this.port.postMessage({ samples: this.total, gapMs: this.longest / 48 });
+                };
+              }
+              process(inputs) {
+                if (this.active) for (const sample of inputs[0]?.[0] ?? []) {
+                  this.total++;
+                  this.quiet = Math.abs(sample) < 0.00001 ? this.quiet + 1 : 0;
+                  this.longest = Math.max(this.longest, this.quiet);
+                }
+                return true;
+              }
+            }
+            registerProcessor('call-continuity-probe', ContinuityProbe);
+          `,
+              ],
+              { type: 'text/javascript' },
+            ),
+          );
+          try {
+            await playback.context.audioWorklet.addModule(url);
+          } finally {
+            URL.revokeObjectURL(url);
+          }
+          probe = new AudioWorkletNode(playback.context, 'call-continuity-probe');
+          playback.connect(probe).connect(playback.context.destination);
+        }
+        const sequences: number[] = [];
         let count = 0,
           stall = false;
         const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -95,8 +136,9 @@ for (const { nativeAck, startupDelay } of [
             // Exercise a cold device/stream graph without sleeping in the test's
             // readiness check or changing the actual codec/receiver.
             if (performance.now() - captureStarted < startupDelay) return;
-            if (n % 19 === 0) return; // deterministic packet loss
-            const ms = stall ? 650 : [0, 10, 30, 5][n % 4];
+            if (!continuity && n % 19 === 0) return; // deterministic packet loss
+            const ms = continuity ? 0 : stall ? 650 : [0, 10, 30, 5][n % 4];
+            sequences.push(unpackAudio(frame)!.sequence);
             const timer = setTimeout(() => {
               timers.delete(timer);
               receiver.append(frame);
@@ -104,7 +146,7 @@ for (const { nativeAck, startupDelay } of [
             timers.add(timer);
             if (nativeAck) {
               maxInFlight = Math.max(maxInFlight, ++inFlight);
-              await delay(35);
+              await delay(continuity && n % 50 < 2 ? 70 : 35);
               inFlight--;
             }
           },
@@ -118,15 +160,17 @@ for (const { nativeAck, startupDelay } of [
           // tone-change latency; startup still has its own finite deadline.
           const startupMs = await waitForTone(440, 5000);
           const readyPackets = count;
+          sequences.length = 0;
+          probe?.port.postMessage('start');
           const recordingAt = performance.now();
           for (let i = 0; i < 6; i++) {
-            if (i === 2) {
+            if (!continuity && i === 2) {
               stall = true;
               await delay(500);
               stall = false;
               await delay(900);
             }
-            if (i === 4) {
+            if (!continuity && i === 4) {
               // The audio render/codec threads keep running during a UI stall.
               // Recovery must discard old encoded deliveries instead of replaying them.
               const until = performance.now() + 250;
@@ -140,7 +184,19 @@ for (const { nativeAck, startupDelay } of [
             timings.push(await waitForTone(frequency));
             await delay(150);
           }
+          let rendered: { samples: number; gapMs: number } | undefined;
+          if (probe) {
+            await delay(3000); // Cross several acknowledgement bursts after warmup.
+            rendered = await new Promise((resolve) => {
+              probe!.port.onmessage = ({ data }) => resolve(data);
+              probe!.port.postMessage('measure');
+            });
+          }
           return {
+            rendered,
+            sequenceGaps: sequences
+              .slice(1)
+              .filter((value, i) => value !== (sequences[i] + 1) >>> 0).length,
             timings,
             startupMs,
             played: audio.currentTime,
@@ -153,6 +209,11 @@ for (const { nativeAck, startupDelay } of [
         } finally {
           stop();
           timers.forEach(clearTimeout);
+          if (probe) {
+            playback.disconnect(probe);
+            probe.disconnect();
+            probe.port.close();
+          }
           playback.disconnect(analyser);
           analyser.disconnect();
           silent.disconnect();
@@ -181,7 +242,19 @@ for (const { nativeAck, startupDelay } of [
     expect(result.played).toBeGreaterThan(1);
     expect(result.timings).toHaveLength(6);
     if (startupDelay) expect(result.startupMs).toBeGreaterThanOrEqual(startupDelay);
-    expect(Math.max(...result.timings)).toBeLessThan(400);
+    expect(Math.max(...result.timings.slice(0, 4))).toBeLessThan(400);
+    // The last two measurements follow an intentional 250 ms UI freeze.
+    // Retained speech may add that delay; recovering by dropping it is not success.
+    expect(Math.max(...result.timings.slice(4))).toBeLessThan(continuity ? 400 : 650);
+    if (continuity) {
+      expect(result.sequenceGaps).toBe(0);
+      expect(result.rendered.samples).toBeGreaterThan(48000 * 3);
+      expect(result.rendered.gapMs).toBeLessThan(3);
+      for (const stats of result.stats) {
+        expect(stats.skipped).toBe(0);
+        expect(stats.concealed).toBe(0);
+      }
+    }
     if (nativeAck) {
       expect(result.maxInFlight).toBe(2);
       expect(result.rate).toBeGreaterThan(35);

@@ -419,6 +419,57 @@ test('saved public groups appear on reload while session relay reads are stalled
   await expect.poll(() => relayRequests).toBeGreaterThan(0);
 });
 
+for (const width of [1280, 390]) {
+  test(`cached public groups allow posting during policy refresh at ${width}px`, async ({
+    page,
+  }) => {
+    let holdMetadata = false;
+    let pendingLookups = 0;
+    await page.routeWebSocket(relay, (socket) => {
+      const server = socket.connectToServer();
+      socket.onMessage((raw) => {
+        const frame = JSON.parse(String(raw));
+        if (
+          holdMetadata &&
+          frame[0] === 'REQ' &&
+          frame.slice(2).every((filter: { kinds?: number[] }) => filter.kinds?.includes(34550))
+        ) {
+          pendingLookups++;
+          return; // Leave policy discovery pending; live traffic and publishing still work.
+        }
+        server.send(raw);
+      });
+    });
+    await page.setViewportSize({ width, height: 844 });
+    await login(page);
+    const { naddr } = await create(page, 'Cached posting');
+    await navigateInApp(page, '/chats');
+    holdMetadata = true;
+    await navigateInApp(page, `/public/${naddr}`);
+    await expect.poll(() => pendingLookups).toBeGreaterThan(0);
+    const input = page.getByLabel('Public message', { exact: true });
+    await expect(input).toBeEnabled({ timeout: 3000 });
+    await input.fill('Posted before permissions finish refreshing');
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    await expect(input).toHaveValue('', { timeout: 3000 });
+    await expect(
+      page.getByTestId('public-message').filter({
+        hasText: 'Posted before permissions finish refreshing',
+      }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(async () => {
+        const { useNostrStore } = await import('/src/stores/nostrStore.svelte.ts');
+        let refreshing = false;
+        useNostrStore().publicGroups.state.subscribe((state) => {
+          refreshing = state.refreshing;
+        })();
+        return refreshing;
+      }),
+    ).toBe(true);
+  });
+}
+
 test('a stalled replica does not block opening, posting or cached re-entry', async ({ page }) => {
   await page.routeWebSocket('wss://stalled.example.org/**', () => {});
   const owner = await login(page);

@@ -227,6 +227,7 @@ it('does not turn a relay timeout into a verified empty policy', async () => {
   await loading;
   expect(get(runtime.state).room).toBeNull();
   expect(get(runtime.state).stale).toBe(true);
+  await expect(runtime.send('No verified room')).rejects.toThrow(/unavailable/);
 });
 it('denies management by a non-owner and isolates state after account replacement', async () => {
   const event = room(generateSecretKey(), 'owned');
@@ -335,7 +336,7 @@ it('opens and posts through a completed replica without waiting for a stalled re
   );
 });
 
-it('shows cached messages immediately, hydrates during refresh and keeps posting locked without real EOSE', async () => {
+it('posts with verified cached policy and hydrates messages before refresh reaches EOSE', async () => {
   const key = generateSecretKey();
   const event = room(key, 'cached');
   let complete = true;
@@ -364,7 +365,10 @@ it('shows cached messages immediately, hydrates during refresh and keeps posting
   await vi.waitFor(() =>
     expect(get(runtime.state).messages.some((e) => e.id === later.id)).toBe(true),
   );
-  await expect(runtime.send('Not yet')).rejects.toThrow(/unavailable/);
+  expect(get(runtime.state).stale).toBe(false);
+  await runtime.send('Sent during refresh');
+  expect(get(runtime.state).messages.some((e) => e.content === 'Sent during refresh')).toBe(true);
+  expect(get(runtime.state).refreshing).toBe(true);
   const lookup = [...listeners].find((l) => !l.filters.some((f) => f.kinds?.includes(9)))!;
   lookup.options.onEose?.();
   await opening;
@@ -372,6 +376,48 @@ it('shows cached messages immediately, hydrates during refresh and keeps posting
   expect(get(runtime.state).error).toBe('');
   await runtime.send('Now verified');
 });
+
+it.each(['blocked', 'untrusted'] as const)(
+  'enforces cached %s policy while the refresh is pending',
+  async (policy) => {
+    const owner = generateSecretKey(),
+      member = generateSecretKey();
+    const definition = room(
+      owner,
+      'cached-restrictions',
+      policy === 'blocked' ? [['blocked', getPublicKey(member)]] : [],
+    );
+    let complete = true;
+    const { runtime, listeners, published } = setup([definition], member, () => complete);
+    const link = encodeRoomLink(parsePublicRoom(definition));
+    await runtime.open(link);
+    runtime.stop(); // Exercise a fresh runtime session using only persisted policy.
+    complete = false;
+    const opening = runtime.open(link);
+    const lookup = () =>
+      [...listeners].find((l) => l.filters.every((f) => f.kinds?.includes(34550)));
+    await vi.waitFor(() => expect(lookup()).toBeDefined());
+    expect(get(runtime.state).stale).toBe(false);
+    expect(get(runtime.state).refreshing).toBe(true);
+    if (policy === 'blocked') {
+      await expect(runtime.send('Blocked post')).rejects.toThrow(/unavailable/);
+    } else {
+      await expect(
+        runtime.send('Untrusted media', {
+          url: 'https://example.org/photo.png',
+          mimeType: 'image/png',
+          size: 100,
+        }),
+      ).rejects.toThrow(/trusted account/);
+      await runtime.send('Text is allowed');
+    }
+    expect(published.filter(({ event }) => event.kind === 9)).toHaveLength(
+      policy === 'blocked' ? 0 : 1,
+    );
+    lookup()!.options.onEose?.();
+    await opening;
+  },
+);
 
 it.each(['save', 'hydrate'] as const)(
   'keeps live trust updates while an older room refresh finishes %s',
@@ -995,42 +1041,66 @@ it('re-enables older paging when live traffic overflows a previously empty room'
   expect(get(runtime.state).messages[0].content).toBe('Live 0');
 }, 10_000);
 
-it('cancels publication if a block arrives while the signer is approving the message', async () => {
-  const owner = generateSecretKey(),
-    member = generateSecretKey();
-  const definition = room(owner, 'pending-signature');
-  const { runtime, listeners, events } = setup([definition], member);
-  await runtime.open(encodeRoomLink(parsePublicRoom(definition)));
-  let release!: () => void;
-  const approval = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const original = NostrPrivateKeySigner.prototype.sign;
-  const signing = vi
-    .spyOn(NostrPrivateKeySigner.prototype, 'sign')
-    .mockImplementation(async function (event) {
-      await approval;
-      return original.call(this, event);
+it.each([false, true])(
+  'cancels publication if a block arrives during signing (refresh pending: %s)',
+  async (refreshing) => {
+    const owner = generateSecretKey(),
+      member = generateSecretKey();
+    const definition = room(owner, 'pending-signature');
+    let complete = true;
+    const { runtime, listeners, events } = setup([definition], member, () => complete);
+    const link = encodeRoomLink(parsePublicRoom(definition));
+    await runtime.open(link);
+    let opening: Promise<void> | undefined;
+    if (refreshing) {
+      complete = false;
+      opening = runtime.open(link);
+      await vi.waitFor(() =>
+        expect([...listeners].some((l) => l.filters.every((f) => f.kinds?.includes(34550)))).toBe(
+          true,
+        ),
+      );
+      expect(get(runtime.state).refreshing).toBe(true);
+    }
+    let release!: () => void;
+    const approval = new Promise<void>((resolve) => {
+      release = resolve;
     });
-  const sending = runtime.send('Awaiting approval');
-  // Attach rejection handling before releasing the delayed signer.
-  const outcome = sending.then(
-    () => '',
-    (error) => String(error),
-  );
-  await vi.waitFor(() => expect(signing).toHaveBeenCalled());
-  const live = [...listeners].find((l) => l.filters.some((f) => f.kinds?.includes(9)))!;
-  live.options.onEvent?.(
-    new ClientEvent(
-      undefined,
-      room(owner, 'pending-signature', [['blocked', getPublicKey(member)]], 11),
-    ),
-  );
-  await vi.waitFor(() => expect(get(runtime.state).room?.blocked).toContain(getPublicKey(member)));
-  release();
-  expect(await outcome).toMatch(/policy changed/i);
-  expect(events.some((e) => e.kind === 9)).toBe(false);
-});
+    const original = NostrPrivateKeySigner.prototype.sign;
+    const signing = vi
+      .spyOn(NostrPrivateKeySigner.prototype, 'sign')
+      .mockImplementation(async function (event) {
+        await approval;
+        return original.call(this, event);
+      });
+    const sending = runtime.send('Awaiting approval');
+    // Attach rejection handling before releasing the delayed signer.
+    const outcome = sending.then(
+      () => '',
+      (error) => String(error),
+    );
+    await vi.waitFor(() => expect(signing).toHaveBeenCalled());
+    const live = [...listeners].find((l) => l.filters.some((f) => f.kinds?.includes(9)))!;
+    live.options.onEvent?.(
+      new ClientEvent(
+        undefined,
+        room(owner, 'pending-signature', [['blocked', getPublicKey(member)]], 11),
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(get(runtime.state).room?.blocked).toContain(getPublicKey(member)),
+    );
+    release();
+    expect(await outcome).toMatch(/policy changed/i);
+    expect(events.some((e) => e.kind === 9)).toBe(false);
+    if (opening) {
+      const lookup = [...listeners].find((l) => l.filters.every((f) => f.kinds?.includes(34550)))!;
+      lookup.options.onEose?.();
+      await opening;
+      await expect(runtime.send('Still blocked')).rejects.toThrow(/unavailable/);
+    }
+  },
+);
 
 it('removes an explicitly deselected unavailable relay before retrying moderation', async () => {
   const key = generateSecretKey();

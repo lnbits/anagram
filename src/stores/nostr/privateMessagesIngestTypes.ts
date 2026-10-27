@@ -138,6 +138,7 @@ export interface PrivateMessagesIngestRuntimeDeps {
     details?: Record<string, unknown>,
   ) => void;
   logInboundEvent: (stage: string, details?: Record<string, unknown>) => void;
+  markVisibleChatRead?: (chatPublicKey: string) => void;
   logInvalidIncomingEpochNumber: (
     groupPublicKey: string,
     epochNumber: number,

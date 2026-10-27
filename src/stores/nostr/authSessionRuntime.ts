@@ -86,6 +86,7 @@ interface AuthSessionRuntimeDeps {
   relayConnectRetryStateByUrl: { clear: () => void };
   relayConnectPromises: { clear: () => void };
   relayStatusVersion: number;
+  resetContactCursorSyncState: () => void;
   resetContactSubscriptionsRuntimeState: (reason?: string) => void;
   resetCalls?: () => void;
   resetEventSinceForFreshLogin: () => void;
@@ -145,6 +146,7 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
     pendingIncomingReactions,
     relayConnectRetryStateByUrl,
     relayConnectPromises,
+    resetContactCursorSyncState,
     resetContactSubscriptionsRuntimeState,
     resetCalls,
     resetEventSinceForFreshLogin,
@@ -467,6 +469,7 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
     pendingIncomingReactions.clear();
     pendingIncomingDeletions.clear();
     resetPendingContactCursorTimers();
+    resetContactCursorSyncState();
     resetTrackedContactEventState();
     void clearDeveloperTraceEntries().catch((error) => {
       console.error('Failed to clear developer trace entries.', error);

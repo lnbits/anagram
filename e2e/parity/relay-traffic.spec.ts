@@ -200,8 +200,12 @@ test('reconnecting one failed relay target reuses the persisted wrapper without 
       .frames.filter((frame) => frame.command === 'EVENT' && frame.kind === 1059);
     expect(retryFrames).toHaveLength(1);
     expect(original).toContain(retryFrames[0]?.eventId);
+    // Alice's automatic read of Bob's reply publishes its cursor after a jittered delay, to
+    // every write relay. Only the retried wrapper must stay off the unrelated relay.
     expect(
-      second.trafficSnapshot().frames.filter((frame) => frame.command === 'EVENT'),
+      second
+        .trafficSnapshot()
+        .frames.filter((frame) => frame.command === 'EVENT' && frame.kind !== 30078),
     ).toHaveLength(0);
     expect(first.trafficSnapshot().rateLimitRejections).toBe(0);
     await info.attach('targeted-retry-traffic', {

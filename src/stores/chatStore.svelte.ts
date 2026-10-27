@@ -698,6 +698,28 @@ function mapChatRowToChat(
   };
 }
 
+// Merges a chat read from the database with its in-memory state, where `before` is the
+// in-memory chat when the read started and `current` the one now.
+function mergeStoredChat(mapped: Chat, current: Chat | undefined, before: Chat | undefined): Chat {
+  // A delete/reopen completed while this database snapshot was loading.
+  if (current && current.meta.deleted_locally !== before?.meta.deleted_locally)
+    mapped.meta = { ...mapped.meta, deleted_locally: current.meta.deleted_locally };
+
+  // IndexedDB may lag the UI during hydration. Keep a message that arrived
+  // during this read, and preserve its author until its summary commits.
+  if (current && current !== before && current.lastMessageAt >= mapped.lastMessageAt)
+    return {
+      ...mapped,
+      lastMessage: current.lastMessage,
+      lastMessageAt: current.lastMessageAt,
+      lastMessageAuthorPublicKey: current.lastMessageAuthorPublicKey,
+      unreadCount: current.unreadCount,
+    };
+  if (current?.lastMessageAt === mapped.lastMessageAt && !mapped.lastMessageAuthorPublicKey)
+    mapped.lastMessageAuthorPublicKey = current.lastMessageAuthorPublicKey;
+  return mapped;
+}
+
 function buildAcceptedChatMeta(
   meta: Record<string, unknown>,
   acceptedAt: string,
@@ -859,33 +881,7 @@ export const useChatStore = createStore('chatStore', () => {
       const mapped = mapChatRowToChat(row, contexts.get(row.public_key.toLowerCase()));
       const current = live.get(mapped.id);
       live.delete(mapped.id);
-      // A delete/reopen completed while this database snapshot was loading.
-      if (
-        current &&
-        current.meta.deleted_locally !== before.get(mapped.id)?.meta.deleted_locally
-      )
-        mapped.meta = { ...mapped.meta, deleted_locally: current.meta.deleted_locally };
-
-      // IndexedDB may lag the UI during hydration. Keep a message that arrived
-      // during this read, and preserve its author until its summary commits.
-      if (
-        current &&
-        current !== before.get(current.id) &&
-        current.lastMessageAt >= mapped.lastMessageAt
-      )
-        return {
-          ...mapped,
-          lastMessage: current.lastMessage,
-          lastMessageAt: current.lastMessageAt,
-          lastMessageAuthorPublicKey: current.lastMessageAuthorPublicKey,
-          unreadCount: current.unreadCount,
-        };
-      if (
-        current?.lastMessageAt === mapped.lastMessageAt &&
-        !mapped.lastMessageAuthorPublicKey
-      )
-        mapped.lastMessageAuthorPublicKey = current.lastMessageAuthorPublicKey;
-      return mapped;
+      return mergeStoredChat(mapped, current, before.get(mapped.id));
     });
     for (const chat of live.values()) if (chat !== before.get(chat.id)) next.push(chat);
     chats = sortByLatest(next);
@@ -954,6 +950,27 @@ export const useChatStore = createStore('chatStore', () => {
     } finally {
       isLoaded = true;
     }
+  }
+
+  // Re-reads one chat's stored summary, e.g. after another device moved its read state,
+  // instead of reloading every chat for a single change.
+  async function refreshChat(chatId: string): Promise<void> {
+    const normalizedChatId = normalizeChatIdentifier(chatId);
+    const before = chats.find((chat) => chat.id === normalizedChatId);
+    if (!normalizedChatId || !before) return;
+    const account = getLoggedInPublicKey();
+    await Promise.all([chatDataService.init(), contactsService.init()]);
+    const [row, contact] = await Promise.all([
+      chatDataService.getChatByPublicKey(normalizedChatId),
+      contactsService.getContactByPublicKey(normalizedChatId),
+    ]);
+    if (!row || getLoggedInPublicKey() !== account) return;
+    const mapped = mapChatRowToChat(row, contact ? toContactContext(contact) : undefined);
+    chats = sortByLatest(
+      chats.map((current) =>
+        current.id === mapped.id ? mergeStoredChat(mapped, current, before) : current,
+      ),
+    );
   }
 
   function selectChat(chatId: string): void {
@@ -1955,6 +1972,7 @@ export const useChatStore = createStore('chatStore', () => {
     deleteChat,
     init,
     reload,
+    refreshChat,
     selectChat,
     setVisibleChatId,
     setSearchQuery,

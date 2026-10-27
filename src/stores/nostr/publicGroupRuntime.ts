@@ -63,7 +63,7 @@ interface State {
   more: boolean;
 }
 interface Dependencies {
-  starterRoom?: NostrEvent;
+  starterRooms?: NostrEvent[];
   client: NostrClient;
   account: () => string | null;
   signer: () => Promise<NostrSigner>;
@@ -222,8 +222,8 @@ export function createPublicGroupRuntime(deps: Dependencies) {
     stop();
     account = next;
     data = new PublicGroupData(next);
-    if (deps.starterRoom) {
-      await data.seed(parsePublicRoom(deps.starterRoom));
+    if (deps.starterRooms?.length) {
+      for (const starterRoom of deps.starterRooms) await data.seed(parsePublicRoom(starterRoom));
       assertSession(next);
     }
     await reloadRooms();

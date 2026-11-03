@@ -1753,7 +1753,7 @@ export function createPrivateMessagesIngestRuntime({
       if (
         !isSelfSentMessage &&
         !isBlockedChat &&
-        (chat.type !== 'group' || chat.meta?.notifications_enabled === true) &&
+        (chat.type !== 'group' || chat.meta?.notifications_enabled !== false) &&
         isAfterSeenBoundary &&
         (await shouldNotifyForAcceptedChatOnly(chat.public_key, chat.meta ?? {}))
       ) {

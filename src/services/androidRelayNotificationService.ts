@@ -390,7 +390,7 @@ export function createAndroidNotificationConversationSignature(
         inboxState: readMetaString(chat.meta, 'inbox_state'),
         lastOutgoingMessageAt: readMetaString(chat.meta, 'last_outgoing_message_at'),
         muted: chat.meta.muted === true,
-        notificationsEnabled: chat.meta.notifications_enabled === true,
+        notificationsEnabled: chat.meta.notifications_enabled !== false,
         name: chat.name.trim(),
         picture: readMetaString(chat.meta, 'picture'),
         publicKey: chat.publicKey,
@@ -530,7 +530,7 @@ async function buildAndroidNotificationConfiguration(): Promise<AndroidNotificat
       policyEligible,
       notificationsEnabled:
         chat.type === 'group'
-          ? chat.meta.notifications_enabled === true && isConversationNotificationEnabled(chat.meta) &&
+          ? chat.meta.notifications_enabled !== false && isConversationNotificationEnabled(chat.meta) &&
             !isContactNotificationSuppressed(contact)
           : isAndroidDirectNotificationConversationEnabled({
               chatMeta: chat.meta,

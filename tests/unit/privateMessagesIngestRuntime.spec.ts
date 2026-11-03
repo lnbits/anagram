@@ -1016,7 +1016,7 @@ describe('privateMessagesIngestRuntime', () => {
     );
   });
 
-  it.each([undefined, false, true])('preserves group unread counts and only notifies on opt-in (%s)', async (enabled) => {
+  it.each([undefined, false, true])('preserves group unread counts and legacy notifications unless explicitly disabled (%s)', async (enabled) => {
     const deps = createDeps();
     const runtime = createPrivateMessagesIngestRuntime(deps);
     const groupPublicKey = 'c'.repeat(64);
@@ -1112,7 +1112,7 @@ describe('privateMessagesIngestRuntime', () => {
         }),
       }),
     );
-    if (enabled !== true) {
+    if (enabled === false) {
       expect(deps.showIncomingMessageBrowserNotification).not.toHaveBeenCalled();
       return;
     }

@@ -93,6 +93,7 @@
     FOREGROUND_MESSAGE_ACTIVITY_EVENT,
     readForegroundMessageActivityDetail,
   } from '#src/services/foregroundMessageActivityService.ts';
+  import { startDesktopNotificationListener } from '#src/lib/platform/desktopNotifications.ts';
   import { updateAppBadge } from '#src/lib/platform/appBadge.ts';
   import { RecordedMessageDeliveryError } from '#src/utils/messageRelayStatus.ts';
   import { parseRoomLink } from '#src/utils/callRoom.ts';
@@ -973,7 +974,7 @@
         if (action === 'refresh-group') await nostr.refreshPrivateMessages();
         await chats.reload();
       } else if (action === 'notifications' && chat.type === 'group') {
-        const enabled = chat.meta.notifications_enabled !== true;
+        const enabled = chat.meta.notifications_enabled === false;
         if (enabled) await enableGroupNotificationPermission();
         await chats.setGroupNotifications(chat.id, enabled);
         if (androidNotifications) {
@@ -1230,6 +1231,12 @@
     });
     nostr.startAppLifecycleRuntime();
     let disposed = false;
+    const stopDesktopNotifications = startDesktopNotificationListener(
+      () => nostr.getLoggedInPublicKeyHex(),
+      (chatPubkey) => {
+        void goto(notificationConversationPath(chatPubkey)).catch(fail);
+      },
+    );
     // Saved public rooms are local account data, just like the private chat list.
     // Do not wait for relay synchronization before displaying them.
     void publicGroups.init().catch((error) => {
@@ -1282,6 +1289,7 @@
       chatRoutingReady = false;
       notificationsReady = false;
       stopNotifications();
+      stopDesktopNotifications();
       publicGroups.stop();
       nostr.stopAppLifecycleRuntime();
       chats.setVisibleChatId(null);

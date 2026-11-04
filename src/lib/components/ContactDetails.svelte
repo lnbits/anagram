@@ -24,6 +24,10 @@
     refreshing = false,
     saving = false,
     hex = false;
+  const directMessageMode = nostr.directMessageMode;
+  $: protocol = $directMessageMode.peer === publicKey
+    ? $directMessageMode.protocol
+    : nostr.getCurrentDirectMessageProtocol(publicKey);
   let error = '',
     notice = '',
     qr = '';
@@ -192,7 +196,13 @@
     {#if loading}<p>{$translate('contacts.loadingContacts')}</p>
     {:else if !contact}<p>{$translate('contacts.contactFoundPublicKey')}</p>
     {:else}
-      {#if contact.type === 'group'}<GroupDetails {publicKey} />{/if}
+      {#if contact.type === 'group'}<GroupDetails {publicKey} />
+      {:else}
+        <details class="profile-section">
+          <summary>Private messages</summary>
+          <p>Encryption: <strong data-testid="contact-protocol" data-protocol={protocol}>{protocol === 'ndr' ? 'Double ratchet' : 'NIP-17'}</strong></p>
+        </details>
+      {/if}
       <details open class="profile-section">
         <summary>{$translate('profile.userMetadataNip01')}</summary>
         <div class="fields">

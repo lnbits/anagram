@@ -14,7 +14,7 @@ import { hasPendingLogoutCleanup, schedulePendingLogoutCleanup } from './logoutS
 import { clearBotInteractionData } from '#src/services/botInteractionData.ts';
 import { PUBLIC_KEY_STORAGE_KEY } from '#src/stores/nostr/constants.ts';
 
-export const KNOWN_APP_INDEXED_DB_NAMES = [
+const SERVICE_DB_NAMES = [
   'anagram-hydration-inbox',
   'anagram-private-relays',
   'chat-data-indexeddb-v2',
@@ -23,6 +23,8 @@ export const KNOWN_APP_INDEXED_DB_NAMES = [
   'nostr-events-indexeddb-v1',
   'nostr-chat-image-cache',
 ] as const;
+
+export const KNOWN_APP_INDEXED_DB_NAMES = [...SERVICE_DB_NAMES, 'anagram-ratchet'] as const;
 
 function hasLocalStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
@@ -47,7 +49,11 @@ function clearBrowserStorage(options: { preservePendingLogoutCleanup?: boolean }
 }
 
 async function clearIndexedDbDatabases(): Promise<void> {
-  const names = new Set([...rememberedAccountDatabases(), ...(await listIndexedDbDatabaseNames())]);
+  const names = new Set([
+    ...KNOWN_APP_INDEXED_DB_NAMES,
+    ...rememberedAccountDatabases(),
+    ...(await listIndexedDbDatabaseNames()),
+  ]);
   const clearResults = await Promise.allSettled([
     messageInbox.clearAllData(),
     privateStorageRelayService.clearAllData(),
@@ -58,11 +64,10 @@ async function clearIndexedDbDatabases(): Promise<void> {
     imageCacheService.clearAllData(),
   ]);
 
-  // Services close their own handles and delete their databases. Only the inbox
-  // clears in place; retry failed deletions and delete account/legacy databases.
-  KNOWN_APP_INDEXED_DB_NAMES.forEach((name, index) => {
-    if (index === 0 || clearResults[index].status === 'rejected') names.add(name);
-    else names.delete(name);
+  // Leave the ratchet database, the in-place inbox, failed services and account databases
+  // for explicit deletion. Only successful service-owned deletions are already complete.
+  SERVICE_DB_NAMES.forEach((name, index) => {
+    if (index !== 0 && clearResults[index].status === 'fulfilled') names.delete(name);
   });
   const results = await Promise.allSettled([...names].map(deleteIndexedDbDatabase));
   const failed = results.find((result) => result.status === 'rejected');

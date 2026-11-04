@@ -8,6 +8,7 @@ import type { CallRoomSignal } from '#src/types/callRoom.ts';
 import { parseRoomSignal, roomRelays } from '#src/utils/callRoom.ts';
 import { parseCallSignal } from '#src/utils/callSignal.ts';
 import { resolvePreferredContactRelayUrls } from '#src/utils/contactRelayUrls.ts';
+import type { createRatchetIntegration } from './ratchetIntegration.ts';
 
 export function createCallSignalingRuntime(deps: {
   ndk: NostrClient;
@@ -16,6 +17,7 @@ export function createCallSignalingRuntime(deps: {
   refreshRelays(peer: string): Promise<unknown>;
   getAppRelays(): string[];
   sendRumor: ReturnType<typeof createRelayPublishRuntime>['sendGiftWrappedRumor'];
+  sendRatchet: ReturnType<typeof createRatchetIntegration>['send'];
 }) {
   const refreshes = new Map<string, Promise<void>>();
   function refreshRoutes(own: string, peer: string) {
@@ -33,6 +35,18 @@ export function createCallSignalingRuntime(deps: {
       refreshes.set(key, pending);
     }
     return pending;
+  }
+  async function readPeer(own: string, peer: string) {
+    const contact = await contactsService.getContactByPublicKey(peer);
+    if (contact?.type === 'group' || contact?.meta?.blocked || deps.isBlocked(peer) || deps.getOwnPubkey() !== own)
+      throw new Error('Call recipient is unavailable.');
+    return contact;
+  }
+  async function queueRatchet(own: string, peer: string, content: string) {
+    const draft = new ClientEvent(deps.ndk, {
+      kind: CALL_SIGNAL_KIND, pubkey: own, tags: [['p', peer]], content,
+    });
+    return await deps.sendRatchet(peer, draft.rawEvent()) !== null;
   }
   function publishSignal(own: string, peer: string, relays: string[], content: string) {
     return deps.sendRumor(
@@ -61,15 +75,9 @@ export function createCallSignalingRuntime(deps: {
     const content = JSON.stringify(signal);
     const now = Math.floor(Date.now() / 1000);
     if (!parseCallSignal(content, now)) throw new Error('Invalid call signal.');
-    const routes = async () => {
-      const contact = await contactsService.getContactByPublicKey(peer);
-      if (
-        contact?.type === 'group' ||
-        contact?.meta.blocked ||
-        deps.isBlocked(peer) ||
-        deps.getOwnPubkey() !== own
-      )
-        throw new Error('Call recipient is unavailable.');
+    const contact = await readPeer(own, peer);
+    if (await queueRatchet(own, peer, content)) return;
+    const routes = (contact: Awaited<ReturnType<typeof readPeer>>) => {
       return inputSanitizerService
         .normalizeRelayEntriesFromUrls([
           ...resolvePreferredContactRelayUrls(contact?.relays),
@@ -77,7 +85,7 @@ export function createCallSignalingRuntime(deps: {
         ])
         .map((entry) => entry.url);
     };
-    const known = await routes();
+    const known = routes(contact);
     // Discovery must not hold up ringing, answering or hanging up on known routes.
     const refresh = refreshRoutes(own, peer);
     const publish = (relays: string[]) => {
@@ -107,7 +115,7 @@ export function createCallSignalingRuntime(deps: {
     } finally {
       clearTimeout(timer);
     }
-    const updated = await routes();
+    const updated = routes(await readPeer(own, peer));
     if (failure && !updated.some((url) => !known.includes(url))) throw failure;
     await publish(updated);
   }
@@ -119,17 +127,19 @@ export function createCallSignalingRuntime(deps: {
   ): Promise<void> {
     const peer = inputSanitizerService.normalizeHexKey(peerInput);
     const own = deps.getOwnPubkey();
-    const relays = roomRelays(relayHints);
     const content = JSON.stringify(signal);
     if (
       !peer ||
       !own ||
       peer === own ||
       deps.isBlocked(peer) ||
-      !relays ||
       !parseRoomSignal(content, Math.floor(Date.now() / 1000))
     )
       throw new Error('Invalid room control');
+    await readPeer(own, peer);
+    if (await queueRatchet(own, peer, content)) return;
+    const relays = roomRelays(relayHints);
+    if (!relays) throw new Error('Invalid room control');
     await publishSignal(own, peer, relays, content);
   }
   return { sendCallSignal, sendRoomSignal };

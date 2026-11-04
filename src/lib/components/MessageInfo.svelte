@@ -2,6 +2,7 @@
   import type { Message, MessageRelayStatus } from '#src/types/chat.ts';
   import { translate } from '#src/i18n.ts';
   export let message: Message;
+  export let directMessage = false;
   export let onretry: (status: MessageRelayStatus) => Promise<void>;
   let error = '';
   let busy = false;
@@ -20,6 +21,10 @@
 </script>
 
 <dl class="message-info">
+  {#if directMessage}
+    <dt>Messaging mode</dt>
+    <dd data-testid="message-protocol">{message.meta.protocol === 'ndr' ? 'Double ratchet' : 'NIP-17'}</dd>
+  {/if}
   <dt>{$translate('common.sent')}</dt>
   <dd>{new Date(message.sentAt).toLocaleString()}</dd>
   <dt>{$translate('contacts.authorPubkey')}</dt>

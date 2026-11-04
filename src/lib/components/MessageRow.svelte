@@ -130,7 +130,7 @@
           </span>{/if}{chatTime(
           message.sentAt,
           $locale,
-        )}{#if !message.meta.deleted}<MessageRelayStatus
+        )}{#if message.sender === 'me' && message.meta.protocol === 'ndr' && !message.meta.deleted}<span data-testid="ratchet-delivery" title={message.meta.ratchet_delivery === 'published' ? 'Accepted by a relay' : 'Waiting for a compatible device or relay'}>{message.meta.ratchet_delivery === 'published' ? ' ✓' : ' · Queued'}</span>{/if}{#if !message.meta.deleted}<MessageRelayStatus
             {message}
             {contactName}
             {contactRelayUrls}

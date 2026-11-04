@@ -4,8 +4,9 @@ Nostr authenticates peers and exchanges connection details. Iroh carries encrypt
 
 ## Signalling
 
-- Direct call controls attempt delivery to configured app relays and any known recipient inboxes. Known delivery routes are used immediately while inbox metadata refreshes in the background. If delivery fails or no route is known, discovery has a bounded 1.5-second fallback wait. Missing inbox metadata does not prevent a call. A single relay acknowledgement is sufficient; other publish attempts continue without delaying negotiation.
-- An unsigned `kind:21117` rumor travels inside a NIP-44 `kind:13` seal and NIP-59 `kind:1059` gift wrap, with one intended `p` recipient. The rumor author must match the seal signer.
+- Call and room controls use the conversation's selected encryption. A double-ratchet conversation sends every `kind:21117` control through its authenticated session. Initialization or delivery failure cannot fall back to NIP-17.
+- Legacy NIP-17 controls attempt delivery to configured app relays and any known recipient inboxes. Known delivery routes are used while inbox metadata refreshes in the background. If delivery fails or no route is known, discovery has a bounded 1.5-second fallback wait. A single relay acknowledgement is sufficient; other publish attempts continue without delaying negotiation.
+- For NIP-17, the unsigned `kind:21117` rumor travels inside a NIP-44 `kind:13` seal and NIP-59 `kind:1059` gift wrap, with one intended `p` recipient. The rumor author must match the seal signer. Private publication uses separate send-only connections with fresh anonymous authentication, never the account's receiving pool.
 - JSON uses `protocol: "anagram/iroh-call/1"`, UUID `callId`, `action` (`invite`, `ringing`, `accept`, `end`), `mode` (`audio`, `video`) and ISO `expiresAt`.
 - Invites and accepts include `address: { id, relayUrl }` and `mimeType`. End controls include a reason. Signals expire within 60 seconds; future timestamps beyond 10 seconds are rejected.
 - Each call creates fresh Iroh endpoints. Peers accept only the endpoint authenticated by the other's Nostr signal, exchange the call UUID over ALPN `anagram/call/1`, then exchange ready frames before sending media.

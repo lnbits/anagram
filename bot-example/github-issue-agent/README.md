@@ -68,6 +68,19 @@ The person writing must always be in `ALLOWED_USERS`; group membership never giv
 
 Plain messages work too: "create an issue in lnbits/anagram about the login bug" drafts an issue when it names exactly one of your repositories (as `owner/repo` or a `github.com` link). Fixed rules decide what a message means; the model is never asked. Approval in words ("yes", "looks good") never publishes: the bot answers with the exact `/confirm CODE`.
 
+### Buttons
+
+In Anagram, every draft message carries three [inline buttons](../../docs/bot-keyboards.md): **Preview** (the issue exactly as `/confirm` would publish it, with the current code), **Refresh status** (draft waiting, being edited or published; or the published issue, its failure, or that it is waiting for the operator) and **Cancel draft** (the same as `/cancel CODE`). There is deliberately **no Publish button**: `/confirm CODE`, typed by the requester, stays the only way to publish, and a button press can never create an issue.
+
+A press is answered **privately**: the answer replaces the draft message's text for that person, in that chat, without a new message or notification, and keeps the buttons (Cancel removes them for that person). So in a group, members can read a preview or the status without adding messages, and a cancellation is seen only by the requester. A press gets no answer unless all of this holds:
+
+- The request is a valid, unexpired Anagram button request (encrypted `kind:21118`) for a draft message this bot sent, with the button really on that message or on the bot's own answer to that person there. The button's data is one of three fixed names; it cannot carry a code, a repository or anything else.
+- The same access rules as for a message: the person is in `ALLOWED_USERS`, the chat is allowed, and the press was made after access was granted. In a DM, the person pressing is the one the draft was sent to. In a private group, the request carries a valid invitation proof for the group's current epoch (and the answer carries the bot's). In a public group, the bot must still be trusted and neither party blocked. Presses count against the hourly message limit.
+- In groups, the repository must still be public on GitHub (asked again right before answering, like `/drafts`); otherwise the answer only says the repository is not shown here.
+- Cancel works for the requester only, and not while the draft is being published. After a restart, or once a draft has expired, Preview and Cancel say the draft is no longer available; Refresh status still reports a published, failed or uncertain issue from the saved records.
+
+**Idempotent.** The exact encrypted answer to each request is kept (five minutes past its expiry), so when Anagram retries a request the same answer is sent again and nothing is cancelled twice; a reused request id with other contents is refused. Presses are handled in the conversation's lane, in order with `/confirm` and `/cancel`. `state.json` keeps, per draft message, the chat it was sent to, its AG reference and the ids of the answers each person received, for 7 days (at most 1,000 messages, 1,000 people per message); it never keeps draft text. Answers are encrypted to the person, and Anagram stores them on that device only.
+
 ## Drafts, codes and references
 
 - A **code** (`K3P9QX`) belongs to one version of one draft. Every edit gives a new code and the old one stops working, so you can only confirm the text you last saw.
@@ -133,7 +146,7 @@ The service runs as an unprivileged dynamic user with state in `/var/lib/anagram
 
 ## Code and checks
 
-`bot.js` holds the chat logic (`handle()`, `command()`, `natural()`, `confirm()`, `publish()`, `reconcile()`, `recover()`) and this bot's access-gated Nostr receive and send paths. `drafting.js` has the prompts and output sanitizing, `intent.js` the fixed parsing rules, `github.js` and `ollama.js` the HTTP clients, `drafts.js` and `issues.js` the drafts and saved records. The transport in `vendor/` is the poll example's, unchanged; see `LICENSE`.
+`bot.js` holds the chat logic (`handle()`, `command()`, `natural()`, `confirm()`, `publish()`, `reconcile()`, `recover()`), the button presses (`callback()`, `press()`) and this bot's access-gated Nostr receive and send paths. `drafting.js` has the prompts and output sanitizing, `intent.js` the fixed parsing rules, `github.js` and `ollama.js` the HTTP clients, `drafts.js` and `issues.js` the drafts and saved records, `messages.js` the user-facing text and the button keyboard. The transport and the inline keyboard validator in `vendor/` are the poll example's, unchanged; see `LICENSE`.
 
 Run `npm run check` and `npm test`. Tests use a mock Ollama, a mock GitHub API and local WebSocket relays; they need no Ollama install, tokens or internet. CI also runs them from a copy of this folder outside the repository.
 

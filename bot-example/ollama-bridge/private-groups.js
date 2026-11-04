@@ -116,15 +116,20 @@ export function sendPrivate(bot, message, group, text) {
       ['invited_at', String(epoch.ticket.created_at)],
       ['invitation_proof', epoch.ticket.sig],
       ['e', message.id, '', 'reply'],
+      ...bot.cardTags(),
     ],
     text,
   );
-  bot.queue(message, [
-    {
-      event: wrap(reply, bot.key, epoch.pubkey),
-      relays: bot.groupRelays.get(group) ?? bot.relays,
-      group,
-      epoch: epoch.epoch,
-    },
-  ]);
+  bot.queue(
+    message,
+    [
+      {
+        event: wrap(reply, bot.key, epoch.pubkey),
+        relays: bot.groupRelays.get(group) ?? bot.relays,
+        group,
+        epoch: epoch.epoch,
+      },
+    ],
+    { root: reply.id, type: 'private', chat: group },
+  );
 }

@@ -178,10 +178,15 @@ test('an allowed DM is answered by the model with NIP-17 reply tags and a self c
   const reply = unwrapEvent(sent[0], alice);
   assert.equal(reply.content, 'Answer to: Explain Bitcoin mining in simple terms.');
   assert.equal(reply.pubkey, bot.pubkey);
-  assert.deepEqual(reply.tags, [
+  assert.deepEqual(reply.tags.slice(0, 2), [
     ['p', getPublicKey(alice)],
     ['e', message.id, '', 'reply'],
   ]);
+  assert.deepEqual(
+    reply.tags.slice(2).map((tag) => tag[0]),
+    ['anagram-inline-keyboard'],
+    'buttons travel as a tag, never in the text',
+  );
   assert.equal(unwrapEvent(sent[1], bot.key).id, reply.id);
 });
 
@@ -291,10 +296,11 @@ test('public groups: only allowed rooms, allowed senders and mentions; replies u
   const [{ event: reply }] = bot.state.outbox;
   assert.ok(verifyEvent(reply));
   assert.equal(reply.kind, 9);
-  assert.deepEqual(reply.tags, [
+  assert.deepEqual(reply.tags.slice(0, 2), [
     ['a', address],
     ['q', question.id, '', question.pubkey],
   ]);
+  assert.equal(reply.tags[2]?.[0], 'anagram-inline-keyboard');
   // A p-tag mention works too, and the public history never includes DMs.
   await sendDM(bot, alice, 'DM secret');
   await settle(bot);

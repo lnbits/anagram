@@ -44,6 +44,20 @@ export function parseCommand(text) {
   return ['help', 'reset', 'model'].includes(name) ? name : 'unknown';
 }
 
+// Anagram inline keyboard under every reply (see README, "Buttons"). Each button does what
+// a command does, and a press is answered privately, so the chat is not filled with
+// "Done" messages. Button data never carries anything but one of these fixed names.
+export const BUTTONS = { new: 'reset', model: 'model', help: 'help' };
+export const KEYBOARD = {
+  inline_keyboard: [
+    [
+      { text: 'New chat', callback_data: 'new', size: 'small' },
+      { text: 'Model', callback_data: 'model', size: 'small' },
+      { text: 'Help', callback_data: 'help', size: 'small' },
+    ],
+  ],
+};
+
 export function helpText(model) {
   return [
     `I forward your messages to a local AI model (${model}) and reply with its answer.`,

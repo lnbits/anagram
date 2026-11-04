@@ -1,37 +1,55 @@
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
-import { getPublicKey, nip19 } from 'nostr-tools';
+import { getEventHash, getPublicKey, nip19 } from 'nostr-tools';
 import {
   bytes,
   ConfigurationError,
   Network,
   newer,
   now,
+  rumor,
   sign,
   State,
   unwrap,
   valid,
   single,
+  wrap,
 } from './runtime.js';
 import { Access } from './access.js';
 import { loadConfig } from './config.js';
 import { buildMessages, Conversations, systemPrompt } from './conversations.js';
 import {
+  BUTTONS,
   failureText,
   formatAnswer,
   helpText,
+  KEYBOARD,
   parseCommand,
   shortId,
   stripMention,
 } from './commands.js';
 import { OllamaClient } from './ollama.js';
 import { directMessage } from './direct-messages.js';
-import { acceptTicket, privateMessage, readTicket } from './private-groups.js';
+import { acceptTicket, authorized, privateMessage, readTicket } from './private-groups.js';
 import { acceptRoom, joinPublic, parseRoom, publicMessage } from './public-groups.js';
+import {
+  BOT_CONTROL_KIND,
+  controlTag,
+  hasCallback,
+  keyboardTag,
+  parseControl,
+  targetKey,
+} from './botKeyboardProtocol.ts';
 
 const DAY = 86400;
 const HOUR = 3600;
 const HERE = fileURLToPath(new URL('.', import.meta.url));
+// Replies with buttons (cards) are remembered so that presses can be checked against them.
+const KEEP_CARDS = 7 * DAY;
+const MAX_CARDS = 1000;
+const USERS_PER_CARD = 1000;
+const VIEWS_PER_USER = 8;
+const MAX_CALLBACKS = 2000;
 
 // How a message moves through the bot:
 //   relay event -> receive()/submit() -> protocol handler (direct-messages.js,
@@ -89,6 +107,10 @@ export class OllamaBridge {
     this.requests = new Map();
     this.notices = new Map();
     this.logged = new Map();
+    // state.cards[id] = { target, recipient?, at, views: { [pubkey]: [answer ids] } }
+    // state.callbacks[`${pubkey}:${requestId}`] = { fingerprint, expires, delivery }
+    this.state.cards ??= {};
+    this.state.callbacks ??= {};
     // Corrupt persisted protocol state must not silently grant access or rotate identity.
     for (const [group, epoch] of Object.entries(this.state.groups)) {
       const { sig, ...message } = epoch.ticket ?? {};
@@ -287,11 +309,164 @@ export class OllamaBridge {
     this.state.seen[message.id] = now();
     this.save();
   }
-  queue(message, deliveries) {
+  queue(message, deliveries, card) {
     // Persist the exact signed reply before publishing. A crash/retry republishes
     // identical event IDs instead of asking the model a second time.
     this.state.seen[message.id] = now();
     this.state.outbox.push(...deliveries.map((delivery) => ({ ...delivery, queuedAt: now() })));
+    if (card) this.remember(card);
+    this.save();
+  }
+
+  // ---- Buttons ---------------------------------------------------------------------------
+  // Every reply carries the same keyboard (commands.js KEYBOARD). A press arrives as an
+  // encrypted kind 21118 request in the bot's own inbox and is answered privately, in place
+  // of the reply's text for that person only, so one reply serves everyone in a group.
+
+  cardTags() {
+    return [keyboardTag(KEYBOARD)];
+  }
+  // Remembers a reply with buttons, so a press can be checked against the reply it is on.
+  remember({ root, type, chat, recipient }) {
+    const cards = this.state.cards;
+    for (const [id, card] of Object.entries(cards))
+      if (card.at < now() - KEEP_CARDS) delete cards[id];
+    const ids = Object.keys(cards);
+    if (ids.length >= MAX_CARDS)
+      delete cards[ids.reduce((a, b) => (cards[a].at <= cards[b].at ? a : b))];
+    cards[root] = {
+      target: { type, chat, root, version: root, bot: this.pubkey },
+      ...(recipient ? { recipient } : {}),
+      at: now(),
+      views: {},
+    };
+  }
+
+  // Checks follow the protocol document: author, conversation, card version, expiry, group
+  // membership and that the button is really on that card. Then the same access rules as
+  // for a message: the sender must be allowed, in an allowed chat, since before the press.
+  async callback(message) {
+    const request = parseControl(message.tags),
+      time = now();
+    if (
+      request?.op !== 'request' ||
+      single(message, 'p') !== this.pubkey ||
+      message.pubkey === this.pubkey ||
+      message.content !== '' ||
+      request.target.bot !== this.pubkey ||
+      request.expires <= time ||
+      request.expires > message.created_at + 300 ||
+      message.created_at > time + 60 ||
+      message.created_at < time - 300 ||
+      this.state.outbox.length >= 1000 ||
+      Object.values(this.state.groups).some((g) => g.pubkey === message.pubkey)
+    )
+      return;
+    const card = this.state.cards[request.target.root];
+    if (!card || targetKey(card.target) !== targetKey(request.target)) return;
+    const { type, chat } = card.target;
+    const conversation = `${type}:${type === 'dm' ? message.pubkey : chat}`;
+    let membership;
+    if (type === 'dm' && card.recipient !== message.pubkey) return;
+    if (type === 'public') {
+      const saved = this.state.rooms[chat];
+      const room = saved && parseRoom(saved.event);
+      if (
+        !room ||
+        !this.access.publicGroup(chat) ||
+        room.blocked.includes(message.pubkey) ||
+        room.blocked.includes(this.pubkey) ||
+        (room.event.pubkey !== this.pubkey && !room.trusted.includes(this.pubkey))
+      )
+        return;
+    }
+    if (type === 'private') {
+      const epoch = this.state.groups[chat],
+        proof = request.membership;
+      if (
+        !epoch ||
+        epoch.conflict ||
+        !this.access.privateGroup(chat) ||
+        !proof ||
+        proof.epoch !== epoch.epoch ||
+        !authorized(
+          {
+            ...message,
+            kind: 14,
+            tags: [
+              ['p', epoch.pubkey],
+              ['h', chat],
+              ['epoch', String(proof.epoch)],
+              ['invited_at', String(proof.invited_at)],
+              ['invitation_proof', proof.invitation_proof],
+            ],
+          },
+          chat,
+          epoch,
+        )
+      )
+        return;
+      membership = {
+        epoch: epoch.epoch,
+        invited_at: epoch.ticket.created_at,
+        invitation_proof: epoch.ticket.sig,
+      };
+    }
+    // Strangers get nothing and leave nothing on disk, exactly like their messages.
+    if (!this.access.sender(message.pubkey)) return this.ignoredSender(message.pubkey);
+    if (!this.allowedWhenSent(message, { type, conversation }))
+      return this.sentBeforeAccess(message.pubkey);
+    // A retried request gets the exact stored answer; a reused id with other contents gets
+    // nothing. Anagram retries for five minutes, then starts a new request.
+    for (const [id, value] of Object.entries(this.state.callbacks))
+      if (value.expires < time - 300) delete this.state.callbacks[id];
+    const cacheKey = `${message.pubkey}:${request.id}`;
+    const cached = this.state.callbacks[cacheKey];
+    if (cached) {
+      if (cached.fingerprint !== message.id) return;
+      if (!this.state.outbox.some((item) => item.event.id === cached.delivery.event.id)) {
+        this.state.outbox.push({ ...cached.delivery, queuedAt: time });
+        this.save();
+      }
+      return;
+    }
+    if (Object.keys(this.state.callbacks).length >= MAX_CALLBACKS) return;
+    const views = card.views[message.pubkey];
+    if (!views && Object.keys(card.views).length >= USERS_PER_CARD) return;
+    // Every answer carries the keyboard again, so a press from a personal view is valid
+    // only if that view is one of the bot's own answers to this person on this card.
+    if (request.view && !views?.includes(request.view)) return;
+    if (!hasCallback(KEYBOARD, request.data) || !BUTTONS[request.data]) return;
+    // Presses count like messages. Over the limit: one private notice, then silence.
+    const limit = this.rateLimit(message.pubkey);
+    if (limit === 'silent') return;
+    const text =
+      limit === 'notice'
+        ? 'You have reached the hourly message limit for this bot. Please try again later.'
+        : this.command(BUTTONS[request.data], { type, conversation });
+    const answer = {
+      op: 'answer',
+      id: request.id,
+      target: request.target,
+      expires: request.expires,
+      ...(membership ? { membership } : {}),
+    };
+    const response = {
+      ...rumor(this.key, [['p', message.pubkey], controlTag(answer), keyboardTag(KEYBOARD)], text),
+      kind: BOT_CONTROL_KIND,
+    };
+    response.id = getEventHash(response);
+    const relays = await this.inbox(message.pubkey);
+    const delivery = { event: wrap(response, this.key, message.pubkey), relays };
+    // The answer, the replay marker and the view commit together, before publishing.
+    (card.views[message.pubkey] ??= []).push(response.id);
+    if (card.views[message.pubkey].length > VIEWS_PER_USER) card.views[message.pubkey].shift();
+    this.state.callbacks[cacheKey] = {
+      expires: request.expires,
+      fingerprint: message.id,
+      delivery,
+    };
+    this.state.outbox.push({ ...delivery, queuedAt: time });
     this.save();
   }
 
@@ -346,6 +521,7 @@ export class OllamaBridge {
       const opened = unwrap(event, key);
       if (!opened) return;
       if (group) await privateMessage(this, opened.message, group, getPublicKey(key));
+      else if (opened.message.kind === BOT_CONTROL_KIND) await this.callback(opened.message);
       else await directMessage(this, opened.message, opened.seal);
     });
   }

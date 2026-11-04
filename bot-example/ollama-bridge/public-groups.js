@@ -134,11 +134,12 @@ export function sendPublic(bot, event, address, text) {
   const reply = sign(
     bot.key,
     9,
-    [
-      ['a', address],
-      ['q', event.id, '', event.pubkey],
-    ],
+    [['a', address], ['q', event.id, '', event.pubkey], ...bot.cardTags()],
     text,
   );
-  bot.queue(event, [{ event: reply, relays: room.relays, room: address }]);
+  bot.queue(event, [{ event: reply, relays: room.relays, room: address }], {
+    root: reply.id,
+    type: 'public',
+    chat: address,
+  });
 }

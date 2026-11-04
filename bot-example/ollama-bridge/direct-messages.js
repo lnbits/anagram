@@ -23,14 +23,16 @@ export async function sendDirect(bot, message, text) {
   const relays = await bot.inbox(message.pubkey);
   const reply = rumor(
     bot.key,
-    [
-      ['p', message.pubkey],
-      ['e', message.id, '', 'reply'],
-    ],
+    [['p', message.pubkey], ['e', message.id, '', 'reply'], ...bot.cardTags()],
     text,
   );
-  bot.queue(message, [
-    { event: wrap(reply, bot.key, message.pubkey), relays },
-    { event: wrap(reply, bot.key, bot.pubkey), relays: bot.relays },
-  ]);
+  bot.queue(
+    message,
+    [
+      { event: wrap(reply, bot.key, message.pubkey), relays },
+      { event: wrap(reply, bot.key, bot.pubkey), relays: bot.relays },
+    ],
+    // A DM card belongs to the person it was sent to; nobody else can press its buttons.
+    { root: reply.id, type: 'dm', chat: bot.pubkey, recipient: message.pubkey },
+  );
 }

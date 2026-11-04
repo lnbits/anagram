@@ -23,6 +23,7 @@ const parent = fileURLToPath(new URL('../data/', import.meta.url));
 mkdirSync(parent, { recursive: true });
 const PRICES = '{"USD":67123.4,"EUR":58234,"JPY":10123456}';
 const button = (code) => ({ text: code, callback_data: `price:${code}`, size: 'small' });
+const REFRESH_ROW = [{ text: 'Refresh', callback_data: 'refresh', size: 'small' }];
 
 function setup(t, fetchText = async () => PRICES, options = {}) {
   const dir = mkdtempSync(`${parent}buttons-`);
@@ -113,7 +114,9 @@ test('dm: a price reply is a card; a press is answered privately in that currenc
   await directMessage(bot, command, { tags: [] });
   const reply = unwrap(bot.state.outbox[0].event, user).message;
   const keyboard = keyboardFromTags(reply.tags);
-  assert.deepEqual(keyboard, { inline_keyboard: [[button('USD'), button('EUR'), button('JPY')]] });
+  assert.deepEqual(keyboard, {
+    inline_keyboard: [[button('USD'), button('EUR'), button('JPY')], REFRESH_ROW],
+  });
   assert.equal(commandFromTags(reply.tags), command.id, 'Anagram may collapse the command');
   assert.ok(!reply.content.includes('callback_data'), 'other clients see only the text');
   const card = onlyCard(bot);
@@ -121,6 +124,7 @@ test('dm: a price reply is a card; a press is answered privately in that currenc
     target: { type: 'dm', chat: bot.pubkey, root: reply.id, version: reply.id, bot: bot.pubkey },
     recipient: pub,
     keyboard,
+    currency: 'USD',
     at: card.at,
     views: {},
   });
@@ -135,7 +139,7 @@ test('dm: a price reply is a card; a press is answered privately in that currenc
   const { id, expires } = parseControl(request.tags);
   assert.deepEqual(parseControl(answer.tags), { op: 'answer', id, target: card.target, expires });
   assert.deepEqual(keyboardFromTags(answer.tags), keyboard, 'the next press works from the answer');
-  assert.deepEqual(card.views[pub], [answer.id]);
+  assert.deepEqual(card.views[pub], [{ id: answer.id, currency: 'EUR' }]);
   assert.equal(bot.state.outbox.length, 3, 'two copies of the reply and one personal answer');
 
   // Pressing on the personal answer names it as the view; an unknown view is refused.
@@ -147,6 +151,38 @@ test('dm: a price reply is a card; a press is answered privately in that currenc
   await deliver(bot, press(user, bot, card, 'price:USD'), user);
   assert.equal(answers(bot, user)[2].content, 'BTC: $67,123 USD');
   assert.equal(card.views[pub].length, 3);
+});
+
+test('Refresh asks again for the currency shown, and a currency the provider dropped is reported', async (t) => {
+  let prices = PRICES;
+  const { bot } = setup(t, async () => prices, { cacheSeconds: 0 });
+  const user = generateSecretKey();
+  await directMessage(bot, rumor(user, [['p', bot.pubkey]], 'price JPY'), { tags: [] });
+  const card = onlyCard(bot);
+  assert.equal(card.currency, 'JPY');
+  prices = '{"USD":70000,"EUR":60000,"JPY":11000000}';
+  await deliver(bot, press(user, bot, card, 'refresh'), user);
+  const [first] = answers(bot, user);
+  assert.equal(
+    first.content,
+    'BTC: ¥11,000,000 JPY',
+    'the card shows JPY, so Refresh asks for JPY',
+  );
+  await deliver(bot, press(user, bot, card, 'price:EUR', { view: first.id }), user);
+  const [, eur] = answers(bot, user);
+  assert.equal(eur.content, 'BTC: €60,000 EUR');
+  prices = '{"USD":71000,"EUR":61000,"JPY":11100000}';
+  await deliver(bot, press(user, bot, card, 'refresh', { view: eur.id }), user);
+  assert.equal(answers(bot, user)[2].content, 'BTC: €61,000 EUR', 'a view keeps its currency');
+  prices = '{"USD":72000}';
+  await deliver(bot, press(user, bot, card, 'price:JPY'), user);
+  const dropped = answers(bot, user)[3];
+  assert.equal(dropped.content, 'Unsupported currency JPY. Available: USD.');
+  assert.deepEqual(keyboardFromTags(dropped.tags), card.keyboard, 'the buttons stay as they were');
+  await deliver(bot, press(user, bot, card, 'refresh', { view: dropped.id }), user);
+  assert.equal(answers(bot, user)[4].content, 'Unsupported currency JPY. Available: USD.');
+  await deliver(bot, press(user, bot, card, 'refresh', { view: 'e'.repeat(64) }), user);
+  assert.equal(answers(bot, user).length, 5, 'Refresh from an unknown view is refused too');
 });
 
 test('a repeated press gets the stored answer again, also after a restart; a reused id with other data gets nothing', async (t) => {

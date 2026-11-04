@@ -112,6 +112,7 @@ test('price replies carry one small button per currency, the default first, eigh
   assert.deepEqual(reply, {
     text: 'BTC: £51,000 GBP',
     priced: true,
+    currency: 'GBP',
     keyboard: {
       inline_keyboard: [
         [
@@ -121,6 +122,7 @@ test('price replies carry one small button per currency, the default first, eigh
           { text: 'JPY', callback_data: 'price:JPY', size: 'small' },
         ],
         [{ text: 'USD', callback_data: 'price:USD', size: 'small' }],
+        [{ text: 'Refresh', callback_data: 'refresh', size: 'small' }],
       ],
     },
   });
@@ -128,11 +130,13 @@ test('price replies carry one small button per currency, the default first, eigh
   const rows = priceKeyboard(many, 'ZZZ').inline_keyboard;
   assert.deepEqual(
     rows.flat().map((b) => b.text),
-    ['AAA', 'BBB', 'CCC', 'DDD', 'EEE', 'FFF', 'GGG', 'HHH'],
+    ['AAA', 'BBB', 'CCC', 'DDD', 'EEE', 'FFF', 'GGG', 'HHH', 'Refresh'],
     'an unknown default currency does not get a button and the list is capped',
   );
-  assert.deepEqual(priceKeyboard(new Map()), { inline_keyboard: [] });
+  assert.deepEqual(priceKeyboard(new Map()), {
+    inline_keyboard: [[{ text: 'Refresh', callback_data: 'refresh', size: 'small' }]],
+  });
   assert.equal(buttonCurrency('price:EUR'), 'EUR');
-  for (const bad of ['price:eur', 'price:EURO', 'vote:0', 'EUR', '', undefined])
+  for (const bad of ['price:eur', 'price:EURO', 'vote:0', 'refresh', 'EUR', '', undefined])
     assert.equal(buttonCurrency(bad), null, String(bad));
 });

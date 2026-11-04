@@ -120,6 +120,7 @@ export async function privateMessage(bot, message, group, receivingEpoch) {
       type: 'private',
       chat: group,
       keyboard: response.keyboard,
+      currency: response.currency,
     },
   );
 }

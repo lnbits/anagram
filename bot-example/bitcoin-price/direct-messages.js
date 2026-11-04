@@ -35,6 +35,7 @@ export async function directMessage(bot, message, seal) {
       chat: bot.pubkey,
       recipient: message.pubkey,
       keyboard: response.keyboard,
+      currency: response.currency,
     },
   );
 }

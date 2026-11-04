@@ -18,7 +18,7 @@ import {
 import { directMessage } from './direct-messages.js';
 import { acceptTicket, authorized, privateMessage, readTicket } from './private-groups.js';
 import { acceptRoom, joinPublic, parseRoom, publicMessage } from './public-groups.js';
-import { buttonCurrency, priceReply, UNAVAILABLE } from './commands.js';
+import { buttonCurrency, priceReply, REFRESH, UNAVAILABLE } from './commands.js';
 import { DEFAULT_PRICE_URL, defaultCurrency, parseCacheSeconds, PriceFeed } from './price.js';
 import {
   BOT_CONTROL_KIND,
@@ -79,7 +79,8 @@ export class PriceBot {
     this.work = Promise.resolve();
     this.stopped = false;
     this.started = false;
-    // state.cards[id] = { target, recipient?, keyboard, at, views: { [pubkey]: [answer ids] } }
+    // state.cards[id] = { target, recipient?, keyboard, currency, at,
+    //                     views: { [pubkey]: [{ id: answer id, currency }] } }
     // state.callbacks[`${pubkey}:${requestId}`] = { fingerprint, expires, delivery }
     this.state.cards ??= {};
     this.state.callbacks ??= {};
@@ -129,7 +130,7 @@ export class PriceBot {
     return tags;
   }
   // Remembers a reply with buttons, so a press can be checked against the card it is on.
-  remember({ root, type, chat, recipient, keyboard }) {
+  remember({ root, type, chat, recipient, keyboard, currency }) {
     const cards = this.state.cards;
     for (const [id, card] of Object.entries(cards))
       if (card.at < now() - KEEP_CARDS) delete cards[id];
@@ -140,6 +141,7 @@ export class PriceBot {
       target: { type, chat, root, version: root, bot: this.pubkey },
       ...(recipient ? { recipient } : {}),
       keyboard,
+      currency: currency ?? this.defaultCurrency,
       at: now(),
       views: {},
     };
@@ -233,16 +235,22 @@ export class PriceBot {
     if (!views && Object.keys(card.views).length >= USERS_PER_CARD) return;
     // Every answer carries the card's keyboard again, so a press from a personal view is
     // valid only if that view is one of the bot's own answers to this person on this card.
-    if (request.view && !views?.includes(request.view)) return;
-    const currency = buttonCurrency(request.data);
-    if (!currency || !hasCallback(card.keyboard, request.data)) return;
-    let text;
+    const view = request.view && views?.find((v) => v.id === request.view);
+    if (request.view && !view) return;
+    if (!hasCallback(card.keyboard, request.data)) return;
+    // Refresh asks again for the currency this person is looking at. A currency button
+    // names one of the card's; if the provider stopped offering it, the answer says so.
+    const currency =
+      request.data === REFRESH ? (view || card).currency : buttonCurrency(request.data);
+    if (!currency) return;
+    let priced;
     try {
-      text = (await priceReply(`price ${currency}`, this.feed, this.defaultCurrency)).text;
+      priced = await priceReply(`price ${currency}`, this.feed, this.defaultCurrency);
     } catch {
       this.log('Price reply failed unexpectedly.');
-      text = UNAVAILABLE;
+      priced = { text: UNAVAILABLE };
     }
+    const text = priced.text;
     const answer = {
       op: 'answer',
       id: request.id,
@@ -262,7 +270,10 @@ export class PriceBot {
     const relays = await this.inbox(message.pubkey);
     const delivery = { event: wrap(response, this.key, message.pubkey), relays };
     // The answer, the replay marker and the view commit together, before publishing.
-    (card.views[message.pubkey] ??= []).push(response.id);
+    (card.views[message.pubkey] ??= []).push({
+      id: response.id,
+      currency: priced.currency ?? (view || card).currency,
+    });
     if (card.views[message.pubkey].length > VIEWS_PER_USER) card.views[message.pubkey].shift();
     this.state.callbacks[cacheKey] = {
       expires: request.expires,

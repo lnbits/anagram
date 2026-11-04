@@ -130,6 +130,7 @@ export async function publicMessage(bot, event, address) {
       type: 'public',
       chat: address,
       keyboard: response.keyboard,
+      currency: response.currency,
     },
   );
 }

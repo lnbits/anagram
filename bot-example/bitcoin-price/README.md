@@ -9,6 +9,7 @@ You: price
 Bot: BTC: $67,123 USD
      [USD] [EUR] [GBP] [CAD]
      [CHF] [AUD] [JPY]
+     [Refresh]
 
 You: price EUR
 Bot: BTC: €58,234 EUR
@@ -74,16 +75,16 @@ Help is not sent in answer to replies, such as a reply to the bot or another bot
 
 ## Buttons
 
-Anagram shows [inline buttons](../../docs/bot-keyboards.md) under every price reply: one small button per currency the provider returned, the default currency first, at most eight (two rows of four). The text is the same with or without buttons, so apps that do not support them simply show the price, and every button does what a command also does. A priced reply also tells Anagram which command it answers, so Anagram can collapse that command under the reply.
+Anagram shows [inline buttons](../../docs/bot-keyboards.md) under every price reply: one small button per currency the provider returned, the default currency first, at most eight (two rows of four), and **Refresh**, which asks again for the currency that person is looking at. The text is the same with or without buttons, so apps that do not support them simply show the price, and every button does what a command also does. A priced reply also tells Anagram which command it answers, so Anagram can collapse that command under the reply.
 
 A press is answered **privately**: the answer replaces the reply's text for that person, in that chat, without a new message or notification, and carries the same buttons, so one card can be used again and again, by everyone in a group, without filling the chat. A press gets no answer unless all of this holds:
 
-- The request is a valid, unexpired Anagram button request (encrypted `kind:21118`) for a reply this bot sent, with the button really on that reply or on the bot's own answer to that person there. The button's data names a currency the provider offered when the reply was written; it cannot name a provider, URL or anything else.
+- The request is a valid, unexpired Anagram button request (encrypted `kind:21118`) for a reply this bot sent, with the button really on that reply or on the bot's own answer to that person there. The button's data names a currency the provider offered when the reply was written, or Refresh; it cannot name a provider, URL or anything else. A currency the provider has since dropped gets the usual "Unsupported currency" answer.
 - In a DM, the person pressing is the one the reply was sent to. In a private group, the request carries a valid invitation proof for the group's current epoch, and the answer carries the bot's. In a public group, the bot must still be trusted (or the owner) and neither party blocked.
 
 **Idempotent.** The exact encrypted answer to each request is kept (five minutes past its expiry), so when Anagram retries a request, the same answer is sent again; a reused request id with other contents is refused. After the request expires Anagram starts a new one, which is answered with a fresh price. Presses use the same price cache as commands, are not subject to `COOLDOWN_SECONDS`, and share the delivery queue's limits. If the provider is down, the answer is the stale or unavailable text, with the buttons kept so the person can try again.
 
-`state.json` keeps, per reply with buttons, the chat it was sent to, its buttons and the ids of the answers each person received, for 7 days (at most 1,000 replies, 1,000 people per reply). Answers are encrypted to the person; Anagram stores them on that device only, so another device shows the original reply and asks again.
+`state.json` keeps, per reply with buttons, the chat it was sent to, its buttons, its currency and the ids and currencies of the answers each person received, for 7 days (at most 1,000 replies, 1,000 people per reply). Answers are encrypted to the person; Anagram stores them on that device only, so another device shows the original reply and asks again.
 
 ## Caching and provider outages
 

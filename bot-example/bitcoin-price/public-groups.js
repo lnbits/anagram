@@ -114,16 +114,22 @@ export async function publicMessage(bot, event, address) {
     !bot.shouldReply(event)
   )
     return;
-  const text = await bot.reply(event);
-  if (text === null) return bot.skip(event);
+  const response = await bot.reply(event);
+  if (response === null) return bot.skip(event);
   const reply = sign(
     bot.key,
     9,
-    [
-      ['a', address],
-      ['q', event.id, '', event.pubkey],
-    ],
-    text,
+    [['a', address], ['q', event.id, '', event.pubkey], ...bot.cardTags(response, event)],
+    response.text,
   );
-  bot.queue(event, [{ event: reply, relays: room.relays, room: address }]);
+  bot.queue(
+    event,
+    [{ event: reply, relays: room.relays, room: address }],
+    response.keyboard && {
+      root: reply.id,
+      type: 'public',
+      chat: address,
+      keyboard: response.keyboard,
+    },
+  );
 }

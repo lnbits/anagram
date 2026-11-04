@@ -175,10 +175,14 @@ test('DM receives one price, proper reply tags, sender history copy, and no repl
   const reply = unwrapEvent(sent[0], user);
   assert.equal(reply.content, 'BTC: $67,123 USD');
   assert.equal(reply.pubkey, bot.pubkey);
-  assert.deepEqual(reply.tags, [
+  assert.deepEqual(reply.tags.slice(0, 2), [
     ['p', getPublicKey(user)],
     ['e', message.id, '', 'reply'],
   ]);
+  assert.deepEqual(
+    reply.tags.slice(2).map((tag) => tag[0]),
+    ['anagram-inline-keyboard', 'anagram-bot-command'],
+  );
   assert.equal(unwrapEvent(sent[1], bot.key).id, reply.id);
   store.close();
   const restored = new State(dir);
@@ -291,10 +295,14 @@ test('public trusted-user discovery, mentions, replies, block/untrust updates an
   const reply = bot.state.outbox[0].event;
   assert.ok(verifyEvent(reply));
   assert.equal(reply.content, 'BTC: ¥10,123,456 JPY');
-  assert.deepEqual(reply.tags, [
+  assert.deepEqual(reply.tags.slice(0, 2), [
     ['a', address],
     ['q', message.id, '', message.pubkey],
   ]);
+  assert.deepEqual(
+    reply.tags.slice(2).map((tag) => tag[0]),
+    ['anagram-inline-keyboard', 'anagram-bot-command'],
+  );
   const blocked = room(owner, bot, [['blocked', bot.pubkey]], now() + 1);
   acceptRoom(bot, blocked);
   await bot.flush();

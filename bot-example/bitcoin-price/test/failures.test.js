@@ -67,7 +67,10 @@ test('an unexpected error while building the reply cannot crash the bot', async 
       throw new Error('bug');
     },
   };
-  assert.equal(await bot.reply({ content: 'price' }), UNAVAILABLE);
+  assert.deepEqual(await bot.reply({ content: 'price', tags: [] }), {
+    text: UNAVAILABLE,
+    keyboard: null,
+  });
 });
 
 test('a reply is queued only after the provider answers, never before', async (t) => {

@@ -121,7 +121,10 @@ test('the longest allowed cache always yields a price, never a cached-but-unusab
   assert.equal(state.calls, 2);
   assert.equal(fallback.stale, true, 'a failed refresh still shows the 300s-old price');
   assert.equal(fallback.ageSeconds, 300);
-  assert.equal(await priceReply('price', feed).then((t) => t.startsWith('BTC: $67,123')), true);
+  assert.equal(
+    await priceReply('price', feed).then((r) => r.text.startsWith('BTC: $67,123')),
+    true,
+  );
 });
 
 test('PRICE_CACHE_SECONDS from the environment accepts only whole seconds from 0 to 300', () => {

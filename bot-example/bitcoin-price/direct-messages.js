@@ -14,19 +14,27 @@ export async function directMessage(bot, message, seal) {
   // Public rooms have no addressed invitation. Sharing a link is an explicit join request.
   await bot.joinPublicLinks(message.content);
   // The message is only marked as handled by bot.queue() below, after the text exists.
-  const text = await bot.reply(message);
-  if (text === null) return bot.skip(message);
+  const response = await bot.reply(message);
+  if (response === null) return bot.skip(message);
   const relays = await bot.inbox(message.pubkey);
   const reply = rumor(
     bot.key,
-    [
-      ['p', message.pubkey],
-      ['e', message.id, '', 'reply'],
-    ],
-    text,
+    [['p', message.pubkey], ['e', message.id, '', 'reply'], ...bot.cardTags(response, message)],
+    response.text,
   );
-  bot.queue(message, [
-    { event: wrap(reply, bot.key, message.pubkey), relays },
-    { event: wrap(reply, bot.key, bot.pubkey), relays: bot.relays },
-  ]);
+  bot.queue(
+    message,
+    [
+      { event: wrap(reply, bot.key, message.pubkey), relays },
+      { event: wrap(reply, bot.key, bot.pubkey), relays: bot.relays },
+    ],
+    // A DM card belongs to the person it was sent to; nobody else can press its buttons.
+    response.keyboard && {
+      root: reply.id,
+      type: 'dm',
+      chat: bot.pubkey,
+      recipient: message.pubkey,
+      keyboard: response.keyboard,
+    },
+  );
 }

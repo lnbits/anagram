@@ -89,8 +89,8 @@ export async function privateMessage(bot, message, group, receivingEpoch) {
     !bot.shouldReply(message)
   )
     return;
-  const text = await bot.reply(message);
-  if (text === null) return bot.skip(message);
+  const response = await bot.reply(message);
+  if (response === null) return bot.skip(message);
   // Epoch keys must never author messages. The bot signs the seal using its own identity.
   const reply = rumor(
     bot.key,
@@ -101,15 +101,25 @@ export async function privateMessage(bot, message, group, receivingEpoch) {
       ['invited_at', String(epoch.ticket.created_at)],
       ['invitation_proof', epoch.ticket.sig],
       ['e', message.id, '', 'reply'],
+      ...bot.cardTags(response, message),
     ],
-    text,
+    response.text,
   );
-  bot.queue(message, [
-    {
-      event: wrap(reply, bot.key, epoch.pubkey),
-      relays: bot.groupRelays.get(group) ?? bot.relays,
-      group,
-      epoch: epoch.epoch,
+  bot.queue(
+    message,
+    [
+      {
+        event: wrap(reply, bot.key, epoch.pubkey),
+        relays: bot.groupRelays.get(group) ?? bot.relays,
+        group,
+        epoch: epoch.epoch,
+      },
+    ],
+    response.keyboard && {
+      root: reply.id,
+      type: 'private',
+      chat: group,
+      keyboard: response.keyboard,
     },
-  ]);
+  );
 }

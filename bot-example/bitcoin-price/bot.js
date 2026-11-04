@@ -1,23 +1,34 @@
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
-import { getPublicKey, nip19 } from 'nostr-tools';
+import { getEventHash, getPublicKey, nip19 } from 'nostr-tools';
 import {
   bytes,
   ConfigurationError,
   Network,
   newer,
   now,
+  rumor,
   sign,
   State,
   unwrap,
   valid,
   single,
+  wrap,
 } from './runtime.js';
 import { directMessage } from './direct-messages.js';
-import { acceptTicket, privateMessage, readTicket } from './private-groups.js';
+import { acceptTicket, authorized, privateMessage, readTicket } from './private-groups.js';
 import { acceptRoom, joinPublic, parseRoom, publicMessage } from './public-groups.js';
-import { priceReply, UNAVAILABLE } from './commands.js';
+import { buttonCurrency, priceReply, UNAVAILABLE } from './commands.js';
 import { DEFAULT_PRICE_URL, defaultCurrency, parseCacheSeconds, PriceFeed } from './price.js';
+import {
+  BOT_CONTROL_KIND,
+  COMMAND_TAG,
+  controlTag,
+  hasCallback,
+  keyboardTag,
+  parseControl,
+  targetKey,
+} from './botKeyboardProtocol.ts';
 
 export const DEFAULT_RELAYS = [
   'wss://relay.nostr.com',
@@ -29,6 +40,12 @@ export const DEFAULT_RELAYS = [
 export const DEFAULT_NAME = 'Bitcoin Price (Example Anagram Bot)';
 const DAY = 86400;
 const HERE = fileURLToPath(new URL('.', import.meta.url));
+// Replies with buttons (cards) are remembered so that presses can be checked against them.
+const KEEP_CARDS = 7 * DAY;
+const MAX_CARDS = 1000;
+const USERS_PER_CARD = 1000;
+const VIEWS_PER_USER = 8;
+const MAX_CALLBACKS = 2000;
 
 export class PriceBot {
   constructor({
@@ -62,6 +79,10 @@ export class PriceBot {
     this.work = Promise.resolve();
     this.stopped = false;
     this.started = false;
+    // state.cards[id] = { target, recipient?, keyboard, at, views: { [pubkey]: [answer ids] } }
+    // state.callbacks[`${pubkey}:${requestId}`] = { fingerprint, expires, delivery }
+    this.state.cards ??= {};
+    this.state.callbacks ??= {};
     // Corrupt persisted protocol state must not silently grant access or rotate identity.
     for (const [group, epoch] of Object.entries(this.state.groups)) {
       const { sig, ...message } = epoch.ticket ?? {};
@@ -84,7 +105,8 @@ export class PriceBot {
   }
 
   // Change this one function to turn the example into your own bot. It is async, returns
-  // text or null (no reply), and must not throw: a thrown error here would stop the bot.
+  // { text, keyboard } (keyboard may be null) or null (no reply), and must not throw: a
+  // thrown error here would stop the bot.
   async reply(message) {
     try {
       // Replies carry an `e` reply tag (kind 14) or a `q` quote tag (kind 9). Other bots,
@@ -95,8 +117,160 @@ export class PriceBot {
       });
     } catch {
       this.log('Price reply failed unexpectedly.');
-      return UNAVAILABLE;
+      return { text: UNAVAILABLE, keyboard: null };
     }
+  }
+  // Extra tags for a reply with buttons: the keyboard, and a marker that lets Anagram
+  // collapse the command the price answers (docs/bot-keyboards.md in the Anagram repository).
+  cardTags(response, command) {
+    if (!response.keyboard) return [];
+    const tags = [keyboardTag(response.keyboard)];
+    if (response.priced) tags.push([COMMAND_TAG, '1', command.id]);
+    return tags;
+  }
+  // Remembers a reply with buttons, so a press can be checked against the card it is on.
+  remember({ root, type, chat, recipient, keyboard }) {
+    const cards = this.state.cards;
+    for (const [id, card] of Object.entries(cards))
+      if (card.at < now() - KEEP_CARDS) delete cards[id];
+    const ids = Object.keys(cards);
+    if (ids.length >= MAX_CARDS)
+      delete cards[ids.reduce((a, b) => (cards[a].at <= cards[b].at ? a : b))];
+    cards[root] = {
+      target: { type, chat, root, version: root, bot: this.pubkey },
+      ...(recipient ? { recipient } : {}),
+      keyboard,
+      at: now(),
+      views: {},
+    };
+  }
+
+  // A button press: an encrypted kind 21118 request in the bot's own inbox. The answer is
+  // personal (only the person who pressed sees it, in place of the card's text), so the
+  // same card keeps working for everyone in a group. Checks follow the protocol document:
+  // author, conversation, card version, expiry, group membership and that the button is
+  // really on that card or on the bot's own answer there. Nothing in the request data is
+  // trusted beyond naming one of the card's buttons.
+  async callback(message) {
+    const request = parseControl(message.tags),
+      time = now();
+    if (
+      request?.op !== 'request' ||
+      single(message, 'p') !== this.pubkey ||
+      message.pubkey === this.pubkey ||
+      message.content !== '' ||
+      request.target.bot !== this.pubkey ||
+      request.expires <= time ||
+      request.expires > message.created_at + 300 ||
+      message.created_at > time + 60 ||
+      message.created_at < time - 300 ||
+      this.state.outbox.length >= 1000 ||
+      Object.values(this.state.groups).some((g) => g.pubkey === message.pubkey)
+    )
+      return;
+    const card = this.state.cards[request.target.root];
+    if (!card || targetKey(card.target) !== targetKey(request.target)) return;
+    let membership;
+    if (card.target.type === 'dm' && card.recipient !== message.pubkey) return;
+    if (card.target.type === 'public') {
+      const saved = this.state.rooms[card.target.chat];
+      const room = saved && parseRoom(saved.event);
+      if (
+        !room ||
+        room.blocked.includes(message.pubkey) ||
+        room.blocked.includes(this.pubkey) ||
+        (room.event.pubkey !== this.pubkey && !room.trusted.includes(this.pubkey))
+      )
+        return;
+    }
+    if (card.target.type === 'private') {
+      const epoch = this.state.groups[card.target.chat],
+        proof = request.membership;
+      if (
+        !epoch ||
+        epoch.conflict ||
+        !proof ||
+        proof.epoch !== epoch.epoch ||
+        !authorized(
+          {
+            ...message,
+            kind: 14,
+            tags: [
+              ['p', epoch.pubkey],
+              ['h', card.target.chat],
+              ['epoch', String(proof.epoch)],
+              ['invited_at', String(proof.invited_at)],
+              ['invitation_proof', proof.invitation_proof],
+            ],
+          },
+          card.target.chat,
+          epoch,
+        )
+      )
+        return;
+      membership = {
+        epoch: epoch.epoch,
+        invited_at: epoch.ticket.created_at,
+        invitation_proof: epoch.ticket.sig,
+      };
+    }
+    // A retried request gets the exact stored answer; a reused id with other contents gets
+    // nothing. Anagram retries for five minutes, then starts a new request.
+    for (const [id, value] of Object.entries(this.state.callbacks))
+      if (value.expires < time - 300) delete this.state.callbacks[id];
+    const cacheKey = `${message.pubkey}:${request.id}`;
+    const cached = this.state.callbacks[cacheKey];
+    if (cached) {
+      if (cached.fingerprint !== message.id) return;
+      if (!this.state.outbox.some((item) => item.event.id === cached.delivery.event.id)) {
+        this.state.outbox.push({ ...cached.delivery, queuedAt: time });
+        this.save();
+      }
+      return;
+    }
+    if (Object.keys(this.state.callbacks).length >= MAX_CALLBACKS) return;
+    const views = card.views[message.pubkey];
+    if (!views && Object.keys(card.views).length >= USERS_PER_CARD) return;
+    // Every answer carries the card's keyboard again, so a press from a personal view is
+    // valid only if that view is one of the bot's own answers to this person on this card.
+    if (request.view && !views?.includes(request.view)) return;
+    const currency = buttonCurrency(request.data);
+    if (!currency || !hasCallback(card.keyboard, request.data)) return;
+    let text;
+    try {
+      text = (await priceReply(`price ${currency}`, this.feed, this.defaultCurrency)).text;
+    } catch {
+      this.log('Price reply failed unexpectedly.');
+      text = UNAVAILABLE;
+    }
+    const answer = {
+      op: 'answer',
+      id: request.id,
+      target: request.target,
+      expires: request.expires,
+      ...(membership ? { membership } : {}),
+    };
+    const response = {
+      ...rumor(
+        this.key,
+        [['p', message.pubkey], controlTag(answer), keyboardTag(card.keyboard)],
+        text,
+      ),
+      kind: BOT_CONTROL_KIND,
+    };
+    response.id = getEventHash(response);
+    const relays = await this.inbox(message.pubkey);
+    const delivery = { event: wrap(response, this.key, message.pubkey), relays };
+    // The answer, the replay marker and the view commit together, before publishing.
+    (card.views[message.pubkey] ??= []).push(response.id);
+    if (card.views[message.pubkey].length > VIEWS_PER_USER) card.views[message.pubkey].shift();
+    this.state.callbacks[cacheKey] = {
+      expires: request.expires,
+      fingerprint: message.id,
+      delivery,
+    };
+    this.state.outbox.push({ ...delivery, queuedAt: time });
+    this.save();
   }
 
   shouldReply(message) {
@@ -125,12 +299,13 @@ export class PriceBot {
     this.state.seen[message.id] = now();
     this.save();
   }
-  queue(message, deliveries) {
+  queue(message, deliveries, card) {
     // Persist the exact signed reply AND dedupe marker before publishing. A crash/retry
     // republishes identical event IDs instead of fetching a different price.
     this.state.seen[message.id] = now();
     (this.state.lastReply ??= {})[message.pubkey] = now();
     this.state.outbox.push(...deliveries.map((delivery) => ({ ...delivery, queuedAt: now() })));
+    if (card) this.remember(card);
     this.save();
   }
   submit(id, action) {
@@ -151,6 +326,7 @@ export class PriceBot {
       const opened = unwrap(event, key);
       if (!opened) return;
       if (group) await privateMessage(this, opened.message, group, getPublicKey(key));
+      else if (opened.message.kind === BOT_CONTROL_KIND) await this.callback(opened.message);
       else await directMessage(this, opened.message, opened.seal);
     });
   }

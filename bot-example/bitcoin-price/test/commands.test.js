@@ -1,7 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { nip19, getPublicKey, generateSecretKey } from 'nostr-tools';
-import { formatPrice, HELP, parseCommand, priceReply, UNAVAILABLE } from '../commands.js';
+import {
+  buttonCurrency,
+  formatPrice,
+  HELP,
+  parseCommand,
+  priceKeyboard,
+  priceReply,
+  UNAVAILABLE,
+} from '../commands.js';
 
 const prices = new Map([
   ['USD', 67123.4],
@@ -63,32 +71,68 @@ test('prices are formatted with a symbol only when there is an unambiguous one',
   assert.equal(formatPrice('CHF', 60000), 'BTC: 60,000 CHF');
 });
 
+const text = async (...args) => (await priceReply(...args)).text;
+
 test('replies use the default currency, the requested currency, or explain what is wrong', async () => {
-  assert.equal(await priceReply('price', fresh), 'BTC: $67,123 USD');
-  assert.equal(await priceReply('price', fresh, 'EUR'), 'BTC: €58,234 EUR');
-  assert.equal(await priceReply('btc jpy', fresh), 'BTC: ¥10,123,456 JPY');
-  assert.equal(await priceReply('hello', fresh), HELP);
+  assert.equal(await text('price', fresh), 'BTC: $67,123 USD');
+  assert.equal(await text('price', fresh, 'EUR'), 'BTC: €58,234 EUR');
+  assert.equal(await text('btc jpy', fresh), 'BTC: ¥10,123,456 JPY');
+  assert.equal(await text('hello', fresh), HELP);
 });
 
 test('unsupported currencies get a friendly answer listing what is available', async () => {
-  const text = await priceReply('price XYZ', fresh);
-  assert.equal(text, 'Unsupported currency XYZ. Available: CHF, EUR, GBP, JPY, USD.');
-  assert.match(await priceReply('price', fresh, 'XYZ'), /^Unsupported currency XYZ\./);
+  const reply = await priceReply('price XYZ', fresh);
+  assert.equal(reply.text, 'Unsupported currency XYZ. Available: CHF, EUR, GBP, JPY, USD.');
+  assert.equal(reply.priced, undefined, 'not a price: the command stays visible');
+  assert.ok(reply.keyboard, 'the available currencies are offered as buttons');
+  assert.match(await text('price', fresh, 'XYZ'), /^Unsupported currency XYZ\./);
 });
 
 test('stale prices are clearly marked', async () => {
   const stale = (ageSeconds) => feed({ prices, ageSeconds, stale: true });
   assert.equal(
-    await priceReply('price', stale(90)),
+    await text('price', stale(90)),
     'BTC: $67,123 USD\nStale price from 1 min ago: the price provider is not responding.',
   );
-  assert.match(await priceReply('price', stale(20)), /Stale price from less than a minute ago/);
-  assert.doesNotMatch(await priceReply('price', fresh), /Stale/);
+  assert.match(await text('price', stale(20)), /Stale price from less than a minute ago/);
+  assert.doesNotMatch(await text('price', fresh), /Stale/);
+  assert.equal((await priceReply('price', stale(20))).priced, true);
 });
 
 test('no usable price gives the unavailable message, and help needs no price', async () => {
-  assert.equal(await priceReply('price', feed(null)), UNAVAILABLE);
-  assert.equal(await priceReply('price EUR', feed(null)), UNAVAILABLE);
+  assert.deepEqual(await priceReply('price', feed(null)), { text: UNAVAILABLE, keyboard: null });
+  assert.equal(await text('price EUR', feed(null)), UNAVAILABLE);
   const never = { get: async () => assert.fail('help must not call the provider') };
-  assert.equal(await priceReply('hi', never), HELP);
+  assert.deepEqual(await priceReply('hi', never), { text: HELP, keyboard: null });
+  assert.equal(await priceReply('hi', never, 'USD', { help: false }), null);
+});
+
+test('price replies carry one small button per currency, the default first, eight at most', async () => {
+  const reply = await priceReply('price', fresh, 'GBP');
+  assert.deepEqual(reply, {
+    text: 'BTC: £51,000 GBP',
+    priced: true,
+    keyboard: {
+      inline_keyboard: [
+        [
+          { text: 'GBP', callback_data: 'price:GBP', size: 'small' },
+          { text: 'CHF', callback_data: 'price:CHF', size: 'small' },
+          { text: 'EUR', callback_data: 'price:EUR', size: 'small' },
+          { text: 'JPY', callback_data: 'price:JPY', size: 'small' },
+        ],
+        [{ text: 'USD', callback_data: 'price:USD', size: 'small' }],
+      ],
+    },
+  });
+  const many = new Map([...'ABCDEFGHIJ'].map((c) => [`${c}${c}${c}`, 1]));
+  const rows = priceKeyboard(many, 'ZZZ').inline_keyboard;
+  assert.deepEqual(
+    rows.flat().map((b) => b.text),
+    ['AAA', 'BBB', 'CCC', 'DDD', 'EEE', 'FFF', 'GGG', 'HHH'],
+    'an unknown default currency does not get a button and the list is capped',
+  );
+  assert.deepEqual(priceKeyboard(new Map()), { inline_keyboard: [] });
+  assert.equal(buttonCurrency('price:EUR'), 'EUR');
+  for (const bad of ['price:eur', 'price:EURO', 'vote:0', 'EUR', '', undefined])
+    assert.equal(buttonCurrency(bad), null, String(bad));
 });

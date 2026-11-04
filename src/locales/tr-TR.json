@@ -796,6 +796,7 @@
   "room.localNameHelp": "Bu aramadaki herkes isminizi görür. CSS yalnızca bu cihazdaki isimlerin görünümünü değiştirir.",
   "room.pasteLink": "Katılmak için arama bağlantısı yapıştırın",
   "room.joinGroupCall": "Grup aramasına katıl",
+  "room.callExpired": "Aramanın süresi doldu",
   "room.joinAudio": "Sesli katıl",
   "room.joinVideo": "Görüntülü katıl",
   "room.createAudio": "Sesli arama başlat",

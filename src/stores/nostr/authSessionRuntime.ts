@@ -40,6 +40,13 @@ import type {
 } from '#src/stores/nostr/types.ts';
 import { clearLinkPreviews } from '#src/services/linkPreviewService.ts';
 import { clearPersistedAppState } from '#src/utils/logoutCleanup.ts';
+import {
+  schedulePendingLogoutCleanup,
+  hasPendingLogoutCleanup,
+  completePendingLogoutCleanup,
+} from '#src/utils/logoutState.ts';
+import { withDeadline } from '#src/utils/withDeadline.ts';
+import { isAndroidNative } from '#src/lib/platform/androidNotifications.ts';
 
 interface RestoreRuntimeState {
   restoreContactCursorStatePromise: Promise<void> | null;
@@ -169,6 +176,10 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
   let loadPrivateKeyHexPromise: Promise<string | null> | null = null;
   let privateKeyGeneration = 0;
   let secureStorageQueue = Promise.resolve();
+  let logoutWork: Promise<void> | undefined;
+  function requireCleanupComplete(): void {
+    if (hasPendingLogoutCleanup()) throw new Error('Finish logging out before signing in again.');
+  }
   function queueSecureStorage<T>(operation: () => Promise<T>): Promise<T> {
     const next = secureStorageQueue.then(operation);
     secureStorageQueue = next.then(
@@ -204,6 +215,7 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
   }
 
   function getPrivateKeyHex(): string | null {
+    if (hasPendingLogoutCleanup()) return null;
     return cachedPrivateKeyHex ?? readLegacyPrivateKeyHex();
   }
 
@@ -228,8 +240,7 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
 
   function isSecurePrivateKeyStorageAvailable(): boolean {
     return (
-      isAndroidSecurePrivateKeyStorageAvailable() ||
-      isElectronSecurePrivateKeyStorageAvailable()
+      isAndroidSecurePrivateKeyStorageAvailable() || isElectronSecurePrivateKeyStorageAvailable()
     );
   }
 
@@ -252,8 +263,7 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
   function readSecurePrivateKeyHex(): Promise<string | null> {
     return queueSecureStorage(async () => {
       if (isAndroidSecurePrivateKeyStorageAvailable()) return readAndroidSecurePrivateKeyHex();
-      if (isElectronSecurePrivateKeyStorageAvailable())
-        return readElectronSecurePrivateKeyHex();
+      if (isElectronSecurePrivateKeyStorageAvailable()) return readElectronSecurePrivateKeyHex();
       return null;
     });
   }
@@ -360,6 +370,7 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
   }
 
   async function loadPrivateKeyHex(): Promise<string | null> {
+    if (hasPendingLogoutCleanup()) return null;
     if (!isSecurePrivateKeyStorageAvailable()) {
       cachedPrivateKeyHex = readLegacyPrivateKeyHex();
       return cachedPrivateKeyHex;
@@ -436,11 +447,7 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
 
   async function removePersistedSecurePrivateKey(): Promise<void> {
     clearSecurePrivateKeyMemoryOnlySession();
-    try {
-      await removeSecurePrivateKeyHex();
-    } catch (error) {
-      console.warn('Failed to remove private key from secure storage.');
-    }
+    await removeSecurePrivateKeyHex();
   }
 
   function clearPrivateKey(options: { clearSecureStorage?: boolean } = {}): void {
@@ -483,7 +490,9 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
     bumpDeveloperDiagnosticsVersion();
 
     if (options.clearSecureStorage !== false) {
-      void removePersistedSecurePrivateKey();
+      void removePersistedSecurePrivateKey().catch(() =>
+        console.warn('Failed to remove private key from secure storage.'),
+      );
     }
 
     if (!hasStorage()) {
@@ -498,6 +507,7 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
   }
 
   async function savePrivateKeyHex(hexPrivateKey: string): Promise<boolean> {
+    requireCleanupComplete();
     const normalized = inputSanitizerService.normalizeHexKey(hexPrivateKey);
     if (!normalized || !hasStorage()) {
       return false;
@@ -510,7 +520,11 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
     cachedPrivateKeyHex = normalized;
 
     if (isSecurePrivateKeyStorageAvailable()) {
-      await removePersistedSecurePrivateKey();
+      // Preserve the existing memory-only login fallback when the keyring is
+      // unavailable. Logout itself still requires confirmed key removal.
+      await removePersistedSecurePrivateKey().catch(() =>
+        console.warn('Failed to remove previous private key from secure storage.'),
+      );
       if (generation !== privateKeyGeneration) return false;
       await persistSecurePrivateKeyHex(normalized, signer.pubkey);
       if (generation !== privateKeyGeneration) return false;
@@ -526,12 +540,14 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
   }
 
   async function loginWithExtension(): Promise<string> {
+    requireCleanupComplete();
     if (!hasNip07Extension()) {
       throw new Error('No NIP-07 extension detected. Install or enable one to continue.');
     }
 
     const signer = new NostrNip07Signer(undefined, ndk);
     const user = await signer.blockUntilReady();
+    requireCleanupComplete();
     user.ndk = ndk;
     const pubkeyHex = inputSanitizerService.normalizeHexKey(user.pubkey ?? signer.pubkey);
     if (!pubkeyHex) {
@@ -562,6 +578,7 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
     connectionToken: string;
     onAuthUrl?: (url: string) => void;
   }): Promise<Nip46LoginResult> {
+    requireCleanupComplete();
     return loginWithNip46Bunker(input);
   }
 
@@ -569,15 +586,18 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
     relayUrl: string;
     onAuthUrl?: (url: string) => void;
   }): Nip46NostrConnectLogin {
+    requireCleanupComplete();
     return createNip46NostrConnectLogin(input);
   }
 
-  async function logout(): Promise<void> {
+  async function performLogout(): Promise<void> {
     const botInteractionOwner = hasStorage()
       ? window.localStorage.getItem(PUBLIC_KEY_STORAGE_KEY)
       : null;
+    schedulePendingLogoutCleanup();
     clearPrivateKey({ clearSecureStorage: false });
-    await removePersistedSecurePrivateKey();
+    if (typeof window !== 'undefined')
+      queueMicrotask(() => window.dispatchEvent?.(new Event('anagram-logout')));
     state.eventSince = 0;
     pendingEventSinceState.pendingEventSinceUpdate = 0;
     state.isRestoringStartupState = false;
@@ -602,7 +622,36 @@ export function createAuthSessionRuntime(state: AuthSessionRuntimeDeps) {
     clearRelayStoreState();
     clearNip65RelayStoreState();
 
-    await clearPersistedAppState({ botInteractionOwner });
+    // Keep one operation alive after a UI deadline. Never race a new login/key
+    // against a late keyring deletion, or enqueue another deletion on Retry.
+    const results = await Promise.allSettled([
+      removePersistedSecurePrivateKey(),
+      (async () => {
+        // The listener owns separate persisted decryption keys. Keep logout
+        // pending until it stops, including after a restart. Clear browser data
+        // afterwards so its final preference writes cannot recreate old state.
+        if (isAndroidNative()) {
+          const service = await import('#src/services/androidRelayNotificationService.ts');
+          await service.disableAndroidRelayNotifications();
+        }
+        await clearPersistedAppState({ botInteractionOwner, preservePendingLogoutCleanup: true });
+      })(),
+    ]);
+    const failed = results.find((result) => result.status === 'rejected');
+    if (failed?.status === 'rejected')
+      throw new Error('Logout cleanup failed. Please retry.', { cause: failed.reason });
+    completePendingLogoutCleanup();
+  }
+
+  function logout(): Promise<void> {
+    logoutWork ??= performLogout().finally(() => {
+      logoutWork = undefined;
+    });
+    return withDeadline(
+      logoutWork,
+      8000,
+      'Logout cleanup is still waiting for storage. Please retry; your session has been stopped.',
+    );
   }
 
   return {

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { WebSocketServer, type WebSocket } from 'ws';
+import { WebSocketServer, WebSocket } from 'ws';
 import {
   finalizeEvent,
   generateSecretKey,
@@ -229,24 +229,38 @@ test('restores incoming history using account inbox and encrypted private-storag
     ).toBeVisible();
     // A later socket loss must recreate the live REQ on this relay even though
     // the other relay transports remain connected.
-    for (const socket of servers[4].clients) socket.terminate();
-    await expect
-      .poll(
-        () =>
-          [...servers[4].clients].some((socket) =>
-            [...(live.get(socket)?.values() ?? [])].some((filters) =>
-              filters.some((filter) => filter.kinds?.includes(1059) && filter.until === undefined),
-            ),
-          ),
-        { timeout: 20000 },
-      )
-      .toBe(true);
+    const disconnectedSockets = new Set(servers[4].clients);
+    const previousAuthSuccesses = authSuccesses;
     const reconnectedReply = wrap(peerKey, 'Live reply after reconnect', 0);
+    for (const socket of disconnectedSockets) socket.terminate();
+    // terminate() leaves closing sockets and their REQs in these maps until
+    // "close" fires. They cannot prove a reconnect or receive the next reply.
+    const reconnectedSubscriptions = () =>
+      [...servers[4].clients]
+        .filter(
+          (socket) => socket.readyState === WebSocket.OPEN && !disconnectedSockets.has(socket),
+        )
+        .flatMap((socket) =>
+          [...(live.get(socket) ?? [])]
+            .filter(([, filters]) =>
+              filters.some(
+                (filter) =>
+                  filter.kinds?.includes(1059) &&
+                  filter.until === undefined &&
+                  matchFilters([filter], reconnectedReply),
+              ),
+            )
+            .map(([id]) => ({ socket, id })),
+        );
+    await expect
+      .poll(() => reconnectedSubscriptions().length, { timeout: 20000 })
+      .toBeGreaterThan(0);
+    expect(authSuccesses).toBeGreaterThan(previousAuthSuccesses);
     events[4].push(reconnectedReply);
-    for (const socket of servers[4].clients)
-      for (const [id, filters] of live.get(socket) ?? [])
-        if (matchFilters(filters, reconnectedReply))
-          socket.send(JSON.stringify(['EVENT', id, reconnectedReply]));
+    const recipients = reconnectedSubscriptions();
+    expect(recipients.length).toBeGreaterThan(0);
+    for (const { socket, id } of recipients)
+      socket.send(JSON.stringify(['EVENT', id, reconnectedReply]));
     await expect(
       page.getByTestId('message-bubble').filter({ hasText: 'Live reply after reconnect' }),
     ).toBeVisible();

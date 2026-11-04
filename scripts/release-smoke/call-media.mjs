@@ -1,7 +1,74 @@
+// Opt-in physical-camera check. Return counters only; never retain camera images.
+// A live track alone is insufficient: capture can fail after getUserMedia resolves.
+export async function probeCallCamera(deviceId) {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    // Exercise native capture modes, including discrete-size UVC cameras.
+    video: deviceId ? { deviceId: { exact: deviceId } } : true,
+  });
+  const player = document.createElement('video');
+  let recorder;
+  let frame;
+  let timer;
+  let closed = false;
+  const result = { frames: 0, recordedBytes: 0, error: '', settings: {} };
+  try {
+    result.settings = stream.getVideoTracks()[0].getSettings();
+    player.muted = true;
+    player.autoplay = true;
+    player.playsInline = true;
+    player.style.cssText =
+      'position:fixed;top:0;left:0;width:320px;height:180px;z-index:2147483647';
+    document.body.append(player);
+    player.srcObject = stream;
+    const presented = () => {
+      result.frames++;
+      frame = player.requestVideoFrameCallback(presented);
+    };
+    frame = player.requestVideoFrameCallback(presented);
+    void player.play().catch((error) => {
+      if (!closed) result.error = String(error);
+    });
+    recorder = new MediaRecorder(new MediaStream(stream.getVideoTracks()), {
+      mimeType: 'video/webm;codecs=vp8',
+      videoBitsPerSecond: 600000,
+    });
+    recorder.ondataavailable = (event) => (result.recordedBytes += event.data.size);
+    recorder.onerror = (event) => (result.error = String(event.error || 'Recording failed'));
+    recorder.start(100);
+    const deadline = performance.now() + 10000;
+    await new Promise((resolve) => {
+      timer = setInterval(() => {
+        if (
+          (result.frames >= 2 && result.recordedBytes > 0) ||
+          result.error ||
+          performance.now() >= deadline
+        )
+          resolve();
+      }, 100);
+    });
+    return result;
+  } finally {
+    closed = true;
+    clearInterval(timer);
+    if (frame !== undefined) player.cancelVideoFrameCallback(frame);
+    if (recorder) {
+      recorder.ondataavailable = recorder.onerror = null;
+      if (recorder.state !== 'inactive') recorder.stop();
+    }
+    player.pause();
+    player.srcObject = null;
+    player.remove();
+    stream.getTracks().forEach((track) => track.stop());
+  }
+}
+
 // Executed inside the packaged WebView. Synthetic sources exercise the real
 // recorder and streaming decoder without microphone/camera access in CI.
 export async function probeCallMedia(verifyVideo) {
-  const types = ['audio/webm;codecs=opus', 'video/webm;codecs=vp8,opus'];
+  // Probe the separate streams negotiated by current calls. Mixing synthetic
+  // WebAudio and canvas tracks also tests WebKit's unrelated A/V clock muxing.
+  const types = ['audio/webm;codecs=opus', 'video/webm;codecs=vp8'];
   const result = {
     secure: globalThis.isSecureContext,
     capture: typeof navigator.mediaDevices?.getUserMedia === 'function',
@@ -20,7 +87,7 @@ export async function probeCallMedia(verifyVideo) {
     const destination = context.createMediaStreamDestination();
     oscillator.connect(destination);
     oscillator.start();
-    const stream = destination.stream;
+    const stream = new MediaStream(mime.startsWith('video/') ? [] : destination.stream.getTracks());
     const canvas = document.createElement('canvas');
     canvas.width = 160;
     canvas.height = 120;

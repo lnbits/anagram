@@ -227,7 +227,7 @@ try {
   );
   stopProxy = await startIrohTestProxy({ certificateDirectory: directory });
   server = await createServer({
-    server: { host: '127.0.0.1', port: 5189, strictPort: true },
+    server: { host: '127.0.0.1', port: 5189, strictPort: true, watch: null, hmr: false },
     plugins: [
       {
         name: 'native-call-probe',
@@ -325,7 +325,7 @@ try {
                 if (isolated()) probeUrl.searchParams.set('participant', String(nextPeer++));
                 html = html.replace(
                   '<head>',
-                  `<head><script>history.replaceState(null, '', ${JSON.stringify(probeUrl.href)})</script>`,
+                  `<head><script>history.replaceState(null, '', ${JSON.stringify(probeUrl.href)});window.addEventListener('error',event=>{fetch('/__native_calls/report?token=${token}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({done:true,passed:false,stage:'page error',error:event.message||'Module failed to load',peer:${isolated() ? nextPeer - 1 : 'null'}})}).catch(()=>{})});</script>`,
                 );
                 response.setHeader('Content-Type', 'text/html');
                 response.end(await vite.transformIndexHtml(request.url, html));

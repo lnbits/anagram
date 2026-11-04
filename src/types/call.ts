@@ -31,6 +31,7 @@ export interface CallSignal {
   videoSupported?: boolean;
   screenSupported?: boolean;
   muteStateSupported?: boolean;
+  mediaRecoveryVersion?: 1;
 }
 export interface CallSession {
   id: string;

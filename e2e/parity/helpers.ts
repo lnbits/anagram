@@ -143,6 +143,7 @@ export async function navigateToChat(page: Page, publicKey: string) {
   else await navigateInApp(page, `/chats/${publicKey}`);
   await expect(page).toHaveURL(new RegExp(`/chats/${publicKey}$`));
   await expect(page.getByTestId('chat-thread')).toBeVisible();
+  await expect(page.getByTestId('chat-thread')).toHaveAttribute('data-chat-public-key', publicKey);
   await expect
     .poll(() =>
       page.evaluate(async () => {
@@ -232,6 +233,12 @@ export async function waitForNoRequests(page: Page) {
 }
 export async function establishAcceptedDirectChat(alice: BootstrappedUser, bob: BootstrappedUser) {
   await openDirectChatFromIdentifier(alice.page, bob.session.publicKey, bob.account.displayName);
+  // Closing the dialog and updating the route can precede the batched thread render.
+  // Typing into the previous chat's composer would be cleared when its draft switches.
+  await expect(alice.page.getByTestId('chat-thread')).toHaveAttribute(
+    'data-chat-public-key',
+    bob.session.publicKey,
+  );
   await sendMessage(alice.page, 'Establish conversation');
   await openRequests(bob.page);
   await acceptFirstRequest(bob.page);

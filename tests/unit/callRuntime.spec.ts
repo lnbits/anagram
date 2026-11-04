@@ -1,4 +1,7 @@
 import { createCallRuntime } from '#src/stores/nostr/callRuntime.svelte.ts';
+import { recordCallMedia } from '#src/services/callMediaService.ts';
+import { cloneCallTrack } from '#src/services/callSharedCapture.ts';
+import { roomVideoProfile } from '#src/services/callVideoProfile.ts';
 import {
   CALL_PROTOCOL,
   type CallConnection,
@@ -122,6 +125,94 @@ afterEach(() => {
 });
 
 describe('call negotiation and lifetime', () => {
+  it('keeps staggered six-person camera/screen joins within older peers’ reset budget', async () => {
+    vi.useFakeTimers();
+    const oldRecorder = globalThis.MediaRecorder;
+    class Recorder {
+      state = 'inactive';
+      ondataavailable?: (event: { data: Blob }) => void;
+      onstop?: () => void;
+      timer?: ReturnType<typeof setInterval>;
+      start(timeslice: number) {
+        this.state = 'recording';
+        this.timer = setInterval(
+          () => this.ondataavailable?.({ data: new Blob([new Uint8Array([1])]) }),
+          timeslice,
+        );
+      }
+      stop() {
+        this.state = 'inactive';
+        clearInterval(this.timer);
+        this.onstop?.();
+      }
+    }
+    globalThis.MediaRecorder = Recorder as unknown as typeof MediaRecorder;
+    const track = (kind: string): MediaStreamTrack =>
+      ({
+        kind,
+        enabled: true,
+        stop() {},
+        clone: () => track(kind),
+        applyConstraints: async () => {},
+      }) as unknown as MediaStreamTrack;
+    const microphone = track('audio'),
+      camera = track('video'),
+      screen = track('video');
+    const peers: ReturnType<typeof setup>[] = [];
+    let members = 2;
+    try {
+      for (; members <= 6; members++) {
+        const h = setup();
+        Object.assign(h.deps, {
+          record: recordCallMedia,
+          videoProfile: () => roomVideoProfile(members, true),
+          getMedia: async () => new MediaStream([cloneCallTrack(microphone)]),
+          getCamera: async () => new MediaStream([cloneCallTrack(camera)]),
+          getScreen: async () => new MediaStream([cloneCallTrack(screen)]),
+        });
+        await h.runtime.start(peer, 'audio');
+        const offer = h.deps.sendSignal.mock.calls[0][1];
+        await h.runtime.receiveSignal(peer, {
+          ...offer,
+          action: 'accept',
+          mediaRecoveryVersion: undefined,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await h.runtime.toggleCamera();
+        await h.runtime.startScreenSharing();
+        await Promise.all(peers.map(({ runtime }) => runtime.refreshVideoQuality()));
+        peers.push(h);
+        await vi.advanceTimersByTimeAsync(1000);
+      }
+      for (const h of peers) {
+        const frames = vi.mocked(h.connection.send).mock.calls.map(([frame]) => frame);
+        // Old and current receivers enforce this same limit across all three lanes.
+        expect(
+          frames.filter((frame) => [4, 5, 7, 10].includes(frame[0])).length,
+        ).toBeLessThanOrEqual(12);
+        expect(frames.some((frame) => frame[0] === 10)).toBe(false);
+        expect(frames.some((frame) => frame[0] === 4)).toBe(false);
+        expect(h.runtime.session?.phase).toBe('active');
+      }
+    } finally {
+      peers.forEach(({ runtime }) => runtime.reset());
+      globalThis.MediaRecorder = oldRecorder;
+    }
+  });
+  it('still rejects a peer flooding media resets', async () => {
+    const h = setup();
+    vi.mocked(h.connection.recv)
+      .mockReset()
+      .mockResolvedValueOnce(new Uint8Array([2]));
+    for (let i = 0; i < 13; i++)
+      vi.mocked(h.connection.recv).mockResolvedValueOnce(new Uint8Array([5, 0]));
+    vi.mocked(h.connection.recv).mockImplementation(() => new Promise(() => {}));
+    await h.runtime.start(peer, 'audio');
+    const offer = h.deps.sendSignal.mock.calls[0][1];
+    await h.runtime.receiveSignal(peer, { ...offer, action: 'accept', reconnectSupported: false });
+    await vi.waitFor(() => expect(h.connection.close).toHaveBeenCalled());
+    expect(h.runtime.session?.phase).toBe('ended');
+  });
   it.each([
     { packet: false, preMutedTrack: false },
     { packet: true, preMutedTrack: false },
@@ -153,8 +244,12 @@ describe('call negotiation and lifetime', () => {
       expect(h.microphone.stop).not.toHaveBeenCalled();
       // Muted legacy audio stops encoding; packet audio keeps its sequence.
       h.stopRecording.mockClear();
+      vi.mocked(h.connection.send).mockClear();
       h.runtime.toggleMicrophone();
       expect(h.stopRecording).toHaveBeenCalledTimes(packet ? 0 : 1);
+      expect(
+        vi.mocked(h.connection.send).mock.calls.filter(([frame]) => frame[0] === 4),
+      ).toHaveLength(packet ? 0 : 1);
       expect(h.microphone.stop).not.toHaveBeenCalled();
       h.runtime.toggleMicrophone();
       await vi.waitFor(() => expect(h.deps.record).toHaveBeenCalledTimes(packet ? 1 : 3));
@@ -972,42 +1067,63 @@ describe('call recovery and video isolation', () => {
     ) as any[];
     camera[4].onCongestion();
     expect(h.runtime.session?.phase).toBe('active');
-    expect(h.runtime.session?.cameraMuted).toBe(true);
+    expect(h.runtime.session?.cameraMuted).toBe(false);
+    await vi.waitFor(() => expect(h.deps.record).toHaveBeenCalledTimes(3), { timeout: 2000 });
     expect(h.microphone.stop).not.toHaveBeenCalled();
     expect(h.connection.close).not.toHaveBeenCalled();
+    // A repeated immediate failure is bounded; retain audio and stop the camera.
+    (h.deps.record.mock.calls[2] as any[])[4].onCongestion();
+    expect(h.runtime.session?.cameraMuted).toBe(true);
     expect(h.connection.send).toHaveBeenCalledWith(new Uint8Array([5, 0]));
   });
-  it('discards video after decoder failure until a fresh stream starts, without ending audio', async () => {
-    const h = setup();
-    const frames: Uint8Array[] = [new Uint8Array([2]), new Uint8Array([5, 1])];
-    let deliver!: (frame: Uint8Array) => void;
-    vi.mocked(h.connection.recv)
-      .mockReset()
-      .mockImplementation(() =>
-        frames.length
-          ? Promise.resolve(frames.shift()!)
-          : new Promise((resolve) => {
-              deliver = resolve;
-            }),
-      );
-    const errors: Array<() => void> = [];
-    h.deps.createReceiver.mockImplementation((...args: any[]) => {
-      errors.push(args[1]);
-      return { url: 'blob:media', append: vi.fn(), close: vi.fn() };
-    });
-    await active(h);
-    errors[1]();
-    deliver(new Uint8Array([3, 9]));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(h.runtime.session?.phase).toBe('active');
-    expect(h.runtime.remoteVideoUrl).toBe('');
-    deliver(new Uint8Array([5, 1]));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(h.runtime.remoteVideoUrl).toBe('blob:media');
-    expect(h.connection.close).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    'recovers a failed decoder only with negotiated support (recovery: %s)',
+    async (recovery) => {
+      const h = setup();
+      const frames: Uint8Array[] = [new Uint8Array([2]), new Uint8Array([5, 1])];
+      let deliver!: (frame: Uint8Array) => void;
+      vi.mocked(h.connection.recv)
+        .mockReset()
+        .mockImplementation(() =>
+          frames.length
+            ? Promise.resolve(frames.shift()!)
+            : new Promise((resolve) => {
+                deliver = resolve;
+              }),
+        );
+      const errors: Array<() => void> = [];
+      h.deps.createReceiver.mockImplementation((...args: any[]) => {
+        errors.push(args[1]);
+        return { url: 'blob:media', append: vi.fn(), close: vi.fn() };
+      });
+      await active(h, { mediaRecoveryVersion: recovery ? 1 : undefined });
+      errors[1]();
+      const requests = vi.mocked(h.connection.send).mock.calls.filter(([frame]) => frame[0] === 10);
+      expect(requests).toHaveLength(recovery ? 1 : 0);
+      deliver(new Uint8Array([3, 9]));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(h.runtime.session?.phase).toBe('active');
+      expect(h.runtime.remoteVideoUrl).toBe('');
+      deliver(new Uint8Array([5, 1]));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(h.runtime.remoteVideoUrl).toBe('blob:media');
+      deliver(new Uint8Array([3, 9]));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(h.runtime.deviceError).toBe('');
+      const camera = h.deps.record.mock.calls.find(
+        (args: any[]) => args[1] === 'video/webm;codecs=vp8',
+      ) as any[];
+      camera[4].onCongestion();
+      deliver(new Uint8Array([3, 9]));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(h.runtime.deviceError).toBe('call.error.video');
+      expect(h.connection.close).not.toHaveBeenCalled();
+    },
+  );
   it('reconnects with a fresh endpoint while preserving duration, microphone and mute state', async () => {
     const h = setup();
     let rejectOld!: (cause: Error) => void;

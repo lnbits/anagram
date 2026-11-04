@@ -712,8 +712,20 @@ test('group-call shared names use saved local CSS in the call and recording wind
   await expectFittedNames();
   await page.evaluate(() => ((window as any).__testRoomNames.cameraMuted = false));
   await expectVideoName(360 / 640);
+  await popup
+    .getByTestId('room-local')
+    .locator('canvas')
+    .evaluate((canvas) => {
+      (window as any).__retainedCallCanvas = canvas;
+    });
   await page.getByTestId('room-max-fill').click();
   await expectVideoName(360 / 640, true);
+  expect(
+    await popup
+      .getByTestId('room-local')
+      .locator('canvas')
+      .evaluate((canvas) => (window as any).__retainedCallCanvas === canvas),
+  ).toBe(true);
   await page.getByTestId('room-max-fill').click();
   await page.evaluate(() => {
     const fixture = window as any;

@@ -18,6 +18,52 @@ import {
   waitForAppBridge,
 } from './helpers';
 import { installExtension, seedAuth, startBunker } from './signer-fixtures';
+
+test('logout stays responsive during stalled storage cleanup and resumes after reload', async ({
+  browser,
+}) => {
+  const user = await bootstrapUser(browser, TEST_ACCOUNTS.logoutRecovery);
+  try {
+    await user.page.evaluate(() => {
+      const remove = indexedDB.deleteDatabase.bind(indexedDB);
+      indexedDB.deleteDatabase = (name: string) => {
+        const request = remove(name);
+        // Delete the data but withhold completion, as a stuck storage backend
+        // would. Reload restores the real API and must resume pending cleanup.
+        return {
+          set onsuccess(_callback: unknown) {},
+          set onerror(callback: IDBOpenDBRequest['onerror']) {
+            request.onerror = callback;
+          },
+          set onblocked(callback: IDBOpenDBRequest['onblocked']) {
+            request.onblocked = callback;
+          },
+          get error() {
+            return request.error;
+          },
+        } as IDBOpenDBRequest;
+      };
+    });
+    await user.page.getByRole('button', { name: 'settings', exact: true }).click();
+    await user.page.getByTestId('settings-logout-item').click();
+    await user.page.getByTestId('settings-logout-confirm').click();
+    await expect(user.page.getByRole('button', { name: 'Retry logout' })).toBeVisible({
+      timeout: 12000,
+    });
+    await expect(user.page.getByTestId('auth-login-button')).toHaveCount(0);
+    expect(await user.page.evaluate(() => localStorage.getItem('npub'))).toBeNull();
+    expect(
+      await user.page.evaluate(() => localStorage.getItem('nostr-chat-pending-logout-cleanup')),
+    ).toBe('1');
+    await user.page.reload();
+    await expect(user.page.getByTestId('auth-open-key-button')).toBeVisible();
+    expect(
+      await user.page.evaluate(() => localStorage.getItem('nostr-chat-pending-logout-cleanup')),
+    ).toBeNull();
+  } finally {
+    await disposeUsers(user);
+  }
+});
 test('onboarding has no history restriction and logout clears either generated or supplied keys', async ({
   browser,
 }) => {

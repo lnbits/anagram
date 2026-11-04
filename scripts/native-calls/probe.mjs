@@ -70,6 +70,13 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
     phases: calls.map((c) => c.session?.phase),
     failures: calls.map((c) => c.failureDetail),
     errors,
+    captureVideos: [...document.querySelectorAll('video[aria-hidden="true"]')].map((video) => ({
+      time: video.currentTime,
+      paused: video.paused,
+      readyState: video.readyState,
+      width: video.videoWidth,
+      height: video.videoHeight,
+    })),
     packetAudio: callPacketAudioDiagnostics(),
     audioSend: sendCosts.map((s) => ({
       count: s.count,
@@ -131,20 +138,29 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
     });
     return output.stream;
   };
-  const camera = () => {
+  const camera = (width = 320, height = 180) => {
     const canvas = document.createElement('canvas');
-    canvas.width = 320;
-    canvas.height = 180;
+    canvas.width = width;
+    canvas.height = height;
     // Keep sources in the window so native engines do not throttle hidden canvases.
     document.querySelector('#sources').append(canvas);
     const paint = canvas.getContext('2d');
+    const manual =
+      typeof globalThis.CanvasCaptureMediaStreamTrack?.prototype.requestFrame === 'function';
+    const stream = canvas.captureStream(manual ? 0 : 24);
+    const track = stream.getVideoTracks()[0];
     let colour = 0;
     const draw = setInterval(() => {
       colour = (colour + 0x9e3779) & 0xffffff;
       paint.fillStyle = `#${colour.toString(16).padStart(6, '0')}`;
       paint.fillRect(0, 0, canvas.width, canvas.height);
+      if (width >= 1280) {
+        paint.fillStyle = '#fff';
+        paint.font = '24px sans-serif';
+        paint.fillText(`Screen share ${colour} — 1280 × 720`, 32, 64);
+      }
+      if (manual) track.requestFrame();
     }, 1000 / 24);
-    const stream = canvas.captureStream(24);
     cleanup.push(() => {
       clearInterval(draw);
       stream.getTracks().forEach((t) => t.stop());
@@ -201,6 +217,7 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
             : sendWire('media', to, signal),
         getMedia: async () => microphone(i),
         getCamera: async () => camera(),
+        getScreen: async () => camera(1280, 720),
         createEndpoint: async () => {
           const endpoint = await createIrohCallEndpoint(['https://127.0.0.1:7004/']);
           const wrap = (connection) => {
@@ -423,7 +440,7 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
     await barrier('audio-ready');
     await stage(withVideo ? 'audio playing; enabling video' : 'audio playing');
     if (withVideo) for (const call of calls.filter(Boolean)) await call.toggleCamera();
-    const playerCount = lanes * (withVideo ? 2 : 1);
+    let playerCount = lanes * (withVideo ? 2 : 1);
     await wait(
       () =>
         healthy() &&
@@ -482,11 +499,38 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
       }
     };
     await sustain(withVideo ? 'sustained audio/video' : 'sustained audio');
+    await barrier('cameras-sustained');
+    if (withVideo) {
+      await stage('starting 720p screen sharing');
+      await calls[0]?.startScreenSharing();
+      await barrier('screen-started');
+      playerCount += ownPeer === null ? count - 1 : ownPeer === 0 ? 0 : 1;
+      await wait(
+        () =>
+          healthy() &&
+          players.size === playerCount &&
+          [...players].every((p) => !p.video || p.pictureChanges > 3),
+        'Screen did not start playing',
+      );
+      await barrier('screen-playing');
+      await sustain('screen sharing with audio and cameras');
+      await barrier('screen-sustained');
+      await calls[0]?.stopScreenSharing();
+      await barrier('screen-stopped');
+      playerCount = lanes * 2;
+      await wait(() => players.size === playerCount, 'Stopping screen sharing retained a decoder');
+    }
     await barrier('sustained');
     const started = calls.map((c) => c.session.startedAt),
       before = connections.map((c) => c.length);
     calls[0]?.toggleMicrophone();
     await barrier('mute-issued');
+    const fromMutedPeer = (p) =>
+      kind === 'direct'
+        ? p.peer === 1
+        : calls[p.peer].participants.some(
+            (member) => member.pubkey === ids[0] && member.audioUrl === p.url,
+          );
     // Check decoded output, not just the mute flag or signalling. Every receiver
     // of peer zero must go silent while the other participants keep speaking.
     await delay(1500);
@@ -494,17 +538,14 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
       [...players].filter((p) => !p.video).map((p) => [p, p.audioSamples]),
     );
     await delay(1000);
+    const muteChecks = [...mutedSamples].map(([p, samples]) => ({
+      peer: p.peer,
+      samples: p.audioSamples - samples,
+      muted: fromMutedPeer(p),
+    }));
     assert(
-      [...mutedSamples].every(([p, samples]) => {
-        const fromMutedPeer =
-          kind === 'direct'
-            ? p.peer === 1
-            : calls[p.peer].participants.some(
-                (member) => member.pubkey === ids[0] && member.audioUrl === p.url,
-              );
-        return (p.audioSamples === samples) === fromMutedPeer;
-      }),
-      `Microphone mute did not silence exactly its receivers: ${JSON.stringify(snapshot())}`,
+      muteChecks.every((check) => (check.samples === 0) === check.muted),
+      `Microphone mute did not silence exactly its receivers: ${JSON.stringify({ muteChecks, ...snapshot() })}`,
     );
     await barrier('mute-verified');
     await stage('muted; disconnecting one peer connection');
@@ -516,7 +557,9 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
         ((ownPeer !== null && ownPeer !== 0) || connections[0].length > before[0]) &&
         players.size === playerCount &&
         [...players].every(
-          (p) => p.element.currentTime > 1 && (!p.video || (p.frames > 5 && p.pictureChanges > 3)),
+          (p) =>
+            (!p.video && fromMutedPeer(p)) ||
+            (p.element.currentTime > 1 && (!p.video || (p.frames > 5 && p.pictureChanges > 3))),
         ),
       'Call did not recover audio/video',
     );

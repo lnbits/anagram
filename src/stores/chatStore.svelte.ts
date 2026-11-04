@@ -1387,7 +1387,14 @@ export const useChatStore = createStore('chatStore', () => {
         string,
         unknown
       >;
-      const existingMessages = await chatDataService.listMessages(normalizedChatId);
+      const latestMessages = await chatDataService.listLatestMessages(normalizedChatId, 1);
+      // Delete cached events in bounded batches while their message IDs remain
+      // available. Never materialize an entire conversation just to remove it.
+      for await (const batch of chatDataService.messageBatches(normalizedChatId)) {
+        await nostrEventDataService.deleteEventsByIds(
+          batch.flatMap((message) => (message.event_id ? [message.event_id] : [])),
+        );
+      }
       const isRequestLikeChat =
         resolveChatCategory(existingMeta) === 'request' ||
         resolveChatCategory(existingMeta) === 'hidden';
@@ -1396,7 +1403,7 @@ export const useChatStore = createStore('chatStore', () => {
       if (isRequestLikeChat && !isGroup) {
         const requestClearedAt = resolveRequestClearBoundaryAt(
           existingMeta,
-          existingMessages,
+          latestMessages.rows,
           existingChat?.lastMessageAt ?? existingRow?.last_message_at ?? null,
         );
         const nextMeta = {
@@ -1417,19 +1424,6 @@ export const useChatStore = createStore('chatStore', () => {
         if (!deleted) {
           return false;
         }
-      }
-
-      try {
-        await nostrEventDataService.deleteEventsByIds(
-          existingMessages
-            .map((message) => message.event_id)
-            .filter(
-              (eventId): eventId is string =>
-                typeof eventId === 'string' && eventId.trim().length > 0,
-            ),
-        );
-      } catch (error) {
-        console.error('Failed to delete nostr events for chat', error);
       }
 
       const nextChats = isGroup

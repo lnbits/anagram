@@ -60,6 +60,8 @@ The iPhone workflow also gates packaging on WebKit streaming playback and simula
 
 Use a fresh RC tag for each candidate. A failed release run does not replace existing assets, even if the same tag was moved to a newer commit. Check the successful release run before downloading again.
 
+On a Linux test machine with a webcam, set `ANAGRAM_CAMERA_TEST=1` when running `scripts/release-smoke/linux.sh` in its disposable display/D-Bus session. This additionally requires real camera preview frames and recorded video bytes, and saves only counters/settings in `call-camera.json`. CI's synthetic media test does not exercise V4L2 camera format negotiation. The bundled GStreamer device provider advertises system-memory camera formats because the packaged WebKitGTK loses DMA-BUF caps features when selecting a camera format; keep `scripts/appimage/v4l2-system-memory.patch` until that WebKit path supports them.
+
 ## Running on NixOS
 
 Use `appimage-run ./Anagram_<version>_amd64.AppImage`. It supplies the Linux library environment expected by the AppImage; launching it directly can fail with missing libraries such as `libfontconfig.so.1`.

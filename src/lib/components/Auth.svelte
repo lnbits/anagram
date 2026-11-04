@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
-  import QRCode from 'qrcode';
   import { useNostrStore } from '#src/stores/nostrStore.svelte.ts';
   import { translate } from '#src/i18n.ts';
   import {
@@ -99,6 +98,7 @@
           relayUrl: relay.href,
           onAuthUrl: receiveAuthUrl,
         });
+        const { default: QRCode } = await import('qrcode');
         qr = await QRCode.toDataURL(pairing.uri, { width: 280, margin: 2 });
         await pairing.login;
       } else if (!(await nostr.savePrivateKey(key)).isValid) {

@@ -796,6 +796,7 @@
   "room.localNameHelp": "يظهر اسمك لجميع المشاركين في هذه المكالمة. يغيّر CSS مظهر الأسماء على هذا الجهاز فقط.",
   "room.pasteLink": "الصق رابط مكالمة للانضمام",
   "room.joinGroupCall": "الانضمام إلى المكالمة الجماعية",
+  "room.callExpired": "انتهت صلاحية المكالمة",
   "room.joinAudio": "الانضمام بالصوت",
   "room.joinVideo": "الانضمام بالفيديو",
   "room.createAudio": "بدء مكالمة صوتية",

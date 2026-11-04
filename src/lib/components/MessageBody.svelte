@@ -13,7 +13,7 @@
   } from '#src/utils/messageFormatting.ts';
   import FormattedMessage from './FormattedMessage.svelte';
   import { openExternalHttpUrl } from '#src/utils/externalLinks.ts';
-  import { parseRoomLink } from '#src/utils/callRoom.ts';
+  import { parseRoomLink, roomLinkStatus } from '#src/utils/callRoom.ts';
   import { readCallHistory, callHistoryDuration } from '#src/utils/callHistory.ts';
   import { useTrustedMediaStore } from '#src/stores/trustedMediaStore.svelte.ts';
   import { portal } from '#src/lib/actions/portal.ts';
@@ -175,7 +175,7 @@
       : [...messageFormatUrls(parts).visible]
           .filter(
             (href) =>
-              !parseRoomLink(href) &&
+              !roomLinkStatus(href) &&
               !publicGroupLinkTarget(href) &&
               previewUrl(href) &&
               !attachments.some((attachment) => attachment.url === href) &&

@@ -1,5 +1,135 @@
 import { expect, test } from '@playwright/test';
 
+for (const { capture, bounded } of [
+  { capture: 'automatic', bounded: false },
+  { capture: 'video-element', bounded: false },
+  { capture: 'automatic', bounded: true },
+  { capture: 'video-element', bounded: true },
+]) {
+  test(`packet video (${capture}, ${bounded ? 'group limits' : 'direct defaults'}) preserves camera shape through startup and orientation changes`, async ({
+    page,
+  }) => {
+    await page.route('**/__packet-video-aspect', (route) =>
+      route.fulfill({ contentType: 'text/html', body: '<button>Start</button>' }),
+    );
+    await page.goto('/__packet-video-aspect');
+    await page.getByRole('button').click();
+    const result = await page.evaluate(
+      async ({ capture, bounded }) => {
+        if (capture === 'video-element')
+          Object.defineProperty(window, 'MediaStreamTrackProcessor', {
+            configurable: true,
+            value: undefined,
+          });
+        const { callPacketVideoSupported, recordPacketVideo, createPacketVideoReceiver } =
+          await import('/src/services/callPacketVideo.ts');
+        const { attachCallMedia } = await import('/src/services/callStreamRegistry.ts');
+        if (!(await callPacketVideoSupported())) return { supported: false };
+        const canvas = document.createElement('canvas');
+        canvas.width = 640;
+        canvas.height = 480;
+        const paint = canvas.getContext('2d')!;
+        const draw = () => {
+          paint.fillStyle = '#000';
+          paint.fillRect(0, 0, canvas.width, canvas.height);
+          const size = Math.min(canvas.width, canvas.height) / 3;
+          paint.fillStyle = '#fff';
+          paint.fillRect((canvas.width - size) / 2, (canvas.height - size) / 2, size, size);
+        };
+        draw();
+        const drawing = setInterval(draw, 40);
+        const stream = canvas.captureStream(24);
+        // Some cameras report no dimensions until their first frame arrives.
+        stream.getVideoTracks()[0].getSettings = () => ({});
+        const errors: string[] = [];
+        const receiver = createPacketVideoReceiver(() => errors.push('decode'));
+        const video = document.createElement('video');
+        video.muted = true;
+        video.playsInline = true;
+        document.body.append(video);
+        attachCallMedia(video, receiver.url);
+        const stop = recordPacketVideo(
+          stream,
+          async (packet) => receiver.append(packet.subarray(1)),
+          () => errors.push('encode'),
+          bounded ? { videoMaxWidth: 640, videoMaxHeight: 360 } : undefined,
+        );
+        void video.play();
+        const frames: Array<{ width: number; height: number; squareRatio: number }> = [];
+        try {
+          for (const [width, height, outputWidth, outputHeight] of [
+            [640, 480, bounded ? 480 : 640, bounded ? 360 : 480],
+            [360, 640, bounded ? 202 : 360, bounded ? 360 : 640],
+            [1280, 720, bounded ? 640 : 1280, bounded ? 360 : 720],
+          ]) {
+            canvas.width = width;
+            canvas.height = height;
+            draw();
+            const deadline = performance.now() + 5000;
+            while (
+              (video.readyState < 2 ||
+                video.videoWidth !== outputWidth ||
+                video.videoHeight !== outputHeight) &&
+              !errors.length &&
+              performance.now() < deadline
+            )
+              await new Promise((resolve) => setTimeout(resolve, 50));
+            const sample = document.createElement('canvas');
+            sample.width = video.videoWidth || 1;
+            sample.height = video.videoHeight || 1;
+            const pixels = sample.getContext('2d')!;
+            if (video.readyState >= 2) pixels.drawImage(video, 0, 0);
+            const data = pixels.getImageData(0, 0, sample.width, sample.height).data;
+            let left = sample.width,
+              right = -1,
+              top = sample.height,
+              bottom = -1;
+            for (let y = 0; y < sample.height; y++) {
+              for (let x = 0; x < sample.width; x++) {
+                if (data[(y * sample.width + x) * 4] < 200) continue;
+                left = Math.min(left, x);
+                right = Math.max(right, x);
+                top = Math.min(top, y);
+                bottom = Math.max(bottom, y);
+              }
+            }
+            frames.push({
+              width: video.videoWidth,
+              height: video.videoHeight,
+              squareRatio: (right - left + 1) / (bottom - top + 1),
+            });
+          }
+          return { supported: true, errors, frames };
+        } finally {
+          stop();
+          receiver.close();
+          clearInterval(drawing);
+          stream.getTracks().forEach((track) => track.stop());
+          video.srcObject = null;
+          video.remove();
+        }
+      },
+      { capture, bounded },
+    );
+    test.skip(!result.supported, 'No packet video codec in this engine');
+    expect(result.errors).toEqual([]);
+    expect(result.frames?.map(({ width, height }) => [width, height])).toEqual(
+      bounded
+        ? [
+            [480, 360],
+            [202, 360],
+            [640, 360],
+          ]
+        : [
+            [640, 480],
+            [360, 640],
+            [1280, 720],
+          ],
+    );
+    for (const frame of result.frames!) expect(frame.squareRatio).toBeCloseTo(1, 1);
+  });
+}
+
 for (const capture of [
   'automatic',
   'automatic-presentation',
@@ -76,11 +206,16 @@ for (const capture of [
         };
       }
       let observing = true;
+      const bitrates: number[] = [];
       let created = 0,
         closed = 0,
         encoded = 0;
       const Original = VideoEncoder;
       window.VideoEncoder = class extends Original {
+        configure(config: VideoEncoderConfig) {
+          if (config.bitrate) bitrates.push(config.bitrate);
+          super.configure(config);
+        }
         constructor(init: VideoEncoderInit) {
           super(init);
           created++;
@@ -197,6 +332,7 @@ for (const capture of [
           errors,
           created,
           encoded,
+          bitrates,
         };
       } finally {
         observing = false;
@@ -225,6 +361,7 @@ for (const capture of [
     });
     expect(result.errors).toEqual([]);
     expect(result.created).toBe(capture === 'video-element-restart' ? 2 : 1);
+    if (capture !== 'all-congested') expect(Math.min(...result.bitrates!)).toBe(600000);
     expect(result.fastPeerFrames).toBeGreaterThan(capture === 'all-congested' ? 2 : 30);
     expect(result.counts![1]).toBeGreaterThan(2);
     expect(result.pictureChanges!.every((count) => count > 2)).toBe(true);

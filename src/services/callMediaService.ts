@@ -10,7 +10,7 @@ export { prepareCallPacketAudio } from './callPacketAudio.ts';
 import type { CallMode } from '#src/types/call.ts';
 import { CALL_MIME_TYPES, CALL_VIDEO_MIME_TYPE } from '#src/utils/callSignal.ts';
 import { isIosNative } from '#src/lib/platform/ios.ts';
-import { isTauri } from '@tauri-apps/api/core';
+import { subscribeLegacyCapture } from './callLegacyCapture.ts';
 
 // The native iPhone app exposes ManagedMediaSource instead of MediaSource.
 // Other clients retain their existing playback path and capability checks.
@@ -66,13 +66,40 @@ const videoConstraints: MediaTrackConstraints = {
   frameRate: { ideal: 24, max: 24 },
   facingMode: 'user',
 };
+async function captureCallMedia(
+  audio: boolean | MediaTrackConstraints,
+  video: false | MediaTrackConstraints,
+): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio, video });
+  } catch (cause) {
+    // WebKitGTK can reject preferred dimensions for a camera with discrete
+    // capture modes (e.g. 640x480 instead of 640x360). Retry its native mode,
+    // preserving the selected devices and all microphone constraints.
+    if (
+      video &&
+      cause &&
+      typeof cause === 'object' &&
+      'name' in cause &&
+      cause.name === 'OverconstrainedError' &&
+      'constraint' in cause &&
+      ['width', 'height', 'frameRate', 'facingMode'].includes(String(cause.constraint))
+    ) {
+      return navigator.mediaDevices.getUserMedia({
+        audio,
+        video: video.deviceId ? { deviceId: video.deviceId } : true,
+      });
+    }
+    throw cause;
+  }
+}
 export function getCallMicrophone(deviceId?: string): Promise<MediaStream> {
   return navigator.mediaDevices.getUserMedia({ audio: audioConstraints(deviceId), video: false });
 }
 export function getCallCamera(deviceId?: string): Promise<MediaStream> {
-  return navigator.mediaDevices.getUserMedia({
-    audio: false,
-    video: { ...videoConstraints, ...(deviceId ? { deviceId: { exact: deviceId } } : {}) },
+  return captureCallMedia(false, {
+    ...videoConstraints,
+    ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
   });
 }
 export function canShareCallScreen(): boolean {
@@ -92,10 +119,10 @@ export function getCallScreen(): Promise<MediaStream> {
 }
 export async function getCallMedia(mode: CallMode, deviceId?: string): Promise<MediaStream> {
   try {
-    return await navigator.mediaDevices.getUserMedia({
-      audio: audioConstraints(deviceId),
-      video: mode === 'video' ? videoConstraints : false,
-    });
+    return await captureCallMedia(
+      audioConstraints(deviceId),
+      mode === 'video' ? videoConstraints : false,
+    );
   } catch (cause) {
     // A disconnected preference must not prevent starting the next call.
     if (
@@ -191,6 +218,9 @@ export interface CallRecordingOptions {
   audioGeneration?: number;
   videoFrameRate?: number;
   videoBitsPerSecond?: number;
+  videoMaxWidth?: number;
+  videoMaxHeight?: number;
+  onStreamRestart?: () => Promise<void>;
   onCongestion?: () => void;
   onSendError?: (cause: unknown) => void;
 }
@@ -204,32 +234,20 @@ export function recordCallMedia(
 ): () => void {
   if (mimeType === OPUS_CALL_MIME) return recordPacketAudio(stream, send, onError, options);
   if (mimeType === PACKET_VIDEO_MIME) return recordPacketVideo(stream, send, onError, options);
-  const nativeLinux =
-    isTauri() && /Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent);
-  const timeslice = mimeType === CALL_MIME_TYPES[1] ? 50 : 100;
-  const recorder = new MediaRecorder(stream, {
-    mimeType,
-    audioBitsPerSecond: 32_000,
-    videoBitsPerSecond: options?.videoBitsPerSecond ?? 600_000,
-  });
   let stopped = false;
-  let keyframeTimer: ReturnType<typeof setTimeout> | undefined;
+  let stopCapture = () => {};
   let queuedBytes = 0;
-  const pending: { id: number; blob: Blob }[] = [];
+  const pending: { id: number; blob?: Blob }[] = [];
   let sending = false;
   let sequence = 0;
   const queuedAt = new Map<number, number>();
   const stop = () => {
     if (stopped) return;
     stopped = true;
-    clearTimeout(keyframeTimer);
     clearInterval(watchdog);
     queuedAt.clear();
     pending.length = 0;
-    recorder.ondataavailable = null;
-    recorder.onerror = null;
-    recorder.onstop = null;
-    if (recorder.state !== 'inactive') recorder.stop();
+    stopCapture();
   };
   const failed = (callback: () => void) => {
     if (!stopped) {
@@ -250,42 +268,22 @@ export function recordCallMedia(
             );
         }, 250)
       : undefined;
-  recorder.onerror = () => failed(onError);
-  // WebKitGTK's VP8 recorder disables periodic keyframes. Renew its video-only
-  // recording before the receiver's eight-second buffer discards the first one.
-  // GStreamer keeps monotonic timestamps across recordings; ordered WebM init
-  // segments can reuse the same MSE player without interrupting the audio track.
-  const renewVideo = mimeType === CALL_VIDEO_MIME_TYPE && nativeLinux;
-  const scheduleKeyframe = () => {
-    if (renewVideo)
-      keyframeTimer = setTimeout(() => {
-        if (!stopped && recorder.state === 'recording') {
-          try {
-            recorder.stop();
-          } catch {
-            failed(onError);
-          }
-        }
-      }, 4000);
-  };
-  recorder.onstop = () => {
-    if (stopped || !renewVideo) return;
-    try {
-      recorder.start(timeslice);
-      scheduleKeyframe();
-    } catch {
-      failed(onError);
-    }
-  };
   const pump = async () => {
     if (sending || stopped) return;
     sending = true;
     try {
       while (!stopped && pending.length) {
+        if (!pending[0].blob) {
+          const reset = pending.shift()!;
+          await options?.onStreamRestart?.();
+          queuedAt.delete(reset.id);
+          continue;
+        }
         // Coalesce only chunks already waiting. WebM is an ordered byte stream;
         // one IPC round trip per chunk otherwise builds lag on native WebViews.
-        const batch = pending.splice(0);
-        const blob = batch.length === 1 ? batch[0].blob : new Blob(batch.map((p) => p.blob));
+        const resetIndex = pending.findIndex((entry) => !entry.blob);
+        const batch = pending.splice(0, resetIndex < 0 ? pending.length : resetIndex);
+        const blob = batch.length === 1 ? batch[0].blob! : new Blob(batch.map((p) => p.blob!));
         const data = new Uint8Array(await blob.arrayBuffer());
         if (stopped) return;
         const frame = new Uint8Array(data.length + 1);
@@ -300,9 +298,9 @@ export function recordCallMedia(
       sending = false;
     }
   };
-  recorder.ondataavailable = (event) => {
-    if (stopped || !event.data.size) return;
-    queuedBytes += event.data.size;
+  const enqueue = (blob?: Blob) => {
+    if (stopped) return;
+    queuedBytes += blob?.size ?? 0;
     // Leave one byte for the lane marker, including when a whole queue is merged.
     if (queuedBytes > 1_048_575) {
       failed(options?.onCongestion ?? onError);
@@ -310,12 +308,15 @@ export function recordCallMedia(
     }
     const id = sequence++;
     queuedAt.set(id, performance.now());
-    pending.push({ id, blob: event.data });
+    pending.push({ id, blob });
     void pump();
   };
   try {
-    recorder.start(timeslice);
-    scheduleKeyframe();
+    stopCapture = subscribeLegacyCapture(stream, mimeType, options, {
+      chunk: enqueue,
+      reset: () => enqueue(),
+      error: () => failed(onError),
+    });
   } catch (cause) {
     stop();
     throw cause;

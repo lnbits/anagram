@@ -796,6 +796,7 @@
   "room.localNameHelp": "Todos nesta chamada veem seu nome. O CSS só altera a aparência dos nomes neste dispositivo.",
   "room.pasteLink": "Cole um link de chamada para entrar",
   "room.joinGroupCall": "Entrar na chamada em grupo",
+  "room.callExpired": "Chamada expirada",
   "room.joinAudio": "Entrar com áudio",
   "room.joinVideo": "Entrar com vídeo",
   "room.createAudio": "Iniciar chamada de áudio",

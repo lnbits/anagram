@@ -283,19 +283,16 @@ pub struct CallConnection {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl CallConnection {
-    // Amortize native WebView IPC latency without retaining a speech backlog.
+    // Amortize native WebView IPC latency without discarding ordinary bursts.
     // Datagram reads are cancellation-safe; stream reads must never use this.
     pub async fn recv_audio_batch(&self) -> Result<Vec<u8>, JsError> {
         let mut packets = std::collections::VecDeque::from([self.recv_audio().await?]);
-        for _ in 0..64 {
+        for _ in 1..4 {
             let Some(next) = self.conn.read_datagram().now_or_never() else {
                 break;
             };
             let data = next.map_err(js_error)?;
             if data.len() > 14 && data.len() <= 1100 && data[0] == 9 && data[1] == 1 {
-                if packets.len() == 4 {
-                    packets.pop_front();
-                }
                 packets.push_back(data.to_vec());
             }
         }

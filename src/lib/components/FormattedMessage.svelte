@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { FormattedMessagePart } from '#src/utils/messageFormatting.ts';
   import { publicGroupLinkTarget } from '#src/utils/publicGroupLink.ts';
-  import { parseRoomLink } from '#src/utils/callRoom.ts';
+  import { roomLinkStatus } from '#src/utils/callRoom.ts';
   import { translate } from '#src/i18n.ts';
   import Icon from './Icon.svelte';
   import ProfileName from './ProfileName.svelte';
@@ -43,24 +43,30 @@
       >{/if}
   {:else if part.type === 'code'}<code class:block={part.block}>{part.text}</code>
   {:else if part.type === 'url' && onopen}
-    {@const room = Boolean(parseRoomLink(part.href))}
+    {@const room = roomLinkStatus(part.href)}
     {@const publicGroup = publicGroupLinkTarget(part.href)}
-    <a
-      data-testid="message-url-link"
-      class:room-link={room || publicGroup !== null}
-      href={part.href}
-      title={part.href}
-      rel="noopener noreferrer"
-      target="_blank"
-      oncontextmenu={(event) => onlinkmenu?.(event, part.href)}
-      onclick={(event) => {
-        event.preventDefault();
-        onopen?.(part.href);
-      }}
-      >{#if publicGroup}<PublicGroupLinkLabel href={part.href} />{:else if room}{$translate(
-          'room.joinGroupCall',
-        )}<Icon name="group" />{:else}{part.text}{/if}</a
-    >
+    {#if room === 'expired'}
+      <span class="room-link expired" aria-disabled="true"
+        >{$translate('room.callExpired')}<Icon name="group" /></span
+      >
+    {:else}
+      <a
+        data-testid="message-url-link"
+        class:room-link={room !== null || publicGroup !== null}
+        href={part.href}
+        title={part.href}
+        rel="noopener noreferrer"
+        target="_blank"
+        oncontextmenu={(event) => onlinkmenu?.(event, part.href)}
+        onclick={(event) => {
+          event.preventDefault();
+          if (roomLinkStatus(part.href) !== 'expired') onopen?.(part.href);
+        }}
+        >{#if publicGroup}<PublicGroupLinkLabel href={part.href} />{:else if room}{$translate(
+            'room.joinGroupCall',
+          )}<Icon name="group" />{:else}{part.text}{/if}</a
+      >
+    {/if}
   {:else if part.type === 'mention' && part.publicKey && oncontact}<button
       class="mention"
       data-testid="message-mention-link"
@@ -137,7 +143,11 @@
     vertical-align: middle;
     font-weight: 600;
   }
-  .room-link:hover {
+  a.room-link:hover {
     background: color-mix(in srgb, var(--q-primary) 12%, transparent);
+  }
+  .expired {
+    color: var(--nc-text-secondary);
+    border-color: currentColor;
   }
 </style>

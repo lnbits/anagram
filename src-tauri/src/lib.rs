@@ -13,6 +13,9 @@ mod secure_storage;
 use tauri::Manager;
 #[cfg(desktop)]
 static PRESENTATION_ID: AtomicUsize = AtomicUsize::new(0);
+// Serialize across WebView reloads as well as within a JS session. A timed-out
+// removal must finish before a later login can write a different account's key.
+static KEY_OPERATIONS: tauri::async_runtime::Mutex<()> = tauri::async_runtime::Mutex::const_new(());
 
 // Native secrets are available only to the bundled main webview. Presentation
 // windows and remotely navigated pages must never inherit keychain access.
@@ -63,9 +66,13 @@ async fn read_clipboard_image(
 async fn read_private_key(window: tauri::WebviewWindow) -> Result<Option<String>, String> {
     authorize_key_access(&window)?;
     let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || secure_storage::read(&app))
-        .await
-        .map_err(|_| "Secure storage operation failed".to_string())?
+    let guard = KEY_OPERATIONS.lock().await;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
+        secure_storage::read(&app)
+    })
+    .await
+    .map_err(|_| "Secure storage operation failed".to_string())?
 }
 #[tauri::command]
 async fn write_private_key(
@@ -77,17 +84,25 @@ async fn write_private_key(
         return Err("Invalid private key".into());
     }
     let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || secure_storage::write(&app, &private_key_hex))
-        .await
-        .map_err(|_| "Secure storage operation failed".to_string())?
+    let guard = KEY_OPERATIONS.lock().await;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
+        secure_storage::write(&app, &private_key_hex)
+    })
+    .await
+    .map_err(|_| "Secure storage operation failed".to_string())?
 }
 #[tauri::command]
 async fn remove_private_key(window: tauri::WebviewWindow) -> Result<(), String> {
     authorize_key_access(&window)?;
     let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || secure_storage::remove(&app))
-        .await
-        .map_err(|_| "Secure storage operation failed".to_string())?
+    let guard = KEY_OPERATIONS.lock().await;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
+        secure_storage::remove(&app)
+    })
+    .await
+    .map_err(|_| "Secure storage operation failed".to_string())?
 }
 #[tauri::command]
 async fn android_notification_command(
@@ -229,6 +244,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             iroh_calls::iroh_call,
+            iroh_calls::iroh_call_send,
             read_clipboard_image,
             read_private_key,
             write_private_key,

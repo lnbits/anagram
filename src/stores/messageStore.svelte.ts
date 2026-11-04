@@ -1770,6 +1770,8 @@ export const useMessageStore = createStore('messageStore', () => {
   async function searchMessages(
     chatId: string,
     query: string,
+    signal?: AbortSignal,
+    beforeMessageId?: string,
   ): Promise<ChatThreadSearchMatch[]> {
     const normalizedChatId = normalizeChatIdentifier(chatId);
     const normalizedQuery = query.trim();
@@ -1778,7 +1780,13 @@ export const useMessageStore = createStore('messageStore', () => {
     }
 
     await chatDataService.init();
-    const rows = await chatDataService.searchMessages(normalizedChatId, normalizedQuery);
+    signal?.throwIfAborted();
+    const rows = await chatDataService.searchMessages(
+      normalizedChatId,
+      normalizedQuery,
+      signal,
+      beforeMessageId ? Number(beforeMessageId) : undefined,
+    );
     return rows.map((row) => ({
       messageId: String(row.id),
       eventId: row.event_id,

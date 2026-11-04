@@ -62,6 +62,24 @@ afterEach(() => {
 });
 
 describe('bot interaction logout cleanup', () => {
+  it('retains unfinished logout across restart and finds account databases without enumeration', async () => {
+    const { PublicGroupData } = await import('#src/services/publicGroupData.ts');
+    const first = new PublicGroupData(owner),
+      second = new PublicGroupData(other);
+    await first.close();
+    await second.close();
+    const list = indexedDB.databases.bind(indexedDB);
+    Object.defineProperty(indexedDB, 'databases', { value: undefined });
+    const { schedulePendingLogoutCleanup, hasPendingLogoutCleanup, completePendingLogoutCleanup } =
+      await import('#src/utils/logoutState.ts');
+    schedulePendingLogoutCleanup();
+    const { clearPersistedAppState } = await import('#src/utils/logoutCleanup.ts');
+    await clearPersistedAppState({ preservePendingLogoutCleanup: true });
+    expect(await list()).toEqual([]);
+    expect(hasPendingLogoutCleanup()).toBe(true);
+    completePendingLogoutCleanup();
+    expect(hasPendingLogoutCleanup()).toBe(false);
+  });
   for (const enumeration of ['missing', 'throws']) {
     it(`clears multiple accounts after a reload when database enumeration ${enumeration}`, async () => {
       const { saveBotInteraction } = await import('#src/services/botInteractionData.ts');

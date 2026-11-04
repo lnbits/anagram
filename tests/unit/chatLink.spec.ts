@@ -7,7 +7,8 @@ describe('chat route identity', () => {
   const pubkey = getPublicKey(secret);
   it('normalizes public identities and preserves bounded profile relay hints', () => {
     for (const id of [pubkey, pubkey.toUpperCase(), nip19.npubEncode(pubkey)])
-      expect(chatLinkTarget(`/chats/${id}/`)).toEqual({ pubkey, relays: [] });
+      for (const prefix of ['/chat/', '/chats/'])
+        expect(chatLinkTarget(`${prefix}${id}/`)).toEqual({ pubkey, relays: [] });
     const relays = Array.from({ length: 10 }, (_, i) => `wss://relay${i}.example.org`);
     expect(chatLinkTarget(`/chats/${nip19.nprofileEncode({ pubkey, relays })}`)).toEqual({
       pubkey,
@@ -24,6 +25,7 @@ describe('chat route identity', () => {
       `/contacts/${pubkey}`,
       `/public/${pubkey}`,
       `/chats/${nip19.nsecEncode(secret)}`,
+      `/chat/${nip19.nsecEncode(secret)}`,
       `/chats/${'a'.repeat(8192)}`,
     ])
       expect(chatLinkTarget(path)).toBeNull();

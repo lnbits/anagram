@@ -99,6 +99,46 @@ test('formatting component renders text safely and reveals spoilers by keyboard'
   ).toBe(true);
 });
 
+test('call invitations stay compact after expiry and cannot open expired calls', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(async () => {
+    const { mount } = await import('/src/lib/dev/mountFixture.ts');
+    const { default: FormattedMessage } = await import('/src/lib/components/FormattedMessage.svelte');
+    const { formatMessage } = await import('/src/utils/messageFormatting.ts');
+    const { roomLinkToken } = await import('/src/utils/callRoom.ts');
+    const call = {
+      id: '12345678-1234-4123-8123-123456789abc', host: 'a'.repeat(64),
+      secret: 'b'.repeat(64), relays: ['wss://relay.example.org/'],
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+    };
+    const expired = roomLinkToken({ ...call, expiresAt: new Date(Date.now() - 60000).toISOString() });
+    const target = document.createElement('div');
+    target.id = 'call-link-fixture';
+    document.body.replaceChildren(target);
+    mount(FormattedMessage, { target, props: {
+      parts: formatMessage([
+        `https://anagram.chat/join/call.html#/call/${roomLinkToken(call)}`,
+        `https://anagram.chat/join/call.html#/call/${expired}`,
+        `anagram://room/call/${expired}`,
+      ].join('\n')),
+      onopen: () => { target.dataset.opened = 'true'; },
+    } });
+  });
+  const fixture = page.locator('#call-link-fixture');
+  await expect(fixture.locator('.expired')).toHaveText(['Call expired', 'Call expired']);
+  await expect(fixture.locator('a')).toHaveCount(1);
+  const active = fixture.getByRole('link', { name: 'Join group call' });
+  await active.click();
+  await expect(fixture).toHaveAttribute('data-opened', 'true');
+  await page.evaluate(() => {
+    delete document.querySelector<HTMLElement>('#call-link-fixture')!.dataset.opened;
+    const later = Date.now() + 120000;
+    Date.now = () => later;
+  });
+  await active.click();
+  await expect(fixture).not.toHaveAttribute('data-opened');
+});
+
 test('actual chat messages format after sending, editing and reloading in both layouts', async ({
   browser,
 }, info) => {

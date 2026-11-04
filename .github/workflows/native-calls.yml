@@ -27,6 +27,64 @@ concurrency:
   group: native-calls-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  linux-calls:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        participants: [3, 4, 6]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: native-call-validation-linux
+      - name: Install native media and display dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb xdotool dbus-x11 pulseaudio \
+            build-essential ninja-build pkg-config bison flex python3-venv patch \
+            libopus-dev libvpx-dev libogg-dev libvorbis-dev libpulse-dev libasound2-dev \
+            libavcodec-dev libavformat-dev libavfilter-dev libswresample-dev libswscale-dev \
+            libjpeg-dev libpng-dev libtheora-dev libgudev-1.0-dev liborc-0.4-dev
+      - uses: actions/cache@v4
+        id: media-cache
+        with:
+          path: ${{ runner.temp }}/anagram-gstreamer
+          key: gstreamer-native-ubuntu24-${{ hashFiles('scripts/appimage/build-gstreamer.sh', 'scripts/appimage/gstreamer.sha256', 'scripts/appimage/*.patch') }}
+      - name: Build the call-capable media runtime
+        if: steps.media-cache.outputs.cache-hit != 'true'
+        run: bash scripts/appimage/build-gstreamer.sh "$RUNNER_TEMP/anagram-gstreamer" "$RUNNER_TEMP/anagram-gstreamer-build"
+      - name: Select the media runtime
+        run: |
+          {
+            echo "LD_LIBRARY_PATH=$RUNNER_TEMP/anagram-gstreamer/lib"
+            echo "GST_PLUGIN_SYSTEM_PATH_1_0=$RUNNER_TEMP/anagram-gstreamer/lib/gstreamer-1.0"
+            echo "GST_PLUGIN_SCANNER=$RUNNER_TEMP/anagram-gstreamer/libexec/gstreamer-1.0/gst-plugin-scanner"
+          } >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npm run verify:iroh
+      - run: npm run build
+      - run: cargo install iroh-relay --version 1.3.0 --locked --features server --bin iroh-relay
+      - name: Exercise isolated native Linux group calls and screen sharing
+        env:
+          ANAGRAM_CALL_TEST_PARTICIPANTS: ${{ matrix.participants }}
+          ANAGRAM_CALL_TEST_SCENARIO: group
+        run: xvfb-run -a -s '-screen 0 1600x1800x24' dbus-run-session -- bash scripts/native-calls/linux.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-calls-linux-${{ matrix.participants }}
+          path: .artifacts/native-calls/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
   calls:
     strategy:
       fail-fast: false

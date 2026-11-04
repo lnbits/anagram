@@ -4,6 +4,7 @@ import {
   parseRoomLink,
   parseRoomSignal,
   roomLinkToken,
+  roomLinkStatus,
 } from '#src/utils/callRoom.ts';
 import { describe, expect, it } from 'vitest';
 
@@ -53,6 +54,20 @@ describe('group call links and authenticated control payloads', () => {
     ).toBeNull();
     expect(parseRoomLink(roomLinkToken({ ...link, relays: ['file:///secret'] }))).toBeNull();
     expect(parseRoomLink('a'.repeat(8193))).toBeNull();
+  });
+  it('recognizes expired invitations for display while still rejecting them for joining', () => {
+    const expires = Date.parse(link.expiresAt);
+    const token = roomLinkToken(link);
+    expect(roomLinkStatus(token, expires - 1)).toBe('active');
+    expect(roomLinkStatus(token, expires)).toBe('expired');
+    expect(roomLinkStatus(token, expires + 86400000)).toBe('expired');
+    expect(parseRoomLink(token, expires)).toBeNull();
+    expect(roomLinkStatus(token, expires - 86400000)).toBeNull();
+    for (const invalid of [
+      { ...link, secret: 'short' },
+      { ...link, expiresAt: 'invalid' },
+      { ...link, relays: ['file:///secret'] },
+    ]) expect(roomLinkStatus(roomLinkToken(invalid), expires)).toBeNull();
   });
   it('validates optional name revisions and strips unrecognized styling fields', () => {
     const renamed = {

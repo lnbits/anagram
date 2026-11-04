@@ -2,6 +2,7 @@ import {
   callCaptureErrorKey,
   callMediaSupported,
   createCallMediaReceiver,
+  getCallCamera,
   getCallMedia,
   getCallMicrophone,
   recordCallMedia,
@@ -112,6 +113,65 @@ describe('call devices and playback', () => {
     expect(getUserMedia).toHaveBeenCalledTimes(2);
     expect(getUserMedia.mock.calls[1]?.[0].audio.deviceId).toBeUndefined();
   });
+  it.each(['width', 'height', 'frameRate', 'facingMode'])(
+    'keeps the selected camera when its preferred %s is unsupported',
+    async (constraint) => {
+      const stream = {};
+      const getUserMedia = vi
+        .fn()
+        .mockRejectedValueOnce({
+          name: 'OverconstrainedError',
+          constraint,
+        })
+        .mockResolvedValue(stream);
+      vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
+      await expect(getCallCamera('colour-camera')).resolves.toBe(stream);
+      expect(getUserMedia).toHaveBeenCalledTimes(2);
+      expect(getUserMedia.mock.calls[1]?.[0]).toEqual({
+        audio: false,
+        video: { deviceId: { exact: 'colour-camera' } },
+      });
+    },
+  );
+  it('keeps microphone processing and selection when starting video with native camera modes', async () => {
+    const getUserMedia = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new DOMException('Unsupported size', 'OverconstrainedError'), {
+          constraint: 'width',
+        }),
+      )
+      .mockResolvedValue({});
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
+    await getCallMedia('video', 'mic-2');
+    expect(getUserMedia.mock.calls[1]?.[0]).toEqual({
+      audio: getUserMedia.mock.calls[0]?.[0].audio,
+      video: true,
+    });
+    expect(getUserMedia.mock.calls[1]?.[0].audio.deviceId).toEqual({ exact: 'mic-2' });
+  });
+  it.each(['deviceId', 'echoCancellation', ''])(
+    'does not hide rejected %s constraints',
+    async (constraint) => {
+      const error = Object.assign(new DOMException('Rejected', 'OverconstrainedError'), {
+        constraint,
+      });
+      const getUserMedia = vi.fn().mockRejectedValue(error);
+      vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
+      await expect(getCallCamera('missing-camera')).rejects.toBe(error);
+      expect(getUserMedia).toHaveBeenCalledOnce();
+    },
+  );
+  it.each(['NotAllowedError', 'NotReadableError', 'NotFoundError'])(
+    'does not retry a camera %s',
+    async (name) => {
+      const error = new DOMException('Capture failed', name);
+      const getUserMedia = vi.fn().mockRejectedValue(error);
+      vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
+      await expect(getCallCamera('camera')).rejects.toBe(error);
+      expect(getUserMedia).toHaveBeenCalledOnce();
+    },
+  );
   it('primes the persistent audio element without treating autoplay denial as input denial', async () => {
     const element = {
       src: '',
@@ -318,18 +378,26 @@ it('stops a congested video recorder by queue age without dropping chunks or end
 
 it.each([
   { native: true, agent: 'Linux x86_64', mime: 'video/webm;codecs=vp8', renews: true },
+  {
+    native: true,
+    agent: 'Linux x86_64',
+    mime: 'video/webm;codecs=vp8',
+    renews: false,
+    reset: false,
+  },
   { native: true, agent: 'Linux; Android 15', mime: 'video/webm;codecs=vp8', renews: false },
   { native: false, agent: 'Linux x86_64', mime: 'video/webm;codecs=vp8', renews: false },
   { native: true, agent: 'Linux x86_64', mime: 'audio/webm;codecs=opus', renews: false },
   { native: true, agent: 'Linux x86_64', mime: 'video/webm;codecs=vp8,opus', renews: false },
 ])(
   'renews only native Linux video-only recordings: $native $agent $mime',
-  async ({ native, agent, mime, renews }) => {
+  async ({ native, agent, mime, renews, reset = true }) => {
     vi.useFakeTimers();
     platform.native = native;
     vi.stubGlobal('navigator', { userAgent: agent });
     class Recorder {
       static current: Recorder;
+      static created = 0;
       state = 'inactive';
       ondataavailable: ((event: { data: Blob }) => void) | null = null;
       onerror: (() => void) | null = null;
@@ -345,10 +413,11 @@ it.each([
       });
       constructor() {
         Recorder.current = this;
+        Recorder.created++;
       }
     }
     vi.stubGlobal('MediaRecorder', Recorder);
-    const sent: number[] = [];
+    const sent: (number | string)[] = [];
     const failure = vi.fn();
     const stop = recordCallMedia(
       {} as MediaStream,
@@ -357,17 +426,25 @@ it.each([
         sent.push(...bytes.subarray(1));
       },
       failure,
+      reset
+        ? {
+            onStreamRestart: async () => {
+              sent.push('reset');
+            },
+          }
+        : undefined,
     );
-    await vi.advanceTimersByTimeAsync(4000);
-    expect(Recorder.current.start).toHaveBeenCalledTimes(renews ? 2 : 1);
+    await vi.advanceTimersByTimeAsync(4100);
+    expect(Recorder.created).toBe(renews ? 2 : 1);
+    expect(Recorder.current.start).toHaveBeenCalledOnce();
     for (const args of Recorder.current.start.mock.calls)
       expect(args).toEqual([mime === 'audio/webm;codecs=opus' ? 50 : 100]);
-    // A completed WebM segment must arrive before the next initialization header.
-    expect(sent).toEqual(renews ? [1, 2, 1] : [1]);
+    // Reset the receiver before delivering a fresh WebM initialization header.
+    expect(sent).toEqual(renews ? [1, 'reset', 1] : [1]);
     expect(vi.getTimerCount()).toBe(renews ? 1 : 0);
     stop();
     await vi.advanceTimersByTimeAsync(8000);
-    expect(Recorder.current.start).toHaveBeenCalledTimes(renews ? 2 : 1);
+    expect(Recorder.created).toBe(renews ? 2 : 1);
     expect(vi.getTimerCount()).toBe(0);
     expect(failure).not.toHaveBeenCalled();
   },
@@ -377,11 +454,12 @@ it('stops renewal and congestion timers if the native video encoder cannot resta
   vi.useFakeTimers();
   platform.native = true;
   vi.stubGlobal('navigator', { userAgent: 'Linux x86_64' });
+  let starts = 0;
   class Recorder {
     state = 'inactive';
     onstop: (() => void) | null = null;
     start = vi.fn(() => {
-      if (this.start.mock.calls.length > 1) throw new Error('Encoder unavailable');
+      if (++starts > 1) throw new Error('Encoder unavailable');
       this.state = 'recording';
     });
     stop() {
@@ -399,9 +477,10 @@ it('stops renewal and congestion timers if the native video encoder cannot resta
     failure,
     {
       onCongestion: congestion,
+      onStreamRestart: async () => {},
     },
   );
-  await vi.advanceTimersByTimeAsync(4000);
+  await vi.advanceTimersByTimeAsync(4100);
   expect(failure).toHaveBeenCalledOnce();
   expect(congestion).not.toHaveBeenCalled();
   expect(vi.getTimerCount()).toBe(0);

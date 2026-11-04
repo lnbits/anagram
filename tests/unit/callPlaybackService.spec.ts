@@ -32,7 +32,7 @@ describe('live call playback recovery', () => {
     const { element, seek } = media(9.5, ranges);
     Object.defineProperty(element, 'paused', { value: true, writable: true });
     const stop = watchCallLive(element, 'audio');
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 8; i++) {
       ranges[0][1] += 0.25;
       followCallLive(element, 'audio');
       vi.advanceTimersByTime(250);
@@ -40,7 +40,7 @@ describe('live call playback recovery', () => {
     expect(seek).not.toHaveBeenCalled();
     Object.defineProperty(element, 'paused', { value: false });
     vi.advanceTimersByTime(250);
-    expect(seek).toHaveBeenCalledExactlyOnceWith(10.8);
+    expect(seek).toHaveBeenCalledExactlyOnceWith(11.8);
     stop();
   });
 
@@ -70,12 +70,19 @@ describe('live call playback recovery', () => {
     const { element, seek } = media(9.5, ranges);
     followCallLive(element, 'audio');
     expect(element.playbackRate).toBe(1.1);
-    ranges[0][1] = 11;
+    ranges[0][1] = 12;
     followCallLive(element, 'audio');
-    expect(seek).toHaveBeenCalledExactlyOnceWith(10.8);
+    expect(seek).toHaveBeenCalledExactlyOnceWith(11.8);
     expect(element.playbackRate).toBe(1);
     followCallLive(element, 'audio');
     expect(seek).toHaveBeenCalledOnce();
+  });
+
+  it('preserves sub-second audio bursts without seeking', () => {
+    const { element, seek } = media(9, [[0, 10]]);
+    for (let i = 0; i < 20; i++) followCallLive(element, 'audio');
+    expect(seek).not.toHaveBeenCalled();
+    expect(element.playbackRate).toBe(1.1);
   });
 
   it('drains a sub-threshold audio backlog over several seconds without a seek', () => {
@@ -123,7 +130,7 @@ describe('live call playback recovery', () => {
 
   it('uses the audio cushion on stalled-event recovery and preserves seek/gap guards', () => {
     vi.useFakeTimers();
-    const { element } = media(9, [[0, 10]]);
+    const { element } = media(8, [[0, 10]]);
     const stop = watchCallLive(element, 'audio');
     vi.advanceTimersByTime(250);
     expect(element.currentTime).toBeCloseTo(9.8);
@@ -137,7 +144,11 @@ describe('live call playback recovery', () => {
       [9.9, 10],
     ]);
     followCallLive(gap.element, 'audio');
-    expect(gap.seek).toHaveBeenCalledWith(9.9);
+    expect(gap.seek).not.toHaveBeenCalled(); // Speech remains in the earlier range.
+    gap.element.currentTime = 9.8;
+    gap.seek.mockClear();
+    followCallLive(gap.element, 'audio');
+    expect(gap.seek).toHaveBeenCalledExactlyOnceWith(9.9);
   });
 
   it('recovers without browser progress events and stops work when detached', () => {

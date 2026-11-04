@@ -189,6 +189,7 @@
       relayVersion: nostr.relayStatusVersion,
       contactVersion: nostr.contactListVersion,
     })),
+    (value) => value.selected?.id,
   );
   let section: 'chats' | 'contacts' | 'settings' = 'chats';
   let watchedDirectPeer: string | null = null;
@@ -229,6 +230,7 @@
     });
   }
   let draft = '';
+  let sendRevision = 0;
   let reply: MessageReplyPreview | null = null;
   let editing: Message | null = null;
   let beforeEdit: { draft: string; reply: MessageReplyPreview | null } | null = null;
@@ -607,8 +609,9 @@
   $: mobileThread =
     section === 'contacts'
       ? Boolean(contactSelectedKey)
-      : section === 'chats' && (/^\/chats\/[^/]+/.test($page.url.pathname) || !!publicLink);
+      : section === 'chats' && (/^\/chats?\/[^/]+/.test($page.url.pathname) || !!publicLink);
   $: if ($state.selected?.id && $state.selected.id !== currentId) {
+    sendRevision++;
     currentId = $state.selected.id;
     draft = chats.getComposerDraft(currentId);
     reply = null;
@@ -697,16 +700,23 @@
       if (!reopened) return;
       chat = reopened;
     }
-    if (chat.id !== visibleChatId) cancelScheduledHistory();
+    const alreadyVisible = chat.id === visibleChatId;
+    if (!alreadyVisible) cancelScheduledHistory();
     showRequests = false;
     // The desktop sidebar stays mounted while the thread changes. Preserve any
     // search input/selection made during navigation; mobile opens a new screen.
     await goto(`/chats/${chat.id}`, { reset: mobileViewport });
+    if ($page.url.pathname !== `/chats/${chat.id}`) return;
     chats.selectChat(chat.id);
     nostr.setAppLifecycleRouteChatId(chat.id);
     mobileThread = true;
-    await loadThread(chat.id);
-    await chats.markAsRead(chat.id);
+    // Commit the recipient and draft before exposing the composer. The thread
+    // effects already load history and mark it read without blocking navigation.
+    await tick();
+    // Reselecting the visible chat does not rerun the selection effect. Refresh
+    // its bounded history scan too, including newly available older replies.
+    if (alreadyVisible && visibleChatId === chat.id)
+      void prioritizeVisibleThread(chat.id).catch(fail);
   }
   async function loadContacts() {
     const revision = ++contactLoadRevision;
@@ -779,30 +789,46 @@
   async function send() {
     const chat = $state.selected;
     if (!chat || !draft.trim() || busy) return;
-    busy = true;
-    const text = serializeMentionDraft(draft, mentionProfiles);
+    const revision = ++sendRevision;
+    const originalDraft = draft;
+    const text = serializeMentionDraft(originalDraft, mentionProfiles);
     const uploadKey = uploadContext();
-    const attachments = draftAttachments(text, uploadedAttachments.get(uploadKey));
+    const uploads = uploadedAttachments.get(uploadKey);
+    const attachments = draftAttachments(text, uploads);
     const editedMessage = editing;
     const originalReply = reply;
+    // Each new message owns its delivery state. Only edits keep the composer
+    // busy; relay acknowledgements must not block the next message.
+    if (editedMessage) busy = true;
     draft = '';
-    if (!editedMessage) chats.clearComposerDraft(chat.id);
+    if (!editedMessage) {
+      chats.clearComposerDraft(chat.id);
+      reply = null;
+      uploadedAttachments.delete(uploadKey);
+    }
+    const current = () =>
+      revision === sendRevision && currentId === chat.id && uploadKey === uploadContext();
     try {
-      if (editedMessage) await messages.editMessage(chat.id, editedMessage.id, text);
-      else {
+      if (editedMessage) {
+        await messages.editMessage(chat.id, editedMessage.id, text);
+        if (current() && editing === editedMessage) finishEditing();
+      } else {
         scrollThreadToLatest(scrollArea);
         await messages.sendMessage(chat.id, text, originalReply, { attachments });
       }
-      uploadedAttachments.delete(uploadKey);
-      if (currentId === chat.id) {
-        if (editedMessage) finishEditing();
-        else reply = null;
-      }
     } catch (e) {
-      if (currentId === chat.id) draft = text;
-      fail(e);
+      // An older failure must not replace a newer draft, reply, edit or send.
+      if (current() && !draft && editing === editedMessage && (!reply || editedMessage)) {
+        draft = originalDraft;
+        if (!editedMessage) {
+          reply = originalReply;
+          if (uploads) uploadedAttachments.set(uploadKey, uploads);
+          chats.setComposerDraft(chat.id, draft);
+        }
+      }
+      if (uploadKey === uploadContext()) fail(e);
     } finally {
-      busy = false;
+      if (editedMessage) busy = false;
     }
   }
   let olderLoad: { chatId: string } | null = null;
@@ -1062,11 +1088,11 @@
             found.normalizedPubkey,
           );
       await nostr.ensureRespondedPubkeyIsContact(found.normalizedPubkey, contactName);
-      modal = '';
       if (addingInContacts) {
         await loadContacts();
         await goto(`/contacts/${found.normalizedPubkey}`);
       } else if (chat) await open(chat);
+      modal = '';
     } catch (e) {
       modalError = String(e);
     } finally {
@@ -1598,6 +1624,14 @@
                   await navigator.clipboard.writeText(nostr.encodeNpub($state.selected!.publicKey));
                 })
             : undefined}
+          oncopylink={$state.selected.type === 'user'
+            ? () =>
+                void act(async () => {
+                  await navigator.clipboard.writeText(
+                    `https://anagram.chat/chat/${nostr.encodeNpub($state.selected!.publicKey)}`,
+                  );
+                })
+            : undefined}
           onback={() => {
             mobileThread = false;
             chats.setVisibleChatId(null);
@@ -1650,7 +1684,9 @@
         {#if searching}
           {#key $state.selected.id}
             <ThreadSearch
-              onsearch={(query) => messages.searchMessages($state.selected!.id, query)}
+              paged
+              onsearch={(query, signal, before) =>
+                messages.searchMessages($state.selected!.id, query, signal, before)}
               onselect={jump}
               onclear={() => (highlightedMessage = '')}
               onclose={() => (searching = false)}

@@ -62,7 +62,7 @@ function member(value: unknown): CallRoomMember | null {
     ...(v.nameRevision !== undefined ? { nameRevision: v.nameRevision } : {}),
   };
 }
-export function parseRoomLink(input: string, now = Date.now()): CallRoomLink | null {
+function readRoomLink(input: string, now: number): CallRoomLink | null {
   try {
     if (input.length > 8192) return null;
     const token = input.includes('/call/') ? input.slice(input.lastIndexOf('/call/') + 6) : input;
@@ -78,7 +78,6 @@ export function parseRoomLink(input: string, now = Date.now()): CallRoomLink | n
       !/^[0-9a-f]{64}$/.test(v.secret) ||
       !relays ||
       !Number.isFinite(expires) ||
-      expires <= now ||
       expires > now + ROOM_LIFETIME_MS + 60_000
     )
       return null;
@@ -86,6 +85,15 @@ export function parseRoomLink(input: string, now = Date.now()): CallRoomLink | n
   } catch {
     return null;
   }
+}
+export function parseRoomLink(input: string, now = Date.now()): CallRoomLink | null {
+  const link = readRoomLink(input, now);
+  return link && Date.parse(link.expiresAt) > now ? link : null;
+}
+/** Display old invitations without accepting them for joining. */
+export function roomLinkStatus(input: string, now = Date.now()): 'active' | 'expired' | null {
+  const link = readRoomLink(input, now);
+  return link ? (Date.parse(link.expiresAt) <= now ? 'expired' : 'active') : null;
 }
 export function roomLinkToken(link: CallRoomLink): string {
   return btoa(JSON.stringify(link)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');

@@ -145,7 +145,12 @@ export const languageOptions = [
 export type LocaleCode = (typeof languageOptions)[number]['code'];
 export type TranslationParams = Record<string, string | number | boolean | null | undefined>;
 const dictionaries: Record<string, Record<string, string>> = { 'en-US': enUS };
-const catalogLoaders = import.meta.glob<{ default: Record<string, string> }>('./locales/*.json');
+// English is always loaded synchronously. Making it a dynamic entry as well can
+// split its export into a store chunk that imports this module during startup.
+const catalogLoaders = import.meta.glob<{ default: Record<string, string> }>([
+  './locales/*.json',
+  '!./locales/en-US.json',
+]);
 const catalogVersion = writable(0);
 const catalogRequests = new Map<string, Promise<void>>();
 function loadCatalog(language: string): Promise<void> {

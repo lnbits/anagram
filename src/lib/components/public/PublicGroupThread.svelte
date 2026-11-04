@@ -57,6 +57,7 @@
     sending = false,
     error = '',
     nearBottom = true;
+  let sendRevision = 0;
   let paging = false;
   let searching = false;
   let highlightedMessage = '';
@@ -366,33 +367,40 @@
     }
   }
   async function send() {
-    if (sending) return;
-    sending = true;
+    if (sending || !writable || !draft.trim()) return;
+    const revision = ++sendRevision;
     error = '';
     const originalDraft = draft;
+    const originalReply = reply;
+    const editedMessage = editing;
     const uploadKey = uploadContext();
+    const uploads = uploadedAttachments.get(uploadKey);
     const text = serializeMentionDraft(originalDraft, $mentionProfiles);
+    const current = () => revision === sendRevision && uploadKey === uploadContext();
     try {
       if (nostr.containsSessionSecret(text))
         throw new Error('This message contains your session secret.');
-      if (editing) {
-        await runtime.editMessage(editing.id, text);
-        cancelContext();
+      if (editedMessage) {
+        sending = true;
+        await runtime.editMessage(editedMessage.id, text);
+        if (current() && editing === editedMessage) cancelContext();
       } else {
-        scrollToEnd();
-        await runtime.send(
-          text,
-          draftAttachments(text, uploadedAttachments.get(uploadKey)),
-          reply?.messageId,
-        );
-        uploadedAttachments.delete(uploadKey);
-        if (draft === originalDraft) draft = '';
+        // Snapshot and release the composer before waiting for relay delivery.
+        draft = '';
         reply = null;
+        uploadedAttachments.delete(uploadKey);
+        scrollToEnd();
+        await runtime.send(text, draftAttachments(text, uploads), originalReply?.messageId);
       }
     } catch (e) {
-      error = (e as Error).message;
+      if (current() && !draft && !editing && !reply) {
+        draft = originalDraft;
+        reply = originalReply;
+        if (uploads) uploadedAttachments.set(uploadKey, uploads);
+      }
+      if (uploadKey === uploadContext()) error = (e as Error).message;
     } finally {
-      sending = false;
+      if (editedMessage) sending = false;
     }
   }
   async function share() {
@@ -434,6 +442,7 @@
       : 'Public group'}
     label="Public group settings"
     onopen={() => (details = true)}
+    oncopylink={share}
     onback={() => goto('/chats')}
   >
     {#snippet actions()}
@@ -441,9 +450,6 @@
         class="icon-button"
         aria-label="Search conversation"
         onclick={() => (searching = !searching)}><Icon name="search" /></button
-      >
-      <button class="icon-button" aria-label="Copy public group link" onclick={share}
-        ><Icon name="content_copy" /></button
       >
       <button
         class="icon-button"

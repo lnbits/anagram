@@ -9,7 +9,10 @@ use std::{
         Arc, Mutex,
     },
 };
-use tauri::{ipc::Response, State, WebviewWindow};
+use tauri::{
+    ipc::{InvokeBody, Request, Response},
+    State, WebviewWindow,
+};
 
 #[derive(Default)]
 struct Handles {
@@ -56,6 +59,80 @@ fn number(args: &Value, key: &str) -> Result<u64, String> {
 }
 fn response(value: Value) -> Response {
     Response::new(value.to_string())
+}
+
+fn call_frame(body: &InvokeBody, audio: bool) -> Result<Vec<u8>, String> {
+    let limit = if audio { 1100 } else { 1_048_576 };
+    let size = match body {
+        InvokeBody::Raw(bytes) => bytes.len(),
+        // Android's postMessage IPC serializes typed arrays as JSON arrays.
+        InvokeBody::Json(Value::Array(bytes)) => bytes.len(),
+        _ => return Err("Expected call frame bytes".into()),
+    };
+    if size == 0 || size > limit {
+        return Err("Invalid call frame size".into());
+    }
+    match body {
+        InvokeBody::Raw(bytes) => Ok(bytes.clone()),
+        InvokeBody::Json(Value::Array(bytes)) => bytes
+            .iter()
+            .map(|byte| {
+                byte.as_u64()
+                    .and_then(|n| u8::try_from(n).ok())
+                    .ok_or_else(|| "Invalid call frame byte".into())
+            })
+            .collect(),
+        _ => unreachable!(),
+    }
+}
+
+#[tauri::command]
+pub async fn iroh_call_send(
+    window: WebviewWindow,
+    state: State<'_, Calls>,
+    request: Request<'_>,
+) -> Result<(), String> {
+    if !state.authorized(window.label()) {
+        return Err("Call transport access denied".into());
+    }
+    let header = |name: &str| {
+        request
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .ok_or("Invalid call headers")
+    };
+    let session = header("x-call-session")?;
+    let id: u64 = header("x-call-connection")?
+        .parse()
+        .map_err(|_| "Invalid connection")?;
+    let audio = match header("x-call-audio")? {
+        "0" => false,
+        "1" => true,
+        _ => return Err("Invalid audio flag".into()),
+    };
+    let connection = {
+        let handles = state.handles.lock().map_err(|_| "Call state unavailable")?;
+        if session.len() != 36 || handles.session != session {
+            return Err("Expired call client session".into());
+        }
+        handles
+            .connections
+            .get(&id)
+            .map(|(_, c)| c.clone())
+            .ok_or("Unknown call connection")?
+    };
+    let data = call_frame(request.body(), audio)?;
+    if audio {
+        connection
+            .send_audio(data)
+            .map_err(|e| e.to_string())
+    } else {
+        connection
+            .send(data)
+            .await
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[tauri::command]
@@ -188,25 +265,6 @@ pub async fn iroh_call(
             .ok_or("Unknown call connection")?
     };
     match operation.as_str() {
-        "send" | "sendAudio" => {
-            let values = args["data"].as_array().ok_or("Invalid frame")?;
-            if values.len() > 1_048_576 {
-                return Err("Call frame too large".into());
-            }
-            let data = values
-                .iter()
-                .map(|v| {
-                    v.as_u64()
-                        .and_then(|n| u8::try_from(n).ok())
-                        .ok_or("Invalid byte")
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            if operation == "sendAudio" {
-                connection.send_audio(data).map_err(|e| e.to_string())?;
-            } else {
-                connection.send(data).await.map_err(|e| e.to_string())?;
-            }
-        }
         "recv" => {
             return connection
                 .recv_lane(number(&args, "lane")? as usize)
@@ -240,6 +298,30 @@ pub async fn iroh_call(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn call_frames_accept_both_ipc_encodings_with_the_same_limits() {
+        for audio in [false, true] {
+            let limit = if audio { 1100 } else { 1_048_576 };
+            for size in [0, 1, limit, limit + 1] {
+                let bytes = vec![255u8; size];
+                for body in [InvokeBody::Raw(bytes.clone()), InvokeBody::Json(json!(bytes))] {
+                    let result = call_frame(&body, audio);
+                    if size > 0 && size <= limit {
+                        assert_eq!(result.unwrap(), bytes);
+                    } else {
+                        assert!(result.is_err());
+                    }
+                }
+            }
+        }
+        for invalid in [
+            json!([256]), json!([-1]), json!([1.5]), json!([null]),
+            json!(["1"]), json!([true]), json!([[1]]), json!({"0": 1}), json!(null),
+        ] {
+            assert!(call_frame(&InvokeBody::Json(invalid), false).is_err());
+        }
+    }
 
     #[test]
     fn transport_requires_a_loaded_trusted_main_window() {

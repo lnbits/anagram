@@ -796,6 +796,7 @@
   "room.localNameHelp": "اس کال میں سب آپ کا نام دیکھتے ہیں۔ CSS صرف اس ڈیوائس پر ناموں کی شکل بدلتا ہے۔",
   "room.pasteLink": "شامل ہونے کے لیے کال کا لنک چسپاں کریں",
   "room.joinGroupCall": "گروپ کال میں شامل ہوں",
+  "room.callExpired": "کال کی مدت ختم ہو گئی",
   "room.joinAudio": "آڈیو کے ساتھ شامل ہوں",
   "room.joinVideo": "ویڈیو کے ساتھ شامل ہوں",
   "room.createAudio": "آڈیو کال شروع کریں",

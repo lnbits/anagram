@@ -65,6 +65,13 @@ for (const kind of ['dm', 'private', 'public'] as const) {
           mimeType: 'video/mp4',
         },
         { text: `https://example.org/${'x'.repeat(500)}`, label: 'https://example.org/' },
+        {
+          text: `https://anagram.chat/join/call.html#/call/${Buffer.from(JSON.stringify({
+            ...JSON.parse(Buffer.from(token, 'base64url').toString()),
+            expiresAt: new Date(Date.now() - 60000).toISOString(),
+          })).toString('base64url')}`,
+          label: 'Call expired',
+        },
       ];
       for (const [index, item] of cases.entries()) {
         if (index === 2) await page.setViewportSize({ width: 390, height: 844 });
@@ -94,6 +101,11 @@ for (const kind of ['dm', 'private', 'public'] as const) {
           { kind, chatId, item },
         );
         const source = page.locator(`[id="message-${id}"]`);
+        if (item.label === 'Call expired') {
+          await expect(source.locator('.room-link.expired')).toHaveText('Call expired');
+          await expect(source.locator('a.room-link')).toHaveCount(0);
+          await expect(source).not.toContainText(item.text);
+        }
         await source.hover();
         await source.locator('.message-content').click({ position: { x: 5, y: 5 } });
         await page.getByRole('menuitem', { name: 'Reply', exact: true }).click();
@@ -125,6 +137,7 @@ for (const kind of ['dm', 'private', 'public'] as const) {
       await page.reload();
       await expect(page.locator('.reply-preview').filter({ hasText: 'Join chat' })).toHaveCount(1);
       await expect(page.locator('.reply-preview').filter({ hasText: 'Video' })).toHaveCount(1);
+      await expect(page.locator('.room-link.expired')).toHaveCount(1);
       await page.screenshot({ path: info.outputPath(`${kind}-reply-previews.png`) });
     } finally {
       await disposeUsers(user, ...(peer ? [peer] : []));

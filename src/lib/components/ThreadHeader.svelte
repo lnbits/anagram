@@ -11,6 +11,7 @@
   export let label: string | undefined = undefined;
   export let onopen: () => void;
   export let oncopy: (() => void) | undefined = undefined;
+  export let oncopylink: (() => void) | undefined = undefined;
   export let onback: () => void;
   export let actions: Snippet | undefined = undefined;
 </script>
@@ -26,10 +27,16 @@
         ><strong>{name}</strong></button
       >
       {#if oncopy}<button
-          class="copy-npub"
+          class="identity-copy"
           aria-label="Copy npub"
           title="Copy npub"
           onclick={oncopy}><Icon name="content_copy" /></button
+        >{/if}
+      {#if oncopylink}<button
+          class="identity-copy"
+          aria-label={publicGroup ? 'Copy public group link' : 'Copy chat link'}
+          title={publicGroup ? 'Copy public group link' : 'Copy chat link'}
+          onclick={oncopylink}><Icon name="link" /></button
         >{/if}
     </div>
     <small>{subtitle}</small>
@@ -52,7 +59,7 @@
   .identity-open strong {
     display: block;
   }
-  .copy-npub {
+  .identity-copy {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -62,14 +69,14 @@
     padding: 4px;
     color: var(--nc-text-secondary);
   }
-  .copy-npub :global(svg) {
+  .identity-copy :global(svg) {
     width: 14px;
     height: 14px;
   }
-  .copy-npub:hover {
+  .identity-copy:hover {
     color: var(--q-primary);
   }
-  .copy-npub:focus-visible {
+  .identity-copy:focus-visible {
     outline: 2px solid var(--q-primary);
     outline-offset: 2px;
   }

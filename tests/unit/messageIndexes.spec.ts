@@ -91,6 +91,38 @@ it('upgrades existing history, indexes edit/reaction references and pages equal 
     await chatDataService.findDeletedMessageInSecond(peer, peer, '2026-01-01T00:00:01.000Z'),
   ).toBeNull();
   expect(getAll).not.toHaveBeenCalled();
+  const firstPage = await chatDataService.searchMessages(peer, 'existing');
+  expect(firstPage).toHaveLength(101);
+  expect(firstPage[0].id).toBe(800);
+  const nextPage = await chatDataService.searchMessages(
+    peer,
+    'existing',
+    undefined,
+    firstPage[99].id,
+  );
+  expect(nextPage[0].id).toBe(700);
+  expect(nextPage).toHaveLength(101);
+  const controller = new AbortController();
+  const batches = vi.spyOn(chatDataService, 'listLatestMessages');
+  controller.abort();
+  await expect(
+    chatDataService.searchMessages(peer, 'missing', controller.signal),
+  ).rejects.toThrow();
+  expect(batches).not.toHaveBeenCalled();
+  const duringScan = new AbortController();
+  const original = chatDataService.listLatestMessages.bind(chatDataService);
+  batches.mockRestore();
+  const scan = vi
+    .spyOn(chatDataService, 'listLatestMessages')
+    .mockImplementationOnce(async (...args) => {
+      const result = await original(...args);
+      duringScan.abort();
+      return result;
+    });
+  await expect(
+    chatDataService.searchMessages(peer, 'missing', duringScan.signal),
+  ).rejects.toThrow();
+  expect(scan).toHaveBeenCalledOnce();
 });
 
 it.each([false, true])(

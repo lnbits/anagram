@@ -4,6 +4,33 @@ import { coalesceStore } from '../../src/lib/state/coalesceStore.ts';
 
 afterEach(() => vi.useRealTimers());
 
+it('publishes recipient changes immediately while keeping same-chat hydration batched', () => {
+  vi.useFakeTimers();
+  const source = writable({ chat: 'alice', revision: 0 });
+  const seen = vi.fn();
+  const stop = coalesceStore(source, (value) => value.chat).subscribe(seen);
+  source.set({ chat: 'alice', revision: 1 });
+  source.set({ chat: 'alice', revision: 2 });
+  expect(seen).toHaveBeenCalledTimes(1);
+  source.set({ chat: 'bob', revision: 3 });
+  expect(seen.mock.calls).toEqual([
+    [{ chat: 'alice', revision: 0 }],
+    [{ chat: 'bob', revision: 3 }],
+  ]);
+  expect(vi.getTimerCount()).toBe(0);
+  source.set({ chat: 'bob', revision: 4 });
+  source.set({ chat: 'bob', revision: 5 });
+  vi.advanceTimersByTime(16);
+  expect(seen).toHaveBeenCalledTimes(3);
+  expect(seen).toHaveBeenLastCalledWith({ chat: 'bob', revision: 5 });
+  source.set({ chat: 'bob', revision: 6 });
+  source.set({ chat: 'alice', revision: 7 });
+  vi.runAllTimers();
+  expect(seen).toHaveBeenCalledTimes(4);
+  expect(seen).toHaveBeenLastCalledWith({ chat: 'alice', revision: 7 });
+  stop();
+});
+
 it('publishes initial state immediately and coalesces bursts without postponing the flush', () => {
   vi.useFakeTimers();
   const source = writable(0);

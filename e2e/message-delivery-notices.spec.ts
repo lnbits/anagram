@@ -67,10 +67,22 @@ test('relay rejection stays on the message status bar without a popup; other sen
     .poll(() => thread.evaluate((node) => node.scrollHeight - node.clientHeight - node.scrollTop))
     .toBeLessThan(2);
   await expect.poll(() => rejections.length).toBeGreaterThan(0);
+  const pendingCount = rejections.length;
+  await expect(composer).toHaveValue('');
+  await composer.fill('Send again before the first relay response');
+  await expect(page.getByTestId('message-send-button')).toBeEnabled();
+  await composer.press('Enter');
+  const second = page
+    .getByTestId('message-bubble')
+    .filter({ hasText: 'Send again before the first relay response' });
+  await expect(second).toBeVisible();
+  await expect.poll(() => rejections.length).toBeGreaterThan(pendingCount);
+  await composer.fill('Keep this newer draft');
   holdRejections = false;
   rejections.splice(0).forEach((reject) => reject());
   await expect(status.locator('.bubble__status-segment--red')).toBeVisible();
-  await expect(composer).toHaveValue('Keep the failed message visible');
+  await expect(second.locator('.bubble__status-segment--red')).toBeVisible();
+  await expect(composer).toHaveValue('Keep this newer draft');
   await expect(page.getByTestId('action-feedback')).toHaveCount(0);
   await status.click();
   const dialog = page.getByRole('dialog');
@@ -89,6 +101,7 @@ test('relay rejection stays on the message status bar without a popup; other sen
   await expect(page.getByTestId('action-feedback')).toContainText(
     'Failed to persist outbound message.',
   );
+  await expect(composer).toHaveValue('Local save failure');
   await expect(page.locator('.message-banner')).toHaveCount(0);
   await page.getByRole('button', { name: 'Dismiss message', exact: true }).click();
   await expect(page.getByTestId('action-feedback')).toHaveCount(0);

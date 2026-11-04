@@ -796,6 +796,7 @@
   "room.localNameHelp": "名前はこの通話の全員に表示されます。CSSはこの端末での名前の見た目だけを変更します。",
   "room.pasteLink": "通話リンクを貼り付けて参加",
   "room.joinGroupCall": "グループ通話に参加",
+  "room.callExpired": "通話の有効期限切れ",
   "room.joinAudio": "音声で参加",
   "room.joinVideo": "ビデオで参加",
   "room.createAudio": "音声通話を開始",

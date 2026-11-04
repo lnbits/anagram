@@ -45,10 +45,26 @@ export function followCallLive(
     // Repeated seeks make the decoder rebuffer and can add as much delay as
     // they remove. Drain modest backlog smoothly, with hysteresis so chunk
     // arrival jitter does not keep changing the rate. Pitch is preserved by
-    // the media element. A large backlog or a buffer gap still needs a seek.
-    if (lag > 0.75 || element.currentTime < start) {
+    // the media element. Only a substantial backlog or a buffer gap needs a seek.
+    let nextRange: number | undefined;
+    for (let i = 0; i <= latest; i++) {
+      if (
+        element.currentTime >= element.buffered.start(i) &&
+        element.currentTime < element.buffered.end(i)
+      )
+        break;
+      if (element.buffered.start(i) > element.currentTime) {
+        nextRange = element.buffered.start(i);
+        break;
+      }
+    }
+    if (lag > 1.5) {
       resetAudioRate(element);
       element.currentTime = Math.max(start, end - 0.2);
+    } else if (nextRange !== undefined) {
+      // Cross only an actual hole, after playing the preceding range in full.
+      resetAudioRate(element);
+      element.currentTime = nextRange;
     } else if (lag > 0.35) {
       if (!catchingUpAudio.has(element)) {
         catchingUpAudio.add(element);

@@ -125,6 +125,12 @@ test('contacts open cached details, public metadata, sharing, relay information 
     await page.setViewportSize({ width, height: 844 });
     await page.getByRole('button', { name: 'Copy npub', exact: true }).click();
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(nip19.npubEncode(peer));
+    await page.getByRole('button', { name: 'Copy chat link', exact: true }).click();
+    const chatUrl = await page.evaluate(() => navigator.clipboard.readText());
+    expect(chatUrl).toBe(`https://anagram.chat/chat/${nip19.npubEncode(peer)}`);
+    await page.goto(new URL(chatUrl).pathname);
+    await expect(page.getByTestId('chat-thread')).toHaveAttribute('data-chat-public-key', peer);
+    await expect(page.getByTestId('message-composer-input')).toBeVisible();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true,

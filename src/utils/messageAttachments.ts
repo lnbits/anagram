@@ -1,6 +1,6 @@
 import { buildMessageTextParts } from '#src/utils/messageTextParts.ts';
 import { publicGroupLinkTarget } from '#src/utils/publicGroupLink.ts';
-import { parseRoomLink } from '#src/utils/callRoom.ts';
+import { roomLinkStatus } from '#src/utils/callRoom.ts';
 import type { MessageAttachmentMetadata } from '#src/types/chat.ts';
 
 const IMETA_TAG_NAME = 'imeta';
@@ -216,7 +216,8 @@ export function buildMessageReplyPreviewContent(
     .map((part) => {
       if (part.type !== 'url') return part.text;
       if (publicGroupLinkTarget(part.href)) return 'Join chat';
-      if (parseRoomLink(part.href)) return 'Join call';
+      const call = roomLinkStatus(part.href);
+      if (call) return call === 'expired' ? 'Call expired' : 'Join call';
       const path = new URL(part.href).pathname;
       const label =
         attachments.get(part.href) ||

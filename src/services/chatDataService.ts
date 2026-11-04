@@ -959,12 +959,31 @@ class ChatDataService {
     }
   }
 
-  async searchMessages(chatPublicKey: string, query: string): Promise<MessageSearchResult[]> {
+  async searchMessages(
+    chatPublicKey: string,
+    query: string,
+    signal?: AbortSignal,
+    beforeMessageId?: number,
+  ): Promise<MessageSearchResult[]> {
     const results: MessageSearchResult[] = [];
-    if (!query.trim()) return results;
-    for await (const batch of this.messageBatches(chatPublicKey)) {
-      for (const row of batch) {
-        if (messageRecordMatchesSearchQuery(row, normalizeMessageSearchText(query), normalizeMeta))
+    const normalizedQuery = normalizeMessageSearchText(query);
+    if (!normalizedQuery) return results;
+    signal?.throwIfAborted();
+    const before = beforeMessageId ? await this.getMessageById(beforeMessageId) : null;
+    if (beforeMessageId && (!before || before.chat_public_key !== chatPublicKey)) return results;
+    let cursor: MessageCursor | undefined = before
+      ? { id: before.id, created_at: before.created_at }
+      : undefined;
+    for (;;) {
+      signal?.throwIfAborted();
+      const batch = cursor
+        ? await this.listMessagesBefore(chatPublicKey, cursor, 250)
+        : await this.listLatestMessages(chatPublicKey, 250);
+      signal?.throwIfAborted();
+      // Cursor results are chronological. Search newest first and retain one
+      // bounded page plus a sentinel telling the UI there are older matches.
+      for (const row of [...batch.rows].reverse()) {
+        if (messageRecordMatchesSearchQuery(row, normalizedQuery, normalizeMeta))
           results.push({
             id: row.id,
             chat_public_key: row.chat_public_key,
@@ -972,9 +991,13 @@ class ChatDataService {
             created_at: row.created_at,
             event_id: row.event_id,
           });
+        if (results.length === 101) return results;
       }
+      if (!batch.has_more || !batch.rows.length) return results;
+      const oldest = batch.rows[0];
+      cursor = { id: oldest.id, created_at: oldest.created_at };
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
-    return results.reverse();
   }
 
   async listLatestMessages(chatPublicKey: string, limit: number): Promise<MessageBatchResult> {

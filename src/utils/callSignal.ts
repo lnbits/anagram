@@ -96,6 +96,7 @@ export function parseCallSignal(
             mediaVersion: 2,
             ...(value.packetVideoVersion === 1 ? { packetVideoVersion: 1 } : {}),
             ...(value.packetAudioVersion === 1 ? { packetAudioVersion: 1 } : {}),
+            ...(value.mediaRecoveryVersion === 1 ? { mediaRecoveryVersion: 1 } : {}),
             ...(value.muteStateSupported === undefined
               ? {}
               : { muteStateSupported: value.muteStateSupported }),

@@ -10,6 +10,7 @@ const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const stop of cleanup.splice(0)) await stop();
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 async function setup() {
@@ -99,8 +100,9 @@ async function setup() {
 }
 
 it('counts messages with notifications off, deduplicates replicas, and persists read state', async () => {
-  // This case explicitly tests arrivals within one second, even on a slow runner.
-  vi.useFakeTimers({ toFake: ['Date'] });
+  // Keep arrivals in one second: setup's vi.waitFor advances fake timers,
+  // including a faked Date, which can otherwise move the read boundary.
+  vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 9, 21, 12, 0, 0, 950));
   const s = await setup(),
     event = s.message('hello');
   await Promise.all([

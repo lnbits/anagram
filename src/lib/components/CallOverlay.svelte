@@ -45,7 +45,9 @@
     video: calls.remoteVideoUrl,
     screen: calls.remoteScreenUrl,
     error: rooms.session ? rooms.error : calls.error || rooms.error,
-    deviceError: rooms.session ? '' : calls.deviceError,
+    deviceError: rooms.session
+      ? (rooms.participants.find((peer) => peer.deviceError)?.deviceError ?? '')
+      : calls.deviceError,
     participants: rooms.participants,
     link: rooms.shareLink,
     muted: rooms.session ? rooms.microphoneMuted : calls.session?.microphoneMuted,
@@ -688,6 +690,12 @@
         role="alert"
       >
         {$translate($state.error || $state.deviceError || outputError)}
+        {#if room && $state.deviceError}
+          {$state.participants
+            .filter((peer) => peer.deviceError)
+            .map((peer) => peer.name)
+            .join(', ')}
+        {/if}
       </div>{/if}
     {#if !ended}
       <CallControlsTray bind:this={controlsTray} bind:autoHide={autoHideControls} enabled={active}>

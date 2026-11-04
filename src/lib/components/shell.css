@@ -810,6 +810,10 @@ input[type='range'] {
   .composer {
     padding: 8px 8px max(8px, var(--app-bottom-inset, env(safe-area-inset-bottom)));
   }
+  .composer .composer-input textarea {
+    font-size: 18px;
+    line-height: 24px;
+  }
   .settings-detail {
     padding: 24px 16px;
   }

@@ -14,6 +14,14 @@ function connection(handle: number): RawConnection {
   let reason: string | undefined;
   let closed = false;
   let audio: Uint8Array[] = [];
+  const send = (data: Uint8Array, audio: boolean) =>
+    invoke<void>('iroh_call_send', data, {
+      headers: {
+        'x-call-session': clientSession,
+        'x-call-connection': String(handle),
+        'x-call-audio': audio ? '1' : '0',
+      },
+    });
   const receive = async (operation: string, args = {}) => {
     try {
       return new Uint8Array(await command<ArrayBuffer>(operation, { connection: handle, ...args }));
@@ -24,8 +32,8 @@ function connection(handle: number): RawConnection {
   };
   return {
     transportStats: () => command('stats', { connection: handle }),
-    send: (data) => command('send', { connection: handle, data: Array.from(data) }),
-    send_audio: (data) => command('sendAudio', { connection: handle, data: Array.from(data) }),
+    send: (data) => send(data, false),
+    send_audio: (data) => send(data, true),
     async recv_audio() {
       if (closed) throw new Error('Call connection closed');
       if (!audio.length) {

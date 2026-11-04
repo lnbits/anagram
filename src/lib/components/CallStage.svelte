@@ -17,7 +17,9 @@
   let popup: Window | null = null;
   let poll: ReturnType<typeof setInterval> | undefined;
   let observer: MutationObserver | undefined;
-  let stopFrames: Array<() => void> = [];
+  const copies = new Map<Node, Node>();
+  const stopFrames = new Map<Node, () => void>();
+  const observedChanges = { childList: true, subtree: true, attributes: true, characterData: true };
   export function focusWindow() {
     popup?.focus();
   }
@@ -25,7 +27,8 @@
     observer?.disconnect();
     observer = undefined;
     stopFrames.forEach((stop) => stop());
-    stopFrames = [];
+    stopFrames.clear();
+    copies.clear();
     windowOpen = false;
     popup = null;
     clearInterval(poll);
@@ -34,6 +37,8 @@
   // them to another window detaches their SourceBuffers and can end the call.
   // Mirror decoded frames instead: no second decoder, transport, or audio player.
   function mirror(source: Node, targetDocument: Document): Node {
+    const existing = copies.get(source);
+    if (existing) return existing;
     if (source instanceof HTMLVideoElement) {
       const canvas = targetDocument.createElement('canvas');
       for (const attribute of source.attributes) {
@@ -59,22 +64,26 @@
       };
       draw();
       const fallback = source.requestVideoFrameCallback ? undefined : setInterval(draw, 40);
-      stopFrames.push(() => {
+      stopFrames.set(source, () => {
         stopped = true;
         if (frame) source.cancelVideoFrameCallback(frame);
         clearInterval(fallback);
       });
+      copies.set(source, canvas);
       return canvas;
     }
     const copy = targetDocument.importNode(source, false);
+    copies.set(source, copy);
     for (const child of source.childNodes) copy.appendChild(mirror(child, targetDocument));
     if (source instanceof HTMLElement && source.shadowRoot && copy.nodeType === Node.ELEMENT_NODE) {
       const root = (copy as HTMLElement).attachShadow({ mode: 'open' });
+      copies.set(source.shadowRoot, root);
+      observer?.observe(source.shadowRoot, observedChanges);
       for (const child of source.shadowRoot.childNodes)
         root.appendChild(mirror(child, targetDocument));
       if (source.matches('[data-testid="custom-call-name"]')) {
         const fitting = fitCallName(copy as HTMLElement);
-        stopFrames.push(fitting.destroy);
+        stopFrames.set(source, fitting.destroy);
       }
     }
     return copy;
@@ -100,20 +109,47 @@
     next.document.head.appendChild(style);
     const target = next.document.createElement('main');
     next.document.body.appendChild(target);
-    const refresh = () => {
-      stopFrames.forEach((stop) => stop());
-      stopFrames = [];
-      if (stage && !next.closed) target.replaceChildren(mirror(stage, next.document));
-    };
-    refresh();
-    observer = new MutationObserver(refresh);
-    if (stage)
-      observer.observe(stage, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        characterData: true,
-      });
+    if (stage) target.replaceChildren(mirror(stage, next.document));
+    observer = new MutationObserver((records) => {
+      if (next.closed) return;
+      for (const record of records) {
+        const copy = copies.get(record.target);
+        if (!copy) continue;
+        if (record.type === 'characterData') copy.textContent = record.target.textContent;
+        if (
+          record.type === 'attributes' &&
+          record.target instanceof Element &&
+          copy.nodeType === Node.ELEMENT_NODE
+        ) {
+          const name = record.attributeName!;
+          if (name === 'style' && record.target.hasAttribute('data-call-name-design')) continue;
+          if (record.target instanceof HTMLVideoElement && ['src', 'style'].includes(name))
+            continue;
+          const value = record.target.getAttribute(name);
+          if (value === null) (copy as Element).removeAttribute(name);
+          else (copy as Element).setAttribute(name, value);
+        }
+        if (record.type === 'childList') {
+          const children = [...record.target.childNodes].map((node) => mirror(node, next.document));
+          for (const child of [...copy.childNodes]) if (!children.includes(child)) child.remove();
+          children.forEach((child, index) => {
+            if (copy.childNodes[index] !== child)
+              copy.insertBefore(child, copy.childNodes[index] ?? null);
+          });
+        }
+      }
+      for (const source of copies.keys()) {
+        const root = source.getRootNode();
+        if (stage.contains(source) || (root instanceof ShadowRoot && stage.contains(root.host)))
+          continue;
+        stopFrames.get(source)?.();
+        stopFrames.delete(source);
+        copies.delete(source);
+      }
+    });
+    if (stage) observer.observe(stage, observedChanges);
+    for (const source of copies.keys())
+      if (source instanceof ShadowRoot) observer.observe(source, observedChanges);
     windowOpen = true;
     next.addEventListener('pagehide', restore, { once: true });
     poll = setInterval(() => {

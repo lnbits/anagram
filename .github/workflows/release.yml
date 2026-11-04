@@ -64,7 +64,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e:pwa
       - name: Test messaging and browser interactions
-        run: npm run test:e2e:local -- e2e/bot-keyboards.spec.ts e2e/app.spec.ts e2e/dm-relay-discovery.spec.ts e2e/group-history.spec.ts e2e/public-groups.spec.ts e2e/message-formatting.spec.ts e2e/parity/dm/link-preview.spec.ts
+        run: npm run test:e2e:local -- e2e/bot-keyboards.spec.ts e2e/app.spec.ts e2e/composer-navigation.spec.ts e2e/native-session.spec.ts e2e/dm-relay-discovery.spec.ts e2e/group-history.spec.ts e2e/public-groups.spec.ts e2e/message-formatting.spec.ts e2e/parity/dm/link-preview.spec.ts
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -121,7 +121,7 @@ jobs:
             libx11-6 libx11-xcb1 libxcb1 libwayland-client0 libgpg-error0 libcom-err2 \
             libgmp10 libasound2 libjack-jackd2-0 \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav gstreamer1.0-tools \
-            build-essential ninja-build pkg-config bison flex python3-venv \
+            build-essential ninja-build pkg-config bison flex python3-venv patch \
             libopus-dev libvpx-dev libogg-dev libvorbis-dev libpulse-dev libasound2-dev \
             libavcodec-dev libavformat-dev libavfilter-dev libswresample-dev libswscale-dev \
             libjpeg-dev libpng-dev libtheora-dev libgudev-1.0-dev liborc-0.4-dev \
@@ -132,7 +132,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/anagram-gstreamer
-          key: gstreamer-ubuntu22-amd64-${{ hashFiles('scripts/appimage/build-gstreamer.sh', 'scripts/appimage/gstreamer.sha256') }}
+          key: gstreamer-ubuntu22-amd64-${{ hashFiles('scripts/appimage/build-gstreamer.sh', 'scripts/appimage/gstreamer.sha256', 'scripts/appimage/*.patch') }}
       - name: Build portable media runtime
         if: runner.os == 'Linux' && steps.media-cache.outputs.cache-hit != 'true'
         run: bash scripts/appimage/build-gstreamer.sh "$RUNNER_TEMP/anagram-gstreamer" "$RUNNER_TEMP/anagram-gstreamer-build"

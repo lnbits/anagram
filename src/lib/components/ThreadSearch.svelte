@@ -5,11 +5,15 @@
   export let onsearch: (
     query: string,
     signal: AbortSignal,
+    before?: string,
   ) => Promise<{ messageId: string; text: string }[]>;
   export let onselect: (id: string, signal: AbortSignal) => Promise<void>;
   export let onclose: () => void;
   export let onclear: () => void;
   export let hint = '';
+  export let paged = false;
+  let older = false;
+  let pages: (string | undefined)[] = [undefined];
   let query = '';
   let results: { messageId: string; text: string }[] = [];
   let index = -1;
@@ -37,28 +41,39 @@
       if (!signal.aborted) error = 'Could not open this message. Try again.';
     }
   }
+  async function loadPage(before?: string) {
+    cancel();
+    const { signal } = controller;
+    busy = true;
+    error = '';
+    onclear();
+    try {
+      const found = await onsearch(query, signal, before);
+      if (signal.aborted) return;
+      older = paged && found.length > 100;
+      results = paged ? found.slice(0, 100) : found;
+      index = -1;
+      busy = false;
+      if (results.length) await select(0);
+    } catch {
+      if (!signal.aborted) {
+        busy = false;
+        error = 'Could not search messages. Try again.';
+      }
+    }
+  }
   function queueSearch() {
     cancel();
     onclear();
     results = [];
     index = -1;
     error = '';
+    older = false;
+    pages = [undefined];
     busy = Boolean(query.trim());
     if (!busy) return;
-    const { signal } = controller;
-    timer = setTimeout(async () => {
-      try {
-        const found = await onsearch(query, signal);
-        if (signal.aborted) return;
-        results = found;
-        busy = false;
-        if (results.length) await select(0);
-      } catch {
-        if (!signal.aborted) {
-          busy = false;
-          error = 'Could not search messages. Try again.';
-        }
-      }
+    timer = setTimeout(() => {
+      void loadPage();
     }, 120);
   }
   function close() {
@@ -94,7 +109,7 @@
     >{busy
       ? 'Searching…'
       : results.length
-        ? `${index + 1} / ${results.length}`
+        ? `${index + 1} / ${results.length}${older ? '+' : ''}`
         : query.trim()
           ? 'No results'
           : ''}</span
@@ -115,6 +130,21 @@
     ><Icon name="close" /></button
   >
   <div class="search-results">
+    {#if paged && pages.length > 1}<button
+        disabled={busy}
+        onclick={() => {
+          pages = pages.slice(0, -1);
+          void loadPage(pages[pages.length - 1]);
+        }}>Newer matches</button
+      >{/if}
+    {#if older}<button
+        disabled={busy}
+        onclick={() => {
+          const before = results[results.length - 1].messageId;
+          pages = [...pages, before];
+          void loadPage(before);
+        }}>Older matches</button
+      >{/if}
     {#if hint}<p>{hint}</p>{/if}
     {#if error}<p role="alert" class="error">{error}</p>{/if}
     {#each results.slice(0, 30) as result, i}<button onclick={() => select(i)}>{result.text}</button

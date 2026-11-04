@@ -34,6 +34,19 @@ const connect = async () => {
   const endpoint = await createNativeCallEndpoint(['https://relay.example/']);
   return endpoint.connect('peer', 'https://relay.example/', crypto.randomUUID(), true);
 };
+it('sends media as binary IPC with the scoped session and handle', async () => {
+  const connection = await connect();
+  const frame = new Uint8Array([3, 0, 255]);
+  await connection.send(frame);
+  await connection.sendAudio!(packet(1));
+  const sends = invoke.mock.calls.filter(([command]) => command === 'iroh_call_send');
+  expect(sends).toHaveLength(2);
+  expect(sends[0][1]).toBe(frame);
+  expect(sends[0][2].headers).toMatchObject({ 'x-call-connection': '2', 'x-call-audio': '0' });
+  expect(sends[0][2].headers['x-call-session']).toHaveLength(36);
+  expect(sends[1][2].headers['x-call-audio']).toBe('1');
+  connection.close();
+});
 it('drains a bounded native audio batch without one IPC round trip per packet', async () => {
   const connection = await connect();
   for (let i = 1; i <= 4; i++) await expect(connection.recvAudio!()).resolves.toEqual(packet(i));

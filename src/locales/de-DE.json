@@ -796,6 +796,7 @@
   "room.localNameHelp": "Alle in diesem Anruf sehen deinen Namen. CSS ändert die Darstellung der Namen nur auf diesem Gerät.",
   "room.pasteLink": "Anruflink zum Beitreten einfügen",
   "room.joinGroupCall": "Gruppenanruf beitreten",
+  "room.callExpired": "Anruf abgelaufen",
   "room.joinAudio": "Mit Audio beitreten",
   "room.joinVideo": "Mit Video beitreten",
   "room.createAudio": "Audioanruf starten",

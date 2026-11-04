@@ -1,4 +1,4 @@
-import { parseRoomLink } from '#src/utils/callRoom.ts';
+import { roomLinkStatus } from '#src/utils/callRoom.ts';
 import {
   buildNostrMentionTextParts,
   type NostrMentionProfile,
@@ -46,7 +46,7 @@ function trimTrailingUrlPunctuation(candidate: string): string {
 }
 
 function buildHttpHref(value: string): string | null {
-  if (value.startsWith('anagram://room/call/')) return parseRoomLink(value) ? value : null;
+  if (value.startsWith('anagram://room/call/')) return roomLinkStatus(value) ? value : null;
   const href = /^www\./iu.test(value) ? `https://${value}` : value;
 
   try {

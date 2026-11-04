@@ -1,0 +1,18 @@
+--- a/sys/v4l2/gstv4l2deviceprovider.c
++++ b/sys/v4l2/gstv4l2deviceprovider.c
+@@ -169,6 +169,15 @@
+   if (type == GST_V4L2_DEVICE_TYPE_INVALID)
+     goto close;
+ 
++  /* WebKitGTK's camera format selector drops caps features and drm-format.
++   * Advertising DMA_DRM first therefore produces invalid system-memory caps
++   * and capture stops with not-negotiated before delivering a single frame.
++   * Advertise the camera's system-memory formats to this bundled WebKit.
++   * Keep the source element's own DMA-BUF support and sink devices unchanged.
++   */
++  if (type == GST_V4L2_DEVICE_TYPE_SOURCE)
++    v4l2obj->req_mode = GST_V4L2_IO_MMAP;
++
+   caps = gst_v4l2_object_get_caps (v4l2obj, NULL);
+ 
+   if (caps == NULL)

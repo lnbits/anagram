@@ -13,6 +13,7 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "iroh_call",
+            "iroh_call_send",
             "read_private_key",
             "write_private_key",
             "remove_private_key",

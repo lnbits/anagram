@@ -40,7 +40,7 @@ jobs:
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e:pwa
-      - run: npm run test:e2e:local -- e2e/bot-keyboards.spec.ts e2e/app.spec.ts e2e/dm-relay-discovery.spec.ts e2e/group-history.spec.ts e2e/public-groups.spec.ts e2e/message-formatting.spec.ts e2e/parity/dm/link-preview.spec.ts
+      - run: npm run test:e2e:local -- e2e/bot-keyboards.spec.ts e2e/app.spec.ts e2e/composer-navigation.spec.ts e2e/native-session.spec.ts e2e/dm-relay-discovery.spec.ts e2e/group-history.spec.ts e2e/public-groups.spec.ts e2e/message-formatting.spec.ts e2e/parity/dm/link-preview.spec.ts
       - name: Test key safety, login links, history recovery and Android call startup
         run: npm run test:e2e:local -- e2e/key-exposure.spec.ts e2e/auth-link-banner.spec.ts e2e/history-hydration.spec.ts e2e/incoming-history-recovery.spec.ts e2e/android-call-startup.spec.ts
       - uses: actions/upload-artifact@v4

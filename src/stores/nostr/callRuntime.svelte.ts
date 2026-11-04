@@ -26,6 +26,10 @@ export interface CallVideoProfile {
   cameraFrameRate: number;
   screenBitrate: number;
   screenFrameRate: number;
+  cameraWidth?: number;
+  cameraHeight?: number;
+  screenWidth?: number;
+  screenHeight?: number;
 }
 const DEFAULT_VIDEO_PROFILE: CallVideoProfile = {
   cameraBitrate: 600_000,
@@ -113,6 +117,11 @@ interface Context {
   connectingAttempt?: number;
   cameraProfile?: number;
   screenProfile?: number;
+  qualityTimer?: ReturnType<typeof setTimeout>;
+  mediaRecovery?: boolean;
+  remoteVideoError?: 'camera' | 'screen';
+  videoRetries?: Map<string, number[]>;
+  videoRetryTimers?: Map<string, ReturnType<typeof setTimeout>>;
 }
 
 export function createCallRuntime(deps: CallRuntimeDeps) {
@@ -166,6 +175,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       videoSupported: deps.supported('video'),
       screenSupported: deps.supported('video'),
       muteStateSupported: true,
+      mediaRecoveryVersion: 1,
       ...(action === 'end'
         ? { reason: reason ?? 'hangup' }
         : action === 'ringing'
@@ -188,6 +198,8 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     clearTimeout(ctx.supportTimeout);
     clearInterval(ctx.heartbeat);
     clearInterval(ctx.recoveryTimer);
+    clearTimeout(ctx.qualityTimer);
+    ctx.videoRetryTimers?.forEach(clearTimeout);
     ctx.stopRecording?.();
     ctx.stopVideoRecording?.();
     ctx.stopScreenRecording?.();
@@ -238,6 +250,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
   }
   function confirmPeer(ctx: Context, incoming: CallSignal) {
     ctx.peerConfirmed = true;
+    ctx.mediaRecovery = incoming.mediaRecoveryVersion === 1;
     ctx.multiplexed = incoming.transportVersion === 2;
     ctx.reconnectSupported = incoming.reconnectSupported === true;
     clearTimeout(ctx.supportTimeout);
@@ -396,6 +409,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       },
       {
         audioGeneration: (ctx.audioGeneration = (ctx.audioGeneration ?? 0) + 1),
+        ...(ctx.splitMedia ? { onStreamRestart: () => connection.send(new Uint8Array([4])) } : {}),
         onSendError: (cause) => {
           if (ctx.connection === connection) recover(ctx, cause);
         },
@@ -408,7 +422,12 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     const revision = ctx.linkRevision,
       stream = ctx.stream;
     const profile = deps.videoProfile?.() ?? DEFAULT_VIDEO_PROFILE;
-    await limitFrameRate(stream.getVideoTracks(), profile.cameraFrameRate);
+    await limitFrameRate(
+      stream.getVideoTracks(),
+      profile.cameraFrameRate,
+      profile.cameraWidth,
+      profile.cameraHeight,
+    );
     if (
       !alive(ctx) ||
       ctx.linkRevision !== revision ||
@@ -433,13 +452,16 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         return connection.send(frame);
       },
       () => {
-        if (ctx.connection === connection) disableCamera(ctx);
+        if (ctx.connection === connection) retryVideo(ctx, 'camera');
       },
       {
         videoBitsPerSecond: profile.cameraBitrate,
         videoFrameRate: profile.cameraFrameRate,
+        videoMaxWidth: profile.cameraWidth,
+        videoMaxHeight: profile.cameraHeight,
+        onStreamRestart: () => connection.send(new Uint8Array([5, 1])),
         onCongestion: () => {
-          if (ctx.connection === connection) disableCamera(ctx);
+          if (ctx.connection === connection) retryVideo(ctx, 'camera');
         },
         onSendError: (cause) => {
           if (ctx.connection === connection) recover(ctx, cause);
@@ -447,11 +469,20 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       },
     );
   }
-  async function limitFrameRate(tracks: MediaStreamTrack[], frameRate: number) {
+  async function limitFrameRate(
+    tracks: MediaStreamTrack[],
+    frameRate: number,
+    width?: number,
+    height?: number,
+  ) {
     await Promise.all(
       tracks.map((track) =>
         track
-          .applyConstraints?.({ frameRate: { ideal: frameRate, max: frameRate } })
+          .applyConstraints?.({
+            frameRate: { ideal: frameRate, max: frameRate },
+            ...(width ? { width: { ideal: width, max: width } } : {}),
+            ...(height ? { height: { ideal: height, max: height } } : {}),
+          })
           .catch(() => {}),
       ),
     );
@@ -467,9 +498,53 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       ctx.screenReceiver = undefined;
       remoteScreenUrl = '';
     }
+    ctx.remoteVideoError = kind;
     deviceError = kind === 'screen' ? 'call.error.screen' : 'call.error.video';
-    // Keep consuming/discarding this stream until the sender explicitly restarts
-    // it. A fresh WebM header is required; reopening a decoder mid-stream is unsafe.
+    // Request a fresh ordered header on this media lane, leaving audio alone.
+    if (ctx.mediaRecovery && allowVideoRetry(ctx, `receive:${kind}`))
+      void ctx.connection?.send(new Uint8Array([10, kind === 'camera' ? 3 : 6])).catch(() => {});
+  }
+  function allowVideoRetry(ctx: Context, key: string): boolean {
+    const now = Date.now();
+    const retries = (ctx.videoRetries ??= new Map());
+    const recent = (retries.get(key) ?? []).filter((at) => now - at < 30000);
+    if (recent.length >= 2 || (recent.length && now - recent[recent.length - 1] < 2000))
+      return false;
+    retries.set(key, [...recent, now]);
+    return true;
+  }
+  function retryVideo(ctx: Context, kind: 'camera' | 'screen') {
+    if (!alive(ctx) || !ctx.ready) return;
+    const timers = (ctx.videoRetryTimers ??= new Map());
+    if (timers.has(kind)) return;
+    ctx.remoteVideoError = undefined;
+    if (!allowVideoRetry(ctx, `send:${kind}`)) {
+      if (kind === 'camera') disableCamera(ctx);
+      else {
+        deviceError = 'call.error.screen';
+        void stopScreenSharing();
+      }
+      return;
+    }
+    if (kind === 'camera') {
+      ctx.stopVideoRecording?.();
+      ctx.stopVideoRecording = undefined;
+    } else {
+      ctx.stopScreenRecording?.();
+      ctx.stopScreenRecording = undefined;
+    }
+    deviceError = kind === 'camera' ? 'call.error.video' : 'call.error.screen';
+    const revision = ctx.linkRevision;
+    timers.set(
+      kind,
+      setTimeout(() => {
+        timers.delete(kind);
+        if (!alive(ctx) || !ctx.ready || ctx.linkRevision !== revision) return;
+        if (kind === 'camera' && ctx.stream?.getVideoTracks().length)
+          void startVideoRecording(ctx).catch(() => disableCamera(ctx));
+        if (kind === 'screen' && ctx.screenStream) void resumeScreenRecording(ctx);
+      }, 1000),
+    );
   }
   function disableCamera(ctx: Context) {
     if (!alive(ctx) || !ctx.splitMedia) return;
@@ -482,6 +557,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     if (ctx.stream) ctx.stream = new MediaStream(ctx.stream.getAudioTracks());
     localStream = ctx.stream ?? null;
     patch({ cameraMuted: true });
+    ctx.remoteVideoError = undefined;
     deviceError = 'call.error.video';
     const connection = ctx.connection;
     if (ctx.ready)
@@ -498,11 +574,16 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     const stopScreen = () => {
       if (alive(ctx) && ctx.linkRevision === revision) {
         deviceError = 'call.error.screen';
-        void stopScreenSharing();
+        retryVideo(ctx, 'screen');
       }
     };
     try {
-      await limitFrameRate(screen.getVideoTracks(), profile.screenFrameRate);
+      await limitFrameRate(
+        screen.getVideoTracks(),
+        profile.screenFrameRate,
+        profile.screenWidth,
+        profile.screenHeight,
+      );
       if (!alive(ctx) || ctx.linkRevision !== revision || ctx.screenStream !== screen) return;
       await connection.send(new Uint8Array([7, 1]));
       if (!alive(ctx) || ctx.linkRevision !== revision || ctx.screenStream !== screen) return;
@@ -518,6 +599,9 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         {
           videoBitsPerSecond: profile.screenBitrate,
           videoFrameRate: profile.screenFrameRate,
+          videoMaxWidth: profile.screenWidth,
+          videoMaxHeight: profile.screenHeight,
+          onStreamRestart: () => connection.send(new Uint8Array([7, 1])),
           onCongestion: stopScreen,
           onSendError: (cause) => {
             if (ctx.linkRevision === revision) recover(ctx, cause);
@@ -530,7 +614,14 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
   }
   async function refreshVideoQuality() {
     const ctx = context;
-    if (!ctx?.ready || ctx.changingMedia || !ctx.splitMedia) return;
+    if (!ctx?.ready || !ctx.splitMedia) return;
+    clearTimeout(ctx.qualityTimer);
+    if (ctx.changingMedia) {
+      ctx.qualityTimer = setTimeout(() => {
+        if (alive(ctx)) void refreshVideoQuality();
+      }, 150);
+      return;
+    }
     const profile = deps.videoProfile?.() ?? DEFAULT_VIDEO_PROFILE;
     const revision = ctx.linkRevision;
     ctx.changingMedia = true;
@@ -557,6 +648,9 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     }
   }
   function dropLink(ctx: Context) {
+    clearTimeout(ctx.qualityTimer);
+    ctx.videoRetryTimers?.forEach(clearTimeout);
+    ctx.videoRetryTimers?.clear();
     ctx.linkRevision++;
     ctx.ready = false;
     clearInterval(ctx.heartbeat);
@@ -707,6 +801,14 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         } else if (data[0] === 0 && data.length > 1 && ctx.ready && !ctx.packetAudio) {
           ctx.receiver?.append(data.subarray(1));
         } else if (data[0] === 3 && data.length > 1 && ctx.ready && ctx.splitMedia) {
+          if (
+            ctx.videoReceiver &&
+            ctx.remoteVideoError === 'camera' &&
+            deviceError === 'call.error.video'
+          ) {
+            ctx.remoteVideoError = undefined;
+            deviceError = '';
+          }
           ctx.videoReceiver?.append(data.subarray(1));
         } else if (data[0] === 4 && data.length === 1 && ctx.ready && ctx.splitMedia) {
           checkMediaChangeRate(ctx);
@@ -748,6 +850,14 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
           ctx.splitMedia &&
           session?.screenAvailable
         ) {
+          if (
+            ctx.screenReceiver &&
+            ctx.remoteVideoError === 'screen' &&
+            deviceError === 'call.error.screen'
+          ) {
+            ctx.remoteVideoError = undefined;
+            deviceError = '';
+          }
           ctx.screenReceiver?.append(data.subarray(1));
         } else if (
           data[0] === 7 &&
@@ -774,6 +884,15 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
               disableRemoteVideo(ctx, 'screen');
             }
           }
+        } else if (
+          data[0] === 10 &&
+          data.length === 2 &&
+          ctx.ready &&
+          ctx.mediaRecovery &&
+          (data[1] === 3 || data[1] === 6)
+        ) {
+          checkMediaChangeRate(ctx);
+          retryVideo(ctx, data[1] === 3 ? 'camera' : 'screen');
         } else if (
           data[0] === 8 &&
           data.length === 2 &&
@@ -1063,6 +1182,14 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         // load. Keep the microphone track and restart its timeline on unmute.
         context.stopRecording?.();
         context.stopRecording = undefined;
+        // Discard already-buffered speech too. This reset shares the ordered
+        // audio lane, so old frames cannot reappear after it. Unmute starts a
+        // fresh header as usual; camera and screen decoders remain untouched.
+        const ctx = context,
+          connection = ctx.connection;
+        void connection?.send(new Uint8Array([4])).catch((cause) => {
+          if (ctx.connection === connection) recover(ctx, cause);
+        });
       }
     }
     patch({ microphoneMuted: muted });
@@ -1192,6 +1319,8 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       return;
     }
     if (!ctx.ready || !deps.getCamera || !session.videoAvailable) return;
+    clearTimeout(ctx.videoRetryTimers?.get('camera'));
+    ctx.videoRetryTimers?.delete('camera');
     ctx.changingMedia = changingMedia = true;
     const revision = ctx.linkRevision;
     deviceError = '';
@@ -1254,6 +1383,8 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
   async function stopScreenSharing() {
     const ctx = context;
     if (!ctx) return;
+    clearTimeout(ctx.videoRetryTimers?.get('screen'));
+    ctx.videoRetryTimers?.delete('screen');
     const revision = ctx.linkRevision;
     ctx.screenRequest = undefined;
     ctx.stopScreenRecording?.();
@@ -1307,6 +1438,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       await resumeScreenRecording(ctx);
     } catch {
       if (alive(ctx) && ctx.screenRequest === request) {
+        ctx.remoteVideoError = undefined;
         deviceError = 'call.error.screen';
         if (ctx.screenStream) await stopScreenSharing();
       }

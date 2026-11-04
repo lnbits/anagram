@@ -6,17 +6,25 @@ export APPDIR="$appdir"
 export PATH="$appdir/usr/bin:${PATH:-/usr/bin:/bin}"
 export XDG_DATA_DIRS="$appdir/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 
+# Preserve the user's choice before generated hooks can overwrite it.
+anagram_gdk_backend="${GDK_BACKEND:-}"
+if [[ -z "$anagram_gdk_backend" ]]; then
+  if [[ -n "${WAYLAND_DISPLAY:-}" || "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
+    anagram_gdk_backend="wayland,x11"
+  else
+    anagram_gdk_backend="x11,wayland"
+  fi
+fi
+
 # Keep the GTK and GStreamer integration prepared by linuxdeploy. The hooks
 # are generated inside the AppImage.
 # shellcheck disable=SC1091
 source "$appdir/apprun-hooks/linuxdeploy-plugin-gtk.sh"
-# Napstr's released GTK hook selects X11/XWayland. Newer Tauri hooks no
-# longer do so. Keep that proven default, with native Wayland as a fallback
-# for desktops without an X server.
-export GDK_BACKEND="x11,wayland"
 export LD_LIBRARY_PATH="$appdir/usr/lib:$appdir/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 # shellcheck disable=SC1091
 source "$appdir/apprun-hooks/linuxdeploy-plugin-gstreamer.sh"
+# Native Wayland avoids the sluggish XWayland scrolling seen on Wayland desktops.
+export GDK_BACKEND="$anagram_gdk_backend"
 
 # WebKitGTK's helper paths in this AppDir are relative to usr/.
 cd "$appdir/usr"

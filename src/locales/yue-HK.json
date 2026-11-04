@@ -796,6 +796,7 @@
   "room.localNameHelp": "通話中所有人都會見到你嘅名稱。CSS 只會改變呢部裝置上名稱嘅顯示樣式。",
   "room.pasteLink": "貼上通話連結加入",
   "room.joinGroupCall": "加入群組通話",
+  "room.callExpired": "通話已過期",
   "room.joinAudio": "以語音加入",
   "room.joinVideo": "以視像加入",
   "room.createAudio": "開始語音通話",

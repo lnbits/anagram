@@ -1,4 +1,5 @@
 import { cloneCallTrack } from '#src/services/callSharedCapture.ts';
+import { roomVideoProfile } from '#src/services/callVideoProfile.ts';
 import { toStore } from 'svelte/store';
 import { untrack } from 'svelte';
 import { callCaptureErrorKey } from '#src/services/callMediaService.ts';
@@ -57,6 +58,31 @@ export function createCallRoomRuntime(deps: Deps) {
   let microphoneDeviceId = $state('');
   let cameraDeviceId = $state('');
   let error = $state('');
+  let qualityTimer: ReturnType<typeof setTimeout> | undefined;
+  async function refreshRoomVideoQuality() {
+    const profile = roomVideoProfile(session?.members.length ?? 2, Boolean(localScreenStream));
+    await Promise.all([
+      ...(localStream?.getVideoTracks() ?? []).map((track) =>
+        track
+          .applyConstraints?.({
+            width: { ideal: profile.cameraWidth, max: profile.cameraWidth },
+            height: { ideal: profile.cameraHeight, max: profile.cameraHeight },
+            frameRate: { ideal: profile.cameraFrameRate, max: profile.cameraFrameRate },
+          })
+          .catch(() => {}),
+      ),
+      ...(localScreenStream?.getVideoTracks() ?? []).map((track) =>
+        track
+          .applyConstraints?.({
+            width: { ideal: profile.screenWidth, max: profile.screenWidth },
+            height: { ideal: profile.screenHeight, max: profile.screenHeight },
+            frameRate: { ideal: profile.screenFrameRate, max: profile.screenFrameRate },
+          })
+          .catch(() => {}),
+      ),
+    ]);
+    await Promise.all(peers.map(({ runtime }) => runtime.refreshVideoQuality()));
+  }
   let peers = $state.raw<Peer[]>([]);
   let busy = $derived.by(() => Boolean(session && session.phase !== 'ended'));
   let shareLink = $derived.by(() =>
@@ -68,6 +94,7 @@ export function createCallRoomRuntime(deps: Deps) {
       phase: runtime.session?.phase ?? 'connecting',
       microphoneMuted: runtime.session?.remoteMicrophoneMuted === true,
       error: runtime.error,
+      deviceError: runtime.deviceError,
       audioUrl: runtime.remoteMediaUrl,
       videoUrl: runtime.remoteVideoUrl,
       screenUrl: runtime.remoteScreenUrl,
@@ -127,6 +154,7 @@ export function createCallRoomRuntime(deps: Deps) {
     pending = [];
     retiredSessions.clear();
     const oldPeers = peers;
+    clearTimeout(qualityTimer);
     peers = [];
     oldPeers.forEach((peer) => {
       peer.stop();
@@ -222,19 +250,7 @@ export function createCallRoomRuntime(deps: Deps) {
         // The room owns routing once; peer reconnects must not acquire/reset it.
         acquireAudioRoute: undefined,
         videoProfile: () =>
-          session && session.members.length >= 4
-            ? {
-                cameraBitrate: Math.floor(900_000 / (session.members.length - 1)),
-                cameraFrameRate: 15,
-                screenBitrate: Math.floor(1_500_000 / (session.members.length - 1)),
-                screenFrameRate: 5,
-              }
-            : {
-                cameraBitrate: 600_000,
-                cameraFrameRate: 24,
-                screenBitrate: 1_500_000,
-                screenFrameRate: 15,
-              },
+          roomVideoProfile(session?.members.length ?? 2, Boolean(localScreenStream)),
         getOwnPubkey: deps.getOwnPubkey,
         resolvePeer: async (pubkey) =>
           current(s) &&
@@ -282,7 +298,10 @@ export function createCallRoomRuntime(deps: Deps) {
       });
       if (s.own.pubkey < member.pubkey) void runtime.start(member.pubkey, 'audio');
     }
-    for (const peer of peers) void peer.runtime.refreshVideoQuality();
+    clearTimeout(qualityTimer);
+    qualityTimer = setTimeout(() => {
+      void refreshRoomVideoQuality();
+    }, 150);
     const buffered = pending;
     pending = [];
     for (const item of buffered)
@@ -597,6 +616,7 @@ export function createCallRoomRuntime(deps: Deps) {
         cameraDeviceId =
           camera.getVideoTracks()[0]?.getSettings().deviceId ?? deviceId ?? cameraDeviceId;
         cameraMuted = false;
+        await refreshRoomVideoQuality();
         previous.forEach((track) => {
           track.onended = null;
           track.stop();
@@ -667,6 +687,7 @@ export function createCallRoomRuntime(deps: Deps) {
     stopStream(localScreenStream);
     localScreenStream = null;
     await Promise.all(peers.map(({ runtime }) => runtime.stopScreenSharing()));
+    await refreshRoomVideoQuality();
   }
   async function startScreenSharing() {
     const s = session;
@@ -680,12 +701,15 @@ export function createCallRoomRuntime(deps: Deps) {
         return;
       }
       localScreenStream = screen;
+      await refreshRoomVideoQuality();
+      if (!current(s) || screenRequest !== request || localScreenStream !== screen) return;
       screen.getTracks().forEach((track) => {
         track.onended = () => {
           void stopScreenSharing();
         };
       });
       await Promise.all(peers.map(({ runtime }) => runtime.startScreenSharing()));
+      await refreshRoomVideoQuality();
     } catch {
       if (current(s) && screenRequest === request) error = 'call.error.screen';
     } finally {

@@ -25,6 +25,8 @@ function videoFrames(
   track: MediaStreamTrack,
   frameRate: number,
   sourceTrack: MediaStreamTrack,
+  maxWidth = 1920,
+  maxHeight = 1080,
 ): ReadableStreamDefaultReader<VideoFrame> {
   const Processor = processor();
   if (Processor) return new Processor({ track, maxBufferSize: 1 }).readable.getReader();
@@ -53,6 +55,9 @@ function videoFrames(
     finish = undefined;
     video.pause();
     video.srcObject = null;
+    // Reset WebKit's retained frame before this element is reused for a new
+    // quality profile or connection. Keep the element's playback permission.
+    video.load();
     video.remove();
     canvas.width = canvas.height = 0;
     idleCaptureVideos.set(sourceTrack, video);
@@ -77,7 +82,7 @@ function videoFrames(
             }
             finish = undefined;
             try {
-              const scale = Math.min(1, 1920 / video.videoWidth, 1080 / video.videoHeight);
+              const scale = Math.min(1, maxWidth / video.videoWidth, maxHeight / video.videoHeight);
               const width = Math.max(2, Math.floor(video.videoWidth * scale));
               const height = Math.max(2, Math.floor(video.videoHeight * scale));
               if (canvas.width !== width) canvas.width = width;
@@ -245,9 +250,10 @@ type Consumer = {
   needsKey: boolean;
   stopped: boolean;
   since: number;
+  slowUntil: number;
 };
 type SharedEncoder = { consumers: Set<Consumer>; stop(): void };
-const encoders = new WeakMap<MediaStreamTrack, Map<number, SharedEncoder>>();
+const encoders = new WeakMap<MediaStreamTrack, Map<string, SharedEncoder>>();
 
 export function recordPacketVideo(
   stream: MediaStream,
@@ -257,6 +263,9 @@ export function recordPacketVideo(
 ): () => void {
   const track = callCaptureTrack(stream.getVideoTracks()[0]);
   const bitrate = options?.videoBitsPerSecond ?? 600000;
+  const maxWidth = options?.videoMaxWidth ?? 1920,
+    maxHeight = options?.videoMaxHeight ?? 1080;
+  const profileKey = `${bitrate}:${options?.videoFrameRate ?? 24}:${maxWidth}:${maxHeight}`;
   let profiles = encoders.get(track);
   if (!profiles) {
     profiles = new Map();
@@ -270,15 +279,16 @@ export function recordPacketVideo(
     needsKey: true,
     stopped: false,
     since: 0,
+    slowUntil: 0,
   };
-  let shared = profiles.get(bitrate);
+  let shared = profiles.get(profileKey);
   if (!shared) {
     const consumers = new Set<Consumer>();
     const captured = track.clone();
     const processorCapture = Boolean(processor());
     let reader: ReadableStreamDefaultReader<VideoFrame>;
     try {
-      reader = videoFrames(captured, options?.videoFrameRate ?? 24, track);
+      reader = videoFrames(captured, options?.videoFrameRate ?? 24, track, maxWidth, maxHeight);
     } catch (error) {
       captured.stop();
       throw error;
@@ -288,10 +298,15 @@ export function recordPacketVideo(
       lastFrame = -Infinity;
     let currentBitrate = bitrate,
       congestedAt = 0;
+    const dimensions = (width: number, height: number) => {
+      const scale = Math.min(1, maxWidth / width, maxHeight / height);
+      return [
+        Math.max(2, Math.floor((width * scale) / 2) * 2),
+        Math.max(2, Math.floor((height * scale) / 2) * 2),
+      ];
+    };
     const settings = track.getSettings();
-    const scale = Math.min(1, 1920 / (settings.width || 640), 1080 / (settings.height || 360));
-    const width = Math.max(2, Math.floor(((settings.width || 640) * scale) / 2) * 2),
-      height = Math.max(2, Math.floor(((settings.height || 360) * scale) / 2) * 2);
+    let [width, height] = dimensions(settings.width || 640, settings.height || 360);
     const config = () => ({
       codec: 'vp8',
       width,
@@ -327,9 +342,23 @@ export function recordPacketVideo(
             void c
               .send(frame.slice())
               .then(() => {
-                if (performance.now() - c.since > 180) {
-                  congestedAt = performance.now();
-                  currentBitrate = Math.max(100000, Math.floor(currentBitrate * 0.7));
+                if (stopped || c.stopped) return;
+                const now = performance.now();
+                c.slowUntil = now - c.since > 180 ? now + 2000 : 0;
+                // A single slow peer must not lower the shared encoder for
+                // everyone. Adapt at most once a second when all peers lag.
+                if (
+                  now - congestedAt >= 1000 &&
+                  [...consumers].every(
+                    (peer) =>
+                      peer.stopped || peer.slowUntil > now || (peer.busy && now - peer.since > 180),
+                  )
+                ) {
+                  congestedAt = now;
+                  currentBitrate = Math.max(
+                    Math.min(bitrate, 200000),
+                    Math.floor(currentBitrate * 0.8),
+                  );
                 }
               })
               .catch((error) => {
@@ -382,10 +411,10 @@ export function recordPacketVideo(
             }
           })();
         encoder.close();
-        profiles!.delete(bitrate);
+        profiles!.delete(profileKey);
       },
     };
-    profiles.set(bitrate, shared);
+    profiles.set(profileKey, shared);
     void (async () => {
       let configuredBitrate = currentBitrate;
       try {
@@ -405,13 +434,21 @@ export function recordPacketVideo(
               currentBitrate = Math.min(bitrate, Math.floor(currentBitrate * 1.1));
               congestedAt = now;
             }
-            if (currentBitrate !== configuredBitrate) {
+            // Startup track settings can be missing or stale; cameras and
+            // shared screens can also change shape while capture stays live.
+            // Encoding every frame at the initial size stretches its pixels.
+            const [nextWidth, nextHeight] = dimensions(frame.displayWidth, frame.displayHeight);
+            const resized = nextWidth !== width || nextHeight !== height;
+            if (resized || currentBitrate !== configuredBitrate) {
+              width = nextWidth;
+              height = nextHeight;
               encoder.configure(config());
               configuredBitrate = currentBitrate;
             }
             const keyFrame =
+              resized ||
               now - lastKey >= 1000 ||
-              (now - lastKey >= 200 && [...consumers].some((c) => c.needsKey && !c.busy));
+              (now - lastKey >= 500 && [...consumers].some((c) => c.needsKey && !c.busy));
             if (keyFrame) lastKey = now;
             lastFrame = now;
             encoder.encode(frame, { keyFrame });

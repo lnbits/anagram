@@ -1,3 +1,4 @@
+import { rememberAccountDatabase } from '#src/utils/indexedDbStorage.ts';
 import { normalizeMessageSearchText } from '#src/utils/messageSearch.ts';
 import type { NostrEvent } from '#src/lib/nostr/client.ts';
 import type { MessageRelayStatus } from '#src/types/chat.ts';
@@ -34,6 +35,7 @@ export class PublicGroupData {
   private db: Promise<IDBDatabase>;
   constructor(account: string) {
     if (!/^[a-f0-9]{64}$/.test(account)) throw new Error('Public groups require an account.');
+    rememberAccountDatabase(`anagram-public-groups-${account}`);
     this.db = new Promise((resolve, reject) => {
       const req = indexedDB.open(`anagram-public-groups-${account}`, 5);
       req.onupgradeneeded = () => {

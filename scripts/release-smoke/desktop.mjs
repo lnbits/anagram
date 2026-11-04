@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { startRelay } from './relay.mjs';
-import { probeCallMedia } from './call-media.mjs';
+import { probeCallCamera, probeCallMedia } from './call-media.mjs';
 import { DEFAULT_RELAYS } from '../../src/constants/relays.ts';
 
 const binary = resolve(process.argv[2] || '');
@@ -279,11 +279,33 @@ try {
   assert.equal(videoVerified, true, 'packaged WebView must display a decoded video frame');
   assert.deepEqual(
     media.decoded,
-    ['audio/webm;codecs=opus', 'video/webm;codecs=vp8,opus'],
+    ['audio/webm;codecs=opus', 'video/webm;codecs=vp8'],
     `packaged WebView must record and stream call media: ${JSON.stringify(media)}`,
   );
   await execute('delete window.__callMediaSmoke');
   console.log('Passed: packaged call audio/video recording and streaming decode');
+  if (process.env.ANAGRAM_CAMERA_TEST === '1') {
+    await execute(`
+      window.__callCameraSmoke = null;
+      (${probeCallCamera.toString()})().then(result => window.__callCameraSmoke = result,
+        error => window.__callCameraSmoke = {error: String(error)});
+    `);
+    let camera;
+    await until(
+      async () => {
+        camera = await execute('return window.__callCameraSmoke');
+        return !!camera;
+      },
+      'physical camera capture',
+      30000,
+    );
+    await writeFile(`${output}/call-camera.json`, JSON.stringify(camera, null, 2));
+    assert.equal(camera.error, '', `camera capture: ${camera.error}`);
+    assert.ok(camera.frames >= 2, 'physical camera must present live preview frames');
+    assert.ok(camera.recordedBytes > 0, 'physical camera must produce outgoing video bytes');
+    await execute('delete window.__callCameraSmoke');
+    console.log('Passed: physical camera preview and recording');
+  }
   await click(testid('auth-open-key-button'));
   await fill(testid('auth-private-key-input'), relay.nsec);
   await click(testid('auth-login-button'));
@@ -338,9 +360,32 @@ try {
   if (process.env.ANAGRAM_RESOURCE_ROOT_PID) {
     const { checkLinuxIdleResources } = await import('./linux-resources.mjs');
     const rootPid = Number(process.env.ANAGRAM_RESOURCE_ROOT_PID);
-    resources = [await checkLinuxIdleResources(execute, rootPid),
-      await checkLinuxIdleResources(execute, rootPid, false)];
+    resources = [
+      await checkLinuxIdleResources(execute, rootPid),
+      await checkLinuxIdleResources(execute, rootPid, false),
+    ];
   }
+  await fill('button[aria-label="settings"]', '\uE007');
+  await click(testid('settings-logout-item'));
+  await click(testid('settings-logout-confirm'));
+  await until(() => exists(testid('auth-open-key-button')), 'packaged logout completes', 15000);
+  assert.equal(await execute('return localStorage.getItem("npub")'), null);
+  assert.equal(
+    await execute('return localStorage.getItem("nostr-chat-pending-logout-cleanup")'),
+    null,
+  );
+  const keyRemoved = await request(`/session/${session}/execute/async`, {
+    script:
+      'const done = arguments[arguments.length - 1]; window.__TAURI_INTERNALS__.invoke("read_private_key").then(key => done(key === null), () => done(false));',
+    args: [],
+  });
+  assert.equal(keyRemoved, true, 'packaged logout removed the native key');
+  await quit();
+  await open();
+  await until(
+    () => exists(testid('auth-open-key-button')),
+    'logged-out state survives process restart',
+  );
   await writeFile(
     `${output}/result.json`,
     JSON.stringify(
@@ -359,6 +404,8 @@ try {
           'reconnect',
           'cold-restart',
           'secure-relay-read',
+          'native-logout-key-removal',
+          'logged-out-cold-restart',
         ],
         relay: relay.stats,
       },
@@ -380,7 +427,7 @@ try {
   );
   if (session) {
     await execute(
-      'return {url: location.href, alerts:[...document.querySelectorAll("[role=alert]")].map(e=>e.textContent), inputs:[...document.querySelectorAll("textarea")].map(e=>({value:e.value, disabled:e.disabled}))}',
+      'return {url: location.href, session: {hasAccount: !!localStorage.getItem("npub"), authMethod: localStorage.getItem("auth-method"), pendingLogout: !!localStorage.getItem("nostr-chat-pending-logout-cleanup"), onboarding: !!localStorage.getItem("anagram-onboarding-pending")}, alerts:[...document.querySelectorAll("[role=alert]")].map(e=>e.textContent), inputs:[...document.querySelectorAll("textarea")].map(e=>({value:e.value, disabled:e.disabled}))}',
     )
       .then((data) => writeFile(`${output}/state.json`, JSON.stringify(data, null, 2)))
       .catch(() => {});

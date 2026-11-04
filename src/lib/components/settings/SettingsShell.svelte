@@ -1,6 +1,5 @@
 <script lang="ts">
   import { dismissOnBackdrop } from '#src/lib/actions/dismissOnBackdrop.ts';
-  import { disableAndroidRelayNotifications } from '#src/services/androidRelayNotificationService.ts';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
@@ -69,7 +68,6 @@
     error = '';
     try {
       if (confirmation === 'logout') {
-        await disableAndroidRelayNotifications();
         nostr.stopAppLifecycleRuntime();
         await nostr.logout();
         window.location.replace('/');
@@ -82,8 +80,11 @@
               : 'settings.forceRefreshSupportedBrowser',
           );
       }
-    } catch {
-      error = $translate(confirmation === 'logout' ? 'errors.failedLogOut' : 'common.tryAgain');
+    } catch (cause) {
+      error =
+        confirmation === 'logout' && cause instanceof Error
+          ? cause.message
+          : $translate('common.tryAgain');
     } finally {
       busy = false;
     }

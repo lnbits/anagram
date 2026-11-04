@@ -131,7 +131,7 @@ export async function hasUsableElectronPrivateKeySession(): Promise<boolean> {
     inputSanitizerService.validateNpub(localStorage.getItem(PUBLIC_KEY_STORAGE_KEY) ?? '')
       .normalizedPubkey;
   if (!storedPubkey) {
-    return false;
+    throw new Error('Saved account metadata is invalid.');
   }
 
   const authMethod = localStorage.getItem(AUTH_METHOD_STORAGE_KEY)?.trim().toLowerCase();
@@ -150,13 +150,11 @@ export async function hasUsableElectronPrivateKeySession(): Promise<boolean> {
     return true;
   }
 
-  try {
-    const securePrivateKey = await readElectronSecurePrivateKeyHex();
-    return Boolean(
-      securePrivateKey && derivePublicKeyFromPrivateKeyHex(securePrivateKey) === storedPubkey
-    );
-  } catch (error) {
-    console.warn('Failed to check Electron secure private-key storage.', error);
-    return false;
-  }
+  // A locked/unavailable credential store is not evidence of a missing key.
+  // Let startup offer a retry without clearing the account or its local data.
+  const securePrivateKey = await readElectronSecurePrivateKeyHex();
+  if (!securePrivateKey) return false;
+  if (derivePublicKeyFromPrivateKeyHex(securePrivateKey) !== storedPubkey)
+    throw new Error('Saved credential does not match the account.');
+  return true;
 }

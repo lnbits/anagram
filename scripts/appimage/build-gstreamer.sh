@@ -24,6 +24,9 @@ while read -r checksum archive; do
   fi
   (cd "$work" && printf '%s  %s\n' "$checksum" "$archive" | sha256sum --check -)
   tar -xf "$work/$archive" -C "$work"
+  if [[ "$project" == gst-plugins-good ]]; then
+    patch --batch --forward -d "$work/$project-$version" -p1 < "$script_dir/v4l2-system-memory.patch"
+  fi
   options=(-Dtests=disabled -Ddoc=disabled)
   [[ "$project" == gst-libav ]] || options+=(-Dexamples=disabled)
   case "$project" in

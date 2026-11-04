@@ -796,6 +796,7 @@
   "room.localNameHelp": "Everybody for this call go see your name. CSS only changes how names look for this device.",
   "room.pasteLink": "Paste call link to join",
   "room.joinGroupCall": "Join group call",
+  "room.callExpired": "Call don expire",
   "room.joinAudio": "Join with audio",
   "room.joinVideo": "Join with video",
   "room.createAudio": "Start audio call",

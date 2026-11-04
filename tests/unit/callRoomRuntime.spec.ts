@@ -521,7 +521,7 @@ it('keeps the room roster while a peer reconnects, and lowers video bitrate as t
   await vi.waitFor(() =>
     expect(
       h.deps.media.record.mock.calls.filter(
-        (args: any[]) => args[4]?.videoBitsPerSecond === 300_000,
+        (args: any[]) => args[4]?.videoBitsPerSecond === 400_000,
       ).length,
     ).toBe(3),
   );

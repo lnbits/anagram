@@ -1,5 +1,5 @@
-// Clones keep per-peer lifecycle/mute controls isolated. Packet encoders may
-// share the room's original source; legacy continuous WebM stays per peer.
+// Clones keep per-peer lifecycle/mute controls isolated. Encoders share the
+// room's original source; WebM consumers use ordered resets for late joins.
 const originals = new WeakMap<MediaStreamTrack, MediaStreamTrack>();
 export function cloneCallTrack(track: MediaStreamTrack): MediaStreamTrack {
   const clone = track.clone();

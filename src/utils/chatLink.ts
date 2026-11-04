@@ -4,7 +4,7 @@ import { nip19 } from '#src/lib/nostr/client.ts';
 export function chatLinkTarget(pathname: string): { pubkey: string; relays: string[] } | null {
   if (pathname.length > 8192) return null;
   try {
-    const match = /^\/chats\/([^/]+)\/?$/.exec(pathname);
+    const match = /^\/chats?\/([^/]+)\/?$/.exec(pathname);
     if (!match) return null;
     const id = decodeURIComponent(match[1]);
     if (/^[a-f0-9]{64}$/i.test(id)) return { pubkey: id.toLowerCase(), relays: [] };

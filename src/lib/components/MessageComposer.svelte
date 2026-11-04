@@ -37,6 +37,8 @@
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
   });
+  // Escape cancels a reply or edit once nothing else in the composer is open.
+  export let oncancel: (() => void) | undefined = undefined;
   function chooseUpload(types: string) {
     attachmentMenu = false;
     fileInput.accept = types;
@@ -128,6 +130,10 @@
           ':',
         );
       return;
+    }
+    if (event.key === 'Escape' && oncancel && !emoji && !attachmentMenu && !event.isComposing) {
+      event.preventDefault();
+      oncancel();
     }
   }
 </script>

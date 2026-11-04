@@ -2,17 +2,19 @@
 
 A standalone Node daemon that answers Anagram messages with the current Bitcoin price. It is based on the [Dad Jokes](../dad-jokes) example, so it works in DMs, private groups and public groups, and it talks to Anagram only through Nostr relays. No Anagram installation, browser, web server or database is needed.
 
-The folder is self-contained: its dependencies, lockfile, configuration example, Nostr helpers and [license](LICENSE) are all inside it. Copy it anywhere and run it from there.
+The folder is self-contained: its dependencies, lockfile, configuration example, Nostr helpers, Anagram's inline keyboard validator (`botKeyboardProtocol.ts`, a copy of the one in the [poll](../poll) example) and [license](LICENSE) are all inside it. Copy it anywhere and run it from there.
 
 ```text
 You: price
 Bot: BTC: $67,123 USD
+     [USD] [EUR] [GBP] [CAD]
+     [CHF] [AUD] [JPY]
 
 You: price EUR
 Bot: BTC: €58,234 EUR
 ```
 
-(The prices above are illustrative.)
+(The prices above are illustrative.) In Anagram, the reply carries one [button](#buttons) per currency; other clients see only the text.
 
 ## Install and run
 
@@ -70,6 +72,19 @@ Supported currencies are whatever the provider returns. mempool.space currently 
 
 Help is not sent in answer to replies, such as a reply to the bot or another bot's answer. This stops two bots that answer everything from messaging each other forever. Commands are always answered.
 
+## Buttons
+
+Anagram shows [inline buttons](../../docs/bot-keyboards.md) under every price reply: one small button per currency the provider returned, the default currency first, at most eight (two rows of four). The text is the same with or without buttons, so apps that do not support them simply show the price, and every button does what a command also does. A priced reply also tells Anagram which command it answers, so Anagram can collapse that command under the reply.
+
+A press is answered **privately**: the answer replaces the reply's text for that person, in that chat, without a new message or notification, and carries the same buttons, so one card can be used again and again, by everyone in a group, without filling the chat. A press gets no answer unless all of this holds:
+
+- The request is a valid, unexpired Anagram button request (encrypted `kind:21118`) for a reply this bot sent, with the button really on that reply or on the bot's own answer to that person there. The button's data names a currency the provider offered when the reply was written; it cannot name a provider, URL or anything else.
+- In a DM, the person pressing is the one the reply was sent to. In a private group, the request carries a valid invitation proof for the group's current epoch, and the answer carries the bot's. In a public group, the bot must still be trusted (or the owner) and neither party blocked.
+
+**Idempotent.** The exact encrypted answer to each request is kept (five minutes past its expiry), so when Anagram retries a request, the same answer is sent again; a reused request id with other contents is refused. After the request expires Anagram starts a new one, which is answered with a fresh price. Presses use the same price cache as commands, are not subject to `COOLDOWN_SECONDS`, and share the delivery queue's limits. If the provider is down, the answer is the stale or unavailable text, with the buttons kept so the person can try again.
+
+`state.json` keeps, per reply with buttons, the chat it was sent to, its buttons and the ids of the answers each person received, for 7 days (at most 1,000 replies, 1,000 people per reply). Answers are encrypted to the person; Anagram stores them on that device only, so another device shows the original reply and asks again.
+
 ## Caching and provider outages
 
 A successful price is reused for `PRICE_CACHE_SECONDS`. After that, the next command asks the provider again; concurrent commands share that one request.
@@ -120,7 +135,7 @@ State is saved in `/var/lib/anagram-bitcoin-price`. Run one process per data dir
 
 ## Make it your own
 
-The bot is a copy of Dad Jokes with three changes. `reply()` in **bot.js** is now `async` and may return `null` to stay silent. The handlers await it before queueing a reply, and **price.js** and **commands.js** replace the joke collection. Change `priceReply()` in **commands.js** to answer something else. Keep `reply()` from throwing, because an error in a handler stops the bot. If your bot answers every message, keep it silent for replies so it cannot loop with another bot.
+The bot is a copy of Dad Jokes with four changes. `reply()` in **bot.js** is now `async`, returns `{ text, keyboard }` (the keyboard may be `null`) and may return `null` to stay silent. The handlers await it before queueing a reply, and **price.js** and **commands.js** replace the joke collection. Change `priceReply()` in **commands.js** to answer something else. Keep `reply()` from throwing, because an error in a handler stops the bot. If your bot answers every message, keep it silent for replies so it cannot loop with another bot. Button presses arrive in `callback()` in **bot.js**; change what a press answers there, and keep the checks before it.
 
 ## Checks
 
@@ -129,7 +144,7 @@ npm run check   # syntax only, instant
 npm test        # full suite, about two minutes
 ```
 
-Tests use mocked or local providers and never contact mempool.space. They cover price parsing and validation, caching, request sharing, stale fallback, URL and private-address rules, command parsing, provider failures in DMs, private groups and public groups, and everything the Dad Jokes tests cover. When this folder is inside the Anagram repository, the optional browser test drives the real client. From the repository root, with Chromium installed:
+Tests use mocked or local providers and never contact mempool.space. They cover price parsing and validation, caching, request sharing, stale fallback, URL and private-address rules, command parsing, provider failures in DMs, private groups and public groups, buttons (cards, private answers, replays, expiry and authorization in every chat type), and everything the Dad Jokes tests cover. When this folder is inside the Anagram repository, the optional browser test drives the real client. From the repository root, with Chromium installed:
 
 ```sh
 npm run test:e2e:local -- --config bot-example/bitcoin-price/playwright.config.js

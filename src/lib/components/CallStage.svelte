@@ -13,7 +13,8 @@
   }> = [];
   export let onblocked: () => void = () => {};
   let stage: HTMLElement;
-  let windowOpen = false;
+  /** Whether the presentation window is open; read-only for the parent. */
+  export let windowOpen = false;
   let popup: Window | null = null;
   let poll: ReturnType<typeof setInterval> | undefined;
   let observer: MutationObserver | undefined;

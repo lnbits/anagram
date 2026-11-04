@@ -17,7 +17,8 @@
   export let testid = 'call-remote-audio';
   export let primary = false;
   export let activity = false;
-  export let onlevel: (value: number) => void = () => {};
+  /** Speech level while metered; null once this input is no longer metered. */
+  export let onlevel: (value: number | null) => void = () => {};
   export let onoutputerror: () => void = () => {};
   let audio: HTMLAudioElement;
   let blocked = false,
@@ -27,18 +28,28 @@
   function meter(enabled: boolean, currentUrl: string) {
     stopActivity?.();
     stopActivity = undefined;
-    onlevel(0);
+    onlevel(null);
     if (!enabled || !currentUrl || !audio) return;
+    // A registered stream belongs to the call and is never stopped here. A capture
+    // is the meter's own. Firefox's mozCaptureStream would divert playback away
+    // from the speakers, so without captureStream this input is not metered.
+    const registered = getCallStream(currentUrl);
+    let captured: MediaStream | undefined;
+    const release = () => captured?.getTracks().forEach((track) => track.stop());
     try {
-      const element = audio as HTMLAudioElement & {
-        captureStream?: () => MediaStream;
-        mozCaptureStream?: () => MediaStream;
+      captured = registered
+        ? undefined
+        : (audio as HTMLAudioElement & { captureStream?: () => MediaStream }).captureStream?.();
+      const stream = registered ?? captured;
+      if (!stream) return;
+      const stop = observeCallActivity(stream, onlevel);
+      stopActivity = () => {
+        stop();
+        release();
       };
-      const stream =
-        getCallStream(currentUrl) ?? element.captureStream?.() ?? element.mozCaptureStream?.();
-      if (stream) stopActivity = observeCallActivity(stream, onlevel);
     } catch {
       /* Audio playback is independent of activity detection. */
+      release();
     }
   }
   export async function play() {
@@ -95,7 +106,7 @@
     attempt++;
     stopActivity?.();
     stopFollowing?.();
-    onlevel(0);
+    onlevel(null);
     if (primary) registerCallAudio(null);
     audio?.pause();
     if (audio) audio.srcObject = null;

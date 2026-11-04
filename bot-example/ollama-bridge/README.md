@@ -106,6 +106,20 @@ Restart after editing `.env`. An ignored private-group invitation stays on the r
 
 In groups, mention the bot before the command: `nostr:npub1... /reset`. The model can only be changed by the operator in `.env`; there is no chat command for it. Other messages go to the model.
 
+## Buttons
+
+In Anagram, every reply carries three [inline buttons](../../docs/bot-keyboards.md): **New chat** (the same as `/reset`), **Model** (`/model`) and **Help** (`/help`). The text is the same with or without buttons, so apps that do not support them simply show the answer, and every button does what a command also does.
+
+A press is answered **privately**: the answer replaces that reply's text for that person, in that chat, without a new message or notification, and carries the buttons again. So pressing New chat in a group forgets the group's shared conversation (exactly like `/reset`) but tells only the person who pressed; others simply notice that the model has forgotten. A press gets no answer unless all of this holds:
+
+- The request is a valid, unexpired Anagram button request (encrypted `kind:21118`) for a reply this bot sent, with the button really on that reply or on the bot's own answer to that person there. The button's data is one of three fixed names; it cannot carry text for the model, a model name or anything else.
+- The same access rules as for a message: the person is in `ALLOWED_NPUBS`, the chat is allowed, and the press was made after access was granted. In a DM, the person pressing is the one the reply was sent to. In a private group, the request carries a valid invitation proof for the group's current epoch (and the answer carries the bot's). In a public group, the bot must still be trusted and neither party blocked.
+- Presses count against `MAX_REQUESTS_PER_HOUR` like messages. Over the limit, one private notice, then silence.
+
+**Idempotent.** The exact encrypted answer to each request is kept (five minutes past its expiry), so when Anagram retries a request the same answer is sent again and nothing is reset twice; a reused request id with other contents is refused. `state.json` keeps, per reply, the chat it was sent to and the ids of the answers each person received, for 7 days (at most 1,000 replies, 1,000 people per reply); answers are encrypted to the person, and Anagram stores them on that device only.
+
+There is no **Stop** button: the bot sends nothing while the model is working (a button needs a message to sit on, and an extra "working…" message would fill the chat), and in a group one person's stop would cancel a shared answer. A question in progress is simply answered; `/reset` or New chat in the meantime keeps that answer out of the history.
+
 ## Conversation memory
 
 - **Separate conversations.** Each DM partner has their own history. Each private group and each public group has one shared history (everyone in that group can see those messages anyway). Histories are never mixed, and nothing from one conversation is sent to the model in another.
@@ -194,11 +208,12 @@ Back up `state.json` while the bot is stopped: it contains the bot's **nsec** an
 
 - **ollama.js** — the Ollama HTTP client (endpoint checks, timeouts, limits). It knows nothing about Nostr.
 - **conversations.js** — bounded per-conversation memory and prompt building.
-- **commands.js** — commands, mention handling, answer formatting, user-facing errors.
+- **commands.js** — commands, mention handling, answer formatting, user-facing errors, and the button keyboard (`KEYBOARD`, `BUTTONS`).
 - **access.js / config.js** — allowlists and environment validation.
-- **bot.js** — access, limits and the generation queue in `handle()` and `generate()`; startup, outbox and relays.
+- **bot.js** — access, limits and the generation queue in `handle()` and `generate()`; button presses in `callback()`; startup, outbox and relays.
 - **direct-messages.js / private-groups.js / public-groups.js** — Nostr protocol handling (NIP-17, NIP-171, NIP-C7), the same as the dad-jokes example plus allowlist checks.
-- **runtime.js** — identity, state file, encryption and relay connections, copied from dad-jokes. The state file also stores when each allowlist entry was granted (`grants`).
+- **runtime.js** — identity, state file, encryption and relay connections, copied from dad-jokes. The state file also stores when each allowlist entry was granted (`grants`), the replies with buttons (`cards`) and the answers to presses (`callbacks`).
+- **botKeyboardProtocol.ts** — Anagram's inline keyboard validator, a copy of the one in the [poll](../poll) example and in the app.
 
 ## Checks
 

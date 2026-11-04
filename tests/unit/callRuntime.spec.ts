@@ -778,6 +778,32 @@ describe('call negotiation and lifetime', () => {
     expect(h.connection.send).toHaveBeenCalledWith(new Uint8Array([4]));
     expect(h.runtime.session?.phase).toBe('active');
   });
+  it('switches microphone before the peer confirms, so the call never sends the old input', async () => {
+    const h = setup();
+    await h.runtime.start(peer, 'audio');
+    const microphone = {
+      kind: 'audio',
+      enabled: true,
+      stop: vi.fn(),
+      onended: null,
+      getSettings: () => ({ deviceId: 'mic-2' }),
+    };
+    h.deps.getMicrophone.mockResolvedValue(
+      new MediaStream([microphone] as unknown as MediaStreamTrack[]),
+    );
+    await h.runtime.selectMicrophone('mic-2');
+    expect(h.runtime.deviceError).toBe('');
+    expect(h.microphone.stop).toHaveBeenCalledOnce();
+    expect(h.deps.record).not.toHaveBeenCalled();
+    const offer = h.deps.sendSignal.mock.calls[0]?.[1] as CallSignal;
+    await h.runtime.receiveSignal(peer, { ...offer, action: 'accept' });
+    await vi.waitFor(() => expect(h.deps.record).toHaveBeenCalled());
+    const recorded = h.deps.record.mock.calls.flatMap(([stream]) =>
+      (stream as MediaStream).getAudioTracks(),
+    );
+    expect(recorded).not.toContain(h.microphone);
+    expect(recorded).toContain(microphone);
+  });
   it('exchanges mute state only after ready and tracks remote mute changes', async () => {
     const h = setup();
     let deliver: ((frame: Uint8Array) => void) | undefined;

@@ -1,4 +1,4 @@
-import { cloneCallTrack } from '#src/services/callSharedCapture.ts';
+import { callCaptureTrack, cloneCallTrack } from '#src/services/callSharedCapture.ts';
 import { roomVideoProfile } from '#src/services/callVideoProfile.ts';
 import { toStore } from 'svelte/store';
 import { untrack } from 'svelte';
@@ -251,6 +251,10 @@ export function createCallRoomRuntime(deps: Deps) {
         acquireAudioRoute: undefined,
         videoProfile: () =>
           roomVideoProfile(session?.members.length ?? 2, Boolean(localScreenStream)),
+        // A quality refresh, deferred or not, blocks camera changes; reapply any it skipped.
+        onVideoQualityRefreshed: () => {
+          if (current(s) && peers.includes(peer)) void syncPeerMedia(runtime);
+        },
         getOwnPubkey: deps.getOwnPubkey,
         resolvePeer: async (pubkey) =>
           current(s) &&
@@ -284,11 +288,13 @@ export function createCallRoomRuntime(deps: Deps) {
           if (phase === 'incoming') {
             await runtime.accept('audio');
           }
-          if (phase === 'active' && !peer.started) {
-            peer.started = true;
-            if (runtime.session?.microphoneMuted !== microphoneMuted) runtime.toggleMicrophone();
-            if (!cameraMuted && runtime.session?.cameraMuted) await runtime.toggleCamera();
-            if (current(s) && localScreenStream) await runtime.startScreenSharing();
+          if (phase === 'active') {
+            // Every (re)activation applies controls changed while the link was down.
+            await syncPeerMedia(runtime);
+            if (!peer.started) {
+              peer.started = true;
+              if (current(s) && localScreenStream) await runtime.startScreenSharing();
+            }
           }
           if (phase === 'ended') {
             if (s.own.pubkey === s.link.host) removeMember(member.pubkey);
@@ -582,6 +588,27 @@ export function createCallRoomRuntime(deps: Deps) {
       if (runtime.session?.microphoneMuted !== microphoneMuted) runtime.toggleMicrophone();
     });
   }
+  // Idempotent: align one peer link with the room's microphone and camera controls.
+  // A busy link skips changes, so re-check after each awaited one; whoever made the
+  // link busy syncs it again when done.
+  async function syncPeerMedia(runtime: PeerRuntime) {
+    const stale = (kind: 'audio' | 'video') =>
+      runtime.localStream
+        ?.getTracks()
+        .some(
+          (track) =>
+            track.kind === kind && !localStream?.getTracks().includes(callCaptureTrack(track)),
+        );
+    for (let pass = 0; pass < 3; pass++) {
+      const media = runtime.session;
+      if (!media || !localStream) return;
+      if (media.microphoneMuted !== microphoneMuted) runtime.toggleMicrophone();
+      if (stale('audio')) await runtime.selectMicrophone(microphoneDeviceId);
+      else if (media.cameraMuted !== cameraMuted) await runtime.toggleCamera();
+      else if (!cameraMuted && stale('video')) await runtime.selectCamera(cameraDeviceId);
+      else return;
+    }
+  }
   async function selectCamera(deviceId: string) {
     if (!busy || !localStream || changingMedia) return;
     if (cameraMuted) {
@@ -631,15 +658,21 @@ export function createCallRoomRuntime(deps: Deps) {
       }
       await Promise.all(
         peers.map(({ runtime }) =>
-          runtime.session?.phase !== 'active'
+          !runtime.session
             ? undefined
-            : runtime.session.cameraMuted !== cameraMuted
-              ? runtime.toggleCamera()
-              : deviceId !== undefined && !cameraMuted
-                ? runtime.selectCamera(deviceId)
-                : undefined,
+            : runtime.session.phase !== 'active'
+              ? // A link that is down drops its camera clone now; reactivation recaptures.
+                runtime.session.cameraMuted
+                ? undefined
+                : runtime.toggleCamera()
+              : runtime.session.cameraMuted !== cameraMuted
+                ? runtime.toggleCamera()
+                : deviceId !== undefined && !cameraMuted
+                  ? runtime.selectCamera(deviceId)
+                  : undefined,
         ),
       );
+      await Promise.all(peers.map(({ runtime }) => syncPeerMedia(runtime)));
     } catch (cause) {
       camera?.getTracks().forEach((track) => {
         if (!localStream?.getTracks().includes(track)) track.stop();
@@ -675,6 +708,7 @@ export function createCallRoomRuntime(deps: Deps) {
         track.onended = null;
         track.stop();
       });
+      await Promise.all(peers.map(({ runtime }) => syncPeerMedia(runtime)));
     } catch (cause) {
       if (current(s)) error = callCaptureErrorKey(cause);
     } finally {

@@ -132,10 +132,11 @@ test('a DM reply references the request and the reply id is remembered for edits
   const { bot } = setup(t);
   const request = await sendDM(bot, alice, `issue in ${REPO}: crash`);
   const reply = last(bot, alice);
-  assert.deepEqual(reply.tags, [
+  assert.deepEqual(reply.tags.slice(0, 2), [
     ['p', getPublicKey(alice)],
     ['e', request.id, '', 'reply'],
   ]);
+  assert.equal(reply.tags[2]?.[0], 'anagram-inline-keyboard', 'draft messages carry buttons');
   assert.equal(bot.sent.get(reply.id).kind, 'draft');
   // The bot also keeps a copy for itself.
   const own = bot.state.outbox.map((item) => {

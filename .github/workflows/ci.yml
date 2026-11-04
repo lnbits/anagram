@@ -37,7 +37,7 @@ jobs:
           npm --prefix "$poll_dir" test
       - name: Test standalone GitHub issue agent bot
         run: |
-          for f in bot.js runtime.js private-groups.js public-groups.js direct-messages.js; do
+          for f in bot.js runtime.js private-groups.js public-groups.js direct-messages.js botKeyboardProtocol.ts; do
             cmp "bot-example/poll/vendor/$f" "bot-example/github-issue-agent/vendor/$f"
           done
           agent_dir="$(mktemp -d)"

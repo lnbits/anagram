@@ -1,7 +1,7 @@
 // User-facing text. Nothing here includes tokens, URLs of the bot's services, stack traces
 // or configuration beyond the repositories a user may use.
 import { nip19 } from 'nostr-tools';
-import { footer } from './drafting.js';
+import { footer, issueBody } from './drafting.js';
 
 const date = (seconds) => new Date(seconds * 1000).toISOString().slice(0, 10);
 const hours = (ms) => Math.max(1, Math.round(ms / 3600000));
@@ -58,6 +58,52 @@ export function formatDraft(draft, { now = Date.now(), revised = false } = {}) {
     `Expires in ${hours(draft.expiresAt - now)} hours.`,
   );
   return lines.join('\n');
+}
+
+// Anagram inline buttons under every draft message (see README, "Buttons"). Each does what
+// a command does, and a press is answered privately. There is no Publish button: /confirm
+// CODE, typed by the requester, stays the only way to publish.
+export const DRAFT_KEYBOARD = {
+  inline_keyboard: [
+    [
+      { text: 'Preview', callback_data: 'preview', size: 'small' },
+      { text: 'Refresh status', callback_data: 'status', size: 'small' },
+      { text: 'Cancel draft', callback_data: 'cancel', size: 'small' },
+    ],
+  ],
+};
+export const NO_KEYBOARD = { inline_keyboard: [] };
+
+// The issue exactly as /confirm would publish it (without the hidden attempt marker).
+export function previewText(draft) {
+  return [
+    `Preview of ${draft.ref}, as it would be published to ${draft.repo} (code ${draft.code}):`,
+    '',
+    `Title: ${draft.title}`,
+    '',
+    issueBody(draft, draft.ref),
+    '',
+    `/confirm ${draft.code} — publish this issue to ${draft.repo}`,
+  ].join('\n');
+}
+
+export function draftStatusText(draft, now = Date.now()) {
+  const state = draft.publishing
+    ? 'being published'
+    : draft.editing
+      ? 'being edited'
+      : `waiting for /confirm ${draft.code}`;
+  return `${draft.ref} for ${draft.repo}: draft (revision ${draft.revision}), ${state}. Expires in ${hours(draft.expiresAt - now)} hours.`;
+}
+
+export function recordStatusText(r) {
+  const where =
+    r.state === 'published' ? `${r.repo}#${r.number} ${r.url}` : `${r.repo}, ${STATUS[r.state]}`;
+  return `${r.ref}: ${where}\nTitle: ${r.title}\nUpdated ${date(r.updatedAt ?? r.createdAt)}.`;
+}
+
+export function goneText(ref, ttlMs) {
+  return `${ref} is no longer available here: drafts expire ${hours(ttlMs)} hours after creation and are forgotten when the bot restarts. Send /drafts to list yours.`;
 }
 
 export function draftList(drafts, now = Date.now()) {

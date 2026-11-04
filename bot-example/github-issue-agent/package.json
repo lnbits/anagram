@@ -11,7 +11,7 @@
     "start": "node --env-file-if-exists=.env bot.js",
     "review": "node --env-file-if-exists=.env review.js",
     "test": "node --test test/*.test.js",
-    "check": "for f in *.js vendor/*.js; do node --check \"$f\" || exit 1; done"
+    "check": "for f in *.js vendor/*.js vendor/*.ts; do node --check \"$f\" || exit 1; done"
   },
   "dependencies": {
     "nostr-tools": "2.25.2",

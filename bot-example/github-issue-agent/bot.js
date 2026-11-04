@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
-import { getPublicKey, nip19 } from 'nostr-tools';
+import { getEventHash, getPublicKey, nip19 } from 'nostr-tools';
 import {
   ConfigurationError,
   mentions,
@@ -44,24 +44,44 @@ import {
   sanitizeText,
 } from './drafting.js';
 import {
+  DRAFT_KEYBOARD,
   draftList,
+  draftStatusText,
   formatDraft,
   githubFailureText,
+  goneText,
   helpText,
   issueList,
   modelFailureText,
+  NO_KEYBOARD,
+  previewText,
   publishedText,
+  recordStatusText,
   reviewText,
   uncertainText,
   whoText,
 } from './messages.js';
 import { definitelyNotCreated, GitHubClient, keywords } from './github.js';
 import { OllamaClient } from './ollama.js';
+import {
+  BOT_CONTROL_KIND,
+  controlTag,
+  hasCallback,
+  keyboardTag,
+  parseControl,
+  targetKey,
+} from './vendor/botKeyboardProtocol.ts';
 
 const DAY = 86400;
 const HOUR = 3600;
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const LANE_LIMIT = 100; // waiting jobs per conversation
+// Draft messages with buttons (cards) are remembered so presses can be checked against them.
+const KEEP_CARDS = 7 * DAY;
+const MAX_CARDS = 1000;
+const USERS_PER_CARD = 1000;
+const VIEWS_PER_USER = 8;
+const MAX_CALLBACKS = 2000;
 const NOT_SHOWN =
   'That repository is not public, so I handle it only in a direct message. Nothing about it is shown here.';
 
@@ -126,6 +146,11 @@ export class IssueAgent extends BotTransport {
     this.modelCalls = new Map();
     this.notices = new Map();
     this.logged = new Map();
+    // state.cards[id] = { target, recipient?, ref, at, views: { [pubkey]: [answer ids] } }
+    // state.callbacks[`${pubkey}:${requestId}`] = { fingerprint, expires, delivery }
+    this.state.cards ??= {};
+    this.state.callbacks ??= {};
+    this.pressing = new Set(); // callback keys whose answer is being prepared
     this.authorize();
   }
 
@@ -541,7 +566,11 @@ export class IssueAgent extends BotTransport {
         content,
       });
       this.log(`Draft created (${request.context.type}, ${repo}).`);
-      await this.reply(request, formatDraft(draft), { kind: 'draft', code: draft.code });
+      await this.reply(request, formatDraft(draft), {
+        kind: 'draft',
+        code: draft.code,
+        ref: draft.ref,
+      });
     });
   }
 
@@ -581,7 +610,7 @@ export class IssueAgent extends BotTransport {
       await this.reply(
         request,
         `${formatDraft(draft, { revised: true })}\nThe previous code ${code} is no longer valid.`,
-        { kind: 'draft', code: draft.code },
+        { kind: 'draft', code: draft.code, ref: draft.ref },
       );
     });
     // lane() drops work while stopping or overloaded; never leave the draft locked.
@@ -845,31 +874,38 @@ export class IssueAgent extends BotTransport {
   }
 
   async reply(request, text, meta = { kind: 'other' }) {
-    const id = await this.deliverTo(request.context.conversation, request.message, text);
+    const { conversation, type } = request.context;
+    // Draft messages are cards: they carry the buttons and are remembered for presses.
+    const card = meta.kind === 'draft';
+    const tags = card ? [keyboardTag(DRAFT_KEYBOARD)] : [];
+    const id = await this.deliverTo(conversation, request.message, text, tags);
     if (id) {
-      this.sent.set(id, { ...meta, conversation: request.context.conversation });
+      this.sent.set(id, { ...meta, conversation });
       bound(this.sent, 5000);
+      if (card) {
+        this.remember({
+          root: id,
+          type,
+          chat: type === 'dm' ? this.pubkey : conversation.slice(type.length + 1),
+          recipient: type === 'dm' ? request.sender : undefined,
+          ref: meta.ref,
+        });
+        this.save();
+      }
     }
     return id;
   }
 
   // Signs the reply into the outbox for one conversation. Returns the reply's id, which the
   // person's client references when replying to it.
-  async deliverTo(conversation, message, text) {
+  async deliverTo(conversation, message, text, tags = []) {
     const split = conversation.indexOf(':');
     const type = conversation.slice(0, split);
     const target = conversation.slice(split + 1);
     if (type === 'dm') {
       // NIP-17, wrapped for the person and for the bot itself (its other clients).
       const relays = await this.inbox(target);
-      const reply = rumor(
-        this.key,
-        [
-          ['p', target],
-          ['e', message.id, '', 'reply'],
-        ],
-        text,
-      );
+      const reply = rumor(this.key, [['p', target], ['e', message.id, '', 'reply'], ...tags], text);
       this.queue(message, [
         { event: wrap(reply, this.key, target), relays },
         { event: wrap(reply, this.key, this.pubkey), relays: this.relays },
@@ -890,6 +926,7 @@ export class IssueAgent extends BotTransport {
           ['invited_at', String(epoch.ticket.created_at)],
           ['invitation_proof', epoch.ticket.sig],
           ['e', message.id, '', 'reply'],
+          ...tags,
         ],
         text,
       );
@@ -911,16 +948,211 @@ export class IssueAgent extends BotTransport {
       const reply = sign(
         this.key,
         9,
-        [
-          ['a', target],
-          ['q', message.id, '', message.pubkey],
-        ],
+        [['a', target], ['q', message.id, '', message.pubkey], ...tags],
         text,
       );
       this.queue(message, [{ event: reply, relays: room.relays, room: target }]);
       return reply.id;
     }
     return undefined;
+  }
+
+  // ---- Buttons ---------------------------------------------------------------------------
+  // A press arrives as an encrypted kind 21118 request in the bot's own inbox and is
+  // answered privately, in place of the draft message's text for that person only. Preview
+  // and Refresh status read; Cancel draft does what /cancel does. Nothing here publishes.
+
+  // Remembers a draft message, so a press can be checked against the card it is on.
+  remember({ root, type, chat, recipient, ref }) {
+    const cards = this.state.cards;
+    for (const [id, card] of Object.entries(cards))
+      if (card.at < now() - KEEP_CARDS) delete cards[id];
+    const ids = Object.keys(cards);
+    if (ids.length >= MAX_CARDS)
+      delete cards[ids.reduce((a, b) => (cards[a].at <= cards[b].at ? a : b))];
+    cards[root] = {
+      target: { type, chat, root, version: root, bot: this.pubkey },
+      ...(recipient ? { recipient } : {}),
+      ref,
+      at: now(),
+      views: {},
+    };
+  }
+
+  // Protocol checks follow docs/bot-keyboards.md: author, conversation, card version,
+  // expiry, group membership, allowed chat, and that the button is really on the card.
+  // Then the same access rules as for a message. The answer itself is prepared in the
+  // conversation's lane (see press()), where /confirm and /cancel run too.
+  async callback(message) {
+    const request = parseControl(message.tags),
+      time = now();
+    if (
+      request?.op !== 'request' ||
+      single(message, 'p') !== this.pubkey ||
+      message.pubkey === this.pubkey ||
+      message.content !== '' ||
+      request.target.bot !== this.pubkey ||
+      request.expires <= time ||
+      request.expires > message.created_at + 300 ||
+      message.created_at > time + 60 ||
+      message.created_at < time - 300 ||
+      this.state.outbox.length >= 1000 ||
+      Object.values(this.state.groups).some((g) => g.pubkey === message.pubkey)
+    )
+      return;
+    const card = this.state.cards[request.target.root];
+    if (!card || targetKey(card.target) !== targetKey(request.target)) return;
+    const { type, chat } = card.target;
+    const conversation = `${type}:${type === 'dm' ? message.pubkey : chat}`;
+    let membership;
+    if (type === 'dm' && card.recipient !== message.pubkey) return;
+    if (type === 'public') {
+      const saved = this.state.rooms[chat];
+      const room = saved && parseRoom(saved.event);
+      if (
+        !room ||
+        !this.access.publicGroup(chat) ||
+        room.blocked.includes(message.pubkey) ||
+        room.blocked.includes(this.pubkey) ||
+        (!saved.explicit && !room.trusted.includes(this.pubkey))
+      )
+        return;
+    }
+    if (type === 'private') {
+      const epoch = this.state.groups[chat],
+        proof = request.membership;
+      if (
+        !epoch ||
+        epoch.conflict ||
+        !this.access.privateGroup(chat) ||
+        !proof ||
+        proof.epoch !== epoch.epoch ||
+        !authorized(
+          {
+            ...message,
+            kind: 14,
+            tags: [
+              ['p', epoch.pubkey],
+              ['h', chat],
+              ['epoch', String(proof.epoch)],
+              ['invited_at', String(proof.invited_at)],
+              ['invitation_proof', proof.invitation_proof],
+            ],
+          },
+          chat,
+          epoch,
+        )
+      )
+        return;
+      membership = {
+        epoch: epoch.epoch,
+        invited_at: epoch.ticket.created_at,
+        invitation_proof: epoch.ticket.sig,
+      };
+    }
+    // Strangers get nothing and leave nothing on disk, exactly like their messages.
+    if (!this.access.sender(message.pubkey)) return this.ignoredSender(message.pubkey);
+    if (!this.allowedWhenWritten(message, { type, conversation })) return;
+    // A retried request gets the exact stored answer; a reused id with other contents gets
+    // nothing. Anagram retries for five minutes, then starts a new request.
+    for (const [id, value] of Object.entries(this.state.callbacks))
+      if (value.expires < time - 300) delete this.state.callbacks[id];
+    const cacheKey = `${message.pubkey}:${request.id}`;
+    const cached = this.state.callbacks[cacheKey];
+    if (cached) {
+      if (cached.fingerprint !== message.id) return;
+      if (!this.state.outbox.some((item) => item.event.id === cached.delivery.event.id)) {
+        this.state.outbox.push({ ...cached.delivery, queuedAt: time });
+        this.save();
+      }
+      return;
+    }
+    if (this.pressing.has(cacheKey) || Object.keys(this.state.callbacks).length >= MAX_CALLBACKS)
+      return;
+    const views = card.views[message.pubkey];
+    if (!views && Object.keys(card.views).length >= USERS_PER_CARD) return;
+    // Every answer carries the keyboard again, so a press from a personal view is valid
+    // only if that view is one of the bot's own answers to this person on this card.
+    if (request.view && !views?.includes(request.view)) return;
+    if (!hasCallback(DRAFT_KEYBOARD, request.data)) return;
+    if (!this.allow(this.requests, message.pubkey, this.limits.requestsPerHour)) return;
+    this.pressing.add(cacheKey);
+    const queued = this.lane(conversation, () =>
+      this.press({ message, request, card, membership, cacheKey, type, conversation }).finally(() =>
+        this.pressing.delete(cacheKey),
+      ),
+    );
+    if (!queued) this.pressing.delete(cacheKey);
+  }
+
+  async press({ message, request, card, membership, cacheKey, type, conversation }) {
+    if (this.stopped) return;
+    const sender = message.pubkey;
+    const draft = this.drafts.findByRef(card.ref);
+    const owned = draft?.conversation === conversation ? draft : undefined;
+    const record = this.issues.inConversation(card.ref, conversation);
+    const repo = owned?.repo ?? record?.repo;
+    let text,
+      keyboard = DRAFT_KEYBOARD;
+    // Groups never learn about repositories that are not public (see visibleNow()).
+    if (repo && !(await this.visibleNow([repo], { context: { type } })).has(repo)) text = NOT_SHOWN;
+    else if (request.data === 'preview')
+      text = owned
+        ? previewText(owned)
+        : record
+          ? recordStatusText(record)
+          : goneText(card.ref, this.drafts.ttlMs);
+    else if (request.data === 'status')
+      text = owned
+        ? draftStatusText(owned)
+        : record
+          ? recordStatusText(record)
+          : goneText(card.ref, this.drafts.ttlMs);
+    else if (!owned)
+      text = record
+        ? record.state === 'published'
+          ? `Draft ${record.code} was already published as ${record.ref}${type === 'dm' ? `: ${record.url}` : ''}. Nothing was changed.`
+          : record.state === 'publishing'
+            ? `${record.ref} is already being published. Please wait for the result.`
+            : record.state === 'review'
+              ? reviewText(record)
+              : goneText(card.ref, this.drafts.ttlMs)
+        : goneText(card.ref, this.drafts.ttlMs);
+    else if (owned.requester !== sender)
+      text = `Only the person who requested draft ${owned.code} can cancel it.`;
+    else if (owned.publishing) text = `${owned.ref} is already being published.`;
+    else {
+      // Exactly what /cancel CODE does, checked in the conversation's lane like /cancel.
+      this.drafts.remove(owned);
+      this.log(`Draft cancelled (${type}, ${owned.repo}).`);
+      text = `Cancelled draft ${owned.ref} (code ${owned.code}).`;
+      keyboard = NO_KEYBOARD;
+    }
+    const answer = {
+      op: 'answer',
+      id: request.id,
+      target: request.target,
+      expires: request.expires,
+      ...(membership ? { membership } : {}),
+    };
+    const response = {
+      ...rumor(this.key, [['p', sender], controlTag(answer), keyboardTag(keyboard)], text),
+      kind: BOT_CONTROL_KIND,
+    };
+    response.id = getEventHash(response);
+    const relays = await this.inbox(sender);
+    if (this.stopped) return;
+    const delivery = { event: wrap(response, this.key, sender), relays };
+    // The answer, the replay marker and the view commit together, before publishing.
+    (card.views[sender] ??= []).push(response.id);
+    if (card.views[sender].length > VIEWS_PER_USER) card.views[sender].shift();
+    this.state.callbacks[cacheKey] = {
+      expires: request.expires,
+      fingerprint: message.id,
+      delivery,
+    };
+    this.state.outbox.push({ ...delivery, queuedAt: now() });
+    this.save();
   }
 
   // ---- Bookkeeping -----------------------------------------------------------------------
@@ -1004,6 +1236,7 @@ export class IssueAgent extends BotTransport {
       const opened = unwrap(event, key);
       if (!opened) return;
       if (group) await this.privateMessage(opened.message, group, getPublicKey(key));
+      else if (opened.message.kind === BOT_CONTROL_KIND) await this.callback(opened.message);
       else await this.directMessage(opened.message, opened.seal);
     });
   }

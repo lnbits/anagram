@@ -45,7 +45,10 @@ textarea:focus {
   border-color: var(--q-primary);
 }
 button:focus-visible,
-a:focus-visible {
+a:focus-visible,
+select:focus-visible,
+.search-box input:focus-visible {
+  /* Selects and the borderless contacts filter show no border change on focus. */
   outline: 2px solid var(--q-primary);
   outline-offset: 2px;
 }

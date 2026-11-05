@@ -4,7 +4,7 @@
 // crash. Output is counts and ids only, never a key.
 //
 //   npm run keyring -- init | list | rotate | retire <kid> [--after-retention]
-//   npm run migrate -- <wallets.json> [--relink-disconnected]
+//   npm run migrate -- <wallets.json> [--relink-disconnected] [--unchecked]
 //   npm run rollback -- <new wallets.json> [--revoke-unrepresentable]
 //   npm run backup [-- <folder>]
 //   npm run restore -- <backup folder> [--lost-ledger]
@@ -26,9 +26,10 @@ import { createHash, randomBytes } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { nip19 } from 'nostr-tools';
-import { lnbitsURL } from './config.js';
+import { lnbitsTimeoutMs, lnbitsURL } from './config.js';
 import { Keyring, KeyringError, credentialAAD, writeAtomic } from './keyring.js';
 import { Ledger, LedgerError, ledgerFile } from './ledger.js';
+import { LNbitsClient, LNbitsError } from './lnbits.js';
 import { Registry, seal } from './registry.js';
 import { DB_FILE, newId, Store, StoreError } from './store.js';
 import { ConfigurationError, State } from './vendor/runtime.js';
@@ -67,6 +68,9 @@ export class Tools {
     retentionDays = 30,
     log = console.log,
     nsec = '',
+    timeoutMs = 10000,
+    // Asks LNbits about one invoice key, as the bot does at startup (LNbitsClient.wallet()).
+    checkKey,
   }) {
     this.dataDir = dataDir;
     this.secretsDir = secretsDir;
@@ -78,6 +82,15 @@ export class Tools {
     this.database = join(dataDir, DB_FILE);
     this.temporary = `${this.database}.tmp`;
     this.backups = join(dataDir, 'backups');
+    this.checkKey =
+      checkKey ??
+      ((key) => {
+        this.client ??= new LNbitsClient({
+          url: lnbitsURL(this.lnbitsUrl, this.allowHttp),
+          timeoutMs,
+        });
+        return this.client.wallet(key);
+      });
   }
   needSecrets() {
     if (!this.secretsDir) throw new ConfigurationError('Set SECRETS_DIR (see the README).');
@@ -87,6 +100,14 @@ export class Tools {
     const state = new State(this.dataDir, { nsec: this.nsec });
     try {
       return work(state);
+    } finally {
+      state.close();
+    }
+  }
+  async lockedAsync(work) {
+    const state = new State(this.dataDir, { nsec: this.nsec });
+    try {
+      return await work(state);
     } finally {
       state.close();
     }
@@ -196,27 +217,39 @@ export class Tools {
 
   // ---- Migration and rollback ------------------------------------------------------------
 
-  migrate(walletsFile, { relinkDisconnected = false } = {}) {
+  // Every key is checked with LNbits first, while nothing has been written yet (checkKeys).
+  async migrate(walletsFile, { relinkDisconnected = false, unchecked = false } = {}) {
     this.needSecrets();
     if (!walletsFile) throw new ConfigurationError('Name the wallets.json to migrate.');
-    return this.locked((state) => {
+    return this.lockedAsync(async (state) => {
       if (existsSync(this.database)) {
-        if (relinkDisconnected) return this.#relink(state, walletsFile);
+        if (relinkDisconnected) return this.#relink(state, walletsFile, unchecked);
         throw new ConfigurationError('Already migrated: connections.db exists.');
       }
       const origin = lnbitsURL(this.lnbitsUrl, this.allowHttp);
       const keyring = Keyring.load(this.secretsDir, { dataDir: this.dataDir });
       const wallets = loadWallets(walletsFile);
-      const ledger = existsSync(ledgerFile(this.secretsDir))
+      // Opening reads only. Wallets skipped below as disconnected are not asked about: a key
+      // reset in LNbits after its disconnect must not hold up everyone else.
+      const known = existsSync(ledgerFile(this.secretsDir))
         ? Ledger.open(this.secretsDir, keyring)
-        : Ledger.create(this.secretsDir, keyring, newId());
+        : undefined;
+      const skips = (owner) =>
+        !relinkDisconnected && Boolean(known?.refs.has(walletRef(owner, wallets.keyFor(owner))));
+      await this.#checkKeys(
+        wallets,
+        wallets.owners().filter((owner) => !skips(owner)),
+        unchecked,
+      );
+      const ledger = known ?? Ledger.create(this.secretsDir, keyring, newId());
       if (existsSync(this.temporary)) rmSync(this.temporary); // an interrupted earlier run
       for (const suffix of ['-wal', '-shm'])
         if (existsSync(this.temporary + suffix)) rmSync(this.temporary + suffix);
 
+      // wallets.json itself is not copied: migrate leaves it as it is, and a copy here would be
+      // one more plaintext file of keys, inside DATA_DIR and its backups.
       const folder = this.backupFolder('pre-migrate');
       this.copyPrivate(state.file, folder, 'state.json');
-      this.copyPrivate(walletsFile, folder, 'wallets.json');
       this.manifest(folder, undefined, { kind: 'pre-migrate' });
 
       const store = Store.create(this.temporary, { storeId: ledger.storeId });
@@ -232,7 +265,7 @@ export class Tools {
           // unless the operator says so, and even then its old menus stay dead. Otherwise M6
           // menus and notification state carry over.
           const disconnected = ledger.refs.has(m6);
-          if (disconnected && !relinkDisconnected) {
+          if (skips(owner)) {
             skipped++;
             continue;
           }
@@ -290,20 +323,73 @@ export class Tools {
       this.log(
         `Migrated ${count} wallet link(s). Backup: ${folder}. Now unset WALLETS_FILE and start the bot.`,
       );
-      this.log('That backup holds wallets.json in the clear: delete it once this has run well.');
+      this.log(
+        `${walletsFile} still holds every key in the clear: delete it once this has run well.`,
+      );
       return count;
     });
+  }
+  // An admin key can spend, so it is never stored: one in the file stops the migration. A key
+  // LNbits cannot vouch for (unreachable, rejected) stops it too, unless unchecked: it is then
+  // stored, and the bot checks it at every start, switching off an admin key as before.
+  // owners: those whose key would be stored.
+  async #checkKeys(wallets, owners, unchecked) {
+    const failed = [];
+    // A few at a time, like the LNbits client's own request slots.
+    for (let i = 0; i < owners.length; i += 4)
+      await Promise.all(
+        owners.slice(i, i + 4).map(async (owner) => {
+          try {
+            await this.checkKey(wallets.keyFor(owner));
+          } catch (error) {
+            if (!(error instanceof LNbitsError)) throw error;
+            failed.push({ owner, code: error.code });
+          }
+        }),
+      );
+    const admin = failed.filter((f) => f.code === 'admin_key');
+    if (admin.length)
+      throw new ConfigurationError(
+        `Nothing was migrated: LNbits reports an admin key, which can spend, for ${admin.map((f) => nip19.npubEncode(f.owner)).join(', ')}. Put that wallet's invoice key in the file instead.`,
+      );
+    if (!failed.length) return;
+    const codes = [...new Set(failed.map((f) => f.code))].join(', ');
+    if (!unchecked)
+      throw new ConfigurationError(
+        `Nothing was migrated: LNbits did not confirm ${failed.length} key(s) (${codes}). Check LNBITS_URL and that LNbits is running. To migrate them anyway, run again with --unchecked: the bot checks them at every start.`,
+      );
+    this.log(
+      `Migrating ${failed.length} key(s) LNbits did not confirm (${codes}): the bot checks them at every start.`,
+    );
   }
   // Links operator wallets again in an existing database, as after recover-ledger. Each is a new
   // link: a wallet that was disconnected gets a new ref, so its old menus stay dead, and old
   // messages stay unanswered. A wallet that is connected to anyone is left as it is.
-  #relink(state, walletsFile) {
+  async #relink(state, walletsFile, unchecked) {
     const origin = lnbitsURL(this.lnbitsUrl, this.allowHttp);
     const keyring = Keyring.load(this.secretsDir, { dataDir: this.dataDir });
     const wallets = loadWallets(walletsFile);
     const store = new Store(this.database);
     try {
       const ledger = Ledger.open(this.secretsDir, keyring, { storeId: store.getMeta('store_id') });
+      // Wallets connected already are left as they are below, so only the others are asked about.
+      const connected = (owner) => {
+        try {
+          store.checkConnect({
+            owner,
+            fingerprint: keyring.fingerprint(origin, wallets.keyFor(owner)),
+          });
+          return false;
+        } catch (error) {
+          if (!(error instanceof StoreError) || error.code !== 'duplicate') throw error;
+          return true;
+        }
+      };
+      await this.#checkKeys(
+        wallets,
+        wallets.owners().filter((owner) => !connected(owner)),
+        unchecked,
+      );
       const folder = this.backupFolder('pre-relink');
       store.backupTo(join(folder, DB_FILE));
       this.copyPrivate(state.file, folder, 'state.json');
@@ -702,6 +788,7 @@ function fromEnv(env) {
     allowHttp: ['true', '1', 'yes'].includes((env.LNBITS_ALLOW_HTTP ?? '').trim().toLowerCase()),
     retentionDays: Number(env.BACKUP_RETENTION_DAYS) || 30,
     nsec: env.NSEC ?? '',
+    timeoutMs: lnbitsTimeoutMs(env),
   });
 }
 
@@ -717,7 +804,10 @@ export function run(args, env = process.env) {
       return tools.retire(rest[0], { afterRetention: flag('--after-retention') });
   }
   if (tool === 'migrate')
-    return tools.migrate(action, { relinkDisconnected: flag('--relink-disconnected') });
+    return tools.migrate(action, {
+      relinkDisconnected: flag('--relink-disconnected'),
+      unchecked: flag('--unchecked'),
+    });
   if (tool === 'rollback')
     return tools.rollback(action, { revokeUnrepresentable: flag('--revoke-unrepresentable') });
   if (tool === 'backup') return tools.backup(action);
@@ -734,14 +824,15 @@ export function run(args, env = process.env) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   process.umask(0o077);
-  try {
-    run(process.argv.slice(2));
-  } catch (error) {
-    const known =
-      error instanceof ConfigurationError ||
-      error instanceof KeyringError ||
-      error instanceof LedgerError;
-    console.error(known ? error.message : `Failed: ${error.message}`);
-    process.exitCode = 1;
-  }
+  // migrate is asynchronous (it asks LNbits); the other tools are not.
+  Promise.resolve()
+    .then(() => run(process.argv.slice(2)))
+    .catch((error) => {
+      const known =
+        error instanceof ConfigurationError ||
+        error instanceof KeyringError ||
+        error instanceof LedgerError;
+      console.error(known ? error.message : `Failed: ${error.message}`);
+      process.exitCode = 1;
+    });
 }

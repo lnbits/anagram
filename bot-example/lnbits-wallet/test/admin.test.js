@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -15,8 +16,10 @@ import {
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getPublicKey, nip19 } from 'nostr-tools';
-import { Tools } from '../admin.js';
+import { run, Tools } from '../admin.js';
 import { Keyring } from '../keyring.js';
+import { LNbitsError } from '../lnbits.js';
+import { plaintextCopies } from '../bot.js';
 import { Ledger, ledgerFile } from '../ledger.js';
 import { Registry } from '../registry.js';
 import { DB_FILE, Store } from '../store.js';
@@ -34,7 +37,19 @@ function fixture(t) {
   const dataDir = join(root, 'data');
   const secretsDir = join(root, 'secrets');
   const logs = [];
-  const tools = new Tools({ dataDir, secretsDir, lnbitsUrl: URL_, log: (l) => logs.push(l) });
+  // What LNbits says about each key during migrate: an error code, or nothing for a good key.
+  const keys = { checked: [], answer: new Map() };
+  const tools = new Tools({
+    dataDir,
+    secretsDir,
+    lnbitsUrl: URL_,
+    log: (l) => logs.push(l),
+    checkKey: async (key) => {
+      keys.checked.push(key);
+      const code = keys.answer.get(key);
+      if (code) throw new LNbitsError(code);
+    },
+  });
   tools.keyringInit();
   const walletsFile = join(root, 'wallets.json');
   writeFileSync(
@@ -62,6 +77,7 @@ function fixture(t) {
     secretsDir,
     tools,
     logs,
+    keys,
     walletsFile,
     open,
     database: join(dataDir, DB_FILE),
@@ -76,13 +92,13 @@ const saveState = (dataDir, change) => {
 const readState = (dataDir) => JSON.parse(readFileSync(join(dataDir, 'state.json'), 'utf8'));
 const allOutput = (fx) => [fx.logs.join('\n')].join('\n');
 
-test('migration keeps M6 refs and link times, and encrypts the keys', (t) => {
+test('migration keeps M6 refs and link times, and encrypts the keys', async (t) => {
   const fx = fixture(t);
   saveState(fx.dataDir, (data) => {
     data.authorized = { users: { [A]: 1000, [B]: 2000 } };
   });
   const before = readFileSync(join(fx.dataDir, 'state.json'), 'utf8');
-  assert.equal(fx.tools.migrate(fx.walletsFile), 2);
+  assert.equal(await fx.tools.migrate(fx.walletsFile), 2);
   assert.equal(statSync(fx.database).mode & 0o777, 0o600);
   assert.ok(!existsSync(`${fx.database}.tmp`));
   assert.ok(!existsSync(`${fx.database}-wal`), 'the database is complete by itself');
@@ -101,17 +117,17 @@ test('migration keeps M6 refs and link times, and encrypts the keys', (t) => {
   assert.ok(registry.store.getMeta('migrated_from_wallets_json'));
 });
 
-test('migration refuses to run twice, and insecure or broken input leaves nothing behind', (t) => {
+test('migration refuses to run twice, and insecure or broken input leaves nothing behind', async (t) => {
   const fx = fixture(t);
   chmodSync(fx.walletsFile, 0o644);
-  assert.throws(() => fx.tools.migrate(fx.walletsFile), /must be private/);
+  await assert.rejects(fx.tools.migrate(fx.walletsFile), /must be private/);
   assert.ok(!existsSync(fx.database));
   chmodSync(fx.walletsFile, 0o600);
-  fx.tools.migrate(fx.walletsFile);
-  assert.throws(() => fx.tools.migrate(fx.walletsFile), /Already migrated/);
+  await fx.tools.migrate(fx.walletsFile);
+  await assert.rejects(fx.tools.migrate(fx.walletsFile), /Already migrated/);
 });
 
-test('a migration interrupted before its rename is rebuilt; the bot refuses meanwhile', (t) => {
+test('a migration interrupted before its rename is rebuilt; the bot refuses meanwhile', async (t) => {
   const fx = fixture(t);
   saveState(fx.dataDir, () => {});
   writeFileSync(`${fx.database}.tmp`, 'half a database');
@@ -136,14 +152,14 @@ test('a migration interrupted before its rename is rebuilt; the bot refuses mean
   );
   assert.match(bot.stderr, /migration or restore was interrupted/);
   assert.notEqual(bot.status, 0);
-  assert.equal(fx.tools.migrate(fx.walletsFile), 2);
+  assert.equal(await fx.tools.migrate(fx.walletsFile), 2);
   assert.ok(!existsSync(`${fx.database}.tmp`));
   assert.equal(fx.open().size, 2);
 });
 
-test('the bot refuses a database with WALLETS_FILE set, or without SECRETS_DIR', (t) => {
+test('the bot refuses a database with WALLETS_FILE set, or without SECRETS_DIR', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const start = (extra) =>
     spawnSync(
       process.execPath,
@@ -171,7 +187,7 @@ test('the bot refuses a database with WALLETS_FILE set, or without SECRETS_DIR',
   assert.match(start({}).stderr, /needs SECRETS_DIR/);
 });
 
-test('offline tools refuse while the bot holds the lock', (t) => {
+test('offline tools refuse while the bot holds the lock', async (t) => {
   const fx = fixture(t);
   const running = new State(fx.dataDir);
   try {
@@ -184,15 +200,15 @@ test('offline tools refuse while the bot holds the lock', (t) => {
       () => fx.tools.restore(fx.root),
       () => fx.tools.recoverLedger(),
     ])
-      assert.throws(work, /owns this data directory/);
+      await assert.rejects(async () => work(), /owns this data directory/);
   } finally {
     running.close();
   }
 });
 
-test('re-migrating does not bring back a disconnected wallet unless asked to', (t) => {
+test('re-migrating does not bring back a disconnected wallet unless asked to', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const registry = fx.open();
   const lease = registry.lease(A);
   registry.revoke(lease.id, 'user');
@@ -200,7 +216,7 @@ test('re-migrating does not bring back a disconnected wallet unless asked to', (
   const out = join(fx.root, 'out.json');
   fx.tools.rollback(out);
   // The original file still lists Alice: she stays disconnected, and the operator is told.
-  assert.equal(fx.tools.migrate(fx.walletsFile), 1);
+  assert.equal(await fx.tools.migrate(fx.walletsFile), 1);
   assert.match(fx.logs.join('\n'), /Skipped 1 wallet\(s\)/);
   const without = fx.open();
   assert.equal(without.linked(A), false);
@@ -208,7 +224,7 @@ test('re-migrating does not bring back a disconnected wallet unless asked to', (
   without.close();
   // On purpose, it is a new link: the old menus stay dead.
   fx.tools.rollback(join(fx.root, 'out2.json'));
-  fx.tools.migrate(fx.walletsFile, { relinkDisconnected: true });
+  await fx.tools.migrate(fx.walletsFile, { relinkDisconnected: true });
   const again = fx.open();
   assert.equal(again.keyFor(A), ALICE_KEY);
   assert.notEqual(again.lease(A).ref, walletRef(A, ALICE_KEY));
@@ -216,9 +232,9 @@ test('re-migrating does not bring back a disconnected wallet unless asked to', (
   assert.equal(again.lease(B).ref, walletRef(B, BOB_KEY), 'others keep theirs');
 });
 
-test('rollback writes only what is in force, and cleans what M6 could revive', (t) => {
+test('rollback writes only what is in force, and cleans what M6 could revive', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const registry = fx.open();
   const gone = registry.lease(A);
   const kept = registry.lease(B);
@@ -267,9 +283,9 @@ test('rollback writes only what is in force, and cleans what M6 could revive', (
   assert.ok(existsSync(ledgerFile(fx.secretsDir)), 'the ledger stays');
 });
 
-test('rollback refuses what M6 cannot express, unless told to disconnect it', (t) => {
+test('rollback refuses what M6 cannot express, unless told to disconnect it', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const registry = fx.open();
   registry.maxPerOwner = 5;
   registry.connect({
@@ -295,9 +311,9 @@ test('rollback refuses what M6 cannot express, unless told to disconnect it', (t
   assert.equal(JSON.parse(readFileSync(out, 'utf8'))[npub(alice)].invoiceKey, ALICE_KEY);
 });
 
-test('a refused rollback disconnects nobody; a damaged backup restores nothing', (t) => {
+test('a refused rollback disconnects nobody; a damaged backup restores nothing', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const folder = fx.tools.backup(join(fx.root, 'bk'));
   const registry = fx.open();
   registry.maxPerOwner = 5;
@@ -321,21 +337,21 @@ test('a refused rollback disconnects nobody; a damaged backup restores nothing',
   assert.deepEqual(readFileSync(fx.database), before, 'the database was not replaced');
 });
 
-test('records written in wallets.json mode work after migrating', (t) => {
+test('records written in wallets.json mode work after migrating', async (t) => {
   const fx = fixture(t);
   saveState(fx.dataDir, (data) => {
     data.invoices = [{ connection: A, op: 'x' }];
     data.outbox = [{ event: {}, relays: [], connection: A }];
   });
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const data = readState(fx.dataDir);
   assert.equal(data.invoices[0].connection, undefined);
   assert.equal(data.outbox[0].connection, undefined);
 });
 
-test('rollback can be run again after a crash, and never overwrites another file', (t) => {
+test('rollback can be run again after a crash, and never overwrites another file', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const out = join(fx.root, 'out.json');
   writeFileSync(out, 'something else', { mode: 0o600 });
   assert.throws(() => fx.tools.rollback(out), /other contents/);
@@ -344,9 +360,9 @@ test('rollback can be run again after a crash, and never overwrites another file
   assert.equal(fx.tools.rollback(out), 2);
 });
 
-test('a backup is consistent and private, and holds no keyring, ledger or clear key', (t) => {
+test('a backup is consistent and private, and holds no keyring, ledger or clear key', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const registry = fx.open(); // a running bot
   const folder = fx.tools.backup(join(fx.root, 'bk'));
   assert.equal(statSync(folder).mode & 0o777, 0o700);
@@ -361,9 +377,9 @@ test('a backup is consistent and private, and holds no keyring, ledger or clear 
   assert.throws(() => fx.tools.backup(folder), /already holds/);
 });
 
-test('restoring an old backup keeps everything disconnected since revoked', (t) => {
+test('restoring an old backup keeps everything disconnected since revoked', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const folder = fx.tools.backup(join(fx.root, 'old'));
   const registry = fx.open();
   const gone = registry.lease(A);
@@ -379,9 +395,9 @@ test('restoring an old backup keeps everything disconnected since revoked', (t) 
   assert.ok(after.store.audit().some((a) => a.action === 'restore'));
 });
 
-test('a restore without trustworthy history restores nothing', (t) => {
+test('a restore without trustworthy history restores nothing', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const folder = fx.tools.backup(join(fx.root, 'old'));
   const registry = fx.open();
   registry.revoke(registry.lease(A).id, 'user');
@@ -405,9 +421,9 @@ test('a restore without trustworthy history restores nothing', (t) => {
   );
 });
 
-test('recover-ledger disconnects everything: nothing can come back', (t) => {
+test('recover-ledger disconnects everything: nothing can come back', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const folder = fx.tools.backup(join(fx.root, 'old'));
   writeFileSync(ledgerFile(fx.secretsDir), 'damaged\n');
   assert.equal(fx.tools.recoverLedger(), 2);
@@ -419,9 +435,9 @@ test('recover-ledger disconnects everything: nothing can come back', (t) => {
   assert.equal(fx.open().size, 0);
 });
 
-test('rotation re-encrypts everything; a crash after adding the key loses nothing', (t) => {
+test('rotation re-encrypts everything; a crash after adding the key loses nothing', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   assert.equal(fx.tools.rotate(), 'k2');
   const registry = fx.open();
   assert.equal(registry.keyFor(A), ALICE_KEY);
@@ -434,9 +450,9 @@ test('rotation re-encrypts everything; a crash after adding the key loses nothin
   assert.ok(after.store.active().every((r) => r.kid === 'k2'));
 });
 
-test('retire is refused while needed; afterwards a backup from before is unreadable', (t) => {
+test('retire is refused while needed; afterwards a backup from before is unreadable', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const folder = fx.tools.backup(join(fx.root, 'old'));
   const row = new Store(join(folder, DB_FILE)).active()[0];
   // Move the manifest where the tool looks for retained backups.
@@ -465,9 +481,9 @@ test('retire is refused while needed; afterwards a backup from before is unreada
   );
 });
 
-test('a lost keyring fails closed and can only be reset by revoking everything', (t) => {
+test('a lost keyring fails closed and can only be reset by revoking everything', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   rmSync(join(fx.secretsDir, 'keyring.json'));
   assert.throws(
     () => fx.open(),
@@ -481,9 +497,9 @@ test('a lost keyring fails closed and can only be reset by revoking everything',
   assert.throws(() => fx.tools.resetLostKeyring(), /nothing to reset/);
 });
 
-test('the CLI revokes while a bot runs, touching only the ledger and the database', (t) => {
+test('the CLI revokes while a bot runs, touching only the ledger and the database', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const state = new State(fx.dataDir); // a running bot holds the lock
   const before = readFileSync(join(fx.dataDir, 'state.json'), 'utf8');
   try {
@@ -504,9 +520,9 @@ test('the CLI revokes while a bot runs, touching only the ledger and the databas
   }
 });
 
-test('commands print ids and counts only, and fail cleanly', (t) => {
+test('commands print ids and counts only, and fail cleanly', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const run = (...args) =>
     spawnSync(process.execPath, [ADMIN, ...args], {
       env: {
@@ -529,9 +545,9 @@ test('commands print ids and counts only, and fail cleanly', (t) => {
   assert.ok(!bad.stderr.includes('    at '), 'no stack trace');
 });
 
-test('a refused restore leaves the setup as it was, and the bot can still start', (t) => {
+test('a refused restore leaves the setup as it was, and the bot can still start', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const backup = fx.tools.backup();
   fx.tools.rotate();
   fx.tools.retire('k1', { afterRetention: true });
@@ -545,9 +561,9 @@ test('a refused restore leaves the setup as it was, and the bot can still start'
   registry.close();
 });
 
-test('a restored state ignores messages from before the restore, so nothing runs twice', (t) => {
+test('a restored state ignores messages from before the restore, so nothing runs twice', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   saveState(fx.dataDir, (data) => {
     data.startedAt = 1000;
   });
@@ -557,9 +573,9 @@ test('a restored state ignores messages from before the restore, so nothing runs
   assert.ok(readState(fx.dataDir).startedAt >= before);
 });
 
-test('a restore takes the backup, not the current data, and refuses another store', (t) => {
+test('a restore takes the backup, not the current data, and refuses another store', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   saveState(fx.dataDir, (data) => {
     data.marker = 'in the backup';
   });
@@ -579,9 +595,9 @@ test('a restore takes the backup, not the current data, and refuses another stor
   assert.equal(readState(fx.dataDir).marker, 'current');
 });
 
-test('a lost host: a backup and an offline keyring restore the identity, all disconnected', (t) => {
+test('a lost host: a backup and an offline keyring restore the identity, all disconnected', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const nsec = readState(fx.dataDir).nsec;
   const backup = fx.tools.backup();
   // The ledger and the data folder's database are gone. The backup and the keyring remain.
@@ -601,16 +617,16 @@ test('a lost host: a backup and an offline keyring restore the identity, all dis
   const raw = readFileSync(fx.database).toString('latin1');
   assert.ok(!raw.includes(ALICE_KEY));
   // The operator's own wallets can be linked again, as a new link.
-  assert.equal(fx.tools.migrate(fx.walletsFile, { relinkDisconnected: true }), 2);
+  assert.equal(await fx.tools.migrate(fx.walletsFile, { relinkDisconnected: true }), 2);
   const again = fx.open();
   assert.equal(again.keyFor(A), ALICE_KEY);
   assert.notEqual(again.lease(A).ref, walletRef(A, ALICE_KEY), 'old menus stay dead');
   again.close();
 });
 
-test('--lost-ledger is refused when a ledger exists, which then decides', (t) => {
+test('--lost-ledger is refused when a ledger exists, which then decides', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const backup = fx.tools.backup();
   assert.throws(() => fx.tools.restore(backup, { lostLedger: true }), /it decides/);
   assert.ok(!existsSync(`${fx.database}.tmp`));
@@ -619,55 +635,194 @@ test('--lost-ledger is refused when a ledger exists, which then decides', (t) =>
   registry.close();
 });
 
-test('recover-ledger then the documented relink works, with new refs', (t) => {
+test('recover-ledger then the documented relink works, with new refs', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   writeFileSync(ledgerFile(fx.secretsDir), 'damaged\n');
   assert.equal(fx.tools.recoverLedger(), 2);
-  assert.throws(() => fx.tools.migrate(fx.walletsFile), /Already migrated/);
-  assert.equal(fx.tools.migrate(fx.walletsFile, { relinkDisconnected: true }), 2);
+  await assert.rejects(fx.tools.migrate(fx.walletsFile), /Already migrated/);
+  assert.equal(await fx.tools.migrate(fx.walletsFile, { relinkDisconnected: true }), 2);
   assert.ok(fx.logs.some((line) => /Linked 2 wallet/.test(line)));
   const registry = fx.open();
   assert.equal(registry.keyFor(B), BOB_KEY);
   assert.notEqual(registry.lease(A).ref, walletRef(A, ALICE_KEY));
   registry.close();
   // Run again: already connected, so nothing changes.
-  assert.equal(fx.tools.migrate(fx.walletsFile, { relinkDisconnected: true }), 0);
+  assert.equal(await fx.tools.migrate(fx.walletsFile, { relinkDisconnected: true }), 0);
   const again = fx.open();
   assert.equal(again.size, 2);
   again.close();
   assert.ok(!allOutput(fx).includes(ALICE_KEY));
 });
 
-test('migration leaves a backup first, and reads every key back', (t) => {
+test('migration leaves a backup first, and reads every key back', async (t) => {
   const fx = fixture(t);
   saveState(fx.dataDir, (data) => {
     data.marker = 'before';
   });
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const folder = readdirSync(join(fx.dataDir, 'backups')).find((n) => n.startsWith('pre-migrate'));
   const saved = join(fx.dataDir, 'backups', folder);
   assert.equal(JSON.parse(readFileSync(join(saved, 'state.json'), 'utf8')).marker, 'before');
-  assert.equal(
-    readFileSync(join(saved, 'wallets.json'), 'utf8'),
-    readFileSync(fx.walletsFile, 'utf8'),
+});
+
+test('migration keeps no plaintext copy of the keys, and leaves wallets.json as it was', async (t) => {
+  const fx = fixture(t);
+  const original = readFileSync(fx.walletsFile, 'utf8');
+  await fx.tools.migrate(fx.walletsFile);
+  assert.equal(readFileSync(fx.walletsFile, 'utf8'), original);
+  for (const name of readdirSync(join(fx.dataDir, 'backups'))) {
+    const folder = join(fx.dataDir, 'backups', name);
+    assert.ok(!existsSync(join(folder, 'wallets.json')), name);
+    for (const file of readdirSync(folder))
+      for (const key of [ALICE_KEY, BOB_KEY])
+        assert.ok(!readFileSync(join(folder, file)).includes(key), `${name}/${file}`);
+  }
+  assert.equal(plaintextCopies(fx.dataDir), 0);
+  assert.match(allOutput(fx), /still holds every key in the clear: delete it/);
+});
+
+test('copies an earlier release left in the backups are counted, for the startup reminder', (t) => {
+  const fx = fixture(t);
+  assert.equal(plaintextCopies(fx.dataDir), 0, 'no backups folder at all');
+  for (const name of ['pre-migrate-old-1', 'pre-migrate-old-2', 'backup-new']) {
+    const folder = join(fx.dataDir, 'backups', name);
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    if (name.startsWith('pre-migrate'))
+      writeFileSync(join(folder, 'wallets.json'), '{}', { mode: 0o600 });
+  }
+  assert.equal(plaintextCopies(fx.dataDir), 2);
+});
+
+test('an admin key is never stored: it stops the migration before anything is written', async (t) => {
+  const fx = fixture(t);
+  saveState(fx.dataDir, (data) => {
+    data.marker = 'before';
+  });
+  const state = readFileSync(join(fx.dataDir, 'state.json'), 'utf8');
+  fx.keys.answer.set(BOB_KEY, 'admin_key');
+  await assert.rejects(fx.tools.migrate(fx.walletsFile), (error) => {
+    assert.match(error.message, /Nothing was migrated: LNbits reports an admin key/);
+    assert.ok(error.message.includes(npub(bob)), 'names whose entry it is');
+    assert.ok(!error.message.includes(BOB_KEY), 'never the key');
+    return true;
+  });
+  assert.deepEqual(
+    fx.keys.checked.sort(),
+    [ALICE_KEY, BOB_KEY].sort(),
+    'every key was asked about',
+  );
+  assert.ok(!existsSync(fx.database));
+  assert.ok(!existsSync(`${fx.database}.tmp`));
+  assert.ok(!existsSync(ledgerFile(fx.secretsDir)), 'no ledger either');
+  assert.ok(!existsSync(join(fx.dataDir, 'backups')), 'no backup folder');
+  assert.equal(readFileSync(join(fx.dataDir, 'state.json'), 'utf8'), state);
+  // --unchecked is about keys LNbits could not vouch for: an admin key still stops it.
+  await assert.rejects(fx.tools.migrate(fx.walletsFile, { unchecked: true }), /admin key/);
+  assert.ok(!existsSync(fx.database));
+  // With the invoice key in its place, it goes through.
+  fx.keys.answer.delete(BOB_KEY);
+  assert.equal(await fx.tools.migrate(fx.walletsFile), 2);
+});
+
+test('keys LNbits cannot confirm stop the migration, unless --unchecked says to go on', async (t) => {
+  const fx = fixture(t);
+  fx.keys.answer.set(ALICE_KEY, 'unavailable');
+  await assert.rejects(fx.tools.migrate(fx.walletsFile), (error) => {
+    assert.match(
+      error.message,
+      /Nothing was migrated: LNbits did not confirm 1 key\(s\) \(unavailable\)/,
+    );
+    assert.match(error.message, /--unchecked/);
+    return true;
+  });
+  assert.ok(!existsSync(fx.database));
+  assert.ok(!existsSync(ledgerFile(fx.secretsDir)));
+  // As before this check existed: stored, and checked by the bot at every start.
+  assert.equal(await fx.tools.migrate(fx.walletsFile, { unchecked: true }), 2);
+  assert.match(allOutput(fx), /Migrating 1 key\(s\) LNbits did not confirm \(unavailable\)/);
+  const registry = fx.open();
+  assert.equal(registry.keyFor(A), ALICE_KEY);
+  registry.close();
+  assert.ok(!allOutput(fx).includes(ALICE_KEY));
+});
+
+test('linking again with --relink-disconnected checks the keys the same way', async (t) => {
+  const fx = fixture(t);
+  await fx.tools.migrate(fx.walletsFile);
+  const registry = fx.open();
+  registry.revoke(registry.lease(A).id, 'user');
+  registry.close();
+  const before = readFileSync(fx.database);
+  fx.keys.answer.set(ALICE_KEY, 'admin_key');
+  await assert.rejects(
+    fx.tools.migrate(fx.walletsFile, { relinkDisconnected: true }),
+    /Nothing was migrated: LNbits reports an admin key/,
+  );
+  assert.ok(readFileSync(fx.database).equals(before), 'the database is unchanged');
+  assert.ok(
+    !readdirSync(join(fx.dataDir, 'backups')).some((n) => n.startsWith('pre-relink')),
+    'nothing was written, not even a backup',
+  );
+  fx.keys.answer.delete(ALICE_KEY);
+  assert.equal(await fx.tools.migrate(fx.walletsFile, { relinkDisconnected: true }), 1);
+});
+
+test('wallets that will be skipped are not asked about, so a reset old key blocks nobody', async (t) => {
+  const fx = fixture(t);
+  await fx.tools.migrate(fx.walletsFile);
+  const registry = fx.open();
+  registry.revoke(registry.lease(A).id, 'user');
+  registry.close();
+  fx.tools.rollback(join(fx.root, 'out.json'));
+  // Alice's key was reset in LNbits after her disconnect, as the README advises.
+  fx.keys.answer.set(ALICE_KEY, 'rejected');
+  fx.keys.checked.length = 0;
+  assert.equal(await fx.tools.migrate(fx.walletsFile), 1, 'skipped as disconnected');
+  assert.deepEqual(fx.keys.checked, [BOB_KEY]);
+  // Linking her again on purpose stores her key, so then it is asked about, and refused.
+  await assert.rejects(
+    fx.tools.migrate(fx.walletsFile, { relinkDisconnected: true }),
+    /did not confirm 1 key\(s\) \(rejected\)/,
+  );
+  fx.keys.checked.length = 0;
+  fx.keys.answer.delete(ALICE_KEY);
+  assert.equal(await fx.tools.migrate(fx.walletsFile, { relinkDisconnected: true }), 1);
+  assert.deepEqual(fx.keys.checked, [ALICE_KEY], 'Bob, connected already, was not asked about');
+});
+
+test('the tools read LNBITS_TIMEOUT_SECONDS as the bot does', () => {
+  assert.throws(
+    () => run(['keyring', 'list'], { LNBITS_TIMEOUT_SECONDS: '-5', SECRETS_DIR: '/nonexistent' }),
+    /LNBITS_TIMEOUT_SECONDS must be a whole number from 1 to 120/,
   );
 });
 
-test('a key that does not read back correctly stops the migration before it counts', (t) => {
+test('with the bot running, migrate asks LNbits nothing', async (t) => {
+  const fx = fixture(t);
+  const running = new State(fx.dataDir);
+  try {
+    await assert.rejects(fx.tools.migrate(fx.walletsFile), /owns this data directory/);
+  } finally {
+    running.close();
+  }
+  assert.deepEqual(fx.keys.checked, []);
+});
+
+test('a key that does not read back correctly stops the migration before it counts', async (t) => {
   const fx = fixture(t);
   const decrypt = Keyring.prototype.decrypt;
   Keyring.prototype.decrypt = () => ({ invoiceKey: 'f'.repeat(32) });
   t.after(() => {
     Keyring.prototype.decrypt = decrypt;
   });
-  assert.throws(() => fx.tools.migrate(fx.walletsFile), /did not read back/);
+  await assert.rejects(fx.tools.migrate(fx.walletsFile), /did not read back/);
   assert.ok(!existsSync(fx.database), 'the database never took effect');
 });
 
-test('a --lost-ledger restore cut short leaves nothing to mistake for a whole history', (t) => {
+test('a --lost-ledger restore cut short leaves nothing to mistake for a whole history', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const backup = fx.tools.backup();
   rmSync(ledgerFile(fx.secretsDir));
   rmSync(fx.database);
@@ -694,12 +849,12 @@ test('a --lost-ledger restore cut short leaves nothing to mistake for a whole hi
   after.close();
 });
 
-test('a backup from before a new ledger cannot bring back what only the old ledger knew', (t) => {
+test('a backup from before a new ledger cannot bring back what only the old ledger knew', async (t) => {
   // A wallet is disconnected after one backup, and a later backup holds that. A new ledger, built
   // from the earlier backup, has never heard of the disconnect in the later one, and vice versa.
-  const setup = (t2) => {
+  const setup = async (t2) => {
     const fx = fixture(t2);
-    fx.tools.migrate(fx.walletsFile);
+    await fx.tools.migrate(fx.walletsFile);
     const before = fx.tools.backup();
     const registry = fx.open();
     const gone = registry.lease(A);
@@ -715,14 +870,14 @@ test('a backup from before a new ledger cannot bring back what only the old ledg
   };
 
   // recover-ledger, then the older backup, with the disconnect only in the lost ledger.
-  const first = setup(t);
+  const first = await setup(t);
   writeFileSync(ledgerFile(first.fx.secretsDir), 'damaged\n');
   first.fx.tools.recoverLedger();
   assert.throws(() => first.fx.tools.restore(first.before), /another store/);
   stays(first.fx, first.gone);
 
   // --lost-ledger from one backup, then a plain restore of another.
-  const second = setup(t);
+  const second = await setup(t);
   const later = second.fx.tools.backup();
   rmSync(ledgerFile(second.fx.secretsDir));
   second.fx.tools.restore(later, { lostLedger: true });
@@ -738,9 +893,9 @@ test('a backup from before a new ledger cannot bring back what only the old ledg
   assert.equal(second.fx.tools.restore(fresh), 0);
 });
 
-test('a lost keyring also starts a new generation of the store', (t) => {
+test('a lost keyring also starts a new generation of the store', async (t) => {
   const fx = fixture(t);
-  fx.tools.migrate(fx.walletsFile);
+  await fx.tools.migrate(fx.walletsFile);
   const backup = fx.tools.backup();
   rmSync(join(fx.secretsDir, 'keyring.json'), { force: true });
   fx.tools.resetLostKeyring();

@@ -85,6 +85,9 @@ export function localTestRelays(value) {
   return [...new Set(relays)];
 }
 
+// The same for the bot and the operator's tools.
+export const lnbitsTimeoutMs = (env) => integer(env, 'LNBITS_TIMEOUT_SECONDS', 10, 1, 120) * 1000;
+
 export function loadConfig(env) {
   const allowHttp = boolean(env, 'LNBITS_ALLOW_HTTP');
   // LNbits' own default cap is 10,000,000 sats per incoming invoice.
@@ -127,7 +130,7 @@ export function loadConfig(env) {
     lnbits: {
       url: lnbitsURL(env.LNBITS_URL, allowHttp),
       allowHttp,
-      timeoutMs: integer(env, 'LNBITS_TIMEOUT_SECONDS', 10, 1, 120) * 1000,
+      timeoutMs: lnbitsTimeoutMs(env),
     },
     // Experimental and off by default: see the README before turning this on.
     send: boolean(env, 'SEND_ENABLED')

@@ -5,13 +5,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { getPublicKey, nip19 } from 'nostr-tools';
 import { unwrapEvent, wrapEvent } from 'nostr-tools/nip59';
 import { now } from '../vendor/runtime.js';
 import { walletRef } from '../wallets.js';
-import { ALICE_KEY, alice, defer, npub, tempDir } from './helpers.js';
+import { ALICE_KEY, BOB_KEY, alice, bob, defer, npub, tempDir } from './helpers.js';
 import { lnbitsServer } from './lnbits-server.js';
 import { relay, until } from './relay.js';
 
@@ -49,6 +49,19 @@ const admin = (env, ...args) => {
   assert.equal(result.status, 0, result.stderr);
   return result.stdout;
 };
+// For a tool that asks the local LNbits, which runs in this process: spawnSync would block it.
+const adminAsync = (env, ...args) =>
+  new Promise((resolve) => {
+    const child = spawn(process.execPath, [ADMIN, ...args], {
+      env: { PATH: process.env.PATH, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (data) => (stdout += data));
+    child.stderr.on('data', (data) => (stderr += data));
+    child.once('exit', (status) => resolve({ status, stdout, stderr }));
+  });
 const replies = (local) =>
   [...local.events.values()]
     .filter((e) => e.kind === 1059)
@@ -147,7 +160,9 @@ test(
     // A payment while the bot is stopped, across the migration.
     lnbits.settle(ALICE_KEY, { sats: 7, memo: 'while migrating' });
     admin(secrets, 'keyring', 'init');
-    admin(secrets, 'migrate', walletsFile);
+    const migrated = await adminAsync(secrets, 'migrate', walletsFile);
+    assert.equal(migrated.status, 0, migrated.stderr);
+    assert.ok(lnbits.requests.some((r) => r.path === '/api/v1/wallet' && r.key === ALICE_KEY));
     const db = start(t, dir, secrets);
     await until(() => /LNbits accepted 1 of 1/.test(db.output()), 'db start', 10000);
     assert.doesNotMatch(db.output(), /started; .* baseline/, 'no new baseline: state carried over');
@@ -198,3 +213,46 @@ test(
     assert.ok(!output.includes('[no-network]'));
   },
 );
+
+test('migrate asks the real LNbits about each key and never stores an admin key', async (t) => {
+  const dir = tempDir(t, 'db-migrate-admin');
+  const lnbits = await lnbitsServer({
+    [ALICE_KEY]: { name: 'a', balance: 1000, payments: [] },
+    [BOB_KEY]: { name: 'b', balance: 1000, payments: [], admin: true },
+  });
+  defer(t, () => lnbits.close());
+  const walletsFile = `${dir}/wallets.json`;
+  writeFileSync(
+    walletsFile,
+    JSON.stringify({
+      [npub(alice)]: { invoiceKey: ALICE_KEY },
+      [npub(bob)]: { invoiceKey: BOB_KEY },
+    }),
+    { mode: 0o600 },
+  );
+  const env = {
+    DATA_DIR: `${dir}/data`,
+    SECRETS_DIR: `${dir}/secrets`,
+    LNBITS_URL: lnbits.url,
+    LNBITS_ALLOW_HTTP: 'true',
+  };
+  admin(env, 'keyring', 'init');
+  const refused = await adminAsync(env, 'migrate', walletsFile);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /Nothing was migrated: LNbits reports an admin key/);
+  assert.ok(refused.stderr.includes(npub(bob)));
+  assert.ok(!existsSync(`${dir}/data/connections.db`));
+
+  // LNbits down: refused, unless --unchecked.
+  const down = { ...env, LNBITS_URL: 'http://127.0.0.1:1/' };
+  writeFileSync(walletsFile, JSON.stringify({ [npub(alice)]: { invoiceKey: ALICE_KEY } }));
+  const unreachable = await adminAsync(down, 'migrate', walletsFile);
+  assert.equal(unreachable.status, 1);
+  assert.match(unreachable.stderr, /did not confirm 1 key\(s\) \(unavailable\)/);
+  assert.ok(!existsSync(`${dir}/data/connections.db`));
+  const anyway = await adminAsync(down, 'migrate', walletsFile, '--unchecked');
+  assert.equal(anyway.status, 0, anyway.stderr);
+  assert.ok(existsSync(`${dir}/data/connections.db`));
+  const output = [refused, unreachable, anyway].map((r) => r.stdout + r.stderr).join('');
+  assert.ok(!output.includes(ALICE_KEY) && !output.includes(BOB_KEY), 'no key in any output');
+});

@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { join, resolve } from 'node:path';
 import { getEventHash, getPublicKey, nip19 } from 'nostr-tools';
@@ -1619,6 +1619,17 @@ const short = (record) => record.op.slice(0, 8);
 // Replies carry an `e` reply tag. Other bots, including this one, always reply that way.
 const isReply = (message) => message.tags.some((t) => t[0] === 'e' && t[3] === 'reply');
 
+// Backups in which an earlier release's migrate kept wallets.json, keys and all.
+export function plaintextCopies(dataDir) {
+  const backups = join(dataDir, 'backups');
+  try {
+    return readdirSync(backups).filter((name) => existsSync(join(backups, name, 'wallets.json')))
+      .length;
+  } catch {
+    return 0; // No backups folder, or one that cannot be read: only a reminder is lost.
+  }
+}
+
 // Keeps an insertion-ordered Map bounded by dropping its oldest entries.
 function bound(map, max = 1000) {
   while (map.size > max) map.delete(map.keys().next().value);
@@ -1676,6 +1687,11 @@ export async function main() {
     );
   // wallets.json mode until the operator migrates; then only the database counts.
   const migrated = existsSync(database);
+  const copies = plaintextCopies(dataDir);
+  if (copies)
+    console.log(
+      `DATA_DIR/backups holds ${copies} copy(ies) of wallets.json in the clear, from an earlier migration: delete them (see the README, "Moving to database mode and back").`,
+    );
   if (migrated && config.walletsFile)
     throw new ConfigurationError(
       'wallets.json was migrated to connections.db: unset WALLETS_FILE, or run "npm run rollback".',

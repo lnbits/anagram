@@ -181,7 +181,7 @@ Redirects are never followed (they could forward the key), responses over 256 KB
 - **Duplicate invoices are prevented by the bot, not by LNbits.** A request that LNbits stored only after every check (more than ten minutes late) stays in `review` until the operator looks; the bot never resends it. A LNbits backend that creates a Lightning invoice but fails to store it leaves an invoice nobody receives; it cannot be paid into the wallet.
 - LNbits' `expiry` field in its answer has no time zone, so the bot states the validity it asked for (`INVOICE_EXPIRY_MINUTES`) instead of reading it back.
 
-- **Admin-key detection is a check, not a guarantee.** It relies on LNbits v1.6.2 adding the wallet `id` only for admin keys. Another LNbits version could behave differently; linking an invoice key is the operator's responsibility. An invoice key itself cannot pay: LNbits refuses `out: true` with it (403).
+- **Admin-key detection is a check, not a guarantee.** It relies on LNbits v1.6.2 adding the wallet `id` only for admin keys. The same check runs when the bot starts, before a key is used, and in `migrate`, which then stores nothing. Another LNbits version could behave differently; linking an invoice key is the operator's responsibility. An invoice key itself cannot pay: LNbits refuses `out: true` with it (403).
 - The balance must fit JavaScript's exact integer range (about 90 000 BTC in msat); a larger value is refused as unexpected rather than shown wrongly.
 - Replies and notifications that relays do not accept for a day are dropped by the transport; the bot logs `Dropping N delivery(ies)...` when that happens. An unreadable payment row in the history is skipped and logged (`Skipped N unreadable payment row(s)`) and is not announced.
 - Every message from a linked person within the hourly limit rewrites `state.json` (the dedupe record is written before anything slow). Over the limit, and from strangers, nothing is written. On slow disks, keep `MAX_REQUESTS_PER_HOUR` modest.
@@ -329,11 +329,13 @@ Stop the bot first. Every tool below except `backup` and `connections revoke` ta
 ```sh
 export SECRETS_DIR=/var/lib/anagram-lnbits-wallet-secrets
 npm run keyring -- init                # creates SECRETS_DIR; store keyring.json offline now
-npm run migrate -- ./wallets.json      # keeps menus, notification state, invoices and link times
+npm run migrate -- ./wallets.json      # checks every key with LNbits; keeps menus, notification state, invoices and link times
 # unset WALLETS_FILE, set SECRETS_DIR, start the bot
 ```
 
-`migrate` backs up to `DATA_DIR/backups/`. **That backup holds `wallets.json` in the clear:** delete it once the new setup has run well, and delete the original `wallets.json` too.
+`migrate` asks LNbits about every key it would store, before it writes any wallet data. Wallets it skips anyway (disconnected earlier, or connected already) are not asked about. **An admin key stops it**, naming whose entry it is: put that wallet's invoice key in the file and run it again. A key LNbits does not confirm (LNbits unreachable, or a key it rejects) stops it too. `--unchecked` migrates those anyway, and the bot then checks them at every start, as in `wallets.json` mode. An admin key is refused either way.
+
+`migrate` backs up `state.json` to `DATA_DIR/backups/` and leaves `wallets.json` as it is, without copying it. **Delete the original `wallets.json` once the new setup has run well:** it holds every key in the clear. Deleting a file does not reliably erase it from disks, snapshots or backups, so if a copy may have been exposed, reset that wallet's keys in LNbits as well. Earlier releases also copied `wallets.json` into `DATA_DIR/backups/pre-migrate-*/`. The bot reminds you at startup while such a copy exists: delete it too.
 
 ```sh
 npm run rollback -- ./wallets-new.json # back to wallets.json mode, with what is still connected

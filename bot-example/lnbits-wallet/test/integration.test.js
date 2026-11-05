@@ -273,6 +273,11 @@ test('the chat relay is down: the result arrives afterwards, once', LONG, async 
   assert.equal(a.messages(/^Paid /).length, 0, 'nothing could arrive yet');
   w.chat.online = true;
   await a.next(/^Paid 100 sats/, 'the result', 90000);
+  // The "I do not know yet" note was queued during the outage, and failed deliveries are retried
+  // with a growing delay (vendor/bot.js flush(): 2^attempts seconds, at most 300). After an outage
+  // of about a minute that delay can pass a minute, so the note may arrive after the result.
+  // Wait for it within that bound, then check that each arrived exactly once.
+  await until(() => a.messages(/I do not know yet/).length > 0, 'the queued note', 140000);
   await pause(2000);
   assert.equal(a.messages(/^Paid /).length, 1);
   assert.equal(a.messages(/I do not know yet/).length, 1);

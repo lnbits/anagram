@@ -1,5 +1,5 @@
-// A serial job queue with a bounded waiting list. The bot uses one for Ollama and one for
-// GitHub, so a slow model never delays publication and only one request of each kind runs.
+// A serial job queue with a bounded waiting list. The bot gives each person one (bot.js lane()),
+// so their requests run in order and a slow wallet for one person never holds up another.
 export class Queue {
   constructor(limit, onError = () => {}) {
     this.limit = limit;

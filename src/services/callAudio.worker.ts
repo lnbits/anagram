@@ -1,3 +1,4 @@
+import { CallAudioQueue } from './callAudioQueue.ts';
 import { Application, createEncoder, createDecoder, loadLibopus } from 'libopus-wasm';
 import { CallAudioJitterBuffer, packAudio, unpackAudio } from './callAudioPackets.ts';
 
@@ -50,12 +51,12 @@ globalThis.onmessage = async ({ data }) => {
           frameSize: 960,
         });
         let credits = 2;
-        let latest: { packet: Uint8Array; at: number } | undefined;
+        const pending = new CallAudioQueue<{ packet: Uint8Array; at: number }>();
         const deliver = (frame: { packet: Uint8Array; at: number }) => {
           if (credits) {
             credits--;
             send({ id, type: 'packet', ...frame });
-          } else latest = frame;
+          } else pending.push(frame, performance.now());
         };
         port.onmessage = ({ data: input }) => {
           if (closed) return;
@@ -74,22 +75,21 @@ globalThis.onmessage = async ({ data }) => {
             send({ id, type: 'error' });
           } finally {
             // Capture must not wait for a round trip through a busy WebView UI.
-            // Encoded delivery has its own bounded two-credit/latest queue.
+            // Encoded delivery has its own bounded FIFO queue.
             port.postMessage({ ack: true });
           }
         };
         return {
           ack() {
             credits = Math.min(2, credits + 1);
-            if (latest && !closed) {
-              const frame = latest;
-              latest = undefined;
-              deliver(frame);
+            if (!closed) {
+              const frame = pending.shift(performance.now());
+              if (frame) deliver(frame);
             }
           },
           close() {
             closed = true;
-            latest = undefined;
+            pending.clear();
             port.close();
             encoder.free();
           },

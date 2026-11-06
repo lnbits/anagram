@@ -378,8 +378,9 @@ for (const kind of ['audio', 'video', 'combined'] as const) {
             // Audio drains modest backlog at 1.1x rather than seeking it away.
             // Allow bounded recovery, but require a full two-second window of
             // low median lag and continued playback, not one favourable timer sample.
-            // Draining 0.75s toward 0.25s can take five seconds at that rate;
-            // eight seconds includes the measurement window and timer headroom.
+            // Preserve up to 1.5s of buffered speech. At 1.1x, draining that
+            // toward 0.25s takes 12.5s, plus the two-second measurement window.
+            // Keep recovery bounded while allowing speech to finish playing.
             const recoveryStarted = performance.now();
             const sample = () => ({
               elapsed: performance.now() - recoveryStarted,
@@ -391,6 +392,9 @@ for (const kind of ['audio', 'video', 'combined'] as const) {
                 : Number.POSITIVE_INFINITY,
             });
             const samples = [sample()];
+            // Repeated 150–200 ms transport delays can retain a modest backlog.
+            // Preserve that speech instead of demanding a seek to the live edge.
+            const audioLagLimit = slowSend || unevenSend ? 0.8 : 0.45;
             let lag = Number.POSITIVE_INFINITY;
             let advanced = 0;
             let frames = 0;
@@ -409,12 +413,12 @@ for (const kind of ['audio', 'video', 'combined'] as const) {
               lag = lags[Math.floor(lags.length / 2)];
               if (
                 samples.length === 21 &&
-                lag < (kind === 'audio' ? 0.45 : 0.75) &&
+                lag < (kind === 'audio' ? audioLagLimit : 0.75) &&
                 advanced > 1.5 &&
                 (kind === 'audio' || frames > 5)
               )
                 break;
-            } while (performance.now() - recoveryStarted < 8000);
+            } while (performance.now() - recoveryStarted < (kind === 'audio' ? 15000 : 8000));
             return {
               errors,
               seeks: seeks - before,
@@ -488,7 +492,9 @@ for (const kind of ['audio', 'video', 'combined'] as const) {
       // not an unnecessary application seek. Unit tests exercise forced drift.
       expect(result.seeks).toBeLessThanOrEqual(3);
       expect(result.samples).toHaveLength(21);
-      expect(result.lag).toBeLessThan(kind === 'audio' ? 0.45 : 0.75);
+      expect(result.lag).toBeLessThan(
+        kind === 'audio' ? (slowSend || unevenSend ? 0.8 : 0.45) : 0.75,
+      );
       expect(result.advanced).toBeGreaterThan(1.5);
       if (kind !== 'audio') expect(result.displayedFrames).toBeGreaterThan(5);
     });

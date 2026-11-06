@@ -1,3 +1,5 @@
+import { CALL_AUDIO_BACKLOG_MS, CALL_AUDIO_QUEUE_FRAMES } from './callAudioQueue.ts';
+
 // Versioned, bounded audio packets. Transport encryption is provided by the
 // authenticated Iroh connection; these headers contain no account identifiers.
 export const OPUS_CALL_MIME = 'audio/opus;anagram=1';
@@ -131,10 +133,11 @@ export class CallAudioJitterBuffer {
     } else if (!this.previousArrival)
       this.previousArrival = { at: now, timestamp: packet.timestamp };
     this.packets.set(packet.sequence, packet);
-    // A relay/WebSocket stall must never replay seconds of obsolete speech.
+    // Preserve ordinary arrival bursts and clock drift. Only a substantial
+    // backlog may skip speech; the adaptive target is not a discard deadline.
     if (
-      distance(this.newest, this.expected) * AUDIO_PACKET_MS > this.stats.targetMs + 60 ||
-      this.packets.size > 24
+      distance(this.newest, this.expected) * AUDIO_PACKET_MS > CALL_AUDIO_BACKLOG_MS ||
+      this.packets.size > CALL_AUDIO_QUEUE_FRAMES
     ) {
       const next = (this.newest - Math.ceil(this.stats.targetMs / 20)) >>> 0;
       this.stats.skipped += Math.max(0, distance(next, this.expected));
@@ -151,24 +154,18 @@ export class CallAudioJitterBuffer {
       if (now - this.startAt < this.stats.targetMs || !this.packets.size) return null;
       this.playing = true;
     }
-    // Correct accumulated clock drift slowly, without chasing individual arrivals.
-    if (
-      distance(this.newest, this.expected) * 20 > this.stats.targetMs + 60 &&
-      now - this.lastAdjustment > 2000
-    ) {
-      this.packets.delete(this.expected);
-      this.expected = (this.expected + 1) >>> 0;
-      this.stats.skipped++;
-      this.lastAdjustment = now;
-    }
-    if (this.growthFrames > 0) {
-      // A burst may have already supplied the extra cushion. Inserting more
-      // concealment then would add delay on top of the buffered audio.
-      if (distance(this.newest, this.expected) * AUDIO_PACKET_MS < this.stats.targetMs) {
-        this.growthFrames--;
-        return { packet: null, fec: false };
-      }
+    // Adapt on a real shortage, not by interrupting speech already available.
+    // Waiting briefly here lets a delayed frame arrive before declaring it lost.
+    if (distance(this.newest, this.expected) * AUDIO_PACKET_MS >= this.stats.targetMs)
       this.growthFrames = 0;
+    if (
+      this.growthFrames > 0 &&
+      !this.packets.has(this.expected) &&
+      !this.packets.has((this.expected + 1) >>> 0)
+    ) {
+      this.growthFrames--;
+      this.stats.concealed++;
+      return { packet: null, fec: false };
     }
     const sequence = this.expected;
     const packet = this.packets.get(sequence);

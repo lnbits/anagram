@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 
-test('short audio chunks sustain decoded sound alongside video and measure source-to-playback delay', async ({
+test('WebM audio preserves speech after a brief pause and gradually recovers latency alongside video', async ({
   page,
 }, testInfo) => {
   page.on('console', (message) => {
@@ -96,7 +96,8 @@ test('short audio chunks sustain decoded sound alongside video and measure sourc
         if (audio.currentTime < 1 || video.currentTime < 1)
           throw new Error(`Playback did not start: ${errors}`);
         console.log('[latency] playback started');
-        // Force the same brief interruption so the two recovery targets are exercised.
+        // Both policies see the same interruption. Audio must drain it without a seek.
+        const beforePauseSeeks = seeks;
         audio.pause();
         video.pause();
         await delay(750);
@@ -132,7 +133,7 @@ test('short audio chunks sustain decoded sound alongside video and measure sourc
           console.log(`[latency] pulse ${pulse}: ${JSON.stringify(timings.at(-1))}`);
           await delay(600);
         }
-        return { timings, errors, seeks };
+        return { timings, errors, seeks, recoverySeeks: seeks - beforePauseSeeks };
       } finally {
         MediaRecorder.prototype.start = originalStart;
         stops.forEach((stop) => stop());
@@ -157,9 +158,13 @@ test('short audio chunks sustain decoded sound alongside video and measure sourc
   });
   expect(result.baseline.errors).toEqual([]);
   expect(result.audio.errors).toEqual([]);
-  expect(result.audio.seeks).toBeLessThanOrEqual(4);
+  expect(result.audio.recoverySeeks).toBe(0);
   for (const pulse of result.audio.timings) {
-    expect(pulse.audioMs).toBeLessThan(500);
+    // Retain the deliberately paused 750 ms of speech instead of cutting it
+    // to meet a latency target. Normal speed catches up gradually afterward.
+    expect(pulse.audioMs).toBeLessThan(1200);
     expect(pulse.videoMs).toBeLessThan(800);
   }
+  expect(result.audio.timings.at(-1)!.audioMs).toBeLessThan(500);
+  expect(result.audio.timings.at(-1)!.audioMs).toBeLessThan(result.audio.timings[0].audioMs);
 });

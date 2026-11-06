@@ -1,3 +1,9 @@
+import { MAX_AUDIO_PACKET_BYTES } from './callAudioPackets.ts';
+import {
+  CallAudioQueue,
+  CALL_AUDIO_BACKLOG_MS,
+  CALL_AUDIO_QUEUE_FRAMES,
+} from './callAudioQueue.ts';
 import { isTauri } from '@tauri-apps/api/core';
 import { callCaptureTrack } from './callSharedCapture.ts';
 import { watchCallAudioContext } from './callAudioRecovery.ts';
@@ -124,7 +130,7 @@ function audioNode(mode: 'capture' | 'playback', generation: number, listener: L
     outputChannelCount: [1],
     channelCount: 1,
     channelCountMode: 'explicit',
-    processorOptions: { mode },
+    processorOptions: { mode, captureFrames: CALL_AUDIO_QUEUE_FRAMES },
   });
   const channel = new MessageChannel();
   current.listeners.set(id, listener);
@@ -156,9 +162,8 @@ function audioNode(mode: 'capture' | 'playback', generation: number, listener: L
 export function createPacketAudioReceiver(onError: () => void): CallMediaReceiver {
   let closed = false,
     pending = false;
-  // Native IPC delivers bursts of four 20 ms packets. Preserve that burst while
-  // bounding both queued work and latency if the decoder stalls.
-  const queued: { packet: Uint8Array; at: number }[] = [];
+  // Preserve IPC bursts in order, including while the decoder is briefly busy.
+  const queued = new CallAudioQueue<Uint8Array>();
   const post = (packet: Uint8Array) => {
     pending = true;
     state.current.worker.postMessage({ id: state.id, type: 'packet', packet });
@@ -169,9 +174,8 @@ export function createPacketAudioReceiver(onError: () => void): CallMediaReceive
     if (message.type === 'received') {
       diagnostics.set(state.id, message.stats);
       pending = false;
-      while (queued.length && performance.now() - queued[0].at > 100) queued.shift();
-      const next = queued.shift();
-      if (next) post(next.packet);
+      const next = queued.shift(performance.now());
+      if (next) post(next);
     }
   });
   const destination = state.current.context.createMediaStreamDestination();
@@ -180,15 +184,13 @@ export function createPacketAudioReceiver(onError: () => void): CallMediaReceive
   return {
     url: handle.url,
     append(packet) {
-      if (closed) return;
-      if (pending) {
-        if (queued.length === 5) queued.shift();
-        queued.push({ packet, at: performance.now() });
-      } else post(packet);
+      if (closed || packet.byteLength > MAX_AUDIO_PACKET_BYTES) return;
+      if (pending) queued.push(packet, performance.now());
+      else post(packet);
     },
     close() {
       closed = true;
-      queued.length = 0;
+      queued.clear();
       state.close();
       destination.disconnect();
       handle.close();
@@ -198,32 +200,11 @@ export function createPacketAudioReceiver(onError: () => void): CallMediaReceive
 
 function recordPacketAudioSource(
   stream: MediaStream,
-  send: (packet: Uint8Array) => Promise<void>,
+  send: (packet: Uint8Array) => void,
   onError: () => void,
-  options?: CallRecordingOptions,
 ): () => void {
-  let stopped = false,
-    sending = false;
-  let latest: { packet: Uint8Array; at: number } | undefined;
-  const transmit = async (packet: Uint8Array) => {
-    sending = true;
-    try {
-      await send(packet);
-      sending = false;
-      if (stopped) return;
-      if (latest) {
-        const next = latest;
-        latest = undefined;
-        if (performance.now() - next.at < 100) void transmit(next.packet);
-      }
-    } catch (error) {
-      if (!stopped) {
-        stop();
-        (options?.onSendError ?? onError)(error);
-      }
-    }
-  };
-  const state = audioNode('capture', options?.audioGeneration ?? 1, (message) => {
+  let stopped = false;
+  const state = audioNode('capture', 1, (message) => {
     if (stopped) return;
     if (message.type === 'error') {
       stop();
@@ -232,10 +213,12 @@ function recordPacketAudioSource(
     }
     if (message.type === 'packet' && message.packet) {
       state.current.worker.postMessage({ id: state.id, type: 'encoded' });
-      if (message.at !== undefined && performance.timeOrigin + performance.now() - message.at > 100)
+      if (
+        message.at !== undefined &&
+        performance.timeOrigin + performance.now() - message.at > CALL_AUDIO_BACKLOG_MS
+      )
         return;
-      if (sending) latest = { packet: message.packet, at: performance.now() };
-      else void transmit(message.packet);
+      send(message.packet);
     }
   });
   const source = state.current.context.createMediaStreamSource(stream);
@@ -247,7 +230,6 @@ function recordPacketAudioSource(
   function stop() {
     if (stopped) return;
     stopped = true;
-    latest = undefined;
     track.removeEventListener('unmute', state.current.recovery.resume);
     source.disconnect();
     state.close();
@@ -271,7 +253,7 @@ export function recordPacketAudio(
     const consumers = new Set<AudioConsumer>();
     const stop = recordPacketAudioSource(
       new MediaStream([track]),
-      async (packet) => {
+      (packet) => {
         for (const consumer of [...consumers]) consumer.packet(packet);
       },
       () => {
@@ -284,7 +266,7 @@ export function recordPacketAudio(
   const current = shared;
   let closed = false,
     inFlight = 0;
-  let pending: { packet: Uint8Array; at: number } | undefined;
+  const pending = new CallAudioQueue<Uint8Array>();
   const transmit = async (packet: Uint8Array) => {
     inFlight++;
     const frame = packet.slice();
@@ -298,17 +280,16 @@ export function recordPacketAudio(
       }
     } finally {
       inFlight--;
-      if (!closed && pending) {
-        const next = pending;
-        pending = undefined;
-        if (performance.now() - next.at <= 100) void transmit(next.packet);
+      if (!closed) {
+        const next = pending.shift(performance.now());
+        if (next) void transmit(next);
       }
     }
   };
   function close() {
     if (closed) return;
     closed = true;
-    pending = undefined;
+    pending.clear();
     current.consumers.delete(consumer);
     if (!current.consumers.size) {
       current.stop();
@@ -320,9 +301,9 @@ export function recordPacketAudio(
     close,
     packet(data) {
       if (closed) return;
-      // Two datagrams may await native IPC acknowledgements; a single round trip
-      // can exceed the 20 ms packet period. Only one latest packet waits behind them.
-      if (inFlight >= 2) pending = { packet: data, at: performance.now() };
+      // Retain two concurrent sends, but preserve speech queued behind a brief
+      // IPC stall. Each peer drains independently of every other participant.
+      if (inFlight >= 2) pending.push(data, performance.now());
       else void transmit(data);
     },
   };

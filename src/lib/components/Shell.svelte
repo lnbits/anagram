@@ -2127,7 +2127,11 @@
               publicKey: chat.publicKey,
               kind: chat.type,
             })),
-            ...$publicState.rooms.map(({ room }) => ({
+            // Encrypted media cannot be read by a public group.
+            ...(forward?.meta.attachments?.some((attachment) => attachment.encryption)
+              ? []
+              : $publicState.rooms
+            ).map(({ room }) => ({
               id: room.address,
               name: room.name,
               publicKey: room.owner,

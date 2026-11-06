@@ -1653,6 +1653,9 @@ export function createPublicGroupRuntime(deps: Dependencies) {
     assertSession(owner);
     if (!saved?.joined || saved.successor || message.meta.deleted)
       throw new Error('Forward destination unavailable.');
+    // Its key travels only inside the private message: public readers would get a broken link.
+    if (message.meta.attachments?.some((attachment) => attachment.encryption))
+      throw new Error('Encrypted media cannot be forwarded to a public group.');
     const room = await readRoom(saved.room);
     assertSession(owner);
     await post(room, message.text, message.meta.attachments ?? [], undefined, () => {

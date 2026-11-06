@@ -1,0 +1,6 @@
+{
+  "npub1replace-with-the-person-s-npub": {
+    "label": "Alice's wallet",
+    "invoiceKey": "replace-with-that-wallet-s-32-character-invoice-key"
+  }
+}

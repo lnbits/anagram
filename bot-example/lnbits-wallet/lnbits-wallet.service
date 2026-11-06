@@ -1,0 +1,68 @@
+# Example systemd unit for the LNbits Wallet bot. See README.md, "Deploy with systemd".
+#
+# Unlike the other example bots this one runs as a dedicated user, not DynamicUser: it must
+# read its private wallets.json (mode 0600), and `npm run review` must run as the same user
+# to open its state. Create the user and files first:
+#   sudo useradd --system --home-dir /var/lib/anagram-lnbits-wallet --shell /usr/sbin/nologin anagram-wallet
+[Unit]
+Description=Anagram LNbits Wallet bot
+Wants=network-online.target
+After=network-online.target
+# A configuration error exits at once; do not retry it forever.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=anagram-wallet
+Group=anagram-wallet
+WorkingDirectory=/opt/lnbits-wallet
+# Read by systemd (as root) before the bot starts: it can stay root-owned, mode 0600.
+EnvironmentFile=/etc/anagram-lnbits-wallet/env
+Environment=DATA_DIR=/var/lib/anagram-lnbits-wallet
+Environment=WALLETS_FILE=/etc/anagram-lnbits-wallet/wallets.json
+# Database mode (see the README): remove WALLETS_FILE above and uncomment both lines. Create the
+# folder first, as this user: sudo install -d -m 0700 -o anagram-wallet -g anagram-wallet <folder>
+# Run the setup tools as that user too, so that the bot can read what they write.
+# Environment=SECRETS_DIR=/var/lib/anagram-lnbits-wallet-secrets
+# ReadWritePaths=/var/lib/anagram-lnbits-wallet-secrets
+# node directly, not `npm start`: npm would also contact its registry for update checks.
+ExecStart=/usr/bin/node /opt/lnbits-wallet/bot.js
+StateDirectory=anagram-lnbits-wallet
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=5
+# SIGTERM: the bot finishes the request in progress, keeps unsent replies and exits.
+KillSignal=SIGTERM
+TimeoutStopSec=45
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# A filtered call fails with EPERM instead of killing the process (Node calls setrlimit at
+# startup, which @resources would forbid; that group is deliberately not excluded).
+SystemCallErrorNumber=EPERM
+# Not MemoryDenyWriteExecute: Node's JIT needs writable executable memory.
+# Not verified on Linux in this repository's checks: run `systemd-analyze security` and a
+# test start on the target system before relying on it.
+
+[Install]
+WantedBy=multi-user.target

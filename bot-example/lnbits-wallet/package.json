@@ -1,0 +1,28 @@
+{
+  "name": "anagram-lnbits-wallet-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A standalone, receive-only Anagram bot for LNbits wallets: balance, history and invoices by encrypted DM, for people its operator has linked to a wallet.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env bot.js",
+    "review": "node --env-file-if-exists=.env review.js",
+    "keyring": "node --env-file-if-exists=.env admin.js keyring",
+    "migrate": "node --env-file-if-exists=.env admin.js migrate",
+    "rollback": "node --env-file-if-exists=.env admin.js rollback",
+    "backup": "node --env-file-if-exists=.env admin.js backup",
+    "restore": "node --env-file-if-exists=.env admin.js restore",
+    "connections": "node --env-file-if-exists=.env admin.js connections",
+    "test": "node --import ./test/no-network.js --test test/*.test.js",
+    "test:db": "node --import ./test/no-network.js --import ./test/db-mode.js --test test/*.test.js",
+    "mock-wallet": "node test/mock-wallet.js",
+    "check": "for f in *.js vendor/*.js; do node --check \"$f\" || exit 1; done"
+  },
+  "dependencies": {
+    "nostr-tools": "2.25.2",
+    "ws": "8.22.0"
+  }
+}

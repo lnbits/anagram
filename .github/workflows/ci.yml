@@ -35,6 +35,20 @@ jobs:
           cp -R bot-example/poll/{vendor,test} "$poll_dir/"
           npm --prefix "$poll_dir" ci
           npm --prefix "$poll_dir" test
+      - name: Test standalone LNbits wallet bot
+        run: |
+          for f in bot.js runtime.js private-groups.js public-groups.js direct-messages.js; do
+            cmp "bot-example/poll/vendor/$f" "bot-example/lnbits-wallet/vendor/$f"
+          done
+          cmp bot-example/poll/test/relay.js bot-example/lnbits-wallet/test/relay.js
+          cmp src/stores/nostr/botKeyboardProtocol.ts bot-example/lnbits-wallet/vendor/botKeyboardProtocol.ts
+          wallet_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$wallet_dir"' EXIT
+          cp -R bot-example/lnbits-wallet/. "$wallet_dir/"
+          npm --prefix "$wallet_dir" ci
+          npm --prefix "$wallet_dir" run check
+          npm --prefix "$wallet_dir" test
+          npm --prefix "$wallet_dir" run test:db
       - name: Test mobile packaging and startup guards
         run: python3 -B -m unittest discover -s scripts/release-smoke -p 'test_*.py'
       - run: npm run build

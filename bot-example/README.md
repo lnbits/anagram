@@ -1,6 +1,7 @@
 # Anagram bots
 
 - [Dad jokes](dad-jokes/README.md): basic DMs, private groups and public groups.
+- [LNbits wallet](lnbits-wallet/README.md): balance, history, invoices and incoming-payment notifications for LNbits wallets that the operator links to Nostr identities. DMs only; receive-only invoice keys.
 - [Poll bot](poll/README.md): Telegram-compatible inline buttons, private votes and personal results.
 - [Telegram bridge](telegram-bridge/README.md): bridge Telegram and Anagram conversations.
 

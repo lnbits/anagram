@@ -111,6 +111,17 @@ export async function world(t, { env = {}, lnbitsWallets = {} } = {}) {
   let child;
   let exited;
   let output = '';
+  // When each part of the output arrived, printed only if the test fails, so that a slow step can
+  // be found afterwards. The bot logs no keys or secrets (see the tests that check its output).
+  const bootedAt = Date.now();
+  const timeline = [];
+  const collect = (data) => {
+    output += data;
+    timeline.push(`+${((Date.now() - bootedAt) / 1000).toFixed(1)}s ${String(data).trimEnd()}`);
+  };
+  t.after(() => {
+    if (!t.passed) console.log(`Bot output of the failed test, by time:\n${timeline.join('\n')}`);
+  });
   let botKey;
   const boot = async () => {
     const started = output.length;
@@ -120,8 +131,8 @@ export async function world(t, { env = {}, lnbitsWallets = {} } = {}) {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const running = child;
-    child.stdout.on('data', (data) => (output += data));
-    child.stderr.on('data', (data) => (output += data));
+    child.stdout.on('data', collect);
+    child.stderr.on('data', collect);
     exited = new Promise((resolve) => running.once('exit', resolve));
     await until(
       () => /Profile and DM inbox published/.test(output.slice(started)),

@@ -1,7 +1,10 @@
 import 'fake-indexeddb/auto';
 import { afterEach, expect, it, vi } from 'vitest';
 import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
-import NostrClient, { type NostrSubscriptionOptions } from '#src/lib/nostr/client.ts';
+import NostrClient, {
+  type NostrEvent,
+  type NostrSubscriptionOptions,
+} from '#src/lib/nostr/client.ts';
 import { PublicGroupData, type SavedPublicRoom } from '#src/services/publicGroupData.ts';
 import { parsePublicRoom } from '#src/stores/nostr/publicGroups.ts';
 import { createPublicGroupActivityRuntime } from '#src/stores/nostr/publicGroupActivityRuntime.ts';
@@ -52,10 +55,13 @@ async function setup() {
       },
     };
   });
+  // What relays hold beyond the live watch, for one-off lookups.
+  const stored: NostrEvent[] = [];
+  const fetchEvents = vi.fn(async () => new Set(stored.map((raw) => ({ rawEvent: () => raw }))));
   const notify = vi.fn(),
     failed = vi.fn();
   const runtime = createPublicGroupActivityRuntime({
-    client: { subscribe } as unknown as NostrClient,
+    client: { subscribe, fetchEvents } as unknown as NostrClient,
     account: () => account,
     database: () => db,
     relays: async (urls) => urls,
@@ -64,6 +70,7 @@ async function setup() {
     },
     notify,
     failed,
+    editLookupDelayMs: 0,
   });
   runtime.sync([saved]);
   await vi.waitFor(() => expect(subscribe).toHaveBeenCalledOnce());
@@ -87,6 +94,8 @@ async function setup() {
     failed,
     subscriptions,
     subscribe,
+    stored,
+    fetchEvents,
     preferences,
     saved: () => saved,
     switchAccount: () => {
@@ -320,6 +329,40 @@ it('applies edits and author deletions to an unread mention in either arrival or
   await s.runtime.markRead(s.room.address);
   await s.runtime.ingest(s.room.address, s.edit(plain.id, plain.id, `${s.mention} late`));
   expect(s.saved().unreadMentionCount).toBe(0);
+});
+
+it('keeps a mention through an edit whose replacement the watch cannot see', async () => {
+  const s = await trustedMentionSetup();
+  const first = s.message(`${s.mention} typo`);
+  await s.runtime.ingest(s.room.address, first);
+  expect(s.saved().unreadMentionCount).toBe(1);
+  // The replacement keeps the original created_at, below a restarted watch's `since`, so
+  // only the deletion arrives. A reply referencing the message is not an edit of it.
+  s.stored.push(
+    s.message('a reply', s.now, [
+      ['a', s.room.address],
+      ['e', first.id],
+    ]),
+    s.edit(first.id, first.id, `${s.mention} fixed`),
+  );
+  await s.runtime.ingest(s.room.address, s.remove([first.id]));
+  await vi.waitFor(() => expect(s.saved().unreadMentionCount).toBe(1));
+  expect(s.fetchEvents).toHaveBeenCalledWith(
+    expect.objectContaining({ kinds: [9], '#e': [first.id], authors: [getPublicKey(s.author)] }),
+    expect.anything(),
+  );
+  expect(s.fetchEvents.mock.calls[0][0]).not.toHaveProperty('since');
+  expect(s.saved().unreadCount).toBe(1);
+
+  // A deletion with no replacement still retracts the mention.
+  s.stored.splice(0);
+  const second = s.message(`${s.mention} second`);
+  await s.runtime.ingest(s.room.address, second);
+  expect(s.saved().unreadMentionCount).toBe(2);
+  await s.runtime.ingest(s.room.address, s.remove([second.id]));
+  await vi.waitFor(() => expect(s.fetchEvents).toHaveBeenCalledTimes(2));
+  expect(s.saved().unreadMentionCount).toBe(1);
+  expect(s.failed).not.toHaveBeenCalled();
 });
 
 it('drops mention updates after an account switch', async () => {

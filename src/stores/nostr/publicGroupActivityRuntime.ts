@@ -21,6 +21,8 @@ export function createPublicGroupActivityRuntime(deps: {
   changed: (row: SavedPublicRoom) => void;
   notify?: (row: SavedPublicRoom, event: NostrEvent) => void;
   failed: () => void;
+  /** How long a deletion that cleared a mention waits before looking for its edit. */
+  editLookupDelayMs?: number;
 }) {
   const watches = new Map<string, { key: string; stop: () => void }>();
   let rows = new Map<string, SavedPublicRoom>();
@@ -33,6 +35,33 @@ export function createPublicGroupActivityRuntime(deps: {
     typeof document !== 'undefined' &&
     document.visibilityState === 'visible' &&
     document.hasFocus();
+
+  async function findEditReplacement(address: string, deletion: NostrEvent) {
+    const token = generation;
+    const active = () => generation === token && rows.has(address);
+    await new Promise((resolve) => setTimeout(resolve, deps.editLookupDelayMs ?? 2000));
+    const row = rows.get(address);
+    if (!active() || !row) return;
+    const relayUrls = await deps.relays(row.room.relays);
+    if (!active()) return;
+    const found = await deps.client.fetchEvents(
+      {
+        kinds: [9],
+        authors: [deletion.pubkey],
+        '#a': [address],
+        '#e': actionTargets(deletion),
+        limit: 10,
+      },
+      { relayUrls },
+    );
+    const targets = actionTargets(deletion);
+    // Only edits of a deleted version; each is validated and applied on top of that version.
+    for (const event of found) {
+      const raw = event.rawEvent();
+      const target = editTarget(raw);
+      if (active() && target && targets.includes(target)) await ingest(address, raw, false);
+    }
+  }
 
   async function ingest(address: string, event: NostrEvent, notify = true, cached = false) {
     const db = deps.database(),
@@ -67,6 +96,9 @@ export function createPublicGroupActivityRuntime(deps: {
       if (updated && current) {
         rows.set(address, updated);
         deps.changed(updated);
+        // An edit deletes the old version, then republishes with its original created_at,
+        // which the watch's `since` excludes. Look for that replacement by reference.
+        if (event.kind === 5) void findEditReplacement(address, event).catch(deps.failed);
       }
       return;
     }

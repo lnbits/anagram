@@ -2,7 +2,9 @@ import { expect, test } from '@playwright/test';
 import { getPublicKey, generateSecretKey, nip19 } from 'nostr-tools';
 import { bootstrapUser, disposeUsers, navigateToChat, TEST_ACCOUNTS } from '../parity/helpers';
 
-test('the new chat dialog stays open while the contact is being added', async ({ browser }) => {
+test('a slow lookup leaves the new chat dialog closable, and a closed one ignores it', async ({
+  browser,
+}) => {
   const user = await bootstrapUser(browser, TEST_ACCOUNTS.dialogBusyUser);
   try {
     const { page } = user;
@@ -11,25 +13,55 @@ test('the new chat dialog stays open while the contact is being added', async ({
       const { useNostrStore } = await import('/src/stores/nostrStore.svelte.ts');
       const store = useNostrStore();
       const resolve = store.resolveIdentifier.bind(store);
-      const gate = new Promise<void>((release) => {
-        (window as unknown as { releaseLookup: () => void }).releaseLookup = release;
-      });
+      const held = window as unknown as { releaseLookup: () => void; lookups: number };
+      held.lookups = 0;
+      let release = () => {};
+      held.releaseLookup = () => release();
       store.resolveIdentifier = async (value: string) => {
-        await gate;
-        return resolve(value);
+        await new Promise<void>((done) => (release = done));
+        const found = await resolve(value);
+        held.lookups++;
+        return found;
       };
     });
+    const released = (count: number) =>
+      expect
+        .poll(() => page.evaluate(() => (window as unknown as { lookups: number }).lookups))
+        .toBe(count);
     const dialog = page.getByRole('dialog');
+    const abandoned = getPublicKey(generateSecretKey());
     await page.getByRole('button', { name: 'Chat options' }).click();
     await page.getByTestId('new-chat-button').click();
+    await page.getByTestId('contact-identifier-input').fill(nip19.npubEncode(abandoned));
+    await page.getByRole('button', { name: 'Add contact', exact: true }).click();
+    await expect(dialog.getByRole('button', { name: 'Add contact', exact: true })).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: 'Close dialog' })).toBeEnabled();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+
+    // The abandoned lookup finishes later: no contact, no chat, no error in the next dialog.
+    await page.evaluate(() => (window as unknown as { releaseLookup: () => void }).releaseLookup());
+    await released(1);
+    await page.getByRole('button', { name: 'Chat options' }).click();
+    await page.getByTestId('new-chat-button').click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('alert')).toHaveCount(0);
+    expect(page.url()).not.toContain(abandoned);
+    expect(
+      await page.evaluate(async (key) => {
+        const { useChatStore } = await import('/src/stores/chatStore.svelte.ts');
+        return useChatStore().chats.some((chat) => chat.publicKey === key);
+      }, abandoned),
+    ).toBe(false);
+
+    // A lookup that finishes while its dialog is open still adds the contact.
     await page
       .getByTestId('contact-identifier-input')
       .fill(nip19.npubEncode(getPublicKey(generateSecretKey())));
     await page.getByRole('button', { name: 'Add contact', exact: true }).click();
-    await page.keyboard.press('Escape');
-    await expect(dialog).toBeVisible();
-    await expect(dialog.getByRole('button', { name: 'Close dialog' })).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: 'Add contact', exact: true })).toBeDisabled();
     await page.evaluate(() => (window as unknown as { releaseLookup: () => void }).releaseLookup());
+    await released(2);
     await expect(dialog).toBeHidden();
     await expect(page.getByTestId('message-composer-input')).toBeVisible();
   } finally {

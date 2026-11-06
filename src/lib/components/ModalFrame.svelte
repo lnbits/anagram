@@ -9,7 +9,18 @@
   export let busy = false;
   export let persistent = false;
   export let onclose: () => void;
+  // Called as soon as Escape dismisses the dialog, before it is gone, for work that must
+  // stop at once. The dialog then closes as usual and onclose follows.
+  export let ondismiss: (() => void) | undefined = undefined;
   export let children: Snippet;
+  // Escape closes the native dialog, but its close event can arrive much later, while the
+  // owner still treats the dialog as open. Report that close once, whichever comes first.
+  let reported = false;
+  function closed() {
+    if (reported) return;
+    reported = true;
+    onclose();
+  }
   function show(node: HTMLDialogElement) {
     node.showModal();
     return { destroy: () => node.close() };
@@ -25,10 +36,19 @@
     if (!busy && !persistent) onclose();
   }}
   oncancel={(event) => {
-    if (busy || persistent) event.preventDefault();
+    if (busy || persistent) {
+      event.preventDefault();
+      return;
+    }
+    ondismiss?.();
+    // After the native close has run (it restores focus), unless the owner already knows.
+    const dialog = event.currentTarget;
+    setTimeout(() => {
+      if (!dialog.open && dialog.isConnected) closed();
+    });
   }}
   onclose={(event) => {
-    if (event.currentTarget.isConnected) onclose();
+    if (event.currentTarget.isConnected) closed();
   }}
 >
   <header>

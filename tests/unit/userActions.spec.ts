@@ -1,5 +1,5 @@
 import { NostrKind } from '#src/lib/nostr/client.ts';
-import { createUserActions } from '#src/stores/nostr/userActions.ts';
+import { createUserActions, NIP05_LOOKUP_TIMEOUT_MS } from '#src/stores/nostr/userActions.ts';
 import type { MessageRelayStatus } from '#src/types/chat.ts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -260,6 +260,24 @@ describe('userActions runtime', () => {
       identifierType: 'nip05',
       error: null,
     });
+  });
+
+  it('gives up on a NIP-05 host that never answers', async () => {
+    vi.useFakeTimers();
+    try {
+      ndkMocks.fromNip05.mockReturnValue(new Promise(() => {}));
+      const result = createUserActions(createDeps()).resolveIdentifier('alice@unreachable.example');
+      await vi.advanceTimersByTimeAsync(NIP05_LOOKUP_TIMEOUT_MS);
+      await expect(result).resolves.toMatchObject({
+        isValid: false,
+        normalizedPubkey: null,
+        identifierType: 'nip05',
+        error: 'nip05_unresolved',
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('builds direct-message rumor events with trimmed message text and normalized reply ids', async () => {

@@ -2,6 +2,7 @@
 
 - [Dad jokes](dad-jokes/README.md): basic DMs, private groups and public groups.
 - [Poll bot](poll/README.md): Telegram-compatible inline buttons, private votes and personal results.
+- [GitHub issue agent](github-issue-agent/README.md): drafts GitHub issues with a local Ollama model and publishes them after explicit confirmation.
 - [Telegram bridge](telegram-bridge/README.md): bridge Telegram and Anagram conversations.
 
 Bots run under their own Nostr identity. Invite them to private groups or share a public-group link; interactive public bots must be trusted by the group owner.

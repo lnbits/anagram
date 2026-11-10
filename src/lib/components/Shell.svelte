@@ -1056,6 +1056,7 @@
   async function addContact() {
     const attempt = ++dialogAttempt;
     const abandoned = () => attempt !== dialogAttempt || modal !== 'contact';
+    let locked = false;
     dialogLookup = true;
     modalError = '';
     try {
@@ -1064,7 +1065,7 @@
       dialogLookup = false;
       if (!found.isValid || !found.normalizedPubkey)
         throw new Error('Enter a valid npub, public key, or NIP-05 address.');
-      dialogBusy = true;
+      dialogBusy = locked = true;
       const addingInContacts = section === 'contacts';
       const chat = addingInContacts
         ? null
@@ -1081,10 +1082,10 @@
     } catch (e) {
       if (!abandoned()) modalError = e instanceof Error ? e.message : String(e);
     } finally {
-      if (attempt === dialogAttempt) {
-        dialogLookup = false;
-        dialogBusy = false;
-      }
+      // Only one attempt at a time gets past its lookup, so this never unlocks a newer one,
+      // and a dialog the browser closed while busy is not left locked.
+      if (locked) dialogBusy = false;
+      if (attempt === dialogAttempt) dialogLookup = false;
     }
   }
   function addContactOnEnter(event: KeyboardEvent) {
@@ -1103,6 +1104,7 @@
   async function createGroup(recoveryPhrase: string) {
     const attempt = ++dialogAttempt;
     const abandoned = () => attempt !== dialogAttempt || modal !== 'group';
+    let locked = false;
     dialogLookup = true;
     modalError = '';
     try {
@@ -1114,7 +1116,7 @@
         keys.push(found.normalizedPubkey);
       }
       dialogLookup = false;
-      dialogBusy = true;
+      dialogBusy = locked = true;
       const result = await nostr.createGroupChat({
         recoveryPhrase,
         name: contactName,
@@ -1160,10 +1162,10 @@
     } catch (e) {
       if (!abandoned()) modalError = e instanceof Error ? e.message : String(e);
     } finally {
-      if (attempt === dialogAttempt) {
-        dialogLookup = false;
-        dialogBusy = false;
-      }
+      // Only one attempt at a time gets past its lookup, so this never unlocks a newer one,
+      // and a dialog the browser closed while busy is not left locked.
+      if (locked) dialogBusy = false;
+      if (attempt === dialogAttempt) dialogLookup = false;
     }
   }
   function prepareUpload(file?: File) {

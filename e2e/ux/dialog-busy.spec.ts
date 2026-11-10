@@ -102,3 +102,42 @@ test('a slow send does not lock the new chat dialog', async ({ browser }) => {
     await disposeUsers(user);
   }
 });
+
+test('a dialog the browser closes while busy does not lock the next one', async ({ browser }) => {
+  const user = await bootstrapUser(browser, TEST_ACCOUNTS.dialogBusyCloseUser);
+  try {
+    const { page } = user;
+    await page.evaluate(async () => {
+      const { useChatStore } = await import('/src/stores/chatStore.svelte.ts');
+      const held = window as unknown as { releaseAdd: () => void };
+      const gate = new Promise<void>((release) => (held.releaseAdd = release));
+      useChatStore().addContact = async () => {
+        await gate;
+        return undefined as never;
+      };
+    });
+    const dialog = page.getByRole('dialog');
+    await page.getByRole('button', { name: 'Chat options' }).click();
+    await page.getByTestId('new-chat-button').click();
+    await page
+      .getByTestId('contact-identifier-input')
+      .fill(nip19.npubEncode(getPublicKey(generateSecretKey())));
+    await page.getByRole('button', { name: 'Add contact', exact: true }).click();
+    await expect(dialog.getByRole('button', { name: 'Close dialog' })).toBeDisabled();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeVisible();
+    // Browsers may still close a busy dialog natively (Chromium does on a repeated Escape
+    // without user activation in between).
+    await page.evaluate(() => document.querySelector<HTMLDialogElement>('dialog.modal')?.close());
+    await expect(dialog).toBeHidden();
+    await page.evaluate(() => (window as unknown as { releaseAdd: () => void }).releaseAdd());
+
+    await page.getByRole('button', { name: 'Chat options' }).click();
+    await page.getByTestId('new-chat-button').click();
+    await expect(dialog.getByRole('button', { name: 'Close dialog' })).toBeEnabled();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+  } finally {
+    await disposeUsers(user);
+  }
+});

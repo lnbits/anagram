@@ -4,6 +4,7 @@ import {
   messageFormatUrls,
   collapseFormattedMessage,
   withoutFormattedMediaUrls,
+  withoutFormattedUrls,
   type FormattedMessagePart,
 } from '#src/utils/messageFormatting.ts';
 import { nip19 } from '#src/lib/nostr/client.ts';
@@ -119,5 +120,25 @@ describe('Telegram-style message formatting', () => {
     const parts = formatMessage('[no link '.repeat(10000) + '**x** '.repeat(10000));
     expect(all(parts).length).toBeLessThan(2100);
     expect(visibleText(parts)).toContain('[no link');
+  });
+});
+
+describe('withoutFormattedUrls (encrypted blob URLs)', () => {
+  const blob = `https://blossom.example.com/${'c3'.repeat(32)}`;
+
+  it('removes the URL everywhere, spoilers and code included, and keeps other text', () => {
+    for (const text of [blob, `look ${blob}`, `||${blob}||`, `\`${blob}\``, `**${blob}** ok`]) {
+      const parts = withoutFormattedUrls(formatMessage(text), [blob]);
+      expect(JSON.stringify(parts)).not.toContain('c3c3');
+    }
+    expect(visibleText(withoutFormattedUrls(formatMessage(`look ${blob}`), [blob])).trim()).toBe(
+      'look',
+    );
+  });
+
+  it('leaves other URLs and messages without encrypted URLs untouched', () => {
+    const parts = formatMessage('see https://example.com/page');
+    expect(withoutFormattedUrls(parts, [blob])).toEqual(parts);
+    expect(withoutFormattedUrls(parts, [])).toBe(parts);
   });
 });

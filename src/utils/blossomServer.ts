@@ -1,4 +1,7 @@
 export const DEFAULT_BLOSSOM_SERVER_URL = 'https://blossom.nostr.build';
+// Default for end-to-end encrypted private media. The server must store the uploaded
+// ciphertext (application/octet-stream) byte-for-byte; verified against Ditto's Blossom server.
+export const DEFAULT_PRIVATE_MEDIA_BLOSSOM_SERVER_URL = 'https://blossom.ditto.pub';
 
 export function normalizeBlossomServerUrl(value: unknown): string | null {
   if (typeof value !== 'string') {

@@ -1,5 +1,6 @@
 import {
   buildMessageTextParts,
+  withoutMessageUrls,
   withoutPreviewMediaUrls,
   type MessageTextPart,
 } from './messageTextParts.ts';
@@ -251,5 +252,25 @@ export function withoutFormattedMediaUrls(
     }
     if (part.type === 'url' && !withoutPreviewMediaUrls(part.text, attachments)) return [];
     return [part];
+  });
+}
+
+/**
+ * Removes the given URLs everywhere, spoilers and code included. Used for encrypted blob URLs,
+ * which point at ciphertext and are never shown as text, whether media is loaded or not.
+ */
+export function withoutFormattedUrls(
+  parts: FormattedMessagePart[],
+  urls: ReadonlyArray<string>,
+): FormattedMessagePart[] {
+  if (!urls.length) return parts;
+  return parts.flatMap((part): FormattedMessagePart[] => {
+    if (part.type === 'format') {
+      const children = withoutFormattedUrls(part.children, urls);
+      return children.length ? [{ ...part, children }] : [];
+    }
+    const text = withoutMessageUrls(part.text, urls);
+    if (text === part.text) return [part];
+    return part.type === 'url' || !text ? [] : [{ ...part, text }];
   });
 }

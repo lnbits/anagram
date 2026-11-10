@@ -1483,6 +1483,32 @@ it('forwards into another public group without replacing the open thread', async
   ).toBe(true);
 });
 
+it('refuses to forward encrypted media into a public group', async () => {
+  const key = generateSecretKey(),
+    metadata = room(key, 'forward-encrypted');
+  const target = parsePublicRoom(metadata);
+  const { runtime, published } = setup([metadata], key);
+  await runtime.open(encodeRoomLink(target));
+  const before = published.length;
+  await expect(
+    runtime.forwardMessage(target.address, {
+      text: 'https://blossom.example/' + 'a'.repeat(64),
+      meta: {
+        attachments: [
+          {
+            type: 'media',
+            url: 'https://blossom.example/' + 'a'.repeat(64),
+            mimeType: 'image/jpeg',
+            sha256: 'a'.repeat(64),
+            encryption: { algorithm: 'aes-gcm', key: 'b'.repeat(64), nonce: 'c'.repeat(24) },
+          },
+        ],
+      },
+    }),
+  ).rejects.toThrow('Encrypted media cannot be forwarded to a public group.');
+  expect(published).toHaveLength(before);
+});
+
 it('receives standard reactions and deletions without application-specific room hints', async () => {
   const key = generateSecretKey(),
     reactor = generateSecretKey(),

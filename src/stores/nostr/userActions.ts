@@ -28,6 +28,7 @@ import type {
   SendDirectMessageReactionOptions,
 } from '#src/stores/nostr/types.ts';
 import type { MessageRelayStatus } from '#src/types/chat.ts';
+import { resolveChatMessageRumorKind } from '#src/utils/messageAttachments.ts';
 
 interface UserActionsDeps {
   prepareOutgoingPrivateMessage: (rumor: ClientEvent, recipient: string, retry?: boolean) => Promise<void>;
@@ -68,6 +69,7 @@ interface UserActionsDeps {
     createdAt?: number,
     replyToEventId?: string | null,
     additionalTags?: string[][],
+    kind?: 14 | 15,
   ) => ClientEvent;
   createEventDeletionRumorEvent: (
     senderPubkey: string,
@@ -305,11 +307,13 @@ export function createUserActions({
     }
 
     const replyTargetEventId = normalizeEventId(options.replyToEventId);
+    // giftWrap overwrites the rumor kind with rumorKind, so both must agree.
+    const rumorKind = resolveChatMessageRumorKind(options.rumorKind);
 
     const publishResult = await sendGiftWrappedRumor(
       recipientPublicKey,
       relays,
-      NostrKind.PrivateDirectMessage,
+      rumorKind,
       (senderPubkey, normalizedRecipientPubkey, createdAt) => {
         return createDirectMessageRumorEvent(
           senderPubkey,
@@ -318,6 +322,7 @@ export function createUserActions({
           createdAt,
           replyTargetEventId,
           options.additionalTags,
+          rumorKind,
         );
       },
       options,
@@ -507,7 +512,8 @@ export function createUserActions({
           ndk,
           await getOrCreateOutboundGiftWrap(storedEvent.event, scope, () =>
             giftWrap(rumorEvent, recipient, signer as any, {
-              rumorKind: NostrKind.PrivateDirectMessage,
+              // Keep kind 15 file messages as kind 15 when they are re-wrapped.
+              rumorKind: resolveChatMessageRumorKind(storedEvent.event.kind),
             }),
           ),
         );

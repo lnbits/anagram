@@ -2000,7 +2000,14 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
       getOwnPubkey: getLoggedInPublicKeyHex,
     });
 
-  const { getBlossomServerUrl, saveBlossomServerUrl } = createBlossomSettingsRuntime({
+  const {
+    getBlossomServerUrl,
+    getPrivateMediaBlossomServerUrl,
+    isPlaintextMediaConfirmationSkipped,
+    saveBlossomServerUrl,
+    savePrivateMediaBlossomServerUrl,
+    setPlaintextMediaConfirmationSkipped,
+  } = createBlossomSettingsRuntime({
     ensurePrivatePreferences,
     publishPrivatePreferences,
     readPrivatePreferencesFromStorage,
@@ -2858,7 +2865,11 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     sendDirectMessage,
     ensureBlossomUploadAuthentication,
     getBlossomServerUrl,
+    getPrivateMediaBlossomServerUrl,
+    isPlaintextMediaConfirmationSkipped,
     saveBlossomServerUrl,
+    savePrivateMediaBlossomServerUrl,
+    setPlaintextMediaConfirmationSkipped,
     getIrohRelays,
     getIrohRelaySettings,
     saveIrohRelaySettings,

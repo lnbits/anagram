@@ -29,6 +29,10 @@ import type {
 } from '#src/stores/nostr/types.ts';
 import type { MessageRelayStatus } from '#src/types/chat.ts';
 
+// A NIP-05 host that never answers would otherwise hold the lookup for the browser's own
+// network timeout, which can be minutes.
+export const NIP05_LOOKUP_TIMEOUT_MS = 10_000;
+
 interface UserActionsDeps {
   prepareOutgoingPrivateMessage: (rumor: ClientEvent, recipient: string, retry?: boolean) => Promise<void>;
   appendRelayStatusesToGroupMemberTicketEvent: (
@@ -212,8 +216,17 @@ export function createUserActions({
       };
     }
 
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const user = await NostrUser.fromNip05(value, ndk, true);
+      const user = await Promise.race([
+        NostrUser.fromNip05(value, ndk, true),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('NIP-05 lookup timed out')),
+            NIP05_LOOKUP_TIMEOUT_MS,
+          );
+        }),
+      ]);
       const normalizedPubkey = user?.pubkey?.toLowerCase() ?? null;
 
       if (!normalizedPubkey || !isValidPubkey(normalizedPubkey)) {
@@ -243,6 +256,8 @@ export function createUserActions({
         relays: [],
         error: 'nip05_unresolved',
       };
+    } finally {
+      clearTimeout(timer);
     }
   }
 

@@ -237,6 +237,17 @@
     beforeEdit = null;
   }
   let busy = false;
+  // Separate from busy so a slow send never locks the new chat or new group dialog.
+  let dialogBusy = false;
+  // An identifier lookup can be slow, so the dialog stays closable while one runs; closing
+  // or starting again leaves its result unused. Only the changes made after it lock the dialog.
+  let dialogLookup = false;
+  let dialogAttempt = 0;
+  function closeDialog() {
+    dialogAttempt++;
+    dialogLookup = false;
+    modal = '';
+  }
   let modal: '' | 'contact' | 'group' | 'profile' | 'forward' | 'room' | 'info' | 'upload' = '';
   let identifier = '';
   let contactName = '';
@@ -246,6 +257,8 @@
   let chatConfirmation: { id: string; name: string; action: 'delete' | 'block' } | null = null;
   let chatConfirmationBusy = false;
   let chatConfirmationError = '';
+  // Errors belong to the dialog that raised them; never carry them into the next one.
+  $: if (!modal) modalError = '';
   let contacts: ContactRecord[] = [];
   let contactsLoaded = false;
   // Profile hydration may cache a contact before its request is accepted.
@@ -1067,12 +1080,18 @@
     }
   }
   async function addContact() {
-    busy = true;
+    const attempt = ++dialogAttempt;
+    const abandoned = () => attempt !== dialogAttempt || modal !== 'contact';
+    let locked = false;
+    dialogLookup = true;
     modalError = '';
     try {
       const found = await nostr.resolveIdentifier(identifier);
+      if (abandoned()) return;
+      dialogLookup = false;
       if (!found.isValid || !found.normalizedPubkey)
         throw new Error('Enter a valid npub, public key, or NIP-05 address.');
+      dialogBusy = locked = true;
       const addingInContacts = section === 'contacts';
       const chat = addingInContacts
         ? null
@@ -1087,10 +1106,19 @@
       } else if (chat) await open(chat);
       modal = '';
     } catch (e) {
-      modalError = String(e);
+      if (!abandoned()) modalError = e instanceof Error ? e.message : String(e);
     } finally {
-      busy = false;
+      // Only one attempt at a time gets past its lookup, so this never unlocks a newer one,
+      // and a dialog the browser closed while busy is not left locked.
+      if (locked) dialogBusy = false;
+      if (attempt === dialogAttempt) dialogLookup = false;
     }
+  }
+  function addContactOnEnter(event: KeyboardEvent) {
+    if (event.key !== 'Enter' || event.isComposing || dialogBusy || dialogLookup || !identifier)
+      return;
+    event.preventDefault();
+    void addContact();
   }
   function openProfile() {
     groupMembers = ($state.selected?.meta.group_members ?? [])
@@ -1100,15 +1128,21 @@
     modal = 'profile';
   }
   async function createGroup(recoveryPhrase: string) {
-    busy = true;
+    const attempt = ++dialogAttempt;
+    const abandoned = () => attempt !== dialogAttempt || modal !== 'group';
+    let locked = false;
+    dialogLookup = true;
     modalError = '';
     try {
       const keys: string[] = [];
       for (const member of groupMembers.split(/[\s,]+/).filter(Boolean)) {
         const found = await nostr.resolveIdentifier(member);
+        if (abandoned()) return;
         if (!found.normalizedPubkey) throw new Error(`Invalid member: ${member}`);
         keys.push(found.normalizedPubkey);
       }
+      dialogLookup = false;
+      dialogBusy = locked = true;
       const result = await nostr.createGroupChat({
         recoveryPhrase,
         name: contactName,
@@ -1152,9 +1186,12 @@
       const chat = chats.chats.find((c) => c.publicKey === result.groupPublicKey);
       if (chat) await open(chat);
     } catch (e) {
-      modalError = String(e);
+      if (!abandoned()) modalError = e instanceof Error ? e.message : String(e);
     } finally {
-      busy = false;
+      // Only one attempt at a time gets past its lookup, so this never unlocks a newer one,
+      // and a dialog the browser closed while busy is not left locked.
+      if (locked) dialogBusy = false;
+      if (attempt === dialogAttempt) dialogLookup = false;
     }
   }
   function prepareUpload(file?: File) {
@@ -1881,7 +1918,9 @@
                   ? 'Group call'
                   : $state.selected?.name}
       label={modal}
-      onclose={() => (modal === 'upload' ? cancelUpload() : (modal = ''))}
+      busy={dialogBusy}
+      ondismiss={() => dialogAttempt++}
+      onclose={() => (modal === 'upload' ? cancelUpload() : closeDialog())}
     >
       {#if modal === 'info' && inspectedMessage}<MessageInfo
           message={inspectedMessage}
@@ -1908,17 +1947,25 @@
       {:else if modal === 'contact'}
         <ContactIdentifierInput
           bind:value={identifier}
-          disabled={busy}
+          disabled={dialogBusy || dialogLookup}
           searchReady={contactsLoaded}
           existingKeys={visibleContacts.map((contact) => contact.public_key)}
           onselect={(profile) => {
             if (!contactName.trim()) contactName = profile.name;
             modalError = '';
           }}
+          onkeydown={addContactOnEnter}
         />
-        <label>{$translate('Name (optional)')}<input bind:value={contactName} /></label>
-        <button class="primary" disabled={busy || !identifier} onclick={addContact}
-          >{$translate('contacts.addContactAction')}</button
+        <label
+          >{$translate('Name (optional)')}<input
+            bind:value={contactName}
+            onkeydown={addContactOnEnter}
+          /></label
+        >
+        <button
+          class="primary"
+          disabled={dialogBusy || dialogLookup || !identifier}
+          onclick={addContact}>{$translate('contacts.addContactAction')}</button
         >
       {:else if modal === 'group'}
         {#if groupFlow === 'choose'}
@@ -1938,25 +1985,29 @@
             }}
           />
         {:else if groupFlow === 'backup'}
-          <GroupSeedBackup relayUrls={relays.relays} {busy} onverified={createGroup} />
+          <GroupSeedBackup
+            relayUrls={relays.relays}
+            busy={dialogBusy || dialogLookup}
+            onverified={createGroup}
+          />
         {:else}<GroupProfileFields
             bind:name={contactName}
             bind:about={groupAbout}
             showPicture={false}
             contextKey="new-private-group"
-            disabled={busy}
+            disabled={dialogBusy}
           /><label
             >{$translate('Members')}<textarea
               bind:value={groupMembers}
               placeholder="Public keys or NIP-05 addresses, separated by commas"></textarea></label
           >
           <p>Members receive an encrypted invitation.</p>
-          <button class="outline" disabled={busy} onclick={() => (groupFlow = 'choose')}
+          <button class="outline" disabled={dialogBusy} onclick={() => (groupFlow = 'choose')}
             >Back</button
           >
           <button
             class="primary"
-            disabled={busy || !contactName}
+            disabled={dialogBusy || !contactName}
             onclick={() => (groupFlow = 'backup')}>Continue</button
           >
         {/if}

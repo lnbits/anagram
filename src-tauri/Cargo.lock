@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "anagram"
-version = "0.9.0"
+version = "0.9.7"
 dependencies = [
  "anagram-iroh-calls",
  "cc",

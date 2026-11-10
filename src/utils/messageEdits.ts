@@ -81,8 +81,8 @@ export function buildEditedMessageMeta(
     ...replacementMeta,
   };
 
-  // A keyboard belongs to the signed replacement, never to the old message text.
-  for (const field of ['inline_keyboard', 'inline_keyboard_version', 'inline_keyboard_chat_type', 'bot_command']) {
+  // A keyboard and mentions belong to the signed replacement, never to the old message text.
+  for (const field of ['inline_keyboard', 'inline_keyboard_version', 'inline_keyboard_chat_type', 'bot_command', 'mentions', 'mentions_me']) {
     if (!(field in replacementMeta)) delete nextMeta[field];
   }
 

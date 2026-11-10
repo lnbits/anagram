@@ -266,6 +266,18 @@ export function parseNostrMentions(text: string): ParsedNostrMention[] {
   return mentions;
 }
 
+const MENTION_URI_HINT = /(?:npub|nprofile)1/i;
+
+export function textMentionsPublicKey(text: string, publicKey: string | null | undefined): boolean {
+  const normalizedPublicKey = normalizePublicKey(publicKey);
+  // Most messages contain no NIP-19 profile reference; skip the bech32 decode for them.
+  if (!normalizedPublicKey || !MENTION_URI_HINT.test(text)) {
+    return false;
+  }
+
+  return parseNostrMentions(text).some((mention) => mention.publicKey === normalizedPublicKey);
+}
+
 export function buildMentionMetadata(
   text: string,
   loggedInPublicKey?: string | null,

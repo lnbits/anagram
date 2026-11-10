@@ -23,6 +23,7 @@ export interface SavedPublicRoom {
   successor?: string;
   updated: number;
   unreadCount?: number;
+  unreadMentionCount?: number;
   notificationsEnabled?: boolean;
   notificationsSince?: number;
   muted?: boolean;
@@ -270,7 +271,12 @@ export class PublicGroupData {
       };
     });
   }
-  async recordActivity(address: string, event: PublicGroupMessage, visible: boolean): Promise<{
+  async recordActivity(
+    address: string,
+    event: PublicGroupMessage,
+    visible: boolean,
+    mentionsMe = false,
+  ): Promise<{
     row: SavedPublicRoom | undefined; fresh: boolean;
   }> {
     const db = await this.db;
@@ -292,14 +298,80 @@ export class PublicGroupData {
           if (known.result) return;
           fresh = event.created_at >= (membership.activitySince ?? Number.MAX_SAFE_INTEGER);
           const unread = fresh && !visible && event.created_at >= (membership.readAt ?? 0);
-          receipts.add({ room: address, id: event.id, unread: unread ? 1 : 0 });
+          const mention = unread && mentionsMe;
+          // author/version let later edits and deletions retarget the mention.
+          receipts.add({ room: address, id: event.id, unread: unread ? 1 : 0,
+            author: event.pubkey, version: event.id, mention: mention ? 1 : 0 });
           row = { ...membership,
             unreadCount: (membership.unreadCount ?? 0) + (unread ? 1 : 0),
+            unreadMentionCount: (membership.unreadMentionCount ?? 0) + (mention ? 1 : 0),
             lastActivityAt: Math.max(membership.lastActivityAt ?? 0, event.created_at),
           };
           rooms.put(row);
         };
       };
+    });
+  }
+  /**
+   * Apply an edit or deletion to an unread message's mention. `version` is the
+   * signed event whose text is current: an edit applies only on top of it, and a
+   * deletion clears the mention only when it removes that version.
+   */
+  async updateMention(
+    address: string,
+    change:
+      | {
+          kind: 'edit';
+          root: string;
+          target: string;
+          id: string;
+          author: string;
+          mentionsMe: boolean;
+        }
+      | { kind: 'delete'; targets: string[]; author: string },
+  ): Promise<SavedPublicRoom | undefined> {
+    const db = await this.db;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(['rooms', 'receipts'], 'readwrite');
+      let row: SavedPublicRoom | undefined;
+      let delta = 0;
+      tx.oncomplete = () => resolve(row);
+      tx.onerror = tx.onabort = () => reject(tx.error);
+      const rooms = tx.objectStore('rooms'), receipts = tx.objectStore('receipts');
+      const roots = change.kind === 'edit' ? [change.root] : change.targets;
+      let pending = roots.length;
+      const finish = () => {
+        if (--pending > 0 || delta === 0) return;
+        const request = rooms.get(address);
+        request.onsuccess = () => {
+          if (!request.result) return;
+          row = { ...request.result,
+            unreadMentionCount: Math.max(0, (request.result.unreadMentionCount ?? 0) + delta) };
+          rooms.put(row);
+        };
+      };
+      for (const root of roots) {
+        const request = receipts.get([address, root]);
+        request.onsuccess = () => {
+          const receipt = request.result;
+          const version = receipt?.version ?? root;
+          if (receipt?.unread === 1 && receipt.author === change.author) {
+            if (change.kind === 'edit' && (change.target === version || version === root)) {
+              const mention = change.mentionsMe ? 1 : 0;
+              delta += mention - (receipt.mention ?? 0);
+              receipts.put({ ...receipt, version: change.id, mention });
+            } else if (
+              change.kind === 'delete' &&
+              receipt.mention === 1 &&
+              change.targets.includes(version)
+            ) {
+              delta -= 1;
+              receipts.put({ ...receipt, mention: 0 });
+            }
+          }
+          finish();
+        };
+      }
     });
   }
   async markRead(address: string): Promise<SavedPublicRoom | undefined> {
@@ -313,7 +385,8 @@ export class PublicGroupData {
       const request = rooms.get(address);
       request.onsuccess = () => {
         if (!request.result) return;
-        row = { ...request.result, unreadCount: 0, readAt: Math.floor(Date.now() / 1000) };
+        row = { ...request.result, unreadCount: 0, unreadMentionCount: 0,
+          readAt: Math.floor(Date.now() / 1000) };
         rooms.put(row);
       };
       const unread = tx.objectStore('receipts').index('unread').openCursor(IDBKeyRange.only([address, 1]));

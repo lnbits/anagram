@@ -1,7 +1,16 @@
 import type NostrClient from '#src/lib/nostr/client.ts';
 import type { NostrEvent, NostrSubscription } from '#src/lib/nostr/client.ts';
 import type { PublicGroupData, SavedPublicRoom } from '#src/services/publicGroupData.ts';
-import { roomPolicy, validRoomMessage } from './publicGroups.ts';
+import { textMentionsPublicKey } from '#src/utils/nostrMentions.ts';
+import { actionTargets, editRoot, editTarget, validPublicAction } from './publicMessageActions.ts';
+import { roomPolicy, validRoomMessage, type PublicRoom } from './publicGroups.ts';
+
+// Untrusted posts display profile mentions as "[profile removed]"; only count visible mentions.
+function mentionsAccount(room: PublicRoom, event: NostrEvent, account: string): boolean {
+  return (
+    roomPolicy(room, event.pubkey) === 'trusted' && textMentionsPublicKey(event.content, account)
+  );
+}
 
 /** Small live inbox summaries for joined rooms, independent of the displayed history window. */
 export function createPublicGroupActivityRuntime(deps: {
@@ -12,6 +21,8 @@ export function createPublicGroupActivityRuntime(deps: {
   changed: (row: SavedPublicRoom) => void;
   notify?: (row: SavedPublicRoom, event: NostrEvent) => void;
   failed: () => void;
+  /** How long a deletion that cleared a mention waits before looking for its edit. */
+  editLookupDelayMs?: number;
 }) {
   const watches = new Map<string, { key: string; stop: () => void }>();
   let rows = new Map<string, SavedPublicRoom>();
@@ -25,11 +36,72 @@ export function createPublicGroupActivityRuntime(deps: {
     document.visibilityState === 'visible' &&
     document.hasFocus();
 
+  async function findEditReplacement(address: string, deletion: NostrEvent) {
+    const token = generation;
+    const active = () => generation === token && rows.has(address);
+    await new Promise((resolve) => setTimeout(resolve, deps.editLookupDelayMs ?? 2000));
+    const row = rows.get(address);
+    if (!active() || !row) return;
+    const relayUrls = await deps.relays(row.room.relays);
+    if (!active()) return;
+    const found = await deps.client.fetchEvents(
+      {
+        kinds: [9],
+        authors: [deletion.pubkey],
+        '#a': [address],
+        '#e': actionTargets(deletion),
+        limit: 10,
+      },
+      { relayUrls },
+    );
+    const targets = actionTargets(deletion);
+    // Only edits of a deleted version; each is validated and applied on top of that version.
+    for (const event of found) {
+      const raw = event.rawEvent();
+      const target = editTarget(raw);
+      if (active() && target && targets.includes(target)) await ingest(address, raw, false);
+    }
+  }
+
   async function ingest(address: string, event: NostrEvent, notify = true, cached = false) {
     const db = deps.database(),
       account = deps.account(),
       token = generation;
     const row = rows.get(address);
+    if (event.kind === 5 || (event.kind === 9 && editTarget(event))) {
+      // Only unread messages can change mention state: skip signature checks and writes
+      // for deletions without unread mentions and edits without unread messages.
+      const kinds = event.tags.filter((tag) => tag[0] === 'k').map((tag) => tag[1]);
+      const relevant =
+        event.kind === 5
+          ? (row?.unreadMentionCount ?? 0) > 0 && (!kinds.length || kinds.includes('9'))
+          : (row?.unreadCount ?? 0) > 0;
+      if (!db || !account || !row?.joined || row.blocked || !relevant) return;
+      if (!validPublicAction(event, address)) return;
+      const updated = await db.updateMention(
+        address,
+        event.kind === 5
+          ? { kind: 'delete', targets: actionTargets(event), author: event.pubkey }
+          : {
+              kind: 'edit',
+              root: editRoot(event)!,
+              target: editTarget(event)!,
+              id: event.id!,
+              author: event.pubkey,
+              mentionsMe: mentionsAccount(row.room, event, account),
+            },
+      );
+      const current =
+        generation === token && deps.account() === account && deps.database() === db;
+      if (updated && current) {
+        rows.set(address, updated);
+        deps.changed(updated);
+        // An edit deletes the old version, then republishes with its original created_at,
+        // which the watch's `since` excludes. Look for that replacement by reference.
+        if (event.kind === 5) void findEditReplacement(address, event).catch(deps.failed);
+      }
+      return;
+    }
     if (
       !db ||
       !account ||
@@ -48,7 +120,12 @@ export function createPublicGroupActivityRuntime(deps: {
     if (!cached) await db.put(address, event);
     if (!active()) return;
     const reading = visible === address && focused();
-    const result = await db.recordActivity(address, event, reading);
+    const result = await db.recordActivity(
+      address,
+      event,
+      reading,
+      !reading && mentionsAccount(row.room, event, account),
+    );
     if (!active() || !result.row || !result.fresh) return;
     rows.set(address, result.row);
     deps.changed(result.row);
@@ -109,6 +186,14 @@ export function createPublicGroupActivityRuntime(deps: {
             {
               kinds: [9],
               '#a': [row.address],
+              since: Math.max(saved.activitySince ?? 0, (saved.lastActivityAt ?? 0) - 1),
+              limit: 50,
+            },
+            // Message deletions can retract an unread mention.
+            {
+              kinds: [5],
+              '#h': [row.address],
+              '#k': ['9'],
               since: Math.max(saved.activitySince ?? 0, (saved.lastActivityAt ?? 0) - 1),
               limit: 50,
             },

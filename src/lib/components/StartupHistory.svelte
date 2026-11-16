@@ -3,6 +3,7 @@
   import { useNostrStore } from '#src/stores/nostrStore.svelte.ts';
   import { translate } from '#src/i18n.ts';
   import {
+    getStartupHistoryStepsValue,
     isStartupLockedStepIdValue,
     type StartupTimedSnapshot,
   } from '#src/stores/nostr/startupState.ts';
@@ -24,7 +25,7 @@
   } catch {
     /* Optional UI preference. */
   }
-  $: steps = [...$state.steps].sort((a, b) => a.order - b.order);
+  $: steps = getStartupHistoryStepsValue($state.steps);
   $: active = steps.filter(
     (step) =>
       step.status === 'in_progress' ||

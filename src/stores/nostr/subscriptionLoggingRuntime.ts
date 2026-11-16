@@ -273,7 +273,7 @@ export function createSubscriptionLoggingRuntime({
       groupable: false,
       ...(options.onEose ? { onEose } : {}),
     });
-    if (options.onEose && !options.closeOnEose)
+    if (options.onEose && !options.closeOnEose && !options.onInitialSync)
       observeConnectedRelayEose(subscription, () => onEose(subscription));
     const reqFrame = buildNostrReqFrame(subId, subscription.filters);
     const reqStatement = buildLoggedNostrReqStatement(subId, subscription.filters);

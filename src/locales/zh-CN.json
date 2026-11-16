@@ -158,6 +158,7 @@
   "common.save": "保存",
   "common.open": "打开",
   "common.pageFound": "找不到页面",
+  "common.partialSync": "部分已同步",
   "common.pending": "待办的",
   "common.pendingTarget": "待定目标",
   "common.pendingTargets": "待定目标",

@@ -158,6 +158,7 @@
   "common.save": "Kaydet",
   "common.open": "Açık",
   "common.pageFound": "Sayfa bulunamadı",
+  "common.partialSync": "Kısmen eşitlendi",
   "common.pending": "Beklemede",
   "common.pendingTarget": "bekleyen hedef",
   "common.pendingTargets": "bekleyen hedefler",

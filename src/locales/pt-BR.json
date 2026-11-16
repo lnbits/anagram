@@ -158,6 +158,7 @@
   "common.save": "Salvar",
   "common.open": "Abrir",
   "common.pageFound": "Página não encontrada",
+  "common.partialSync": "Sincronizado parcialmente",
   "common.pending": "Pendente",
   "common.pendingTarget": "alvo pendente",
   "common.pendingTargets": "metas pendentes",

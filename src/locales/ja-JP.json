@@ -158,6 +158,7 @@
   "common.save": "保存",
   "common.open": "開ける",
   "common.pageFound": "ページが見つかりません",
+  "common.partialSync": "一部同期済み",
   "common.pending": "保留中",
   "common.pendingTarget": "保留中のターゲット",
   "common.pendingTargets": "保留中のターゲット",

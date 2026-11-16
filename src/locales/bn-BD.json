@@ -158,6 +158,7 @@
   "common.save": "সংরক্ষণ",
   "common.open": "খোলা",
   "common.pageFound": "পেজ পাওয়া যায়নি",
+  "common.partialSync": "আংশিকভাবে সিঙ্ক হয়েছে",
   "common.pending": "মুলতুবি",
   "common.pendingTarget": "মুলতুবি লক্ষ্য",
   "common.pendingTargets": "মুলতুবি লক্ষ্য",

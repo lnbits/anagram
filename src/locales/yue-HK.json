@@ -158,6 +158,7 @@
   "common.save": "儲存",
   "common.open": "開咗",
   "common.pageFound": "搵唔到頁面",
+  "common.partialSync": "部分已同步",
   "common.pending": "待處理",
   "common.pendingTarget": "待處理嘅目標",
   "common.pendingTargets": "待處理嘅目標",

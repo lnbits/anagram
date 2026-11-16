@@ -188,18 +188,11 @@ try {
           '/Library/Keychains/System.keychain',
         ]);
     } else {
-      const escaped = cert.replaceAll("'", "''");
-      command('powershell', [
-        '-NoProfile',
-        '-Command',
-        `$ErrorActionPreference = 'Stop'; Import-Certificate -FilePath '${escaped}' -CertStoreLocation Cert:\\CurrentUser\\Root | Out-Null`,
-      ]);
+      // Use the Windows store tool directly: a child Windows PowerShell session
+      // launched from pwsh may not have the Cert: provider initialized.
+      command('certutil.exe', ['-user', '-addstore', 'Root', cert]);
       removeTrust = () =>
-        command('powershell', [
-          '-NoProfile',
-          '-Command',
-          `$ErrorActionPreference = 'Stop'; Remove-Item 'Cert:\\CurrentUser\\Root\\${fingerprint}'`,
-        ]);
+        command('certutil.exe', ['-user', '-delstore', 'Root', fingerprint]);
     }
   }
   const relayConfig = join(directory, 'relay.toml');

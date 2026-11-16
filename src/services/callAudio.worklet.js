@@ -1,5 +1,8 @@
 // Only PCM moves through the audio render thread. Opus runs in a dedicated
 // worker. Credits bound MessagePort queues even when either thread is stalled.
+// Keep two complete frames ahead of the one being rendered. A worker reply
+// delayed past one 20 ms frame must not leave an otherwise healthy stream silent.
+const PLAYBACK_FRAMES = 3;
 class CallAudioProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
@@ -25,7 +28,7 @@ class CallAudioProcessor extends AudioWorkletProcessor {
         if (data.ack) this.credits = Math.min(this.captureFrames, this.credits + 1);
         if (data.pcm) {
           this.pending = false;
-          if (this.output.length < 2) this.output.push(data.pcm);
+          if (this.output.length < PLAYBACK_FRAMES) this.output.push(data.pcm);
         }
       };
     };
@@ -59,7 +62,7 @@ class CallAudioProcessor extends AudioWorkletProcessor {
           }
         }
       }
-      if (this.link && this.output.length < 2 && !this.pending) {
+      if (this.link && this.output.length < PLAYBACK_FRAMES && !this.pending) {
         this.pending = true;
         this.link.postMessage({ pull: true });
       }

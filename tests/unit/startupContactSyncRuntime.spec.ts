@@ -24,6 +24,10 @@ import { PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS } from '#src/stores/nostr/
 import { RelayQueryTimeoutError } from '#src/stores/nostr/relayQueryUtils.ts';
 import { writeStartupCheckpoint } from '#src/stores/nostr/startupCheckpoint.ts';
 import { createStartupContactSyncRuntime } from '#src/stores/nostr/startupContactSyncRuntime.ts';
+import {
+  createInitialStartupStepSnapshots,
+  getStartupHistoryStepsValue,
+} from '#src/stores/nostr/startupState.ts';
 
 const PUBKEY = 'a'.repeat(64);
 
@@ -141,6 +145,7 @@ describe('startup contact sync runtime', () => {
 
   it('runs startup restore tasks in dependency order', async () => {
     const taskOrder: string[] = [];
+    const beginStartupStep = vi.fn();
     let restoreStartupStatePromise: Promise<void> | null = null;
     let syncLoggedInContactProfilePromise: Promise<void> | null = null;
     let syncRecentChatContactsPromise: Promise<void> | null = null;
@@ -161,7 +166,7 @@ describe('startup contact sync runtime', () => {
 
     const runtime = createStartupContactSyncRuntime({
       applyContactCursorStateToContact: vi.fn(async () => false),
-      beginStartupStep: vi.fn(),
+      beginStartupStep,
       bumpContactListVersion: vi.fn(),
       completeStartupStep: vi.fn(),
       createStartupBatchTracker: vi.fn(() => ({
@@ -215,6 +220,9 @@ describe('startup contact sync runtime', () => {
 
     await runtime.restoreStartupState();
 
+    expect(
+      getStartupHistoryStepsValue(createInitialStartupStepSnapshots()).map((step) => step.id),
+    ).toEqual(beginStartupStep.mock.calls.map(([stepId]) => stepId));
     expect(taskOrder).toEqual([
       'my-relays-restore',
       'my-relays-subscribe',

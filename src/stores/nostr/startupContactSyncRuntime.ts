@@ -10,7 +10,10 @@ import {
   readStartupCheckpoint,
   writeStartupCheckpoint,
 } from '#src/stores/nostr/startupCheckpoint.ts';
-import type { StartupStepId } from '#src/stores/nostr/startupState.ts';
+import {
+  STARTUP_RESTORE_STEP_ORDER,
+  type StartupStepId,
+} from '#src/stores/nostr/startupState.ts';
 import type {
   ContactCursorContent,
   ContactRefreshLifecycle,
@@ -34,22 +37,6 @@ interface RefreshAllStoredContactsSummary {
   cursorAppliedCount: number;
   cursorUiReloaded: boolean;
 }
-
-const STARTUP_RESTORE_STEP_ORDER = [
-  'my-relays-restore',
-  'my-relays-subscribe',
-  'outbound-message-replay',
-  'private-preferences',
-  'private-contact-list-restore',
-  'group-identity-secrets',
-  'contact-cursor-state',
-  'private-contact-list-subscribe',
-  'contact-profile-subscribe',
-  'contact-relay-list-subscribe',
-  'private-messages-subscribe',
-  'group-rosters-subscribe',
-  'message-history-restore',
-] as const satisfies readonly StartupStepId[];
 
 const STARTUP_TASK_ERROR_MESSAGES: Record<StartupStepId, string> = {
   'my-relays-restore': 'Failed to restore My Relays on startup',

@@ -1,0 +1,27 @@
+name: Set up Android PR tooling
+description: Install the shared Node, Java, Android SDK and Gradle tools for PR jobs.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version-file: .node-version
+        cache: npm
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+    - uses: android-actions/setup-android@v3
+      with:
+        packages: platform-tools
+        log-accepted-android-sdk-licenses: false
+    - uses: gradle/actions/setup-gradle@v4
+    - run: npm ci
+      shell: bash
+    - name: Install Android SDK and NDK
+      shell: bash
+      env:
+        NDK_VERSION: '29.0.13846066'
+      run: |
+        sdkmanager "ndk;$NDK_VERSION" "build-tools;35.0.0"
+        echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"

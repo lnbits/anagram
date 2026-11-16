@@ -11,7 +11,8 @@ concurrency:
   # Let a main run finish if it has already started deploying the site.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
-  web:
+  static-checks:
+    name: Static checks
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -25,6 +26,16 @@ jobs:
       - run: npm audit --audit-level=high
       - run: npm run verify:iroh
       - run: npm run quality:all
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
       - run: npm run test:unit
       - name: Test standalone poll bot and encrypted interactions
         run: |
@@ -37,21 +48,25 @@ jobs:
           npm --prefix "$poll_dir" test
       - name: Test mobile packaging and startup guards
         run: python3 -B -m unittest discover -s scripts/release-smoke -p 'test_*.py'
-      - run: npm run build
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e:pwa
-      - run: npm run test:e2e:local -- e2e/bot-keyboards.spec.ts e2e/app.spec.ts e2e/composer-navigation.spec.ts e2e/native-session.spec.ts e2e/dm-relay-discovery.spec.ts e2e/group-history.spec.ts e2e/public-groups.spec.ts e2e/message-formatting.spec.ts e2e/parity/dm/link-preview.spec.ts
-      - name: Test key safety, login links, history recovery and Android call startup
-        run: npm run test:e2e:local -- e2e/key-exposure.spec.ts e2e/auth-link-banner.spec.ts e2e/history-hydration.spec.ts e2e/incoming-history-recovery.spec.ts e2e/android-call-startup.spec.ts
-      - uses: actions/upload-artifact@v4
-        if: failure()
+  web-build:
+    name: Web build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          name: web-browser-failures
-          path: |
-            test-results/
-            .artifacts/pwa-results/
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Save production build for PWA tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: build/
           include-hidden-files: true
-          if-no-files-found: ignore
+          if-no-files-found: error
+          overwrite: true
           retention-days: 7
       - name: Prepare GitHub Pages routes
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
@@ -61,9 +76,78 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: build/
+  pwa-tests:
+    name: PWA tests
+    needs: web-build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-build
+          path: build/
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e:pwa
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: pwa-browser-failures
+          path: .artifacts/pwa-results/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 7
+  messaging-tests:
+    name: Messaging tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e:local -- e2e/bot-keyboards.spec.ts e2e/app.spec.ts e2e/composer-navigation.spec.ts e2e/native-session.spec.ts e2e/dm-relay-discovery.spec.ts e2e/group-history.spec.ts e2e/public-groups.spec.ts e2e/message-formatting.spec.ts e2e/parity/dm/link-preview.spec.ts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: messaging-browser-failures
+          path: test-results/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 7
+  recovery-security-tests:
+    name: Recovery and security tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Test key safety, login links, history recovery and Android call startup
+        run: npm run test:e2e:local -- e2e/key-exposure.spec.ts e2e/auth-link-banner.spec.ts e2e/history-hydration.spec.ts e2e/incoming-history-recovery.spec.ts e2e/android-call-startup.spec.ts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: recovery-security-browser-failures
+          path: test-results/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 7
   deploy-pages:
     name: Deploy chat.nostr.com
-    needs: web
+    needs: [static-checks, unit-tests, web-build, pwa-tests, messaging-tests, recovery-security-tests]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     permissions:

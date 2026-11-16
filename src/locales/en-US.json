@@ -158,6 +158,7 @@
   "common.save": "Save",
   "common.open": "Open",
   "common.pageFound": "Page not found",
+  "common.partialSync": "Partially synchronized",
   "common.pending": "Pending",
   "common.pendingTarget": "pending target",
   "common.pendingTargets": "pending targets",

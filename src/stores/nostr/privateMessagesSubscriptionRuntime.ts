@@ -48,7 +48,7 @@ interface PrivateMessagesSubscriptionRuntimeDeps {
   buildSubscriptionRelayDetails: (relayUrls: string[]) => Record<string, unknown>;
   bumpDeveloperDiagnosticsVersion: () => void;
   clearPrivateMessagesUiRefreshState: () => void;
-  completeStartupStep: (stepId: MessageStartupTrackId) => void;
+  completeStartupStep: (stepId: MessageStartupTrackId, partial?: boolean) => void;
   ensureRelayConnections: (relayUrls: string[]) => Promise<void>;
   extractRelayUrlsFromEvent: (event: ClientEvent) => string[];
   failStartupStep: (stepId: MessageStartupTrackId, error: unknown) => void;
@@ -157,6 +157,8 @@ export function createPrivateMessagesSubscriptionRuntime(
       signature: string;
       since: number;
       ready: boolean;
+      partial: boolean;
+      completedRelayUrls: string[];
       subscription: ReturnType<NostrClient['subscribe']>;
     }
   >();
@@ -626,6 +628,8 @@ export function createPrivateMessagesSubscriptionRuntime(
               signature,
               since,
               ready: false,
+              partial: false,
+              completedRelayUrls: [] as string[],
               subscription: null as unknown as ReturnType<NostrClient['subscribe']>,
             };
             scopes.set(publicKey, state);
@@ -651,13 +655,24 @@ export function createPrivateMessagesSubscriptionRuntime(
                   updateStoredEventSinceFromCreatedAt(wrapped.created_at);
                   queuePrivateMessageIngestion(wrapped, loggedInPubkeyHex, {
                     priority: 'foreground',
-                    ...(state.ready ? { live: true } : {}),
+                    ...(state.ready &&
+                    (!state.partial || state.completedRelayUrls.includes(wrapped.relay?.url ?? ''))
+                      ? { live: true }
+                      : {}),
                   });
                   bumpDeveloperDiagnosticsVersion();
                 },
                 onEose: () => {
                   state.ready = true;
+                  state.partial = false;
                   onEose();
+                  finishInitialMessages();
+                },
+                onInitialSync: (completed, pending) => {
+                  if (runGeneration !== generation || scopes.get(publicKey) !== state) return;
+                  state.ready = true;
+                  state.partial = pending.length > 0;
+                  state.completedRelayUrls = completed;
                   finishInitialMessages();
                 },
                 onClose: () => {
@@ -719,10 +734,25 @@ export function createPrivateMessagesSubscriptionRuntime(
       )
         return;
       messageHistoryRestoreContext.ready = true;
-      markPrivateMessagesLiveCoverageNow();
-      runtimeState.privateMessagesSubscriptionLastEoseAt ??= new Date().toISOString();
+      const partial = [...scopes.values()].some((state) => state.partial);
+      const hasCompletedRelay = [...scopes.values()].some(
+        (state) => !state.partial || state.completedRelayUrls.length > 0,
+      );
+      if (!partial) {
+        markPrivateMessagesLiveCoverageNow();
+        runtimeState.privateMessagesSubscriptionLastEoseAt ??= new Date().toISOString();
+      }
       setPrivateMessagesRestoreThrottleMs(0);
-      if (shouldTrackStartupStep) completeStartupStep('private-message-events');
+      if (shouldTrackStartupStep) {
+        if (hasCompletedRelay) completeStartupStep('private-message-events', partial);
+        else
+          failStartupStep(
+            'private-message-events',
+            new Error(
+              'No relay completed initial message synchronization. Retrying in the background.',
+            ),
+          );
+      }
       if (changed) {
         flushPrivateMessagesUiRefreshNow();
         schedulePostPrivateMessagesEoseChecks();

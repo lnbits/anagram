@@ -114,7 +114,7 @@ export const STARTUP_INTERNAL_TASK_DEFINITIONS = [
 
 export type StartupInternalTaskId = (typeof STARTUP_INTERNAL_TASK_DEFINITIONS)[number]['id'];
 export type StartupTrackId = StartupStepId | StartupInternalTaskId;
-export type StartupStepStatus = 'pending' | 'in_progress' | 'success' | 'error';
+export type StartupStepStatus = 'pending' | 'in_progress' | 'success' | 'partial' | 'error';
 
 export interface StartupTimedSnapshot {
   id: string;
@@ -178,12 +178,13 @@ export function beginStartupTimedSnapshotValue<TSnapshot extends StartupTimedSna
 
 export function completeStartupTimedSnapshotValue<TSnapshot extends StartupTimedSnapshot>(
   step: TSnapshot,
-  now: number
+  now: number,
+  partial = false,
 ): TSnapshot {
   const startedAt = step.startedAt ?? now;
   return {
     ...step,
-    status: 'success',
+    status: partial ? 'partial' : 'success',
     startedAt,
     completedAt: now,
     durationMs: Math.max(0, now - startedAt),

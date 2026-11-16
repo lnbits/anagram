@@ -158,6 +158,7 @@
   "common.save": "Save",
   "common.open": "Open am",
   "common.pageFound": "Page no dey",
+  "common.partialSync": "Some don sync",
   "common.pending": "Dey wait",
   "common.pendingTarget": "target wey dey wait",
   "common.pendingTargets": "targets wey dey wait",

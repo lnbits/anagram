@@ -58,11 +58,13 @@
     const status = $translate(
       step.status === 'success'
         ? 'common.completed'
-        : step.status === 'error'
-          ? 'common.failed'
-          : step.status === 'in_progress'
-            ? 'common.progress'
-            : 'common.pending',
+        : step.status === 'partial'
+          ? 'common.partialSync'
+          : step.status === 'error'
+            ? 'common.failed'
+            : step.status === 'in_progress'
+              ? 'common.progress'
+              : 'common.pending',
       { duration: duration(step) },
     );
     return typeof step.eventCount === 'number' && Number.isFinite(step.eventCount)

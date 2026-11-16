@@ -151,7 +151,10 @@ export function createStartupRuntime(state: StartupRuntimeDeps) {
     };
   }
 
-  function finalizeStartupStepDisplay(stepId: StartupTrackId, status: 'success' | 'error'): void {
+  function finalizeStartupStepDisplay(
+    stepId: StartupTrackId,
+    status: 'success' | 'partial' | 'error',
+  ): void {
     const parentStepId = resolveStartupStepIdValue(stepId);
     if (state.startupDisplay.stepId !== parentStepId) {
       return;
@@ -211,26 +214,26 @@ export function createStartupRuntime(state: StartupRuntimeDeps) {
     showStartupStepProgress(stepId);
   }
 
-  function completeStartupStep(stepId: StartupTrackId): void {
+  function completeStartupStep(stepId: StartupTrackId, partial = false): void {
     const now = Date.now();
     const internalTaskDefinition = getStartupInternalTaskDefinitionValue(stepId);
     if (internalTaskDefinition) {
       const task = ensureStartupInternalTaskSnapshot({ taskId: internalTaskDefinition.id });
-      Object.assign(task, completeStartupTimedSnapshotValue(task, now));
+      Object.assign(task, completeStartupTimedSnapshotValue(task, now, partial));
       if (
         'completeParentOnFinish' in internalTaskDefinition &&
         internalTaskDefinition.completeParentOnFinish === true
       ) {
         const parentStep = getStartupStepSnapshot(internalTaskDefinition.parentId);
-        Object.assign(parentStep, completeStartupTimedSnapshotValue(parentStep, now));
+        Object.assign(parentStep, completeStartupTimedSnapshotValue(parentStep, now, partial));
       }
-      finalizeStartupStepDisplay(stepId, 'success');
+      finalizeStartupStepDisplay(stepId, partial ? 'partial' : 'success');
       return;
     }
 
     const step = getStartupStepSnapshot(stepId);
-    Object.assign(step, completeStartupTimedSnapshotValue(step, now));
-    finalizeStartupStepDisplay(stepId, 'success');
+    Object.assign(step, completeStartupTimedSnapshotValue(step, now, partial));
+    finalizeStartupStepDisplay(stepId, partial ? 'partial' : 'success');
   }
 
   function failStartupStep(stepId: StartupTrackId, error: unknown): void {

@@ -1,6 +1,7 @@
 import { paceRelayRequests } from '#src/lib/nostr/relayPacing.ts';
 import { normalizeRumor } from '#src/lib/nostr/normalizeRumor.ts';
 import { guardRelayAuthentication } from '#src/lib/nostr/relayAuthentication.ts';
+import { RELAY_QUERY_TIMEOUT_MS } from '#src/stores/nostr/constants.ts';
 import { unwrapInWorker } from './cryptoWorker';
 import {
   SimplePool,
@@ -681,6 +682,9 @@ export interface NostrSubscriptionOptions {
   onEvent?: (event: ClientEvent, relay?: NostrRelay) => void;
   onEvents?: (events: ClientEvent[]) => void;
   onEose?: (subscription?: NostrSubscription) => void;
+  // Bounded live-listener readiness, never evidence of complete history coverage.
+  // Opting in also retries unfinished relays without replacing healthy listeners.
+  onInitialSync?: (completedRelayUrls: string[], pendingRelayUrls: string[]) => void;
   onClose?: () => void;
   [key: string]: unknown;
 }
@@ -713,20 +717,79 @@ export class NostrSubscription extends Emitter {
       this.opts.relayUrls ?? [...this.client.pool.relays.keys()];
     const seen = new Set<string>();
     const targets = urls.map((url) => this.client.pool.getRelay(url, false));
+    const settledTargets = new Set<NostrRelay>();
+    let syncSignature = '';
+    const reportInitialSync = () => {
+      if (this.closed || !this.opts.onInitialSync || settledTargets.size !== targets.length) return;
+      const completed = targets
+        .filter((target) => this.eosesSeen.has(target))
+        .map((target) => target.url);
+      const pending = targets
+        .filter((target) => !this.eosesSeen.has(target))
+        .map((target) => target.url);
+      const signature = JSON.stringify([completed, pending]);
+      if (signature === syncSignature) return;
+      syncSignature = signature;
+      this.opts.onInitialSync(completed, pending);
+    };
     this.opts.relaySet ??= new NostrRelaySet(new Set(targets), this.client);
     urls.forEach((url) => this.relayFilters.set(url, this.filters));
     for (const target of targets) {
       // One cleanup slot per relay, not one retained object per reconnect.
       let currentSubscription: { close(): void } | undefined;
       let cancelAuth: (() => void) | undefined;
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      let retryTimer: ReturnType<typeof setTimeout> | undefined;
+      let connecting = false;
+      let requestGeneration = 0;
+      let retryDelay = RELAY_QUERY_TIMEOUT_MS;
+      const retryUnfinished = () => {
+        if (!this.opts.onInitialSync || this.closed || retryTimer !== undefined) return;
+        retryTimer = setTimeout(() => {
+          retryTimer = undefined;
+          cancelAuth?.();
+          requestGeneration++;
+          currentSubscription?.close();
+          currentSubscription = undefined;
+          void startTarget();
+        }, retryDelay);
+        retryDelay = Math.min(retryDelay * 2, 60000);
+      };
+      const settle = () => {
+        settledTargets.add(target);
+        reportInitialSync();
+      };
+      const fail = (reason: unknown) => {
+        if (this.closed) return;
+        clearTimeout(deadline);
+        this.failedTargets.add(target);
+        this.emit('closed', reason, target);
+        settle();
+        retryUnfinished();
+        if (!this.opts.onInitialSync && targets.every((item) => this.failedTargets.has(item)))
+          this.stop();
+      };
       this.closers.push({
         close: () => {
+          clearTimeout(deadline);
+          clearTimeout(retryTimer);
           cancelAuth?.();
           currentSubscription?.close();
           currentSubscription = undefined;
         },
       });
       const startTarget = async () => {
+        if (this.closed || connecting) return;
+        connecting = true;
+        clearTimeout(retryTimer);
+        retryTimer = undefined;
+        clearTimeout(deadline);
+        if (this.opts.onInitialSync) {
+          deadline = setTimeout(() => {
+            settle();
+            retryUnfinished();
+          }, RELAY_QUERY_TIMEOUT_MS);
+        }
         this.failedTargets.delete(target);
         try {
           await target.connect();
@@ -736,15 +799,11 @@ export class NostrSubscription extends Emitter {
           const relay = this.client.transport.getExistingRelay(target.url);
           if (!relay?.connected) throw new Error('Relay connection unavailable; will retry');
           let authRetried = false;
-          const fail = (reason: unknown) => {
-            if (this.closed) return;
-            this.failedTargets.add(target);
-            this.emit('closed', reason, target);
-            if (targets.every((item) => this.failedTargets.has(item))) this.stop();
-          };
           const subscribeTarget = () => {
             if (this.closed) return;
             this.failedTargets.delete(target);
+            const request = ++requestGeneration;
+            const active = () => !this.closed && request === requestGeneration;
             let ended = false;
             const sub = relay.subscribe(this.filters, {
               id: this.subId,
@@ -752,7 +811,7 @@ export class NostrSubscription extends Emitter {
               // deadlines; a silent/disconnected relay must never advance history cursors.
               eoseTimeout: 2147483647,
               onevent: (raw) => {
-                if (this.closed || (seen.has(raw.id) && !this.opts.includeRelayDuplicates)) return;
+                if (!active() || (seen.has(raw.id) && !this.opts.includeRelayDuplicates)) return;
                 seen.add(raw.id);
                 if (seen.size > 10000) seen.delete(seen.values().next().value!);
                 const event = new ClientEvent(this.client, raw);
@@ -763,8 +822,13 @@ export class NostrSubscription extends Emitter {
                 this.emit('event', event, target);
               },
               oneose: () => {
-                if (this.closed) return;
+                if (!active()) return;
+                clearTimeout(deadline);
+                clearTimeout(retryTimer);
+                retryTimer = undefined;
+                retryDelay = RELAY_QUERY_TIMEOUT_MS;
                 this.eosesSeen.add(target);
+                settle();
                 if (targets.every((item) => this.eosesSeen.has(item))) {
                   this.eoseReceived = true;
                   this.opts.onEose?.(this);
@@ -773,6 +837,7 @@ export class NostrSubscription extends Emitter {
                 }
               },
               onclose: (reason) => {
+                if (!active()) return;
                 ended = true;
                 currentSubscription = undefined;
                 if (this.closed) return;
@@ -820,11 +885,9 @@ export class NostrSubscription extends Emitter {
           };
           subscribeTarget();
         } catch (error) {
-          if (!this.closed) {
-            this.failedTargets.add(target);
-            this.emit('closed', error, target);
-            if (targets.every((item) => this.failedTargets.has(item))) this.stop();
-          }
+          fail(error);
+        } finally {
+          connecting = false;
         }
       };
       // A partial failure keeps healthy deliveries alive. When this particular

@@ -158,6 +158,7 @@
   "common.save": "Enregistrer",
   "common.open": "Ouvert",
   "common.pageFound": "Page introuvable",
+  "common.partialSync": "Synchronisation partielle",
   "common.pending": "En attente",
   "common.pendingTarget": "cible en attente",
   "common.pendingTargets": "cibles en attente",

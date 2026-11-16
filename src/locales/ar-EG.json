@@ -158,6 +158,7 @@
   "common.save": "حفظ",
   "common.open": "يفتح",
   "common.pageFound": "لم يتم العثور على الصفحة",
+  "common.partialSync": "تمت المزامنة جزئيًا",
   "common.pending": "قيد الانتظار",
   "common.pendingTarget": "في انتظار الهدف",
   "common.pendingTargets": "الأهداف المعلقة",

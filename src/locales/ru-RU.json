@@ -158,6 +158,7 @@
   "common.save": "Сохранить",
   "common.open": "Открыть",
   "common.pageFound": "Страница не найдена",
+  "common.partialSync": "Частично синхронизировано",
   "common.pending": "В ожидании",
   "common.pendingTarget": "ожидающая цель",
   "common.pendingTargets": "ожидающие цели",

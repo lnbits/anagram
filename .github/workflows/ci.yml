@@ -36,6 +36,8 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
+      - name: Generate SvelteKit configuration
+        run: npx svelte-kit sync
       - run: npm run test:unit
       - name: Test standalone poll bot and encrypted interactions
         run: |

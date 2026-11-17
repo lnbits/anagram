@@ -169,6 +169,14 @@ try {
           fingerprint,
           '/Library/Keychains/System.keychain',
         ]);
+      // Ask the same platform trust engine for its precise SSL-policy error
+      // before Iroh reduces a rejected TLS connection to an online timeout.
+      command('security', ['verify-cert', '-c', cert, '-p', 'ssl', '-s', 'localhost', '-v'], {
+        stdio: 'inherit',
+      });
+      command('security', ['verify-cert', '-c', cert, '-p', 'ssl', '-s', '127.0.0.1', '-v'], {
+        stdio: 'inherit',
+      });
     } else {
       // The current-user Root store can display an unattended confirmation
       // dialog. Disposable GitHub-hosted Windows runners already run as admin;

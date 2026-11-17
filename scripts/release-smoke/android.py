@@ -148,8 +148,11 @@ def click(label):
     tap(wait(label, scroll=True))
 
 
-def wait_notification_listener(seconds=30):
-    end = time.monotonic() + seconds
+def wait_notification_listener(seconds=30, startup_seconds=180):
+    # The chat screen renders before initializeSessionState() finishes. Shell
+    # requests notifications only afterwards, so public-relay restoration needs
+    # its own bounded budget before the permission prompt/service can appear.
+    end = time.monotonic() + startup_seconds
     permission_approved = False
     while time.monotonic() < end:
         running()

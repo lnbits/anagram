@@ -167,10 +167,39 @@ class AndroidNotificationListener(unittest.TestCase):
         with patch.object(android, 'running'), \
                 patch.object(android, 'tree', return_value=screen()), \
                 patch.object(android, 'adb', return_value='isForeground=false'), \
-                patch.object(android.time, 'monotonic', side_effect=[0, 0, 31]), \
+                patch.object(android.time, 'monotonic', side_effect=[0, 0, 181]), \
                 patch.object(android.time, 'sleep'):
             with self.assertRaisesRegex(RuntimeError, 'notification listener did not enter the foreground'):
                 android.wait_notification_listener()
+
+    def test_slow_session_restore_can_request_permission_after_thirty_seconds(self):
+        # Run 44061855430 reached home but was still at "6/13 Restore encrypted
+        # group identity secrets" when the old 30-second wait expired. Shell
+        # requests permission only after that session initialization completes.
+        restoring = screen('[212,560][312,608]', 'settings')
+        ET.SubElement(restoring[0], 'node', {
+            'text': '6/13 Restore encrypted group identity secrets',
+            'enabled': 'true', 'bounds': '[10,528][278,544]',
+        })
+        with patch.object(android, 'running'), \
+                patch.object(android, 'tree', side_effect=[restoring, AndroidNotificationPrompt.prompt()]), \
+                patch.object(android, 'adb', side_effect=['(nothing)', '(nothing)', '', 'isForeground=true']) as adb, \
+                patch.object(android.time, 'monotonic', side_effect=[0, 0, 120, 121, 122]), \
+                patch.object(android.time, 'sleep'):
+            android.wait_notification_listener()
+        self.assertEqual(adb.call_args_list[2].args,
+                         ('shell', 'input', 'tap', '160', '351'))
+
+    def test_slow_session_restore_with_existing_permission_still_requires_service(self):
+        # On cold restart there need not be a permission prompt to renew a
+        # deadline. The listener may still wait for session restoration.
+        with patch.object(android, 'running'), \
+                patch.object(android, 'tree', return_value=screen()), \
+                patch.object(android, 'adb', side_effect=['(nothing)', 'isForeground=true']) as adb, \
+                patch.object(android.time, 'monotonic', side_effect=[0, 0, 120]), \
+                patch.object(android.time, 'sleep'):
+            android.wait_notification_listener()
+        self.assertEqual(adb.call_count, 2)
 
     def test_accepts_permission_that_arrives_after_home_then_waits_for_service(self):
         with patch.object(android, 'running'), \
@@ -199,14 +228,14 @@ class AndroidNotificationListener(unittest.TestCase):
         tree.assert_called_once()
 
     def test_late_permission_gets_a_full_service_start_timeout(self):
-        # The dump/tap can finish near the deadline or run past it. In both
-        # cases, the service starts only after the original 30-second budget.
-        for approval_time in (29.5, 31):
+        # The dump/tap can finish near the session deadline or run past it.
+        # Either way, service startup gets its own full 30-second budget.
+        for approval_time in (179.5, 181):
             with self.subTest(approval_time=approval_time), \
                     patch.object(android, 'running'), \
                     patch.object(android, 'tree', return_value=AndroidNotificationPrompt.prompt()) as tree, \
                     patch.object(android, 'adb', side_effect=['(nothing)', '', 'isForeground=false', 'isForeground=true']) as adb, \
-                    patch.object(android.time, 'monotonic', side_effect=[0, 29, approval_time, 32, approval_time + 29]), \
+                    patch.object(android.time, 'monotonic', side_effect=[0, 179, approval_time, 182, approval_time + 29]), \
                     patch.object(android.time, 'sleep'):
                 android.wait_notification_listener()
                 self.assertEqual(adb.call_args_list[1].args,

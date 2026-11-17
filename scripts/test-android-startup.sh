@@ -16,6 +16,7 @@ test_temp=$(mktemp -d)
 finish() {
   timeout 10 adb logcat -d > "$output/logcat.txt" 2>&1 || true
   timeout 10 adb logcat -d -b crash > "$output/crash.txt" 2>&1 || true
+  timeout 10 adb shell dumpsys activity services com.nostr.anagram/.RelayNotificationService > "$output/notification-service.txt" 2>&1 || true
   timeout 10 adb exec-out screencap -p > "$output/screen.png" 2>/dev/null || true
   rm -rf "$test_temp"
 }

@@ -1227,6 +1227,11 @@ describe('privateStateRuntime', () => {
 
     await runtime.restoreGroupIdentitySecrets(['wss://seed.example']);
 
+    expect(deps.ndk.fetchEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kinds: [NostrKind.FollowSet], authors: [ndkMocks.groupPubkey] }),
+      expect.objectContaining({ startupTrackId: 'group-identity-secrets' }),
+      expect.anything(),
+    );
     expect(deps.refreshContactRelayList).not.toHaveBeenCalled();
     expect(serviceMocks.contactsService.updateContact).toHaveBeenCalledWith(7, {
       metaBase: groupContact.meta,

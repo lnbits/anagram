@@ -398,7 +398,10 @@ export function createPrivateStateRuntime({
 
         if (signal.aborted || loggedInPubkeyHex !== getLoggedInPublicKeyHex()) return;
         const streamKey = `preferences:${loggedInPubkeyHex}`;
-        if ((lastReplaceableCreatedAtByStream.get(streamKey) ?? 0) > (preferencesEvent.created_at ?? 0)) return;
+        if ((lastReplaceableCreatedAtByStream.get(streamKey) ?? 0) > (preferencesEvent.created_at ?? 0)) {
+          completeStartupStep('private-preferences');
+          return;
+        }
         lastReplaceableCreatedAtByStream.set(
           streamKey,
           Math.max(
@@ -1460,6 +1463,7 @@ export function createPrivateStateRuntime({
     ownerPublicKey: string,
     seedRelayUrls: string[] = [],
   ): Promise<boolean> {
+    const signal = startupRelaySignal(ndk);
     const normalizedGroupPublicKey = inputSanitizerService.normalizeHexKey(groupPublicKey);
     const normalizedGroupPrivateKey = inputSanitizerService.normalizeHexKey(groupPrivateKey);
     const normalizedOwnerPublicKey = inputSanitizerService.normalizeHexKey(ownerPublicKey);
@@ -1486,7 +1490,7 @@ export function createPrivateStateRuntime({
 
     await ensureRelayConnections(relayUrls);
 
-    const relaySet = createReadyRelaySet(ndk, relayUrls);
+    const relaySet = NostrRelaySet.fromRelayUrls(relayUrls, ndk, false);
     const listEvent = await fetchEventWithRelayTimeout(
       ndk,
       {
@@ -1496,10 +1500,11 @@ export function createPrivateStateRuntime({
       },
       {
         cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
+        startupTrackId: 'group-identity-secrets',
       },
       relaySet,
     );
-    if (!listEvent) {
+    if (!listEvent || signal.aborted) {
       return false;
     }
 
@@ -1510,6 +1515,9 @@ export function createPrivateStateRuntime({
       listEvent.content,
       [normalizedOwnerPublicKey],
     );
+    const streamKey = `${normalizedGroupPublicKey}:${GROUP_MEMBERS_FOLLOW_SET_D_TAG}`;
+    if (signal.aborted || (lastReplaceableCreatedAtByStream.get(streamKey) ?? 0) > (listEvent.created_at ?? 0)) return false;
+    lastReplaceableCreatedAtByStream.set(streamKey, listEvent.created_at ?? 0);
     const existingMembers = inputSanitizerService.normalizeContactGroupMembers(
       groupContact.meta.group_members,
     );

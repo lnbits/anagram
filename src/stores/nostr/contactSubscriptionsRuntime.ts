@@ -1,3 +1,4 @@
+import { startupRelayObserver } from '#src/stores/nostr/startupRelayTracking.ts';
 import {
   metadataIndexerFallbacks,
   PUBLIC_DISCOVERY_INDEXERS,
@@ -661,7 +662,7 @@ export function createContactSubscriptionsRuntime({
           applied: async () => {
             await Promise.all([contactProfileApplyQueue, contactRelayListApplyQueue]);
           },
-          start: (onEose: () => void, onClose: () => void) =>
+          start: (onEose: () => void, onClose: () => void, onInitialSync: (completed: string[], pending: string[]) => void) =>
             subscribeWithReqLogging(
               'contact-profile',
               'contact-hydration',
@@ -679,6 +680,8 @@ export function createContactSubscriptionsRuntime({
                   else queueContactRelayListEventApplication(wrapped);
                 },
                 onEose,
+                onInitialSync,
+                onRelayStatus: startupRelayObserver(ndk, ['contact-profile-subscribe', 'contact-relay-list-subscribe'], signature, relayUrls),
                 onClose,
               },
               { signature, ...buildSubscriptionRelayDetails(relayUrls) },
@@ -686,7 +689,7 @@ export function createContactSubscriptionsRuntime({
         };
       }),
     );
-    await subscriptions.waitForEose();
+    await subscriptions.waitForInitialSync();
     if (runGeneration !== generation) return;
     // Relays/pool deduplicate kind-0 events. Reuse snapshots for new rosters and
     // contacts recreated by private-list reconciliation, without refetching or

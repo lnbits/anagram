@@ -1,3 +1,4 @@
+import { startupRelayObserver } from '#src/stores/nostr/startupRelayTracking.ts';
 import NostrClient, {
   ClientEvent,
   type NostrFilter,
@@ -640,6 +641,7 @@ export function createPrivateMessagesSubscriptionRuntime(
               {
                 relaySet: NostrRelaySet.fromRelayUrls(relayUrls, ndk, false),
                 cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
+                onRelayStatus: startupRelayObserver(ndk, ['private-message-events'], publicKey, relayUrls),
                 onEvent: (event) => {
                   if (getLoggedInPublicKeyHex() !== loggedInPubkeyHex) return;
                   const wrapped =

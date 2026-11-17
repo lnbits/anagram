@@ -24,6 +24,7 @@ import { PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS } from '#src/stores/nostr/
 import { RelayQueryTimeoutError } from '#src/stores/nostr/relayQueryUtils.ts';
 import { writeStartupCheckpoint } from '#src/stores/nostr/startupCheckpoint.ts';
 import { createStartupContactSyncRuntime } from '#src/stores/nostr/startupContactSyncRuntime.ts';
+import { startupRelayObserver } from '#src/stores/nostr/startupRelayTracking.ts';
 import {
   createInitialStartupStepSnapshots,
   getStartupHistoryStepsValue,
@@ -43,7 +44,7 @@ function installLocalStorage(): void {
 }
 
 function createSessionInitializationRuntime(
-  options: { restoreMyRelayListError?: Error; resumeError?: Error } = {},
+  options: { restoreMyRelayListError?: Error; resumeError?: Error; overrides?: Partial<Parameters<typeof createStartupContactSyncRuntime>[0]> } = {},
 ) {
   let restoreStartupStatePromise: Promise<void> | null = null;
   let syncLoggedInContactProfilePromise: Promise<void> | null = null;
@@ -120,6 +121,7 @@ function createSessionInitializationRuntime(
     subscribeMyRelayListUpdates: task(),
     subscribePrivateContactListUpdates: task(),
     subscribePrivateMessagesForLoggedInUser: task(),
+    ...options.overrides,
   });
 
   return {
@@ -140,7 +142,64 @@ describe('startup contact sync runtime', () => {
     for (const operation of networkTasks) expect(operation).not.toHaveBeenCalled();
   });
   afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it('retries failed restores with backoff and cancels queued retries at logout', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('scheduler', { yield: async () => {} });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const restore = vi.fn(async () => { throw new RelayQueryTimeoutError(10000); });
+    const { runtime } = createSessionInitializationRuntime({ overrides: {
+      relayClient: {}, restorePrivatePreferences: restore,
+    } });
+    await expect(runtime.rerunStartupStep('private-preferences')).rejects.toBeInstanceOf(RelayQueryTimeoutError);
+    expect(restore).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(restore).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(19999);
+    expect(restore).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(restore).toHaveBeenCalledTimes(3);
+    runtime.resetStartupSessionInitialization();
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(restore).toHaveBeenCalledTimes(3);
+  });
+
+  it('refreshes dependent routes after preferences recover, without retrying local errors', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('scheduler', { yield: async () => {} });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const restore = vi.fn().mockRejectedValueOnce(new RelayQueryTimeoutError(10000)).mockResolvedValue(undefined);
+    const cursors = vi.fn(async () => {});
+    const inbox = vi.fn(async () => {});
+    const { runtime } = createSessionInitializationRuntime({ overrides: {
+      relayClient: {}, restorePrivatePreferences: restore,
+      restoreContactCursorState: cursors, subscribePrivateMessagesForLoggedInUser: inbox,
+    } });
+    await expect(runtime.rerunStartupStep('private-preferences')).rejects.toThrow('timed out');
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(cursors).toHaveBeenCalledOnce();
+    expect(inbox).toHaveBeenCalledOnce();
+    restore.mockRejectedValue(new Error('signer rejected'));
+    await expect(runtime.rerunStartupStep('private-preferences')).rejects.toThrow('signer rejected');
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(restore).toHaveBeenCalledTimes(3);
+    runtime.resetStartupSessionInitialization();
+  });
+
+  it('restores cursors even when mute-list relay queries fail', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cursors = vi.fn(async () => {});
+    const { runtime } = createSessionInitializationRuntime({ overrides: {
+      restoreMuteList: vi.fn(async () => { throw new RelayQueryTimeoutError(10000); }),
+      restoreContactCursorState: cursors,
+    } });
+    await expect(runtime.rerunStartupStep('contact-cursor-state')).rejects.toThrow('timed out');
+    expect(cursors).toHaveBeenCalledOnce();
   });
 
   it('runs startup restore tasks in dependency order', async () => {
@@ -350,6 +409,25 @@ describe('startup contact sync runtime', () => {
     expect(runLightweightSessionResume).toHaveBeenCalledWith(['wss://relay.one/']);
     expect(beginStartupStep).not.toHaveBeenCalled();
   });
+
+  for (const snapshot of [false, true]) {
+    it(`keeps background sync separate from unfinished snapshot checkpoints (${snapshot})`, async () => {
+      installLocalStorage();
+      const relayClient = {};
+      const { runtime } = createSessionInitializationRuntime({ overrides: { relayClient } });
+      startupRelayObserver(relayClient, ['contact-profile-subscribe'], 'live', ['wss://relay.one/']);
+      startupRelayObserver(relayClient, ['message-history-restore'], 'history', ['wss://relay.one/']);
+      if (snapshot) {
+        startupRelayObserver(relayClient, ['private-preferences'], 'snapshot', ['wss://relay.one/'], { snapshot: true });
+      }
+      try {
+        await runtime.initializeSessionState(['wss://relay.one/']);
+        expect(JSON.parse(window.localStorage.getItem('nostr-startup-checkpoint')!).status).toBe(snapshot ? 'failed' : 'complete');
+      } finally {
+        runtime.resetStartupSessionInitialization();
+      }
+    });
+  }
 
   it('falls back to a full restore when lightweight resume fails', async () => {
     installLocalStorage();

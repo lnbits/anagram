@@ -889,5 +889,16 @@
   "chat.dadBotExamples": "Créer des bots utiles pour Nostr et Anagram est facile et offre des possibilités incroyables. Découvrez quelques exemples ici :",
   "chat.historyKeys": "Récupération des clés du groupe…",
   "chat.historyMessages": "Chargement des messages…",
-  "chat.historyRetry": "Une partie de l’historique n’a pas pu être chargée. Faites défiler vers le haut ou choisissez Plus pour réessayer."
+  "chat.historyRetry": "Une partie de l’historique n’a pas pu être chargée. Faites défiler vers le haut ou choisissez Plus pour réessayer.",
+  "startup.relaySummary": "{success} synchronized · {error} failed · {pending} pending",
+  "startup.relayState.success": "Synchronized",
+  "startup.relayState.error": "Failed",
+  "startup.relayState.pending": "Pending",
+  "startup.relayState.retrying": "Retrying",
+  "startup.relayReason.timeout": "No completion response before the deadline",
+  "startup.relayReason.unavailable": "Connection unavailable",
+  "startup.relayReason.closed": "Request closed before completion",
+  "startup.relayReason.auth": "Relay requires authentication or access",
+  "startup.relayReason.rate-limited": "Relay rate limit reached",
+  "startup.localFailure": "Relay results could not be fully applied. Retry this startup step from Developer settings."
 }

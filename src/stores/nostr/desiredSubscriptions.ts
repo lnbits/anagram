@@ -30,7 +30,11 @@ export interface DesiredSubscription {
   key: string;
   signature: string;
   prepare: () => Promise<void>;
-  start: (eose: () => void, close: () => void) => { stop: () => void };
+  start: (
+    eose: () => void,
+    close: () => void,
+    initialSync: (completed: string[], pending: string[]) => void,
+  ) => { stop: () => void };
   applied?: () => Promise<void>;
 }
 
@@ -42,6 +46,7 @@ export function createDesiredSubscriptions() {
     subscription?: { stop: () => void };
     started: Promise<void>;
     ready: Promise<void>;
+    initialReady: Promise<void>;
     cancel: () => void;
   }
   const entries = new Map<string, Entry>();
@@ -61,6 +66,13 @@ export function createDesiredSubscriptions() {
     remove(desired.key);
     let resolveReady!: () => void;
     let rejectReady!: (error: Error) => void;
+    let resolveInitial!: () => void;
+    let rejectInitial!: (error: Error) => void;
+    const initialReady = new Promise<void>((resolve, reject) => {
+      resolveInitial = resolve;
+      rejectInitial = reject;
+    });
+    void initialReady.catch(() => {});
     const ready = new Promise<void>((resolve, reject) => {
       resolveReady = resolve;
       rejectReady = reject;
@@ -70,8 +82,13 @@ export function createDesiredSubscriptions() {
     const entry: Entry = {
       signature: desired.signature,
       ready,
+      initialReady,
       started: Promise.resolve(),
-      cancel: () => rejectReady(new Error('Subscription closed before hydration completed.')),
+      cancel: () => {
+        const error = new Error('Subscription closed before hydration completed.');
+        rejectReady(error);
+        rejectInitial(error);
+      },
     };
     entries.set(desired.key, entry);
     entry.started = Promise.resolve()
@@ -81,16 +98,24 @@ export function createDesiredSubscriptions() {
         entry.subscription = desired.start(
           () => {
             void (desired.applied?.() ?? Promise.resolve()).then(resolveReady, rejectReady);
+            void (desired.applied?.() ?? Promise.resolve()).then(resolveInitial, rejectInitial);
           },
           () => {
             if (entries.get(desired.key) === entry) entries.delete(desired.key);
             entry.cancel();
-          }
+          },
+          () => {
+            if (entries.get(desired.key) !== entry) return;
+            // Settled initial work is not full EOSE. Live listeners retain and
+            // retry unfinished targets; callers can use already applied data.
+            void (desired.applied?.() ?? Promise.resolve()).then(resolveInitial, rejectInitial);
+          },
         );
       })
       .catch((error) => {
         if (entries.get(desired.key) === entry) entries.delete(desired.key);
         rejectReady(error);
+        rejectInitial(error);
         throw error;
       });
     return entry.started;
@@ -102,11 +127,11 @@ export function createDesiredSubscriptions() {
     await Promise.all(desired.map((item) => ensure(item, unhealthy)));
   }
 
-  async function waitForEose(timeoutMs = RELAY_QUERY_TIMEOUT_MS): Promise<void> {
+  async function waitForReady(initial: boolean, timeoutMs = RELAY_QUERY_TIMEOUT_MS): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        Promise.all([...entries.values()].map((entry) => entry.ready)),
+        Promise.all([...entries.values()].map((entry) => initial ? entry.initialReady : entry.ready)),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => reject(new RelayQueryTimeoutError(timeoutMs)), timeoutMs);
         }),
@@ -119,7 +144,8 @@ export function createDesiredSubscriptions() {
   return {
     ensure,
     reconcile,
-    waitForEose,
+    waitForEose: (timeoutMs?: number) => waitForReady(false, timeoutMs),
+    waitForInitialSync: (timeoutMs?: number) => waitForReady(true, timeoutMs),
     stop: () => {
       for (const key of entries.keys()) remove(key);
     },

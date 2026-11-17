@@ -11,6 +11,11 @@ import {
   type StartupStepSnapshot,
   type StartupTrackId,
 } from '#src/stores/nostr/startupState.ts';
+import {
+  setStartupRelayListener,
+  startupRelayStatuses,
+  type StartupRelaySnapshot,
+} from '#src/stores/nostr/startupRelayTracking.ts';
 
 
 interface StartupRuntimeState {
@@ -20,6 +25,7 @@ interface StartupRuntimeState {
 }
 
 interface StartupRuntimeDeps {
+  relayClient?: object;
   startupDisplay: StartupDisplaySnapshot;
   startupState: StartupRuntimeState;
   startupSteps: StartupStepSnapshot[];
@@ -38,6 +44,22 @@ interface StartupStepUpdate {
 
 export function createStartupRuntime(state: StartupRuntimeDeps) {
   const { startupState, startupStepMinProgressMs } = state;
+  if (state.relayClient) setStartupRelayListener(state.relayClient, (track, relays) => {
+    const step = state.startupSteps.find((entry) => entry.id === track);
+    const task = step ?? getStartupInternalTaskSnapshot(track);
+    if (!task) return;
+    task.relays = relays;
+    // A late real EOSE can update an already settled step, without opening the
+    // startup spinner again or overwriting an unrelated local/decryption error.
+    if (task.status !== 'pending' && task.status !== 'in_progress' && !task.errorMessage) {
+      task.status = relayResult(relays);
+    }
+  });
+
+  function relayResult(relays: StartupRelaySnapshot[]): 'success' | 'partial' | 'error' {
+    if (relays.every((relay) => relay.status === 'success')) return 'success';
+    return relays.some((relay) => relay.status === 'success') ? 'partial' : 'error';
+  }
   function clearStartupDisplayTimer(): void {
     if (startupState.startupDisplayTimer !== null) {
       globalThis.clearTimeout(startupState.startupDisplayTimer);
@@ -196,10 +218,12 @@ export function createStartupRuntime(state: StartupRuntimeDeps) {
     const now = Date.now();
     const internalTaskDefinition = getStartupInternalTaskDefinitionValue(stepId);
     const parentStep = getStartupStepSnapshot(stepId);
+    if (state.relayClient) parentStep.relays = startupRelayStatuses(state.relayClient, parentStep.id);
     const nextStep = beginStartupTimedSnapshotValue(parentStep, now);
     if (nextStep === parentStep) {
       if (internalTaskDefinition) {
         const task = ensureStartupInternalTaskSnapshot({ taskId: internalTaskDefinition.id });
+        if (state.relayClient) task.relays = startupRelayStatuses(state.relayClient, stepId);
         Object.assign(task, beginStartupTimedSnapshotValue(task, now));
         showStartupStepProgress(stepId);
       }
@@ -209,6 +233,7 @@ export function createStartupRuntime(state: StartupRuntimeDeps) {
     Object.assign(parentStep, nextStep);
     if (internalTaskDefinition) {
       const task = ensureStartupInternalTaskSnapshot({ taskId: internalTaskDefinition.id });
+      if (state.relayClient) task.relays = startupRelayStatuses(state.relayClient, stepId);
       Object.assign(task, beginStartupTimedSnapshotValue(task, now));
     }
     showStartupStepProgress(stepId);
@@ -220,20 +245,23 @@ export function createStartupRuntime(state: StartupRuntimeDeps) {
     if (internalTaskDefinition) {
       const task = ensureStartupInternalTaskSnapshot({ taskId: internalTaskDefinition.id });
       Object.assign(task, completeStartupTimedSnapshotValue(task, now, partial));
+      if (task.relays?.length) task.status = relayResult(task.relays);
       if (
         'completeParentOnFinish' in internalTaskDefinition &&
         internalTaskDefinition.completeParentOnFinish === true
       ) {
         const parentStep = getStartupStepSnapshot(internalTaskDefinition.parentId);
         Object.assign(parentStep, completeStartupTimedSnapshotValue(parentStep, now, partial));
+        if (parentStep.relays?.length) parentStep.status = relayResult(parentStep.relays);
       }
-      finalizeStartupStepDisplay(stepId, partial ? 'partial' : 'success');
+      finalizeStartupStepDisplay(stepId, task.status as 'success' | 'partial' | 'error');
       return;
     }
 
     const step = getStartupStepSnapshot(stepId);
     Object.assign(step, completeStartupTimedSnapshotValue(step, now, partial));
-    finalizeStartupStepDisplay(stepId, partial ? 'partial' : 'success');
+    if (step.relays?.length) step.status = relayResult(step.relays);
+    finalizeStartupStepDisplay(stepId, step.status as 'success' | 'partial' | 'error');
   }
 
   function failStartupStep(stepId: StartupTrackId, error: unknown): void {

@@ -889,5 +889,16 @@
   "chat.dadBotExamples": "Nostr आणि Anagram साठी उपयुक्त बॉट तयार करणे सोपे आहे आणि त्यातून अफाट शक्यता उघडतात. काही उदाहरणे येथे पाहा:",
   "chat.historyKeys": "गटाच्या कळा पुनर्प्राप्त होत आहेत…",
   "chat.historyMessages": "संदेश लोड होत आहेत…",
-  "chat.historyRetry": "काही इतिहास लोड होऊ शकला नाही. पुन्हा प्रयत्न करण्यासाठी वर स्क्रोल करा किंवा अधिक निवडा."
+  "chat.historyRetry": "काही इतिहास लोड होऊ शकला नाही. पुन्हा प्रयत्न करण्यासाठी वर स्क्रोल करा किंवा अधिक निवडा.",
+  "startup.relaySummary": "{success} synchronized · {error} failed · {pending} pending",
+  "startup.relayState.success": "Synchronized",
+  "startup.relayState.error": "Failed",
+  "startup.relayState.pending": "Pending",
+  "startup.relayState.retrying": "Retrying",
+  "startup.relayReason.timeout": "No completion response before the deadline",
+  "startup.relayReason.unavailable": "Connection unavailable",
+  "startup.relayReason.closed": "Request closed before completion",
+  "startup.relayReason.auth": "Relay requires authentication or access",
+  "startup.relayReason.rate-limited": "Relay rate limit reached",
+  "startup.localFailure": "Relay results could not be fully applied. Retry this startup step from Developer settings."
 }

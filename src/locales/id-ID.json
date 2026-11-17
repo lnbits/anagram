@@ -889,5 +889,16 @@
   "chat.dadBotExamples": "Membuat bot berguna untuk Nostr dan Anagram itu mudah dan memiliki potensi luar biasa. Lihat beberapa contoh di sini:",
   "chat.historyKeys": "Memulihkan kunci grup…",
   "chat.historyMessages": "Memuat pesan…",
-  "chat.historyRetry": "Sebagian riwayat tidak dapat dimuat. Gulir ke atas atau pilih Lainnya untuk mencoba lagi."
+  "chat.historyRetry": "Sebagian riwayat tidak dapat dimuat. Gulir ke atas atau pilih Lainnya untuk mencoba lagi.",
+  "startup.relaySummary": "{success} synchronized · {error} failed · {pending} pending",
+  "startup.relayState.success": "Synchronized",
+  "startup.relayState.error": "Failed",
+  "startup.relayState.pending": "Pending",
+  "startup.relayState.retrying": "Retrying",
+  "startup.relayReason.timeout": "No completion response before the deadline",
+  "startup.relayReason.unavailable": "Connection unavailable",
+  "startup.relayReason.closed": "Request closed before completion",
+  "startup.relayReason.auth": "Relay requires authentication or access",
+  "startup.relayReason.rate-limited": "Relay rate limit reached",
+  "startup.localFailure": "Relay results could not be fully applied. Retry this startup step from Developer settings."
 }

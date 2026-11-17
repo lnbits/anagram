@@ -1,3 +1,4 @@
+import { startupRelayObserver, type RelaySyncUpdate } from '#src/stores/nostr/startupRelayTracking.ts';
 import { createGroupHistoryRuntime } from '#src/stores/nostr/groupHistoryRuntime.svelte.ts';
 import { createThreadHistoryRuntime } from '#src/stores/nostr/threadHistoryRuntime.ts';
 import { MESSAGE_HYDRATION_VERSION } from '#src/lib/nostr/hydrationVersion.ts';
@@ -323,12 +324,23 @@ export function createPrivateMessagesBackfillRuntime({
       options.signal?.aborted ||
       (!options.signal && runToken !== privateMessagesBackfillRunToken) ||
       options.loggedInPubkeyHex !== getLoggedInPublicKeyHex();
+    const report: ((update: RelaySyncUpdate) => void) | undefined = options.startupTaskId
+      ? startupRelayObserver(ndk, [options.startupTaskId], options.startupTaskId, options.relayUrls, { parentStepId: 'message-history-restore' })
+      : undefined;
     const completedRelays: string[] = [];
     const readyRelays =
       options.requireReady === false
         ? NostrRelaySet.fromRelayUrls(options.relayUrls, ndk, false)
         : createReadyRelaySet(ndk, options.relayUrls);
-    if (!readyRelays) throw new RelayQueryUnavailableError();
+    if (!readyRelays) {
+      options.relayUrls.forEach((relayUrl) => report?.({ relayUrl, status: 'error', reason: 'unavailable' }));
+      throw new RelayQueryUnavailableError();
+    }
+    for (const relayUrl of options.relayUrls) {
+      if (!readyRelays.relayUrls.includes(relayUrl)) {
+        report?.({ relayUrl, status: 'error', reason: 'unavailable' });
+      }
+    }
     // Each relay owns a bounded cursor. A busy or unavailable relay cannot widen
     // another relay's request, and only a real EOSE plus committed ingestion counts.
     await Promise.all(
@@ -355,7 +367,10 @@ export function createPrivateMessagesBackfillRuntime({
                   historySubscriptions.delete(subscription);
                   subscription.stop();
                 }
-                if (error) reject(error);
+                if (error) {
+                  if (!cancelled()) report?.({ relayUrl, status: 'error', reason: error instanceof Error && error.message.includes('timed out') ? 'timeout' : 'closed' });
+                  reject(error);
+                }
                 else resolve({ count, oldest });
               };
               const aborted = () => finish(new Error('Thread history cancelled'));
@@ -383,6 +398,7 @@ export function createPrivateMessagesBackfillRuntime({
                     relaySet,
                     cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
                     closeOnEose: true,
+                    onRelayStatus: (update) => { if (update.status !== 'success' && !cancelled()) report?.(update); },
                     onEvent: (event) => {
                       if (settled || receivedEose || cancelled()) return;
                       const wrap =
@@ -474,6 +490,7 @@ export function createPrivateMessagesBackfillRuntime({
           // The background scheduler yields and discovers new groups after every page.
           if (options.pager || options.probe) break;
         }
+        report?.({ relayUrl, status: 'success' });
         completedRelays.push(relayUrl);
       }),
     );

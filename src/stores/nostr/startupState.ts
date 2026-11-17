@@ -1,3 +1,5 @@
+import type { StartupRelaySnapshot } from '#src/stores/nostr/startupRelayTracking.ts';
+
 export const STARTUP_STEP_DEFINITIONS = [
   { id: 'my-relays-restore', order: 1, label: 'startup.restoreMyRelayList' },
   { id: 'my-relays-subscribe', order: 2, label: 'startup.subscribeMyRelayListUpdates' },
@@ -147,6 +149,7 @@ export interface StartupTimedSnapshot {
   durationMs: number | null;
   errorMessage: string | null;
   eventCount: number | null;
+  relays?: StartupRelaySnapshot[];
 }
 
 export interface StartupInternalTaskSnapshot extends StartupTimedSnapshot {

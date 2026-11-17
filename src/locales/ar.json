@@ -889,5 +889,16 @@
   "chat.dadBotExamples": "إنشاء بوتات مفيدة لـ Nostr وAnagram سهل ويتيح إمكانات هائلة. اطّلع على بعض الأمثلة هنا:",
   "chat.historyKeys": "جارٍ استعادة مفاتيح المجموعة…",
   "chat.historyMessages": "جارٍ تحميل الرسائل…",
-  "chat.historyRetry": "تعذّر تحميل بعض السجل. مرّر لأعلى أو اختر المزيد للمحاولة مجددًا."
+  "chat.historyRetry": "تعذّر تحميل بعض السجل. مرّر لأعلى أو اختر المزيد للمحاولة مجددًا.",
+  "startup.relaySummary": "{success} synchronized · {error} failed · {pending} pending",
+  "startup.relayState.success": "Synchronized",
+  "startup.relayState.error": "Failed",
+  "startup.relayState.pending": "Pending",
+  "startup.relayState.retrying": "Retrying",
+  "startup.relayReason.timeout": "No completion response before the deadline",
+  "startup.relayReason.unavailable": "Connection unavailable",
+  "startup.relayReason.closed": "Request closed before completion",
+  "startup.relayReason.auth": "Relay requires authentication or access",
+  "startup.relayReason.rate-limited": "Relay rate limit reached",
+  "startup.localFailure": "Relay results could not be fully applied. Retry this startup step from Developer settings."
 }

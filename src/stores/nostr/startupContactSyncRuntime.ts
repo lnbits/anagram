@@ -22,6 +22,7 @@ import type {
 } from '#src/stores/nostr/types.ts';
 import type { ContactRecord } from '#src/types/contact.ts';
 import { yieldToMainThread } from '#src/utils/backgroundTasks.ts';
+import { needsStartupRelayRetry, resetStartupRelayTracking, startupRelayStatuses } from '#src/stores/nostr/startupRelayTracking.ts';
 
 interface StartupBatchTracker {
   beginItem: () => void;
@@ -72,6 +73,8 @@ interface StartupTaskRunOptions {
 }
 
 interface StartupContactSyncRuntimeDeps {
+  relayClient?: object;
+  getStartupStepSnapshot?: (step: StartupStepId) => { status: string; errorMessage: string | null };
   logStartupRestore?: (phase: string, details?: Record<string, unknown>) => void;
   applyContactCursorStateToContact: (
     contact: ContactRecord,
@@ -188,6 +191,32 @@ export function createStartupContactSyncRuntime(state: StartupContactSyncRuntime
   } = state;
   let initializeSessionStatePromise: Promise<void> | null = null;
   let initializedSessionPubkey: string | null = null;
+  let startupGeneration = 0;
+  const retryTimers = new Map<StartupStepId, ReturnType<typeof setTimeout>>();
+  const retryDelays = new Map<StartupStepId, number>();
+  function scheduleRetry(stepId: StartupStepId, seedRelayUrls: string[]): void {
+    if (!state.relayClient || retryTimers.has(stepId)) return;
+    const owner = getLoggedInPublicKeyHex();
+    const generation = startupGeneration;
+    const delay = retryDelays.get(stepId) ?? 10000;
+    retryDelays.set(stepId, Math.min(delay * 2, 60000));
+    retryTimers.set(stepId, setTimeout(() => {
+      retryTimers.delete(stepId);
+      if (generation !== startupGeneration || owner !== getLoggedInPublicKeyHex()) return;
+      if (state.isRestoringStartupState) { scheduleRetry(stepId, seedRelayUrls); return; }
+      void runStartupTask(stepId, seedRelayUrls).then(async (success) => {
+        if (!success || generation !== startupGeneration || owner !== getLoggedInPublicKeyHex()) return;
+        // Recovered preferences/contact/group data can unlock cursors and new
+        // inbox/roster routes. Reconciliation preserves unchanged healthy listeners.
+        if (['private-preferences', 'private-contact-list-restore', 'group-identity-secrets'].includes(stepId)) {
+          for (const dependent of ['contact-cursor-state', 'contact-profile-subscribe', 'private-messages-subscribe', 'group-rosters-subscribe'] as const) {
+            if (generation !== startupGeneration || owner !== getLoggedInPublicKeyHex()) return;
+            await runStartupTask(dependent, seedRelayUrls);
+          }
+        }
+      });
+    }, delay));
+  }
 
   function getCheckpointRelayUrls(fallbackRelayUrls: string[]): string[] {
     const configuredRelayUrls = inputSanitizerService.normalizeStringArray(
@@ -365,8 +394,15 @@ export function createStartupContactSyncRuntime(state: StartupContactSyncRuntime
         await refreshGroupRelayListsOnStartup(seedRelayUrls);
         return;
       case 'contact-cursor-state':
-        await restoreMuteList(seedRelayUrls);
-        await restoreContactCursorState(seedRelayUrls);
+        // These independent restores share a display row. A failed mute-list
+        // replica must not prevent read cursors from being restored.
+        {
+          const results = await Promise.allSettled([
+            restoreMuteList(seedRelayUrls), restoreContactCursorState(seedRelayUrls),
+          ]);
+          const failed = results.find((result) => result.status === 'rejected');
+          if (failed?.status === 'rejected') throw failed.reason;
+        }
         return;
       case 'logged-in-contact-profile':
         await syncLoggedInContactProfile(seedRelayUrls);
@@ -403,6 +439,9 @@ export function createStartupContactSyncRuntime(state: StartupContactSyncRuntime
     seedRelayUrls: string[],
     options: StartupTaskRunOptions = {},
   ): Promise<boolean> {
+    const generation = startupGeneration;
+    const owner = getLoggedInPublicKeyHex();
+    const current = () => generation === startupGeneration && owner === getLoggedInPublicKeyHex();
     const taskStartedAt = Date.now();
     if (options.resetStep === true) {
       resetStartupStep(stepId);
@@ -415,6 +454,9 @@ export function createStartupContactSyncRuntime(state: StartupContactSyncRuntime
     try {
       await yieldToMainThread();
       await runStartupTaskBody(stepId, seedRelayUrls, options);
+      if (!current()) return false;
+      const snapshot = state.getStartupStepSnapshot?.(stepId);
+      if (snapshot?.status === 'error' && snapshot.errorMessage) return false;
       if (stepId !== 'private-messages-subscribe' && stepId !== 'message-history-restore') {
         completeStartupStep(stepId);
       }
@@ -422,9 +464,17 @@ export function createStartupContactSyncRuntime(state: StartupContactSyncRuntime
         task: stepId,
         durationMs: Date.now() - taskStartedAt,
       });
+      if (state.relayClient && needsStartupRelayRetry(state.relayClient, stepId)) scheduleRetry(stepId, seedRelayUrls);
+      else {
+        clearTimeout(retryTimers.get(stepId));
+        retryTimers.delete(stepId);
+        retryDelays.delete(stepId);
+      }
       return true;
     } catch (error) {
+      if (!current()) return false;
       failStartupStep(stepId, error);
+      if (isExpectedRelayQueryDeferral(error)) scheduleRetry(stepId, seedRelayUrls);
       const reportError = isExpectedRelayQueryDeferral(error) ? console.warn : console.error;
       reportError(STARTUP_TASK_ERROR_MESSAGES[stepId], error);
       logStartupRestore('task-error', {
@@ -473,6 +523,7 @@ export function createStartupContactSyncRuntime(state: StartupContactSyncRuntime
     }
 
     state.isRestoringStartupState = true;
+    const generation = startupGeneration;
     logStartupRestore('start', {
       hasLoggedInPubkey: Boolean(getLoggedInPublicKeyHex()),
       seedRelayCount: seedRelayUrls.length,
@@ -481,10 +532,13 @@ export function createStartupContactSyncRuntime(state: StartupContactSyncRuntime
       let didCompleteEveryTask = true;
       try {
         for (const stepId of STARTUP_RESTORE_STEP_ORDER) {
+          if (generation !== startupGeneration || loggedInPubkeyHex !== getLoggedInPublicKeyHex()) return;
           didCompleteEveryTask =
             (await runStartupTask(stepId, seedRelayUrls)) && didCompleteEveryTask;
+          if (state.relayClient && startupRelayStatuses(state.relayClient, stepId).some((relay) => relay.status !== 'success')) didCompleteEveryTask = false;
         }
       } finally {
+        if (generation !== startupGeneration) return;
         state.isRestoringStartupState = false;
         flushPendingEventSinceUpdate();
         setRestoreStartupStatePromise(null);
@@ -557,6 +611,11 @@ export function createStartupContactSyncRuntime(state: StartupContactSyncRuntime
   }
 
   function resetStartupSessionInitialization(): void {
+    startupGeneration += 1;
+    retryTimers.forEach(clearTimeout);
+    retryTimers.clear();
+    retryDelays.clear();
+    if (state.relayClient) resetStartupRelayTracking(state.relayClient);
     initializeSessionStatePromise = null;
     initializedSessionPubkey = null;
   }

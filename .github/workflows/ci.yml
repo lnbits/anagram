@@ -137,7 +137,7 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - name: Test key safety, login links, history recovery and Android call startup
-        run: npm run test:e2e:local -- e2e/key-exposure.spec.ts e2e/auth-link-banner.spec.ts e2e/history-hydration.spec.ts e2e/incoming-history-recovery.spec.ts e2e/android-call-startup.spec.ts
+        run: npm run test:e2e:local -- e2e/key-exposure.spec.ts e2e/auth-link-banner.spec.ts e2e/auth-parity.spec.ts e2e/startup-relay-recovery.spec.ts e2e/history-hydration.spec.ts e2e/incoming-history-recovery.spec.ts e2e/android-call-startup.spec.ts
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

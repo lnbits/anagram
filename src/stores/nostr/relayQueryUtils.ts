@@ -9,13 +9,143 @@ import {
 } from '#src/lib/nostr/client.ts';
 import { RELAY_QUERY_TIMEOUT_MS } from '#src/stores/nostr/constants.ts';
 import { selectReadyRelayUrls } from '#src/stores/nostr/relayTimeoutUtils.ts';
+import { retainStartupRelayQueries, startupRelayObserver, startupRelaySignal } from '#src/stores/nostr/startupRelayTracking.ts';
+import type { StartupTrackId } from '#src/stores/nostr/startupState.ts';
 
 type RelayQueryNdk = Pick<NostrClient, 'fetchEvent' | 'fetchEvents' | 'subscribe'>;
 
 type RelayQuerySubscriptionOptions = Omit<
   NostrSubscriptionOptions,
   'closeOnEose' | 'onEose' | 'onEvent' | 'onEvents' | 'relaySet' | 'relayUrls'
-> & { allowPartialResults?: boolean };
+> & { allowPartialResults?: boolean; startupTrackId?: StartupTrackId };
+
+interface StartupQueryCache {
+  signal: AbortSignal;
+  release: () => void;
+  complete: Set<string>;
+  events: Map<string, ClientEvent>;
+  running?: Promise<Set<ClientEvent>>;
+}
+const startupQueries = new WeakMap<object, Map<string, StartupQueryCache>>();
+
+// A recovered contact secret or changed contact list produces new cursor filters.
+// Retire obsolete batches so they neither retain ciphertext nor request endless retries.
+export function retainStartupQueryFilters(ndk: object, track: StartupTrackId, filters: NostrFilter[]): void {
+  const keys = new Set(filters.map((filter) => JSON.stringify([track, filter])));
+  retainStartupRelayQueries(ndk, track, keys);
+  const queries = startupQueries.get(ndk);
+  for (const [key, cache] of queries ?? []) {
+    if (!key.startsWith(`[${JSON.stringify(track)},`) || keys.has(key) || cache.running) continue;
+    cache.release();
+    cache.events.clear();
+    queries?.delete(key);
+  }
+}
+
+// Startup snapshots retry failed replicas independently and keep data already
+// received. This is deliberately separate from history/coverage queries.
+function fetchStartupRelayEvents(
+  ndk: RelayQueryNdk,
+  filters: NostrFilter | NostrFilter[],
+  opts: RelayQuerySubscriptionOptions,
+  relaySet: NostrRelaySet,
+  timeoutMs: number,
+): Promise<Set<ClientEvent>> {
+  const track = opts.startupTrackId!;
+  const key = JSON.stringify([track, filters]);
+  const signal = startupRelaySignal(ndk);
+  let queries = startupQueries.get(ndk);
+  if (!queries || [...queries.values()].some((query) => query.signal !== signal)) {
+    queries = new Map();
+    startupQueries.set(ndk, queries);
+  }
+  let cache = queries.get(key);
+  if (!cache) {
+    cache = { signal, complete: new Set(), events: new Map(), release: () => {} };
+    queries.set(key, cache);
+    const entry = cache;
+    const aborted = () => {
+      entry.events.clear();
+      entry.complete.clear();
+      queries?.delete(key);
+    };
+    signal.addEventListener('abort', aborted, { once: true });
+    entry.release = () => signal.removeEventListener('abort', aborted);
+  }
+  if (cache.running) return cache.running;
+  const current = cache;
+  const report = startupRelayObserver(ndk, [track], key, relaySet.relayUrls, { snapshot: true });
+  const collect = (event: ClientEvent) => {
+    if (signal.aborted) return;
+    const id = event.deduplicationKey();
+    const previous = current.events.get(id);
+    if (!previous || Number(event.created_at) > Number(previous.created_at) ||
+      (event.created_at === previous.created_at && event.id < previous.id)) current.events.set(id, event);
+  };
+  current.running = Promise.all(relaySet.relayUrls.map(async (relayUrl) => {
+    if (current.complete.has(relayUrl)) {
+      report({ relayUrl, status: 'success' });
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      let subscription: ReturnType<NostrClient['subscribe']> | undefined;
+      const finish = (complete = false) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal.removeEventListener('abort', aborted);
+        if (complete && !signal.aborted) {
+          current.complete.add(relayUrl);
+          report({ relayUrl, status: 'success' });
+        }
+        subscription?.stop();
+        resolve();
+      };
+      const aborted = () => finish();
+      const timer = setTimeout(() => {
+        report({ relayUrl, status: 'error', reason: 'timeout' });
+        finish();
+      }, timeoutMs);
+      signal.addEventListener('abort', aborted, { once: true });
+      if (signal.aborted) { finish(); return; }
+      try {
+        const { startupTrackId: _track, allowPartialResults: _partial, ...options } = opts;
+        subscription = ndk.subscribe(filters, {
+          ...options,
+          relaySet: NostrRelaySet.fromRelayUrls([relayUrl], ndk as NostrClient, false),
+          closeOnEose: true,
+          onRelayStatus: (update) => {
+            if (settled) return;
+            report(update);
+            if (update.status === 'error') finish();
+          },
+          onEvent: (event) => { if (!settled) collect(event); },
+          onEvents: (events) => { if (!settled) events.forEach(collect); },
+          onEose: () => finish(true),
+          onClose: () => {
+            if (settled) return;
+            report({ relayUrl, status: 'error', reason: 'closed' });
+            finish();
+          },
+        });
+        if (settled) subscription.stop();
+      } catch {
+        report({ relayUrl, status: 'error', reason: 'unavailable' });
+        finish();
+      }
+    });
+  })).then(() => {
+    if (signal.aborted) throw new DOMException('Startup cancelled', 'AbortError');
+    if (!current.complete.size && !current.events.size) throw new RelayQueryTimeoutError(timeoutMs);
+    if (relaySet.relayUrls.every((url) => current.complete.has(url))) {
+      current.release();
+      queries?.delete(key);
+    }
+    return new Set(current.events.values());
+  }).finally(() => { current.running = undefined; });
+  return current.running;
+}
 
 export class RelayQueryUnavailableError extends Error {
   constructor() {
@@ -89,6 +219,7 @@ function fetchRelayEventsWithSubscription(
   relaySet: NostrRelaySet,
   timeoutMs: number,
 ): Promise<Set<ClientEvent>> {
+  if (opts?.startupTrackId) return fetchStartupRelayEvents(ndk, filters, opts, relaySet, timeoutMs);
   return new Promise<Set<ClientEvent>>((resolve, reject) => {
     const eventsByDeduplicationKey = new Map<string, ClientEvent>();
     let subscription: ReturnType<NostrClient['subscribe']> | null = null;

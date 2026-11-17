@@ -6,6 +6,28 @@ import {
 } from '../../src/stores/nostr/desiredSubscriptions';
 
 describe('desired subscriptions', () => {
+  it('accepts partial initial hydration after applying events without completing EOSE', async () => {
+    const runtime = createDesiredSubscriptions();
+    let initial!: (completed: string[], pending: string[]) => void;
+    let eose!: () => void;
+    let applied!: () => void;
+    const committed = new Promise<void>((resolve) => { applied = resolve; });
+    const stop = vi.fn();
+    await runtime.reconcile([{
+      key: 'contacts', signature: 'same', prepare: async () => {}, applied: () => committed,
+      start: (done, _close, partial) => { eose = done; initial = partial; return { stop }; },
+    }]);
+    initial(['wss://good/'], ['wss://slow/']);
+    let ready = false;
+    const waiting = runtime.waitForInitialSync().then(() => { ready = true; });
+    await Promise.resolve();
+    expect(ready).toBe(false);
+    applied(); await waiting;
+    await expect(runtime.waitForEose(1)).rejects.toThrow('timed out');
+    expect(stop).not.toHaveBeenCalled();
+    eose(); await runtime.waitForEose();
+    runtime.stop();
+  });
   it('joins concurrent setup and keeps an unchanged healthy subscription', async () => {
     const runtime = createDesiredSubscriptions();
     let release!: () => void;

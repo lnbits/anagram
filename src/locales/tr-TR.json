@@ -889,5 +889,16 @@
   "chat.dadBotExamples": "Nostr ve Anagram için yararlı botlar geliştirmek kolaydır ve inanılmaz olanaklar sunar. Bazı örneklere buradan bakabilirsiniz:",
   "chat.historyKeys": "Grup anahtarları kurtarılıyor…",
   "chat.historyMessages": "Mesajlar yükleniyor…",
-  "chat.historyRetry": "Geçmişin bir kısmı yüklenemedi. Yeniden denemek için yukarı kaydırın veya Daha fazla seçeneğini seçin."
+  "chat.historyRetry": "Geçmişin bir kısmı yüklenemedi. Yeniden denemek için yukarı kaydırın veya Daha fazla seçeneğini seçin.",
+  "startup.relaySummary": "{success} synchronized · {error} failed · {pending} pending",
+  "startup.relayState.success": "Synchronized",
+  "startup.relayState.error": "Failed",
+  "startup.relayState.pending": "Pending",
+  "startup.relayState.retrying": "Retrying",
+  "startup.relayReason.timeout": "No completion response before the deadline",
+  "startup.relayReason.unavailable": "Connection unavailable",
+  "startup.relayReason.closed": "Request closed before completion",
+  "startup.relayReason.auth": "Relay requires authentication or access",
+  "startup.relayReason.rate-limited": "Relay rate limit reached",
+  "startup.localFailure": "Relay results could not be fully applied. Retry this startup step from Developer settings."
 }

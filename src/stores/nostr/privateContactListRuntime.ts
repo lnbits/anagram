@@ -1,3 +1,4 @@
+import { startupRelayObserver } from '#src/stores/nostr/startupRelayTracking.ts';
 import NostrClient, {
   ClientEvent,
   type NostrFilter,
@@ -516,7 +517,7 @@ export function createPrivateContactListRuntime(state: PrivateContactListRuntime
     restorePrivateContactListPromise = (async () => {
       try {
         await subscribePrivateContactListUpdates(seedRelayUrls);
-        await desiredSubscriptions.waitForEose();
+        await desiredSubscriptions.waitForInitialSync();
         completeStartupStep('private-contact-list');
       } catch (error) {
         failStartupStep('private-contact-list', error);
@@ -574,7 +575,7 @@ export function createPrivateContactListRuntime(state: PrivateContactListRuntime
           await getLoggedInSignerUser();
         },
         applied: () => privateContactListApplyQueue,
-        start: (onEose, onClose) => {
+        start: (onEose, onClose, onInitialSync) => {
           privateContactListSubscriptionSignature = signature;
           privateContactListSubscription = subscribeWithReqLogging(
             'private-contact-list',
@@ -592,6 +593,8 @@ export function createPrivateContactListRuntime(state: PrivateContactListRuntime
                 queuePrivateContactListEventApplication(wrappedEvent);
               },
               onEose,
+              onInitialSync,
+              onRelayStatus: startupRelayObserver(ndk, ['private-contact-list', 'private-contact-list-subscribe'], signature, relayUrls),
               onClose,
             },
             { signature, ...buildSubscriptionRelayDetails(relayUrls) },

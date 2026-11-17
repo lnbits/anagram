@@ -457,6 +457,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     updateStartupInternalTask,
     updateStartupStep,
   } = createStartupRuntime({
+    relayClient: ndk,
     get startupDisplay() {
       return startupDisplay;
     },
@@ -2041,6 +2042,8 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     syncLoggedInContactProfile,
     syncRecentChatContacts,
   } = createStartupContactSyncRuntime({
+    relayClient: ndk,
+    getStartupStepSnapshot,
     logStartupRestore: (phase, details) =>
       logDeveloperTrace('info', 'startup-restore', phase, details),
     applyContactCursorStateToContact,

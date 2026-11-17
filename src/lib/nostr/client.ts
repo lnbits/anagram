@@ -1,3 +1,4 @@
+import { relaySyncReason, type RelaySyncUpdate, type RelaySyncObserver } from '#src/stores/nostr/startupRelayTracking.ts';
 import { paceRelayRequests } from '#src/lib/nostr/relayPacing.ts';
 import { normalizeRumor } from '#src/lib/nostr/normalizeRumor.ts';
 import { guardRelayAuthentication } from '#src/lib/nostr/relayAuthentication.ts';
@@ -685,6 +686,7 @@ export interface NostrSubscriptionOptions {
   // Bounded live-listener readiness, never evidence of complete history coverage.
   // Opting in also retries unfinished relays without replacing healthy listeners.
   onInitialSync?: (completedRelayUrls: string[], pendingRelayUrls: string[]) => void;
+  onRelayStatus?: RelaySyncObserver;
   onClose?: () => void;
   [key: string]: unknown;
 }
@@ -741,6 +743,9 @@ export class NostrSubscription extends Emitter {
       let deadline: ReturnType<typeof setTimeout> | undefined;
       let retryTimer: ReturnType<typeof setTimeout> | undefined;
       let connecting = false;
+      let attempted = false;
+      const report = (status: RelaySyncUpdate['status'], reason?: RelaySyncUpdate['reason']) =>
+        this.opts.onRelayStatus?.({ relayUrl: target.url, status, ...(reason ? { reason } : {}) });
       let requestGeneration = 0;
       let retryDelay = RELAY_QUERY_TIMEOUT_MS;
       const retryUnfinished = () => {
@@ -763,6 +768,7 @@ export class NostrSubscription extends Emitter {
         if (this.closed) return;
         clearTimeout(deadline);
         this.failedTargets.add(target);
+        report('error', relaySyncReason(reason));
         this.emit('closed', reason, target);
         settle();
         retryUnfinished();
@@ -781,11 +787,14 @@ export class NostrSubscription extends Emitter {
       const startTarget = async () => {
         if (this.closed || connecting) return;
         connecting = true;
+        report(attempted ? 'retrying' : 'pending');
+        attempted = true;
         clearTimeout(retryTimer);
         retryTimer = undefined;
         clearTimeout(deadline);
         if (this.opts.onInitialSync) {
           deadline = setTimeout(() => {
+            report('error', 'timeout');
             settle();
             retryUnfinished();
           }, RELAY_QUERY_TIMEOUT_MS);
@@ -828,6 +837,7 @@ export class NostrSubscription extends Emitter {
                 retryTimer = undefined;
                 retryDelay = RELAY_QUERY_TIMEOUT_MS;
                 this.eosesSeen.add(target);
+                report('success');
                 settle();
                 if (targets.every((item) => this.eosesSeen.has(item))) {
                   this.eoseReceived = true;
@@ -908,6 +918,7 @@ export class NostrSubscription extends Emitter {
     this.closers = [];
     this.emit('close');
     this.opts.onClose?.();
+    this.opts.onRelayStatus?.dispose?.();
     this.removeAllListeners();
   }
 }

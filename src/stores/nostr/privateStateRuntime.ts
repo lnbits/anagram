@@ -1,3 +1,4 @@
+import { startupRelaySignal } from '#src/stores/nostr/startupRelayTracking.ts';
 import type NostrClient from '#src/lib/nostr/client.ts';
 import {
   ClientEvent,
@@ -23,6 +24,7 @@ import {
 import {
   createReadyRelaySet,
   fetchEventsWithRelayTimeout,
+  retainStartupQueryFilters,
   fetchEventWithRelayTimeout,
 } from '#src/stores/nostr/relayQueryUtils.ts';
 import type {
@@ -337,6 +339,7 @@ export function createPrivateStateRuntime({
   }
 
   async function restorePrivatePreferences(seedRelayUrls: string[] = []): Promise<void> {
+    const signal = startupRelaySignal(ndk);
     if (restoreState.restorePrivatePreferencesPromise) {
       return restoreState.restorePrivatePreferencesPromise;
     }
@@ -359,7 +362,7 @@ export function createPrivateStateRuntime({
         await ensureRelayConnections(relayUrls);
         await ensureLoggedInSignerUser();
 
-        const relaySet = createReadyRelaySet(ndk, relayUrls);
+        const relaySet = NostrRelaySet.fromRelayUrls(relayUrls, ndk, false);
         const preferencesEvent = await fetchEventWithRelayTimeout(
           ndk,
           {
@@ -369,6 +372,7 @@ export function createPrivateStateRuntime({
           },
           {
             cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
+            startupTrackId: 'private-preferences',
           },
           relaySet,
         );
@@ -377,6 +381,7 @@ export function createPrivateStateRuntime({
           return;
         }
 
+        if (signal.aborted || loggedInPubkeyHex !== getLoggedInPublicKeyHex()) return;
         updateStoredEventSinceFromCreatedAt(preferencesEvent.created_at);
         let decryptedPreferences: PrivatePreferences | null = null;
         try {
@@ -391,7 +396,9 @@ export function createPrivateStateRuntime({
           return;
         }
 
+        if (signal.aborted || loggedInPubkeyHex !== getLoggedInPublicKeyHex()) return;
         const streamKey = `preferences:${loggedInPubkeyHex}`;
+        if ((lastReplaceableCreatedAtByStream.get(streamKey) ?? 0) > (preferencesEvent.created_at ?? 0)) return;
         lastReplaceableCreatedAtByStream.set(
           streamKey,
           Math.max(
@@ -402,6 +409,7 @@ export function createPrivateStateRuntime({
         writePrivatePreferencesToStorage(decryptedPreferences);
         completeStartupStep('private-preferences');
       } catch (error) {
+        if (signal.aborted) return;
         failStartupStep('private-preferences', error);
         throw error;
       }
@@ -1557,7 +1565,7 @@ export function createPrivateStateRuntime({
     await ensureRelayConnections(relayUrls);
     await ensureLoggedInSignerUser();
 
-    const relaySet = createReadyRelaySet(ndk, relayUrls);
+    const relaySet = NostrRelaySet.fromRelayUrls(relayUrls, ndk, false);
     const events = await fetchEventsWithRelayTimeout(
       ndk,
       {
@@ -1567,6 +1575,7 @@ export function createPrivateStateRuntime({
       },
       {
         cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
+        startupTrackId: 'group-identity-secrets',
       },
       relaySet,
     );
@@ -1594,6 +1603,7 @@ export function createPrivateStateRuntime({
   }
 
   async function restoreGroupIdentitySecrets(seedRelayUrls: string[] = []): Promise<void> {
+    const signal = startupRelaySignal(ndk);
     if (restoreState.restoreGroupIdentitySecretsPromise) {
       return restoreState.restoreGroupIdentitySecretsPromise;
     }
@@ -1602,6 +1612,7 @@ export function createPrivateStateRuntime({
     restoreState.restoreGroupIdentitySecretsPromise = (async () => {
       try {
         const eventsByGroupPubkey = await fetchGroupIdentitySecretEvents(seedRelayUrls);
+        if (signal.aborted) return;
         if (eventsByGroupPubkey.size === 0) {
           completeStartupStep('group-identity-secrets');
           return;
@@ -1618,6 +1629,7 @@ export function createPrivateStateRuntime({
             continue;
           }
 
+          if (signal.aborted) return;
           if (!decryptedSecret || decryptedSecret.group_pubkey !== groupPublicKey) {
             continue;
           }
@@ -1670,6 +1682,7 @@ export function createPrivateStateRuntime({
 
         completeStartupStep('group-identity-secrets');
       } catch (error) {
+        if (signal.aborted) return;
         failStartupStep('group-identity-secrets', error);
         throw error;
       }
@@ -1800,6 +1813,7 @@ export function createPrivateStateRuntime({
       .filter((entry): entry is readonly [string, string] => Boolean(entry))
       .map(([dTag]) => dTag);
     if (normalizedContactDTags.length === 0) {
+      retainStartupQueryFilters(ndk, 'contact-cursor-data', []);
       return new Map<string, ContactCursorContent>();
     }
 
@@ -1816,19 +1830,22 @@ export function createPrivateStateRuntime({
     await ensureRelayConnections(relayUrls);
     await ensureLoggedInSignerUser();
 
-    const relaySet = createReadyRelaySet(ndk, relayUrls);
+    const relaySet = NostrRelaySet.fromRelayUrls(relayUrls, ndk, false);
     const eventsByDTag = new Map<string, ContactCursorContent>();
 
-    for (const dTagBatch of chunkValues(normalizedContactDTags, CONTACT_CURSOR_FETCH_BATCH_SIZE)) {
+    const filters = chunkValues(normalizedContactDTags.sort(), CONTACT_CURSOR_FETCH_BATCH_SIZE).map((dTagBatch) => ({
+      kinds: [PRIVATE_PREFERENCES_KIND],
+      authors: [loggedInPubkeyHex],
+      '#d': dTagBatch,
+    }));
+    retainStartupQueryFilters(ndk, 'contact-cursor-data', filters);
+    for (const filter of filters) {
       const events = await fetchEventsWithRelayTimeout(
         ndk,
-        {
-          kinds: [PRIVATE_PREFERENCES_KIND],
-          authors: [loggedInPubkeyHex],
-          '#d': dTagBatch,
-        },
+        filter,
         {
           cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
+          startupTrackId: 'contact-cursor-data',
         },
         relaySet,
       );
@@ -2039,6 +2056,7 @@ export function createPrivateStateRuntime({
   }
 
   async function restoreContactCursorState(seedRelayUrls: string[] = []): Promise<void> {
+    const signal = startupRelaySignal(ndk);
     if (restoreState.restoreContactCursorStatePromise) {
       return restoreState.restoreContactCursorStatePromise;
     }
@@ -2061,12 +2079,14 @@ export function createPrivateStateRuntime({
         await contactsService.init();
         const contacts = await contactsService.listContacts();
         if (contacts.length === 0) {
+          retainStartupQueryFilters(ndk, 'contact-cursor-data', []);
           completeStartupStep('contact-cursor-data');
           return;
         }
 
         const cursorsByDTag = await fetchContactCursorEvents(contacts, seedRelayUrls);
 
+        if (signal.aborted) return;
         let didApplyCursorState = false;
         if (cursorsByDTag.size > 0) {
           for (const contact of contacts) {
@@ -2075,6 +2095,7 @@ export function createPrivateStateRuntime({
               continue;
             }
 
+            if (signal.aborted) return;
             const cursor = cursorsByDTag.get(contactDTag);
             if (!cursor) {
               continue;
@@ -2110,6 +2131,7 @@ export function createPrivateStateRuntime({
         await Promise.all([chatStore.reload(), messageStore.reloadLoadedMessages()]);
         completeStartupStep('contact-cursor-data');
       } catch (error) {
+        if (signal.aborted) return;
         failStartupStep('contact-cursor-data', error);
         throw error;
       }

@@ -889,5 +889,16 @@
   "chat.dadBotExamples": "Nostr や Anagram 向けの便利なボットは簡単に作れ、大きな可能性があります。こちらのサンプルをご覧ください：",
   "chat.historyKeys": "グループの鍵を復元中…",
   "chat.historyMessages": "メッセージを読み込み中…",
-  "chat.historyRetry": "履歴の一部を読み込めませんでした。上にスクロールするか「もっと見る」を選んで再試行してください。"
+  "chat.historyRetry": "履歴の一部を読み込めませんでした。上にスクロールするか「もっと見る」を選んで再試行してください。",
+  "startup.relaySummary": "{success} synchronized · {error} failed · {pending} pending",
+  "startup.relayState.success": "Synchronized",
+  "startup.relayState.error": "Failed",
+  "startup.relayState.pending": "Pending",
+  "startup.relayState.retrying": "Retrying",
+  "startup.relayReason.timeout": "No completion response before the deadline",
+  "startup.relayReason.unavailable": "Connection unavailable",
+  "startup.relayReason.closed": "Request closed before completion",
+  "startup.relayReason.auth": "Relay requires authentication or access",
+  "startup.relayReason.rate-limited": "Relay rate limit reached",
+  "startup.localFailure": "Relay results could not be fully applied. Retry this startup step from Developer settings."
 }

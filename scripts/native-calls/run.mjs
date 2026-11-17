@@ -9,6 +9,7 @@ import { createServer } from 'vite';
 import { chromium } from '@playwright/test';
 import { startIrohTestProxy } from '../iroh-test-proxy.cjs';
 import { runCommand } from './command.mjs';
+import { createTestCertificate } from './certificate.mjs';
 
 const linuxNative = process.argv.includes('--linux') && process.platform === 'linux';
 const browserOnly = process.argv.includes('--browser');
@@ -135,30 +136,7 @@ const startNativeProbe = (pid) => {
 };
 let app, timer;
 try {
-  const cert = join(directory, 'cert.pem');
-  command(
-    process.env.OPENSSL || 'openssl',
-    [
-      'req',
-      '-x509',
-      '-newkey',
-      'rsa:2048',
-      '-nodes',
-      '-days',
-      '1',
-      '-subj',
-      '/CN=Anagram disposable call test',
-      '-addext',
-      'subjectAltName=DNS:localhost,IP:127.0.0.1',
-      '-addext',
-      'basicConstraints=critical,CA:FALSE',
-      '-keyout',
-      join(directory, 'key.pem'),
-      '-out',
-      cert,
-    ],
-    { stdio: 'ignore' },
-  );
+  const cert = createTestCertificate(directory, command);
   if (!browserOnly && !linuxNative) {
     const fingerprint = command(process.env.OPENSSL || 'openssl', [
       'x509',

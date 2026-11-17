@@ -804,6 +804,61 @@ describe('call negotiation and lifetime', () => {
     deliver?.(new Uint8Array([8, 0]));
     await vi.waitFor(() => expect(h.runtime.session?.remoteMicrophoneMuted).toBe(false));
   });
+  it.each([false, true])(
+    'discards buffered and incoming packet audio on remote mute (datagrams=%s)',
+    async (datagrams) => {
+      const h = setup();
+      h.endpoint.datagrams = true;
+      Object.assign(h.deps, { preparePacketAudio: async () => vi.fn() });
+      let control: (frame: Uint8Array) => void;
+      let audio: (frame: Uint8Array) => void;
+      vi.mocked(h.connection.recv)
+        .mockReset()
+        .mockResolvedValueOnce(new Uint8Array([2]))
+        .mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              control = resolve;
+            }),
+        );
+      if (datagrams)
+        h.connection.recvAudio = vi.fn(
+          () =>
+            new Promise((resolve) => {
+              audio = resolve;
+            }),
+        );
+      await h.runtime.start(peer, 'audio');
+      const offer = h.deps.sendSignal.mock.calls[0][1];
+      await h.runtime.receiveSignal(peer, { ...offer, action: 'accept' });
+      await vi.waitFor(() => expect(h.runtime.session?.phase).toBe('active'));
+      const packet = new Uint8Array([9, 1, 2, 3]);
+      const send = async (frame: Uint8Array, isAudio = false) => {
+        const deliver = datagrams && isAudio ? audio! : control!;
+        deliver(frame);
+        await vi.waitFor(() => expect(datagrams && isAudio ? audio! : control!).not.toBe(deliver));
+      };
+      await send(packet, true);
+      expect(h.receiver.append).toHaveBeenCalledWith(packet);
+      const silent = { url: 'blob:silent', append: vi.fn(), close: vi.fn() };
+      h.deps.createReceiver.mockReturnValue(silent);
+      await send(new Uint8Array([8, 1]));
+      expect(h.receiver.close).toHaveBeenCalledOnce();
+      expect(h.runtime.remoteMediaUrl).toBe(silent.url);
+      expect(h.runtime.session?.remoteMicrophoneMuted).toBe(true);
+      await send(packet, true);
+      expect(silent.append).not.toHaveBeenCalled();
+      await send(new Uint8Array([8, 1])); // Duplicate state must not allocate another decoder.
+      expect(h.deps.createReceiver).toHaveBeenCalledTimes(2);
+      await send(new Uint8Array([8, 0]));
+      await send(packet, true);
+      expect(silent.append).toHaveBeenCalledWith(packet);
+      expect(h.deps.createReceiver).toHaveBeenCalledTimes(2);
+      expect(h.deps.record).toHaveBeenCalledOnce();
+      expect(h.microphone.stop).not.toHaveBeenCalled();
+      expect(h.runtime.session?.phase).toBe('active');
+    },
+  );
   it('keeps the original microphone when a new input cannot be opened', async () => {
     const h = setup();
     await h.runtime.start(peer, 'audio');

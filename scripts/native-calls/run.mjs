@@ -1,4 +1,4 @@
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createWriteStream } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'vite';
 import { chromium } from '@playwright/test';
 import { startIrohTestProxy } from '../iroh-test-proxy.cjs';
+import { runCommand } from './command.mjs';
 
 const linuxNative = process.argv.includes('--linux') && process.platform === 'linux';
 const browserOnly = process.argv.includes('--browser');
@@ -77,8 +78,11 @@ const resetResult = () => {
   void result.catch(() => {});
 };
 resetResult();
-const command = (file, args, options = {}) =>
-  execFileSync(file, args, { encoding: 'utf8', ...options });
+const command = (file, args, options = {}) => {
+  lastStage = `Command: ${file} ${args[0] ?? ''}`;
+  console.log(lastStage);
+  return runCommand(file, args, options);
+};
 const launch = (file, args, name, env = process.env) => {
   const log = createWriteStream(join(artifacts, `${name}.log`));
   logs.push(log);
@@ -191,8 +195,7 @@ try {
       // Use the Windows store tool directly: a child Windows PowerShell session
       // launched from pwsh may not have the Cert: provider initialized.
       command('certutil.exe', ['-user', '-addstore', 'Root', cert]);
-      removeTrust = () =>
-        command('certutil.exe', ['-user', '-delstore', 'Root', fingerprint]);
+      removeTrust = () => command('certutil.exe', ['-user', '-delstore', 'Root', fingerprint]);
     }
   }
   const relayConfig = join(directory, 'relay.toml');

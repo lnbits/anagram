@@ -24,6 +24,7 @@ import { PRIVATE_MESSAGES_STARTUP_RESTORE_THROTTLE_MS } from '#src/stores/nostr/
 import { RelayQueryTimeoutError } from '#src/stores/nostr/relayQueryUtils.ts';
 import { writeStartupCheckpoint } from '#src/stores/nostr/startupCheckpoint.ts';
 import { createStartupContactSyncRuntime } from '#src/stores/nostr/startupContactSyncRuntime.ts';
+import { startupRelayObserver } from '#src/stores/nostr/startupRelayTracking.ts';
 import {
   createInitialStartupStepSnapshots,
   getStartupHistoryStepsValue,
@@ -408,6 +409,25 @@ describe('startup contact sync runtime', () => {
     expect(runLightweightSessionResume).toHaveBeenCalledWith(['wss://relay.one/']);
     expect(beginStartupStep).not.toHaveBeenCalled();
   });
+
+  for (const snapshot of [false, true]) {
+    it(`keeps background sync separate from unfinished snapshot checkpoints (${snapshot})`, async () => {
+      installLocalStorage();
+      const relayClient = {};
+      const { runtime } = createSessionInitializationRuntime({ overrides: { relayClient } });
+      startupRelayObserver(relayClient, ['contact-profile-subscribe'], 'live', ['wss://relay.one/']);
+      startupRelayObserver(relayClient, ['message-history-restore'], 'history', ['wss://relay.one/']);
+      if (snapshot) {
+        startupRelayObserver(relayClient, ['private-preferences'], 'snapshot', ['wss://relay.one/'], { snapshot: true });
+      }
+      try {
+        await runtime.initializeSessionState(['wss://relay.one/']);
+        expect(JSON.parse(window.localStorage.getItem('nostr-startup-checkpoint')!).status).toBe(snapshot ? 'failed' : 'complete');
+      } finally {
+        runtime.resetStartupSessionInitialization();
+      }
+    });
+  }
 
   it('falls back to a full restore when lightweight resume fails', async () => {
     installLocalStorage();

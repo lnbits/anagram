@@ -22,7 +22,7 @@ import type {
 } from '#src/stores/nostr/types.ts';
 import type { ContactRecord } from '#src/types/contact.ts';
 import { yieldToMainThread } from '#src/utils/backgroundTasks.ts';
-import { needsStartupRelayRetry, resetStartupRelayTracking, startupRelayStatuses } from '#src/stores/nostr/startupRelayTracking.ts';
+import { needsStartupRelayRetry, resetStartupRelayTracking } from '#src/stores/nostr/startupRelayTracking.ts';
 
 interface StartupBatchTracker {
   beginItem: () => void;
@@ -535,7 +535,12 @@ export function createStartupContactSyncRuntime(state: StartupContactSyncRuntime
           if (generation !== startupGeneration || loggedInPubkeyHex !== getLoggedInPublicKeyHex()) return;
           didCompleteEveryTask =
             (await runStartupTask(stepId, seedRelayUrls)) && didCompleteEveryTask;
-          if (state.relayClient && startupRelayStatuses(state.relayClient, stepId).some((relay) => relay.status !== 'success')) didCompleteEveryTask = false;
+          // The checkpoint records foreground restore readiness. Live listeners
+          // and paged history retry independently (including after a warm resume).
+          // Only unfinished finite snapshots require another full restore.
+          if (state.relayClient && needsStartupRelayRetry(state.relayClient, stepId)) {
+            didCompleteEveryTask = false;
+          }
         }
       } finally {
         if (generation !== startupGeneration) return;

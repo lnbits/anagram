@@ -17,6 +17,8 @@ it('generates a short-lived localhost TLS certificate with explicit server authe
     import { runCommand } from './scripts/native-calls/command.mjs';
     const directory = mkdtempSync(join(tmpdir(), 'native-cert-test-'));
     try {
+      // Host configuration must not contribute extensions or affect generation.
+      process.env.OPENSSL_CONF = join(directory, 'unavailable-host-config.cnf');
       const path = createTestCertificate(directory, runCommand);
       const cert = new X509Certificate(readFileSync(path));
       assert.ok(cert.keyUsage.includes('1.3.6.1.5.5.7.3.1'));

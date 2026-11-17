@@ -169,6 +169,12 @@ try {
           fingerprint,
           '/Library/Keychains/System.keychain',
         ]);
+      // Fail with the platform's trust error before an opaque Iroh timeout.
+      for (const hostname of ['localhost', '127.0.0.1']) {
+        command('security', ['verify-cert', '-c', cert, '-p', 'ssl', '-s', hostname], {
+          stdio: 'inherit',
+        });
+      }
     } else {
       // The current-user Root store can display an unattended confirmation
       // dialog. Disposable GitHub-hosted Windows runners already run as admin;

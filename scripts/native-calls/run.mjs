@@ -192,10 +192,12 @@ try {
           '/Library/Keychains/System.keychain',
         ]);
     } else {
-      // Use the Windows store tool directly: a child Windows PowerShell session
-      // launched from pwsh may not have the Cert: provider initialized.
-      command('certutil.exe', ['-user', '-addstore', 'Root', cert]);
-      removeTrust = () => command('certutil.exe', ['-user', '-delstore', 'Root', fingerprint]);
+      // The current-user Root store can display an unattended confirmation
+      // dialog. Disposable GitHub-hosted Windows runners already run as admin;
+      // use their machine store and remove only this short-lived certificate.
+      // Register cleanup first in case installation fails after adding it.
+      removeTrust = () => command('certutil.exe', ['-delstore', 'Root', fingerprint]);
+      command('certutil.exe', ['-addstore', 'Root', cert]);
     }
   }
   const relayConfig = join(directory, 'relay.toml');
@@ -480,6 +482,8 @@ try {
       process.exitCode = 1;
     }
   }
-  await rm(directory, { recursive: true, force: true });
+  // WebView subprocesses can finish a profile write just after the app exits.
+  // Retry transient ENOTEMPTY/EBUSY without replacing the recorded test failure.
+  await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   logs.forEach((log) => log.end());
 }

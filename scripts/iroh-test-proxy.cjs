@@ -70,6 +70,10 @@ async function startIrohTestProxy({ certificateDirectory } = {}) {
         request.pipe(upstream);
       },
     );
+    // Surface trust/handshake failures before endpoint.online's generic timeout.
+    server.on('tlsClientError', (error) => {
+      console.error('Local Iroh test proxy TLS client error:', error.message);
+    });
     server.on('connection', (socket) => {
       sockets.add(socket);
       socket.on('close', () => sockets.delete(socket));

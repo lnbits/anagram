@@ -137,6 +137,21 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
     })),
   });
   const stage = (name) => report({ stage: `${kind}: ${name}`, ...snapshot() });
+  // Keep every participant observable while another waits for media or a barrier.
+  // The first failing client ends the run, so its snapshot alone misses the sender.
+  let reportingSnapshot = false;
+  const diagnosticsTimer = setInterval(async () => {
+    if (stopping || reportingSnapshot) return;
+    reportingSnapshot = true;
+    try {
+      await report({ diagnostic: true, ...snapshot() });
+    } catch {
+      // The normal stage/result report remains responsible for transport errors.
+    } finally {
+      reportingSnapshot = false;
+    }
+  }, 5000);
+  cleanup.push(() => clearInterval(diagnosticsTimer));
   const healthy = () => {
     assert(!errors.length, JSON.stringify(snapshot()));
     return (

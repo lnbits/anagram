@@ -61,6 +61,19 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
   window.addEventListener('keydown', resumePlayback);
   const clockStart = performance.now();
   const audioStart = context.currentTime;
+  // Fixture-only pixel diagnostics distinguish a frozen capture from transport
+  // or decoder stalls when a native quality/profile change replaces the reader.
+  const pixel = (source) => {
+    try {
+      const sample = document.createElement('canvas');
+      sample.width = sample.height = 1;
+      const paint = sample.getContext('2d', { willReadFrequently: true });
+      paint.drawImage(source, 0, 0, 1, 1);
+      return [...paint.getImageData(0, 0, 1, 1).data.slice(0, 3)];
+    } catch {
+      return null;
+    }
+  };
   const snapshot = () => ({
     elapsedSeconds: (performance.now() - clockStart) / 1000,
     sourceSeconds: context.currentTime - audioStart,
@@ -70,12 +83,24 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
     phases: calls.map((c) => c.session?.phase),
     failures: calls.map((c) => c.failureDetail),
     errors,
+    sourceCanvases: [...document.querySelectorAll('#sources canvas')].map((canvas) => ({
+      width: canvas.width,
+      height: canvas.height,
+      pixel: pixel(canvas),
+    })),
     captureVideos: [...document.querySelectorAll('video[aria-hidden="true"]')].map((video) => ({
       time: video.currentTime,
       paused: video.paused,
       readyState: video.readyState,
       width: video.videoWidth,
       height: video.videoHeight,
+      pixel: pixel(video),
+      tracks: video.srcObject?.getVideoTracks().map((track) => ({
+        enabled: track.enabled,
+        muted: track.muted,
+        state: track.readyState,
+        settings: track.getSettings(),
+      })),
     })),
     packetAudio: callPacketAudioDiagnostics(),
     audioSend: sendCosts.map((s) => ({

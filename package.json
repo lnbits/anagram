@@ -19,8 +19,7 @@
     "release:version": "node scripts/set-release-version.mjs",
     "release:check": "node scripts/set-release-version.mjs --check",
     "verify:iroh": "node scripts/verify-iroh.mjs",
-    "assets:social": "node scripts/render-social-cards.mjs",
-    "audit:ci": "node scripts/audit-dependencies.mjs"
+    "assets:social": "node scripts/render-social-cards.mjs"
   },
   "dependencies": {
     "@noble/hashes": "2.0.1",

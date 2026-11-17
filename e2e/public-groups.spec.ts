@@ -899,6 +899,21 @@ test('app relays carry public group creation, moderation and posts when preferre
 }) => {
   const deadRelay = 'wss://disconnected.example.org/';
   const stalledRelay = 'wss://stalled.example.org/';
+  const messageText = 'App relay delivery';
+  let releasePost: (() => void) | undefined;
+  let postId = '';
+  await page.routeWebSocket(relay, (socket) => {
+    const server = socket.connectToServer();
+    socket.onMessage((raw) => {
+      const data = JSON.parse(String(raw));
+      if (data[0] === 'EVENT' && data[1].kind === 9 && data[1].content === messageText) {
+        postId = data[1].id;
+        // Hold the post until the test observes the cleared composer. This
+        // makes the gap between clearing a draft and relay delivery explicit.
+        releasePost = () => server.send(raw);
+      } else server.send(raw);
+    });
+  });
   await page.routeWebSocket(deadRelay, (socket) => {
     socket.onMessage(() => socket.close());
   });
@@ -940,13 +955,20 @@ test('app relays carry public group creation, moderation and posts when preferre
   await settings.getByRole('button', { name: 'Save group relays', exact: true }).click();
   await expect(settings).toBeHidden({ timeout: 3000 });
   const composer = page.getByPlaceholder('Write a public message');
-  await composer.fill('App relay delivery');
+  await composer.fill(messageText);
   await page.getByTestId('message-send-button').click();
   await expect(composer).toHaveValue('', { timeout: 3000 });
+  await expect.poll(() => Boolean(releasePost)).toBe(true);
+  const message = page.getByTestId('public-message').filter({ hasText: messageText });
+  await expect(message).toHaveCount(1);
+  await expect(message.locator('.bubble__status-segment--green')).toHaveCount(0);
+  releasePost!();
+  // The composer clears before signing/persistence/publication finish. Reload
+  // only after a real relay ACK has been recorded in the message's status.
+  await expect(message.locator('.bubble__status-segment--green')).toBeVisible();
   await page.reload();
-  await expect(
-    page.getByTestId('public-message').filter({ hasText: 'App relay delivery' }),
-  ).toHaveCount(1);
+  await expect(message).toHaveCount(1);
+  await expect(message).toHaveAttribute('data-event-id', postId);
   await page.getByRole('button', { name: 'Public group settings' }).click();
   await settings.getByRole('tab', { name: 'Relays', exact: true }).click();
   await expect(settings.locator('.group-relays li')).toHaveCount(1);

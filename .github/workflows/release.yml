@@ -45,7 +45,7 @@ jobs:
         run: node scripts/release-policy.mjs
         env:
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
-      - run: npm run audit:ci
+      - run: npm audit --audit-level=high
       - run: npm run verify:iroh
       - run: npm run quality:all
       - run: npm run test:unit

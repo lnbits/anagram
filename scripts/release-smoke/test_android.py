@@ -147,6 +147,15 @@ class AndroidNotificationPrompt(unittest.TestCase):
 
 
 class AndroidNotificationListener(unittest.TestCase):
+    def test_running_listener_needs_no_permission_prompt(self):
+        with patch.object(android, 'running'), \
+                patch.object(android, 'tree') as tree, \
+                patch.object(android, 'adb', return_value='isForeground=true foregroundId=4101') as adb:
+            android.wait_notification_listener()
+        tree.assert_not_called()
+        adb.assert_called_once_with('shell', 'dumpsys', 'activity', 'services',
+                                    f'{android.PACKAGE}/.RelayNotificationService')
+
     def test_waits_for_foreground_service_not_just_live_app(self):
         with patch.object(android, 'running'), \
                 patch.object(android, 'tree', return_value=screen()), \
@@ -176,14 +185,35 @@ class AndroidNotificationListener(unittest.TestCase):
 
     def test_permission_approval_does_not_pass_a_stopped_service(self):
         with patch.object(android, 'running'), \
-                patch.object(android, 'tree', return_value=AndroidNotificationPrompt.prompt()), \
-                patch.object(android, 'adb', side_effect=['isForeground=false', '']) as adb, \
-                patch.object(android.time, 'monotonic', side_effect=[0, 0, 31]), \
+                patch.object(android, 'tree', return_value=AndroidNotificationPrompt.prompt()) as tree, \
+                patch.object(android, 'adb', side_effect=['isForeground=false', '', 'isForeground=false']) as adb, \
+                patch.object(android.time, 'monotonic', side_effect=[0, 29, 31, 32, 62]), \
                 patch.object(android.time, 'sleep'):
             with self.assertRaisesRegex(RuntimeError, 'notification listener did not enter the foreground'):
                 android.wait_notification_listener()
         self.assertEqual(adb.call_args_list[1].args,
                          ('shell', 'input', 'tap', '160', '351'))
+        self.assertEqual(sum(call.args[:3] == ('shell', 'dumpsys', 'activity')
+                             for call in adb.call_args_list), 2)
+        # A stale permission dump must not repeatedly renew the startup budget.
+        tree.assert_called_once()
+
+    def test_late_permission_gets_a_full_service_start_timeout(self):
+        # The dump/tap can finish near the deadline or run past it. In both
+        # cases, the service starts only after the original 30-second budget.
+        for approval_time in (29.5, 31):
+            with self.subTest(approval_time=approval_time), \
+                    patch.object(android, 'running'), \
+                    patch.object(android, 'tree', return_value=AndroidNotificationPrompt.prompt()) as tree, \
+                    patch.object(android, 'adb', side_effect=['(nothing)', '', 'isForeground=false', 'isForeground=true']) as adb, \
+                    patch.object(android.time, 'monotonic', side_effect=[0, 29, approval_time, 32, approval_time + 29]), \
+                    patch.object(android.time, 'sleep'):
+                android.wait_notification_listener()
+                self.assertEqual(adb.call_args_list[1].args,
+                                 ('shell', 'input', 'tap', '160', '351'))
+                self.assertEqual(sum(call.args[:3] == ('shell', 'dumpsys', 'activity')
+                                     for call in adb.call_args_list), 3)
+                tree.assert_called_once()
 
 
 if __name__ == '__main__':

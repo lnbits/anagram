@@ -2,7 +2,10 @@ import { relaySyncReason, type RelaySyncUpdate, type RelaySyncObserver } from '#
 import { paceRelayRequests } from '#src/lib/nostr/relayPacing.ts';
 import { normalizeRumor } from '#src/lib/nostr/normalizeRumor.ts';
 import { guardRelayAuthentication } from '#src/lib/nostr/relayAuthentication.ts';
-import { RELAY_QUERY_TIMEOUT_MS } from '#src/stores/nostr/constants.ts';
+import {
+  RELAY_CONNECT_RETRY_MAX_DELAY_MS,
+  RELAY_QUERY_TIMEOUT_MS,
+} from '#src/stores/nostr/constants.ts';
 import { unwrapInWorker } from './cryptoWorker';
 import {
   SimplePool,
@@ -750,6 +753,7 @@ export class NostrSubscription extends Emitter {
       let retryDelay = RELAY_QUERY_TIMEOUT_MS;
       const retryUnfinished = () => {
         if (!this.opts.onInitialSync || this.closed || retryTimer !== undefined) return;
+        const connectionDelay = this.client.relayConnectionRetryDelay?.(target.url) ?? 0;
         retryTimer = setTimeout(() => {
           retryTimer = undefined;
           cancelAuth?.();
@@ -757,8 +761,10 @@ export class NostrSubscription extends Emitter {
           currentSubscription?.close();
           currentSubscription = undefined;
           void startTarget();
-        }, retryDelay);
-        retryDelay = Math.min(retryDelay * 2, 60000);
+        }, connectionDelay > 0 ? connectionDelay : retryDelay);
+        // Waiting for a socket cooldown is not another failed query attempt.
+        if (connectionDelay <= 0)
+          retryDelay = Math.min(retryDelay * 2, RELAY_CONNECT_RETRY_MAX_DELAY_MS);
       };
       const settle = () => {
         settledTargets.add(target);
@@ -801,6 +807,8 @@ export class NostrSubscription extends Emitter {
         }
         this.failedTargets.delete(target);
         try {
+          if ((this.client.relayConnectionRetryDelay?.(target.url) ?? 0) > 0)
+            throw new Error('Relay connection is cooling down; will retry when ready');
           await target.connect();
           if (this.closed) return;
           // A guarded connect can be deferred during backoff. Do not bypass it
@@ -947,6 +955,7 @@ export default class NostrClient {
   pool = new RelayPool(this);
   signer?: NostrSigner;
   relayConnectionFilter?: (relay: string) => boolean;
+  relayConnectionRetryDelay?: (relay: string) => number;
   relayAuthDefaultPolicy?: (...args: any[]) => any;
   constructor(
     options: {

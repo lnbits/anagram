@@ -267,6 +267,15 @@ export function createRelayConnectionRuntime({
     );
   };
 
+  // Subscription recovery shares this deadline instead of independently polling
+  // a guarded connect and backing off again without making a socket attempt.
+  ndk.relayConnectionRetryDelay = (relayUrl) => {
+    const normalizedRelayUrl = normalizeRelayClientUrl(relayUrl);
+    if (!normalizedRelayUrl || ndk.pool.relays.get(normalizedRelayUrl)?.connected) return 0;
+    const nextAttemptAt = relayConnectRetryStateByUrl.get(normalizedRelayUrl)?.nextAttemptAt;
+    return Math.max(0, (nextAttemptAt ?? 0) - Date.now());
+  };
+
   function getRelayConnectionAttemptBlockReason(relayUrl: string): string | null {
     const normalizedRelayUrl = normalizeRelayClientUrl(relayUrl);
     if (!normalizedRelayUrl || !isUsableRelayClientUrl(normalizedRelayUrl)) {

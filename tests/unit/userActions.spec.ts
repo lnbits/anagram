@@ -355,107 +355,118 @@ describe('userActions runtime', () => {
     expect(deps.publishEventWithRelayStatuses).not.toHaveBeenCalled();
   });
 
-  it('marks relay retries as pending first and failed when republish errors', async () => {
-    const deps = createDeps();
-    const actions = createUserActions(deps);
-    const failureStatuses = [
-      makeRelayStatus({
-        relay_url: 'wss://relay.example',
-        status: 'failed',
-        detail: 'relay down',
-      }),
-    ];
-
-    serviceMocks.chatDataService.getMessageById.mockResolvedValue({
-      id: 7,
-      event_id: 'event-1',
-    });
-    serviceMocks.nostrEventDataService.getEventById.mockResolvedValue({
-      direction: 'out',
-      event: {
-        id: 'event-1',
-        kind: NostrKind.PrivateDirectMessage,
-        created_at: 1700000000,
-        pubkey: 's'.repeat(64),
-        tags: [['p', 'r'.repeat(64)]],
-      },
-    });
-    ndkMocks.giftWrap.mockResolvedValue({
-      kind: NostrKind.GiftWrap,
-      toNostrEvent: async () => ({
-        kind: NostrKind.GiftWrap,
-        id: 'a'.repeat(64),
-        sig: 'b'.repeat(128),
-        tags: [],
-        content: '',
-        pubkey: 'c'.repeat(64),
-        created_at: 1700000000,
-      }),
-    });
-    serviceMocks.nostrEventDataService.upsertEvent.mockImplementation(async (input) => input);
-    deps.publishEventWithRelayStatuses.mockResolvedValue({
-      relayStatuses: failureStatuses,
-      error: new Error('publish failed'),
-    });
-
-    await expect(
-      actions.retryDirectMessageRelay(7, ' wss://relay.example ', 'recipient')
-    ).rejects.toThrow('relay down');
-
-    expect(deps.appendRelayStatusesToMessageEvent).toHaveBeenNthCalledWith(
-      1,
-      7,
-      [
+  it.each(['manual', 'outbox:relay-connected'])(
+    'preserves delivery errors and only bypasses cooldown for a manual retry (%s)',
+    async (trigger) => {
+      const deps = createDeps();
+      const actions = createUserActions(deps);
+      const failureStatuses = [
         makeRelayStatus({
           relay_url: 'wss://relay.example',
-          scope: 'recipient',
-          status: 'pending',
-        }),
-      ],
-      expect.objectContaining({
-        direction: 'out',
-        eventId: 'event-1',
-      })
-    );
-    expect(deps.appendRelayStatusesToMessageEvent).toHaveBeenNthCalledWith(
-      2,
-      7,
-      [
-        makeRelayStatus({
-          relay_url: 'wss://relay.example',
-          scope: 'recipient',
           status: 'failed',
           detail: 'relay down',
         }),
-      ],
-      expect.objectContaining({
+      ];
+
+      serviceMocks.chatDataService.getMessageById.mockResolvedValue({
+        id: 7,
+        event_id: 'event-1',
+      });
+      serviceMocks.nostrEventDataService.getEventById.mockResolvedValue({
         direction: 'out',
-        eventId: 'event-1',
-      })
-    );
-    expect(deps.logMessageRelayDiagnostics).toHaveBeenCalledWith(
-      'retry-start',
-      expect.objectContaining({
-        messageId: 7,
-        eventId: 'event-1',
-        relayUrl: 'wss://relay.example',
-        scope: 'recipient',
-        trigger: 'manual',
-      })
-    );
-    expect(deps.logMessageRelayDiagnostics).toHaveBeenCalledWith(
-      'retry-failed',
-      expect.objectContaining({
-        messageId: 7,
-        eventId: 'event-1',
-        relayUrl: 'wss://relay.example',
-        scope: 'recipient',
-        trigger: 'manual',
-        error: 'relay down',
-      }),
-      'warn'
-    );
-  });
+        event: {
+          id: 'event-1',
+          kind: NostrKind.PrivateDirectMessage,
+          created_at: 1700000000,
+          pubkey: 's'.repeat(64),
+          tags: [['p', 'r'.repeat(64)]],
+        },
+      });
+      ndkMocks.giftWrap.mockResolvedValue({
+        kind: NostrKind.GiftWrap,
+        toNostrEvent: async () => ({
+          kind: NostrKind.GiftWrap,
+          id: 'a'.repeat(64),
+          sig: 'b'.repeat(128),
+          tags: [],
+          content: '',
+          pubkey: 'c'.repeat(64),
+          created_at: 1700000000,
+        }),
+      });
+      serviceMocks.nostrEventDataService.upsertEvent.mockImplementation(async (input) => input);
+      deps.publishEventWithRelayStatuses.mockResolvedValue({
+        relayStatuses: failureStatuses,
+        error: new Error('publish failed'),
+      });
+
+      await expect(
+        actions.retryDirectMessageRelay(
+          7,
+          ' wss://relay.example ',
+          'recipient',
+          trigger === 'manual' ? undefined : { trigger },
+        ),
+      ).rejects.toThrow('relay down');
+      expect(deps.ensureRelayConnections).toHaveBeenCalledWith(['wss://relay.example'], {
+        force: trigger === 'manual',
+      });
+
+      expect(deps.appendRelayStatusesToMessageEvent).toHaveBeenNthCalledWith(
+        1,
+        7,
+        [
+          makeRelayStatus({
+            relay_url: 'wss://relay.example',
+            scope: 'recipient',
+            status: 'pending',
+          }),
+        ],
+        expect.objectContaining({
+          direction: 'out',
+          eventId: 'event-1',
+        }),
+      );
+      expect(deps.appendRelayStatusesToMessageEvent).toHaveBeenNthCalledWith(
+        2,
+        7,
+        [
+          makeRelayStatus({
+            relay_url: 'wss://relay.example',
+            scope: 'recipient',
+            status: 'failed',
+            detail: 'relay down',
+          }),
+        ],
+        expect.objectContaining({
+          direction: 'out',
+          eventId: 'event-1',
+        }),
+      );
+      expect(deps.logMessageRelayDiagnostics).toHaveBeenCalledWith(
+        'retry-start',
+        expect.objectContaining({
+          messageId: 7,
+          eventId: 'event-1',
+          relayUrl: 'wss://relay.example',
+          scope: 'recipient',
+          trigger,
+        }),
+      );
+      expect(deps.logMessageRelayDiagnostics).toHaveBeenCalledWith(
+        'retry-failed',
+        expect.objectContaining({
+          messageId: 7,
+          eventId: 'event-1',
+          relayUrl: 'wss://relay.example',
+          scope: 'recipient',
+          trigger,
+          error: 'relay down',
+        }),
+        'warn',
+      );
+    },
+  );
 
   it('rejects group ticket relay retries when the logged-in user is not the group owner', async () => {
     const deps = createDeps();

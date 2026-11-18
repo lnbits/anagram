@@ -5,6 +5,7 @@ import {
   ensureSingleSocketRelayConnectGuard,
   isUsableRelayClientUrl,
 } from '#src/stores/nostr/relayConnectionRuntime.ts';
+import { RELAY_CONNECT_RETRY_MAX_DELAY_MS } from '#src/stores/nostr/constants.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type FakeSocket = {
@@ -98,6 +99,7 @@ function createRuntimeHarness(
     pool,
     relayAuthDefaultPolicy: undefined,
     relayConnectionFilter: undefined,
+    relayConnectionRetryDelay: undefined as ((url: string) => number) | undefined,
   };
 
   const runtime = createRelayConnectionRuntime({
@@ -140,7 +142,7 @@ function createRuntimeHarness(
     relayAuthFailureListenerUrls,
     relayConnectRetryBaseDelayMs: 10000,
     relayConnectRetryJitterRatio: 0,
-    relayConnectRetryMaxDelayMs: 300000,
+    relayConnectRetryMaxDelayMs: RELAY_CONNECT_RETRY_MAX_DELAY_MS,
     relayConnectRetryStateByUrl,
     relayConnectPromises,
     setCachedSigner: vi.fn(),
@@ -296,6 +298,24 @@ describe('relayConnectionRuntime', () => {
     expect(rawConnect).toHaveBeenCalledOnce();
   });
 
+  it('shares the remaining cooldown with subscription recovery and clears it on manual retry', async () => {
+    const { ndk, relay, runtime, rawConnect, relayConnectRetryStateByUrl } = createRuntimeHarness();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1000);
+    relayConnectRetryStateByUrl.set(relay.url, { failureCount: 8, nextAttemptAt: 61000 });
+    expect(ndk.relayConnectionRetryDelay?.('wss://relay.example')).toBe(60000);
+    now.mockReturnValue(21000);
+    expect(ndk.relayConnectionRetryDelay?.(relay.url)).toBe(40000);
+    relay.connected = true;
+    expect(ndk.relayConnectionRetryDelay?.(relay.url)).toBe(0);
+    relay.connected = false;
+    rawConnect.mockImplementation(async () => {
+      relay.connected = true;
+    });
+    await runtime.ensureRelayConnections([relay.url], { force: true });
+    relay.connected = false;
+    expect(ndk.relayConnectionRetryDelay?.(relay.url)).toBe(0);
+  });
+
   it('clears relay retry backoff after a successful connection', async () => {
     const { pool, relay, relayConnectRetryStateByUrl, runtime } = createRuntimeHarness();
     relayConnectRetryStateByUrl.set(relay.url, {
@@ -424,7 +444,7 @@ describe('relay retry helpers', () => {
         baseDelayMs: 10000,
         failureCount: 1,
         jitterRatio: 0.2,
-        maxDelayMs: 300000,
+        maxDelayMs: RELAY_CONNECT_RETRY_MAX_DELAY_MS,
         randomValue: 0,
       }),
     ).toBe(8000);
@@ -433,7 +453,7 @@ describe('relay retry helpers', () => {
         baseDelayMs: 10000,
         failureCount: 3,
         jitterRatio: 0.2,
-        maxDelayMs: 300000,
+        maxDelayMs: RELAY_CONNECT_RETRY_MAX_DELAY_MS,
         randomValue: 1,
       }),
     ).toBe(48000);
@@ -442,10 +462,10 @@ describe('relay retry helpers', () => {
         baseDelayMs: 10000,
         failureCount: 10,
         jitterRatio: 0.2,
-        maxDelayMs: 300000,
+        maxDelayMs: RELAY_CONNECT_RETRY_MAX_DELAY_MS,
         randomValue: 1,
       }),
-    ).toBe(300000);
+    ).toBe(60000);
   });
 
   it('accepts loopback relays but rejects unspecified client addresses', () => {

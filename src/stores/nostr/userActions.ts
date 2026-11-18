@@ -498,7 +498,7 @@ export function createUserActions({
       );
 
       try {
-        await ensureRelayConnections([normalizedRelayUrl]);
+        await ensureRelayConnections([normalizedRelayUrl], { force: trigger === 'manual' });
         const recipient =
           scope === 'self'
             ? new NostrUser({ pubkey: signer.pubkey })

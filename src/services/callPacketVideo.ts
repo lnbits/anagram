@@ -41,7 +41,7 @@ function videoFrames(
   video.playsInline = true;
   video.setAttribute('aria-hidden', 'true');
   video.style.cssText =
-    'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none';
+    'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0.01;pointer-events:none';
   document.body.append(video);
   const interval = Math.ceil(1000 / Math.max(1, Math.min(24, frameRate))) + 1;
   let timer: ReturnType<typeof setTimeout> | undefined;

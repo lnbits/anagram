@@ -41,6 +41,8 @@ export interface CallRuntimeDeps {
   packetVideoSupported?(): Promise<boolean>;
   preparePacketAudio?(): Promise<(() => void) | undefined>;
   videoProfile?(): CallVideoProfile;
+  /** After a video quality refresh, which skips camera and microphone changes while it runs. */
+  onVideoQualityRefreshed?(): void;
   onEnded?(session: CallSession): Promise<void>;
   sendSignal(peer: string, signal: CallSignal): Promise<void>;
   getOwnPubkey(): string | null;
@@ -624,6 +626,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     }
     const profile = deps.videoProfile?.() ?? DEFAULT_VIDEO_PROFILE;
     const revision = ctx.linkRevision;
+    let failed = false;
     ctx.changingMedia = true;
     try {
       if (ctx.stopVideoRecording && ctx.cameraProfile !== profile.cameraBitrate) {
@@ -642,9 +645,12 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         await resumeScreenRecording(ctx);
       }
     } catch {
+      failed = true;
       if (ctx.linkRevision === revision) disableCamera(ctx);
     } finally {
       ctx.changingMedia = false;
+      // A failed restart disabled this camera; do not reapply it at once.
+      if (alive(ctx) && !failed) deps.onVideoQualityRefreshed?.();
     }
   }
   function dropLink(ctx: Context) {
@@ -1223,15 +1229,12 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
   }
   async function selectMicrophone(deviceId: string) {
     const ctx = context;
-    if (
-      !ctx?.stream ||
-      !ctx.ready ||
-      ctx.changingMedia ||
-      typeof deviceId !== 'string' ||
-      deviceId.length > 512
-    )
+    // A link that is down still switches, so reconnecting never resends the old input.
+    if (!ctx?.stream || ctx.changingMedia || typeof deviceId !== 'string' || deviceId.length > 512)
       return;
-    if (!ctx.splitMedia || !deps.getMicrophone) {
+    // Before the peer confirms nothing records yet, so the input can be replaced outright.
+    const legacy = () => ctx.peerConfirmed && !ctx.splitMedia;
+    if (legacy() || !deps.getMicrophone) {
       deviceError = 'call.error.peerUpgrade';
       return;
     }
@@ -1241,7 +1244,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     let replacement: MediaStream | undefined;
     try {
       replacement = await deps.getMicrophone(deviceId);
-      if (!alive(ctx) || ctx.linkRevision !== revision) {
+      if (!alive(ctx) || ctx.linkRevision !== revision || legacy()) {
         replacement.getTracks().forEach((track) => {
           track.stop();
         });
@@ -1264,7 +1267,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         track.stop();
       });
       // The old recorder is stopped before this ordered reset; its pending chunks are cancelled.
-      await ctx.connection?.send(new Uint8Array([4]));
+      if (ctx.ready) await ctx.connection?.send(new Uint8Array([4]));
       if (alive(ctx) && ctx.linkRevision === revision) startAudioRecording(ctx);
     } catch (cause) {
       // A rejected new device leaves the current microphone and call intact.
@@ -1318,7 +1321,10 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       patch({ cameraMuted: muted });
       return;
     }
-    if (!ctx.ready || !deps.getCamera || !session.videoAvailable) return;
+    if (!deps.getCamera || !session.videoAvailable) return;
+    const turningOff = !session.cameraMuted && deviceId === undefined;
+    // Turning off must not wait for a link: a reconnect would resend the live track.
+    if (!ctx.ready && !turningOff) return;
     clearTimeout(ctx.videoRetryTimers?.get('camera'));
     ctx.videoRetryTimers?.delete('camera');
     ctx.changingMedia = changingMedia = true;
@@ -1327,7 +1333,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     let camera: MediaStream | undefined;
     let installed = false;
     try {
-      if (!session.cameraMuted && deviceId === undefined) {
+      if (turningOff) {
         ctx.stopVideoRecording?.();
         ctx.stopVideoRecording = undefined;
         const tracks = ctx.stream.getVideoTracks();
@@ -1338,7 +1344,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
           track.onended = null;
           track.stop();
         });
-        await ctx.connection?.send(new Uint8Array([5, 0]));
+        if (ctx.ready) await ctx.connection?.send(new Uint8Array([5, 0]));
       } else {
         camera = await deps.getCamera(deviceId ?? cameraDeviceId);
         if (!alive(ctx) || ctx.linkRevision !== revision) {

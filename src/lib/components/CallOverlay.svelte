@@ -82,7 +82,9 @@
     showInviteLink = false,
     inviteError = '';
   let devices: MediaDeviceInfo[] = [];
+  let devicesStream: MediaStream | null = null;
   let now = Date.now();
+  let clock: ReturnType<typeof setInterval> | undefined;
   let disposed = false;
   let activityStream: MediaStream | null = null,
     activityEnabled = false;
@@ -177,8 +179,23 @@
   $: ringtone.setRinging(!room && (phase === 'incoming' || phase === 'outgoing'));
   $: if (ended) minimized = false;
   $: if (!$state.busy) invite = false;
-  $: if ($state.local) void refreshDevices();
+  // Enumerate when the local stream appears or is replaced; devicechange covers the rest.
+  $: if ($state.local !== devicesStream) {
+    devicesStream = $state.local;
+    if (devicesStream) void refreshDevices();
+  }
+  $: syncClock(!room && active && Boolean($state.session?.startedAt));
   $: watchActivity($state.local, speakerView && room && !$state.muted);
+  // The overlay stays mounted for the app's lifetime; only tick while a duration is shown.
+  function syncClock(running: boolean) {
+    if (running && !clock) {
+      now = Date.now();
+      clock = setInterval(() => (now = Date.now()), 1000);
+    } else if (!running && clock) {
+      clearInterval(clock);
+      clock = undefined;
+    }
+  }
   function duration(ms: number) {
     const seconds = Math.max(0, Math.floor(ms / 1000));
     return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
@@ -289,16 +306,13 @@
     }
   }
   onMount(() => {
-    const timer = setInterval(() => (now = Date.now()), 1000);
     const changed = () => void refreshDevices(true);
     navigator.mediaDevices?.addEventListener('devicechange', changed);
-    return () => {
-      clearInterval(timer);
-      navigator.mediaDevices?.removeEventListener('devicechange', changed);
-    };
+    return () => navigator.mediaDevices?.removeEventListener('devicechange', changed);
   });
   onDestroy(() => {
     disposed = true;
+    clearInterval(clock);
     ringtone.dispose();
     stopActivity?.();
     calls.reset();

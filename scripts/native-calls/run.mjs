@@ -4,7 +4,7 @@ import { createWriteStream } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createBuildConfig, probeSettings, probeUrl, readBuildConfig } from './build-config.mjs';
 import { createServer } from 'vite';
 import { chromium } from '@playwright/test';
 import { startIrohTestProxy } from '../iroh-test-proxy.cjs';
@@ -12,14 +12,12 @@ import { startIrohTestProxy } from '../iroh-test-proxy.cjs';
 const linuxNative = process.argv.includes('--linux') && process.platform === 'linux';
 const browserOnly = process.argv.includes('--browser');
 // Linux group participants run in separate apps, matching their real audio graphs.
-const participants = Number(process.env.ANAGRAM_CALL_TEST_PARTICIPANTS || (browserOnly ? 6 : 4));
-const scenario = process.env.ANAGRAM_CALL_TEST_SCENARIO || 'all';
-const media = process.env.ANAGRAM_CALL_TEST_MEDIA || 'video';
-if (!['audio', 'video'].includes(media)) throw new Error('Choose audio or video call media');
-if (!['all', 'direct', 'group', 'legacy'].includes(scenario))
-  throw new Error('Choose all, direct, group or legacy call scenarios');
-if (!Number.isInteger(participants) || participants < 2 || participants > 6)
-  throw new Error('Choose 2 to 6 test participants');
+const settings = probeSettings(browserOnly);
+const { participants, scenario } = settings;
+const buildConfigPath = !browserOnly && process.env.ANAGRAM_CALL_TEST_BUILD_CONFIG;
+const config = buildConfigPath
+  ? await readBuildConfig(buildConfigPath, settings)
+  : createBuildConfig(settings);
 if (
   !browserOnly &&
   !linuxNative &&
@@ -37,8 +35,8 @@ await Promise.all(
   ),
 );
 const directory = await mkdtemp(join(tmpdir(), 'anagram-native-calls-'));
-const token = randomUUID();
-const url = `http://127.0.0.1:5189/__native_calls?token=${token}&native=${browserOnly ? 0 : 1}&participants=${participants}&scenario=${scenario}&media=${media}`;
+const { token } = config;
+const url = probeUrl(config);
 const cases = linuxNative && scenario === 'all' ? ['direct', 'group', 'legacy'] : [scenario];
 let currentCase = cases[0],
   nextPeer = 0;
@@ -333,7 +331,7 @@ try {
     ],
   });
   await server.listen();
-  if (!browserOnly) {
+  if (!browserOnly && !buildConfigPath) {
     console.log('Building native debug app with isolated probe URL');
     const build = launch(
       'cargo',

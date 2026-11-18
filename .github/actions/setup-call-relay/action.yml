@@ -1,0 +1,29 @@
+name: Set up local call relay
+description: Cache the pinned Iroh relay independently of application builds and test results
+inputs:
+  image:
+    description: Runner image label (separates different OS baselines)
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache/restore@v4
+      id: relay-cache
+      with:
+        path: ${{ runner.temp }}/native-call-relay
+        key: native-call-relay-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.image }}-iroh-1.3.0-server
+    - name: Compile local Iroh relay
+      if: steps.relay-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: cargo install iroh-relay --version 1.3.0 --locked --features server --bin iroh-relay --root "$RUNNER_TEMP/native-call-relay"
+    - name: Verify relay and add it to PATH
+      shell: bash
+      run: |
+        "$RUNNER_TEMP/native-call-relay/bin/iroh-relay" --version
+        echo "$RUNNER_TEMP/native-call-relay/bin" >> "$GITHUB_PATH"
+    # Save before tests: a media assertion must not throw away a successful build.
+    - uses: actions/cache/save@v4
+      if: steps.relay-cache.outputs.cache-hit != 'true'
+      with:
+        path: ${{ runner.temp }}/native-call-relay
+        key: ${{ steps.relay-cache.outputs.cache-primary-key }}

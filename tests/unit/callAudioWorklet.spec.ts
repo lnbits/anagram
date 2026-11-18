@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { CALL_AUDIO_QUEUE_FRAMES } from '#src/services/callAudioQueue.ts';
 
 function createProcessor(mode: 'capture' | 'playback') {
@@ -110,4 +110,14 @@ it('timestamps capture before codec queues and keeps the microphone output silen
   for (let i = 0; i < 8; i++)
     processor.process([[new Float32Array(128)]], [[new Float32Array(128)]]);
   expect(frames.at(-1).at).toBe(2040);
+});
+
+it('requests one clock calibration when capture actually starts rendering', () => {
+  const processor = createProcessor('capture');
+  const started = vi.fn();
+  processor.port.postMessage = started;
+  expect(started).not.toHaveBeenCalled();
+  for (let i = 0; i < 20; i++)
+    processor.process([[new Float32Array(128)]], [[new Float32Array(128)]]);
+  expect(started).toHaveBeenCalledExactlyOnceWith({ type: 'capture-started' });
 });

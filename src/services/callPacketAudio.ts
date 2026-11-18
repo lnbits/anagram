@@ -165,6 +165,10 @@ function audioNode(mode: 'capture' | 'playback', generation: number, listener: L
   };
   current.context.addEventListener('statechange', clock);
   node.port.onmessage = ({ data }) => {
+    // Device startup can delay the render clock after the initial epoch was
+    // sampled. Rebase when capture actually starts so fresh PCM is not stale.
+    // Already queued frames retain their original age and backlog limit.
+    if (data.type === 'capture-started') clock();
     if (data.type === 'render') listener(data);
   };
   const channel = new MessageChannel();

@@ -12,6 +12,7 @@ class CallAudioProcessor extends AudioWorkletProcessor {
     this.captureFrames = options.processorOptions.captureFrames;
     this.credits = this.captureFrames;
     this.sequence = 0;
+    this.captureStarted = false;
     this.captureEpoch = options.processorOptions.captureEpoch;
     this.renderedSamples = 0;
     this.underrunSamples = 0;
@@ -45,6 +46,10 @@ class CallAudioProcessor extends AudioWorkletProcessor {
     if (!this.active) return false;
     const out = outputs[0][0];
     if (this.mode === 'capture') {
+      if (!this.captureStarted) {
+        this.captureStarted = true;
+        this.port.postMessage({ type: 'capture-started' });
+      }
       const input = inputs[0]?.[0];
       for (let i = 0; i < out.length; i++) {
         this.input[this.offset++] = input?.[i] ?? 0;

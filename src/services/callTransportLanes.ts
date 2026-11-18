@@ -32,6 +32,7 @@ export function mergeCallLanes(connection: RawConnection): CallConnection {
           recvAudio: () => connection.recv_audio!(),
         }
       : {}),
+    ...(connection.sendAudioBatch ? { sendAudioBatch: connection.sendAudioBatch } : {}),
     send: (data) => connection.send(data),
     async recv() {
       if (closed) throw new Error('Call connection closed');

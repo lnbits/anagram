@@ -1,4 +1,4 @@
-import { MAX_AUDIO_PACKET_BYTES } from './callAudioPackets.ts';
+import { MAX_AUDIO_PACKET_BYTES, MAX_NATIVE_AUDIO_BATCH } from './callAudioPackets.ts';
 import {
   CallAudioQueue,
   CALL_AUDIO_BACKLOG_MS,
@@ -269,10 +269,24 @@ export function recordPacketAudio(
   const pending = new CallAudioQueue<Uint8Array>();
   const transmit = async (packet: Uint8Array) => {
     inFlight++;
-    const frame = packet.slice();
-    new DataView(frame.buffer).setUint32(2, options?.audioGeneration ?? 1);
+    const stamp = (packet: Uint8Array) => {
+      const frame = packet.slice();
+      new DataView(frame.buffer).setUint32(2, options?.audioGeneration ?? 1);
+      return frame;
+    };
     try {
-      await send(frame);
+      const first = stamp(packet);
+      const now = performance.now();
+      const second = options?.sendAudioBatch ? pending.shift(now) : undefined;
+      if (second && options?.sendAudioBatch) {
+        const frames = [first, stamp(second)];
+        while (frames.length < MAX_NATIVE_AUDIO_BATCH) {
+          const next = pending.shift(now);
+          if (!next) break;
+          frames.push(stamp(next));
+        }
+        await options.sendAudioBatch(frames);
+      } else await send(first);
     } catch (error) {
       if (!closed) {
         close();

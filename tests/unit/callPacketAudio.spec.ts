@@ -118,81 +118,99 @@ it('preserves brief decoder stalls and bounds a sustained decoder backlog', asyn
   }
 });
 
-it('preserves sender backlog in order without delaying another peer, and clears it on hangup', async () => {
-  const { posted, worker, release, recordPacketAudio } = await mockEngine();
-  const { packAudio, unpackAudio } = await import('#src/services/callAudioPackets.ts');
-  const track = new EventTarget() as MediaStreamTrack;
-  track.enabled = true;
-  const stream = new MediaStream([track]);
-  const received: number[] = [];
-  const generations: number[] = [];
-  const acknowledgements: Array<() => void> = [];
-  const fast: number[] = [];
-  const error = vi.fn();
-  const stopSlow = recordPacketAudio(
-    stream,
-    async (bytes) => {
-      const packet = unpackAudio(bytes)!;
-      received.push(packet.sequence);
-      generations.push(packet.generation);
-      await new Promise<void>((resolve) => acknowledgements.push(resolve));
-    },
-    error,
-    { audioGeneration: 7 },
-  );
-  const stopFast = recordPacketAudio(
-    stream,
-    async (bytes) => {
-      fast.push(unpackAudio(bytes)!.sequence);
-    },
-    error,
-  );
-  const id = posted.find((message) => message.type === 'encode').id;
-  const deliver = (sequence: number) =>
-    worker.onmessage({
-      data: {
-        id,
-        type: 'packet',
-        at: performance.timeOrigin + performance.now() - 200,
-        packet: packAudio({
-          sequence,
-          generation: 1,
-          timestamp: sequence * 960,
-          opus: new Uint8Array([1]),
-        }),
+it.each([false, true])(
+  'preserves sender order and peer isolation with native batching %s',
+  async (nativeBatch) => {
+    const { posted, worker, release, recordPacketAudio } = await mockEngine();
+    const { packAudio, unpackAudio } = await import('#src/services/callAudioPackets.ts');
+    const track = new EventTarget() as MediaStreamTrack;
+    track.enabled = true;
+    const stream = new MediaStream([track]);
+    const received: number[] = [];
+    const generations: number[] = [];
+    const acknowledgements: Array<() => void> = [];
+    const fast: number[] = [];
+    const error = vi.fn();
+    const batchSizes: number[] = [];
+    const stopSlow = recordPacketAudio(
+      stream,
+      async (bytes) => {
+        const packet = unpackAudio(bytes)!;
+        received.push(packet.sequence);
+        generations.push(packet.generation);
+        await new Promise<void>((resolve) => acknowledgements.push(resolve));
       },
-    });
-  try {
-    for (let i = 0; i < 10; i++) {
-      deliver(i);
+      error,
+      {
+        audioGeneration: 7,
+        sendAudioBatch: nativeBatch
+          ? async (frames) => {
+              batchSizes.push(frames.length);
+              for (const bytes of frames) {
+                const packet = unpackAudio(bytes)!;
+                received.push(packet.sequence);
+                generations.push(packet.generation);
+              }
+              await new Promise<void>((resolve) => acknowledgements.push(resolve));
+            }
+          : undefined,
+      },
+    );
+    const stopFast = recordPacketAudio(
+      stream,
+      async (bytes) => {
+        fast.push(unpackAudio(bytes)!.sequence);
+      },
+      error,
+    );
+    const id = posted.find((message) => message.type === 'encode').id;
+    const deliver = (sequence: number) =>
+      worker.onmessage({
+        data: {
+          id,
+          type: 'packet',
+          at: performance.timeOrigin + performance.now() - 200,
+          packet: packAudio({
+            sequence,
+            generation: 1,
+            timestamp: sequence * 960,
+            opus: new Uint8Array([1]),
+          }),
+        },
+      });
+    try {
+      for (let i = 0; i < 10; i++) {
+        deliver(i);
+        await Promise.resolve();
+      }
+      expect(received).toEqual([0, 1]);
+      expect(fast).toEqual(Array.from({ length: 10 }, (_, i) => i));
+      while (acknowledgements.length) {
+        acknowledgements.shift()!();
+        await Promise.resolve();
+        await Promise.resolve();
+      }
+      expect(received).toEqual(fast);
+      expect(batchSizes).toEqual(nativeBatch ? [8] : []);
+      expect(generations).toEqual(Array(10).fill(7));
+      expect(posted.filter((message) => message.type === 'encode')).toHaveLength(1);
+      for (let i = 10; i < 20; i++) {
+        deliver(i);
+        await Promise.resolve();
+      }
+      stopSlow();
+      acknowledgements.splice(0).forEach((resolve) => resolve());
       await Promise.resolve();
+      await Promise.resolve();
+      expect(received).toHaveLength(12); // Queued speech cannot publish after hangup.
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      stopSlow();
+      stopFast();
+      release?.();
     }
-    expect(received).toEqual([0, 1]);
-    expect(fast).toEqual(Array.from({ length: 10 }, (_, i) => i));
-    while (acknowledgements.length) {
-      acknowledgements.shift()!();
-      await Promise.resolve();
-      await Promise.resolve();
-    }
-    expect(received).toEqual(fast);
-    expect(generations).toEqual(Array(10).fill(7));
-    expect(posted.filter((message) => message.type === 'encode')).toHaveLength(1);
-    for (let i = 10; i < 20; i++) {
-      deliver(i);
-      await Promise.resolve();
-    }
-    stopSlow();
-    acknowledgements.splice(0).forEach((resolve) => resolve());
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(received).toHaveLength(12); // Queued speech cannot publish after hangup.
-    expect(error).not.toHaveBeenCalled();
-  } finally {
-    stopSlow();
-    stopFast();
-    release?.();
-  }
-});
+  },
+);
 
 it('discards queued speech and late encoder output while the microphone is muted', async () => {
   const { posted, worker, release, recordPacketAudio } = await mockEngine();

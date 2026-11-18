@@ -59,6 +59,7 @@ export interface CallTransportStats {
 export interface CallConnection {
   transportStats?(): Promise<CallTransportStats>;
   sendAudio?(data: Uint8Array): Promise<void>;
+  sendAudioBatch?(packets: Uint8Array[]): Promise<void>;
   recvAudio?(): Promise<Uint8Array>;
   send(data: Uint8Array): Promise<void>;
   recv(): Promise<Uint8Array>;

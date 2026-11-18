@@ -245,16 +245,18 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
           const endpoint = await createIrohCallEndpoint(['https://127.0.0.1:7004/']);
           const wrap = (connection) => {
             connections[i].push(connection);
-            const sendAudio = connection.sendAudio;
-            if (sendAudio)
-              connection.sendAudio = async (data) => {
-                const at = performance.now();
-                await sendAudio(data);
-                const elapsed = performance.now() - at;
-                sendCosts[i].count++;
-                sendCosts[i].totalMs += elapsed;
-                sendCosts[i].maxMs = Math.max(sendCosts[i].maxMs, elapsed);
-              };
+            for (const method of ['sendAudio', 'sendAudioBatch']) {
+              const send = connection[method];
+              if (send)
+                connection[method] = async (data) => {
+                  const at = performance.now();
+                  await send(data);
+                  const elapsed = performance.now() - at;
+                  sendCosts[i].count++;
+                  sendCosts[i].totalMs += elapsed;
+                  sendCosts[i].maxMs = Math.max(sendCosts[i].maxMs, elapsed);
+                };
+            }
             return connection;
           };
           return {
@@ -274,7 +276,16 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
               return send(frame);
             },
             onError,
-            options,
+            options?.sendAudioBatch
+              ? {
+                  ...options,
+                  sendAudioBatch: (frames) => {
+                    recording.sent += frames.length;
+                    recording.lastSent = performance.now();
+                    return options.sendAudioBatch(frames);
+                  },
+                }
+              : options,
           );
           recordings.add(recording);
           return () => {

@@ -61,8 +61,7 @@ fn response(value: Value) -> Response {
     Response::new(value.to_string())
 }
 
-fn call_frame(body: &InvokeBody, audio: bool) -> Result<Vec<u8>, String> {
-    let limit = if audio { 1100 } else { 1_048_576 };
+fn call_frame(body: &InvokeBody, limit: usize) -> Result<Vec<u8>, String> {
     let size = match body {
         InvokeBody::Raw(bytes) => bytes.len(),
         // Android's postMessage IPC serializes typed arrays as JSON arrays.
@@ -86,6 +85,28 @@ fn call_frame(body: &InvokeBody, audio: bool) -> Result<Vec<u8>, String> {
     }
 }
 
+const MAX_AUDIO_BATCH: usize = 12;
+
+fn audio_packets(mut bytes: &[u8]) -> Result<Vec<&[u8]>, String> {
+    let mut frames = Vec::new();
+    while !bytes.is_empty() {
+        if frames.len() == MAX_AUDIO_BATCH || bytes.len() < 2 {
+            return Err("Invalid audio batch".into());
+        }
+        let size = usize::from(u16::from_be_bytes([bytes[0], bytes[1]]));
+        let packet = bytes.get(2..2 + size).ok_or("Truncated audio batch")?;
+        if !(15..=1100).contains(&size) || !packet.starts_with(&[9, 1]) {
+            return Err("Invalid audio packet".into());
+        }
+        frames.push(packet);
+        bytes = &bytes[2 + size..];
+    }
+    if frames.is_empty() {
+        return Err("Empty audio batch".into());
+    }
+    Ok(frames)
+}
+
 #[tauri::command]
 pub async fn iroh_call_send(
     window: WebviewWindow,
@@ -106,9 +127,11 @@ pub async fn iroh_call_send(
     let id: u64 = header("x-call-connection")?
         .parse()
         .map_err(|_| "Invalid connection")?;
-    let audio = match header("x-call-audio")? {
-        "0" => false,
-        "1" => true,
+    let lane = header("x-call-audio")?;
+    let limit = match lane {
+        "0" => 1_048_576,
+        "1" => 1100,
+        "batch" => MAX_AUDIO_BATCH * 1102,
         _ => return Err("Invalid audio flag".into()),
     };
     let connection = {
@@ -122,8 +145,13 @@ pub async fn iroh_call_send(
             .map(|(_, c)| c.clone())
             .ok_or("Unknown call connection")?
     };
-    let data = call_frame(request.body(), audio)?;
-    if audio {
+    let data = call_frame(request.body(), limit)?;
+    if lane == "batch" {
+        for packet in audio_packets(&data)? {
+            connection.send_audio(packet.to_vec()).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    } else if lane == "1" {
         connection
             .send_audio(data)
             .map_err(|e| e.to_string())
@@ -306,7 +334,7 @@ mod tests {
             for size in [0, 1, limit, limit + 1] {
                 let bytes = vec![255u8; size];
                 for body in [InvokeBody::Raw(bytes.clone()), InvokeBody::Json(json!(bytes))] {
-                    let result = call_frame(&body, audio);
+                    let result = call_frame(&body, limit);
                     if size > 0 && size <= limit {
                         assert_eq!(result.unwrap(), bytes);
                     } else {
@@ -319,8 +347,21 @@ mod tests {
             json!([256]), json!([-1]), json!([1.5]), json!([null]),
             json!(["1"]), json!([true]), json!([[1]]), json!({"0": 1}), json!(null),
         ] {
-            assert!(call_frame(&InvokeBody::Json(invalid), false).is_err());
+            assert!(call_frame(&InvokeBody::Json(invalid), 1_048_576).is_err());
         }
+    }
+
+    #[test]
+    fn validates_the_entire_audio_batch_before_sending() {
+        let mut packet = vec![0, 15, 9, 1];
+        packet.resize(17, 0);
+        let full = packet.repeat(MAX_AUDIO_BATCH);
+        assert_eq!(audio_packets(&full).unwrap().len(), MAX_AUDIO_BATCH);
+        assert!(audio_packets(&packet.repeat(MAX_AUDIO_BATCH + 1)).is_err());
+        assert!(audio_packets(&[]).is_err());
+        assert!(audio_packets(&full[..full.len() - 1]).is_err());
+        packet[2] = 3;
+        assert!(audio_packets(&packet).is_err());
     }
 
     #[test]

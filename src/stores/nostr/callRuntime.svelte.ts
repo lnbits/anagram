@@ -408,6 +408,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         if (ctx.connection === connection) fail(ctx, new Error('Audio encoder failed'));
       },
       {
+        sendAudioBatch: ctx.packetAudio ? connection.sendAudioBatch : undefined,
         audioGeneration: (ctx.audioGeneration = (ctx.audioGeneration ?? 0) + 1),
         ...(ctx.splitMedia ? { onStreamRestart: () => connection.send(new Uint8Array([4])) } : {}),
         onSendError: (cause) => {

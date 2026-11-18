@@ -36,19 +36,17 @@ permissions:
 concurrency:
   # Standalone checks must not cancel checks required by a release.
   group: call-media-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # TEMPORARY PR #122 focus: preserve results from jobs already running.
+  cancel-in-progress: ${{ github.event.pull_request.number != 122 }}
 jobs:
   browsers:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-24.04
-            browser: chromium
-          - os: ubuntu-24.04
-            browser: firefox
-          - os: macos-26
-            browser: webkit
+        # TEMPORARY PR #122 focus: Chromium and WebKit passed on e4d9732.
+        # Restore all three browsers before final validation. Manual/release
+        # runs and other PRs continue to run the complete matrix.
+        include: ${{ fromJSON(github.event.pull_request.number == 122 && '[{"os":"ubuntu-24.04","browser":"firefox"}]' || '[{"os":"ubuntu-24.04","browser":"chromium"},{"os":"ubuntu-24.04","browser":"firefox"},{"os":"macos-26","browser":"webkit"}]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:

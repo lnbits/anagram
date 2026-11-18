@@ -23,7 +23,7 @@ vi.mock('#src/services/nostrEventDataService.ts', () => ({
 }));
 
 function makeRelayStatus(
-  overrides: Partial<MessageRelayStatus> & Pick<MessageRelayStatus, 'relay_url'>
+  overrides: Partial<MessageRelayStatus> & Pick<MessageRelayStatus, 'relay_url'>,
 ): MessageRelayStatus {
   return {
     relay_url: overrides.relay_url,
@@ -32,6 +32,7 @@ function makeRelayStatus(
     status: overrides.status ?? 'failed',
     updated_at: overrides.updated_at ?? '2026-01-01T00:00:00.000Z',
     ...(overrides.detail ? { detail: overrides.detail } : {}),
+    ...(overrides.retry_after ? { retry_after: overrides.retry_after } : {}),
   };
 }
 
@@ -57,6 +58,46 @@ describe('outboundMessageReplayRuntime', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it('skips policy refusals and persisted rate-limit deadlines while retrying reachable alternatives', async () => {
+    const retryDirectMessageRelay = vi.fn().mockResolvedValue(undefined);
+    serviceMocks.nostrEventDataService.listEventsByDirection.mockResolvedValue([
+      {
+        direction: 'out',
+        event: { id: 'event-1', kind: NostrKind.PrivateDirectMessage },
+        relay_statuses: [
+          makeRelayStatus({ relay_url: 'wss://blocked/', detail: 'blocked: not in web of trust' }),
+          makeRelayStatus({ relay_url: 'wss://restricted/', detail: 'restricted: sign up first' }),
+          makeRelayStatus({ relay_url: 'wss://refused/', detail: 'relay-rejected: no thanks' }),
+          makeRelayStatus({
+            relay_url: 'wss://limited/',
+            detail: 'rate-limited: slow down',
+            retry_after: new Date(Date.now() + 120000).toISOString(),
+          }),
+          makeRelayStatus({ relay_url: 'wss://offline/', detail: 'Relay is not connected.' }),
+        ],
+      },
+    ]);
+    const runtime = createOutboundMessageReplayRuntime({
+      getLoggedInPublicKeyHex: () => 'f'.repeat(64),
+      logMessageRelayDiagnostics: vi.fn(),
+      retryDirectMessageRelay,
+    });
+    await runtime.runOutboundMessageReplay('startup');
+    expect(retryDirectMessageRelay).toHaveBeenCalledTimes(1);
+    expect(retryDirectMessageRelay).toHaveBeenCalledWith(7, 'wss://offline/', 'recipient', {
+      trigger: 'outbox:startup',
+    });
+    runtime.resetOutboundMessageReplayRuntimeState();
+    vi.setSystemTime(Date.now() + 120001);
+    retryDirectMessageRelay.mockClear();
+    await runtime.runOutboundMessageReplay('startup');
+    expect(retryDirectMessageRelay).toHaveBeenCalledWith(7, 'wss://limited/', 'recipient', {
+      trigger: 'outbox:startup',
+    });
+    expect(retryDirectMessageRelay).toHaveBeenCalledTimes(2);
+    runtime.resetOutboundMessageReplayRuntimeState();
   });
 
   it('retries persisted pending and failed DM relay targets', async () => {
@@ -118,7 +159,7 @@ describe('outboundMessageReplayRuntime', () => {
       7,
       'wss://relay-pending',
       'recipient',
-      { trigger: 'outbox:startup' }
+      { trigger: 'outbox:startup' },
     );
     expect(retryDirectMessageRelay).toHaveBeenNthCalledWith(2, 7, 'wss://relay-failed', 'self', {
       trigger: 'outbox:startup',
@@ -130,7 +171,7 @@ describe('outboundMessageReplayRuntime', () => {
         reason: 'startup',
         messageId: 7,
         eventId: 'event-1',
-      })
+      }),
     );
     expect(logMessageRelayDiagnostics).toHaveBeenCalledWith(
       'outbox-replay-complete',
@@ -138,7 +179,7 @@ describe('outboundMessageReplayRuntime', () => {
         reason: 'startup',
         attemptedRelayCount: 2,
         replayedEventCount: 1,
-      })
+      }),
     );
   });
 
@@ -174,7 +215,7 @@ describe('outboundMessageReplayRuntime', () => {
     await runtime.startOutboundMessageReplay();
     const addEventListenerMock = vi.mocked(window.addEventListener);
     const onlineHandler = addEventListenerMock.mock.calls.find(
-      ([eventName]) => eventName === 'online'
+      ([eventName]) => eventName === 'online',
     )?.[1] as (() => void) | undefined;
     expect(onlineHandler).toBeTypeOf('function');
 

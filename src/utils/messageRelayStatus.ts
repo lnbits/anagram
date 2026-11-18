@@ -49,6 +49,9 @@ export function normalizeMessageRelayStatus(value: unknown): MessageRelayStatus 
     scope: value.scope,
     updated_at: updatedAt,
     ...(detail ? { detail } : {}),
+    ...(typeof value.retry_after === 'string' && Number.isFinite(Date.parse(value.retry_after))
+      ? { retry_after: new Date(value.retry_after).toISOString() }
+      : {}),
   };
 }
 
@@ -64,7 +67,7 @@ export function normalizeMessageRelayStatuses(value: unknown): MessageRelayStatu
 
 export function mergeMessageRelayStatuses(
   existingRelayStatuses: MessageRelayStatus[],
-  nextRelayStatuses: MessageRelayStatus[]
+  nextRelayStatuses: MessageRelayStatus[],
 ): MessageRelayStatus[] {
   const mergedRelayStatuses = new Map<string, MessageRelayStatus>();
 

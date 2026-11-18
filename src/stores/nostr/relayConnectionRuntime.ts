@@ -302,6 +302,8 @@ export function createRelayConnectionRuntime({
     )}ms.`;
   }
 
+  const connectedSince = new Map<string, number>();
+
   function clearRelayConnectRetryState(relayUrl: string): void {
     const normalizedRelayUrl = normalizeRelayClientUrl(relayUrl);
     if (normalizedRelayUrl) {
@@ -467,7 +469,7 @@ export function createRelayConnectionRuntime({
       logRelayLifecycle('connecting', relay);
     });
     ndk.pool.on('relay:connect', (relay) => {
-      clearRelayConnectRetryState(relay.url);
+      connectedSince.set(relay.url, Date.now());
       authenticatedRelayUrls.delete(relay.url);
       bumpRelayStatusVersion();
       logRelayLifecycle('connect', relay);
@@ -483,6 +485,10 @@ export function createRelayConnectionRuntime({
       logRelayLifecycle('ready', relay);
     });
     ndk.pool.on('relay:disconnect', (relay) => {
+      const since = connectedSince.get(relay.url);
+      if (since !== undefined && Date.now() - since >= 60_000)
+        clearRelayConnectRetryState(relay.url);
+      connectedSince.delete(relay.url);
       recordRelayConnectFailure(relay);
       authenticatedRelayUrls.delete(relay.url);
       bumpRelayStatusVersion();

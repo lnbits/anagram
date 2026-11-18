@@ -316,21 +316,33 @@ describe('relayConnectionRuntime', () => {
     expect(ndk.relayConnectionRetryDelay?.(relay.url)).toBe(0);
   });
 
-  it('clears relay retry backoff after a successful connection', async () => {
-    const { pool, relay, relayConnectRetryStateByUrl, runtime } = createRuntimeHarness();
-    relayConnectRetryStateByUrl.set(relay.url, {
-      failureCount: 3,
-      nextAttemptAt: Date.now() + 40000,
-    });
-    await runtime.ensureRelayConnections([]);
-    const relayConnectHandler = pool.on.mock.calls.find(
-      ([eventName]) => eventName === 'relay:connect',
-    )?.[1] as ((nextRelay: FakeRelay) => void) | undefined;
-
-    relay.connected = true;
-    relayConnectHandler?.(relay);
-
-    expect(relayConnectRetryStateByUrl.has(relay.url)).toBe(false);
+  it('keeps backoff for flapping connections and resets it only after a stable session', async () => {
+    vi.useFakeTimers();
+    try {
+      const { pool, relay, relayConnectRetryStateByUrl, runtime } = createRuntimeHarness();
+      relayConnectRetryStateByUrl.set(relay.url, {
+        failureCount: 3,
+        nextAttemptAt: Date.now() + 40000,
+      });
+      await runtime.ensureRelayConnections([]);
+      const connected = pool.on.mock.calls.find(([name]) => name === 'relay:connect')![1];
+      const disconnected = pool.on.mock.calls.find(([name]) => name === 'relay:disconnect')![1];
+      relay.connected = true;
+      connected(relay);
+      expect(relayConnectRetryStateByUrl.get(relay.url)?.failureCount).toBe(3);
+      await vi.advanceTimersByTimeAsync(1000);
+      relay.connected = false;
+      disconnected(relay);
+      expect(relayConnectRetryStateByUrl.get(relay.url)?.failureCount).toBe(4);
+      relay.connected = true;
+      connected(relay);
+      await vi.advanceTimersByTimeAsync(60000);
+      relay.connected = false;
+      disconnected(relay);
+      expect(relayConnectRetryStateByUrl.get(relay.url)?.failureCount).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rejects unspecified-address relay URLs as client destinations', async () => {

@@ -1,3 +1,4 @@
+import { relayFailureKind } from '#src/stores/nostr/relayTrafficPolicy.ts';
 import type { StartupTrackId } from '#src/stores/nostr/startupState.ts';
 import { resolveStartupStepIdValue } from '#src/stores/nostr/startupState.ts';
 
@@ -34,8 +35,10 @@ function session(client: object): Session {
 // Store only an allowlisted reason, never relay-provided text, filters or ciphertext.
 export function relaySyncReason(reason: unknown): RelaySyncReason {
   const text = typeof reason === 'string' ? reason : reason instanceof Error ? reason.message : '';
-  if (/^auth-required:|^restricted:/.test(text)) return 'auth';
-  if (/^rate-limited:/.test(text)) return 'rate-limited';
+  const kind = relayFailureKind(text);
+  if (kind === 'auth') return 'auth';
+  if (kind === 'rate-limited') return 'rate-limited';
+  if (kind === 'terminal') return 'closed';
   return 'unavailable';
 }
 

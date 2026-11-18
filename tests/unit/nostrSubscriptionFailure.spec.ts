@@ -232,16 +232,14 @@ it('bounds partial live synchronization and retries only the silent relay withou
     expect(onInitialSync).toHaveBeenLastCalledWith([good], [slow]);
     expect(subscription.eoseReceived).toBe(false);
     expect(onEose).not.toHaveBeenCalled();
-    handlers
-      .get(good)
-      .onevent({
-        id: 'live',
-        kind: 1059,
-        tags: [],
-        content: '',
-        created_at: 1,
-        pubkey: 'a'.repeat(64),
-      });
+    handlers.get(good).onevent({
+      id: 'live',
+      kind: 1059,
+      tags: [],
+      content: '',
+      created_at: 1,
+      pubkey: 'a'.repeat(64),
+    });
     expect(onEvent).toHaveBeenCalledOnce();
     const stale = handlers.get(slow);
     await vi.advanceTimersByTimeAsync(RELAY_QUERY_TIMEOUT_MS);
@@ -349,6 +347,58 @@ it('cancels a cooldown wait when stopped and recovers early on an external recon
     expect(starts.get(url)).toBe(2);
   } finally {
     subscription.stop();
+    vi.useRealTimers();
+  }
+});
+
+it('does not retry definitive subscription refusals on timers or reconnect, and preserves healthy coverage', async () => {
+  vi.useFakeTimers();
+  try {
+    const bad = 'wss://blocked.example/',
+      good = 'wss://healthy.example/';
+    const { client, handlers, subscription, starts, onEose } = await setup(
+      [bad, good],
+      false,
+      false,
+      vi.fn(),
+    );
+    handlers.get(bad).onclose('blocked: kind not allowed');
+    handlers.get(good).oneose();
+    await vi.advanceTimersByTimeAsync(120000);
+    client.pool.emit('relay:connect', client.pool.getRelay(bad, false));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(starts.get(bad)).toBe(1);
+    expect(starts.get(good)).toBe(1);
+    expect(onEose).not.toHaveBeenCalled();
+    subscription.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it('uses the shared rate-limit deadline for query recovery without restarting healthy relays', async () => {
+  vi.useFakeTimers();
+  try {
+    const bad = 'wss://limited.example/',
+      good = 'wss://healthy.example/';
+    const { client, handlers, subscription, starts } = await setup(
+      [bad, good],
+      false,
+      false,
+      vi.fn(),
+    );
+    client.relayTrafficPolicy(bad).rateLimited('REQ', 'rate-limited: wait', 45000);
+    handlers.get(bad).onclose('rate-limited: wait');
+    handlers.get(good).oneose();
+    await vi.advanceTimersByTimeAsync(44999);
+    expect(starts.get(bad)).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(starts.get(bad)).toBe(2);
+    expect(starts.get(good)).toBe(1);
+    subscription.stop();
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(starts.get(bad)).toBe(2);
+  } finally {
     vi.useRealTimers();
   }
 });

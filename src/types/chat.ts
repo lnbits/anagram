@@ -139,6 +139,8 @@ export interface MessageRelayStatus {
   scope: MessageRelayStatusScope;
   updated_at: string;
   detail?: string;
+  /** Earliest retry allowed by relay feedback; survives reloads. */
+  retry_after?: string;
 }
 
 export interface NostrEventEntry {

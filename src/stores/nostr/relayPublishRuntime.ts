@@ -15,6 +15,7 @@ import NostrClient, {
 } from '#src/lib/nostr/client.ts';
 import { contactsService } from '#src/services/contactsService.ts';
 import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
+import { relayFailureKind } from '#src/stores/nostr/relayTrafficPolicy.ts';
 import { RELAY_PUBLISH_TIMEOUT_MS } from '#src/stores/nostr/constants.ts';
 import { getOrCreateOutboundGiftWrap } from '#src/stores/nostr/outboundGiftWrap.ts';
 import type {
@@ -105,6 +106,10 @@ export function createRelayPublishRuntime({
           : (errorsByRelayUrl.get(relayUrl) ??
             'Delivery unknown: relay did not acknowledge publish.');
 
+      const retryAt =
+        relayFailureKind(detail) === 'rate-limited'
+          ? ndk.relayTrafficPolicy(relayUrl).retryAt('EVENT')
+          : 0;
       return {
         relay_url: relayUrl,
         direction: 'outbound',
@@ -112,6 +117,7 @@ export function createRelayPublishRuntime({
         scope,
         updated_at: updatedAt,
         ...(detail ? { detail } : {}),
+        ...(retryAt > Date.now() ? { retry_after: new Date(retryAt).toISOString() } : {}),
       };
     });
   }

@@ -140,6 +140,8 @@ const startNativeProbe = async (pid) => {
     ]);
   }
 };
+// Compare native, WebKit and relay CPU when investigating hosted macOS stalls.
+let sampleTimer;
 let app, timer;
 try {
   const cert = createTestCertificate(directory, command);
@@ -345,6 +347,24 @@ try {
     clearTimeout(buildTimer);
     if (code !== 0) throw new Error(`Native build failed (${code}); see build.log`);
   }
+  if (!browserOnly && process.platform === 'darwin') {
+    const usage = createWriteStream(join(artifacts, 'process-usage.log'));
+    logs.push(usage);
+    const sample = () => {
+      const ps = spawn('ps', ['-A', '-r', '-o', 'pid,ppid,%cpu,rss,comm']);
+      let data = '';
+      ps.stdout.on('data', (chunk) => {
+        data += chunk;
+      });
+      ps.on('close', () =>
+        usage.write(
+          `${new Date().toISOString()} ${lastStage}\n${data.split('\n').slice(0, 26).join('\n')}\n`,
+        ),
+      );
+      ps.on('error', (error) => usage.write(`ps: ${error.message}\n`));
+    };
+    sampleTimer = setInterval(sample, 5000);
+  }
   const completedCases = [];
   for (const selected of cases) {
     currentCase = selected;
@@ -458,6 +478,7 @@ try {
   process.exitCode = 1;
 } finally {
   clearTimeout(timer);
+  clearInterval(sampleTimer);
   if (browser) await browser.close();
   for (const child of children.reverse()) {
     if (child.exitCode !== null || child.signalCode !== null) continue;

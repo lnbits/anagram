@@ -31,7 +31,7 @@
           {
             action: 'notifications',
             label:
-              chat.meta.notifications_enabled === true
+              chat.meta.notifications_enabled !== false
                 ? 'Disable notifications'
                 : 'Enable notifications',
           },

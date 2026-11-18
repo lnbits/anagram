@@ -1,3 +1,4 @@
+import { isDesktopNative } from '#src/lib/platform/desktopNotifications.ts';
 import { isIosNative } from '#src/lib/platform/ios.ts';
 
 const BROWSER_NOTIFICATIONS_STORAGE_KEY = 'ui-browser-notifications';
@@ -14,11 +15,12 @@ function canUseStorage(): boolean {
 
 function isDesktopNotificationEnvironment(): boolean {
   return (
-    canUseWindow() &&
-    Boolean(
-      window.desktopRuntime?.isElectron &&
-      typeof window.desktopRuntime.showIncomingMessageNotification === 'function',
-    )
+    isDesktopNative() ||
+    (canUseWindow() &&
+      Boolean(
+        window.desktopRuntime?.isElectron &&
+        typeof window.desktopRuntime.showIncomingMessageNotification === 'function',
+      ))
   );
 }
 

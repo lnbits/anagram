@@ -4,6 +4,7 @@ import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
 import type { ContactRecord } from '#src/types/contact.ts';
 import { areBrowserNotificationsEnabled } from '#src/utils/browserNotificationPreference.ts';
 import { notificationConversationPath } from '#src/utils/notificationConversation.ts';
+import { isDesktopNative, showDesktopMessageNotification } from '#src/lib/platform/desktopNotifications.ts';
 import { isAndroidNative } from '#src/lib/platform/androidNotifications.ts';
 
 
@@ -244,6 +245,19 @@ export function createInboundPresentationRuntime(state: InboundPresentationRunti
     }
 
     const messagePreview = buildBrowserNotificationMessagePreview(options.messageText);
+
+    if (isDesktopNative()) {
+      const ownerPubkey = getLoggedInPublicKeyHex();
+      if (ownerPubkey) {
+        void showDesktopMessageNotification({
+          ownerPubkey,
+          chatPubkey: options.chatPubkey,
+          title: options.title,
+          body: messagePreview,
+        }).catch((error) => console.warn('Failed to show incoming desktop notification', error));
+      }
+      return;
+    }
 
     if (
       window.desktopRuntime?.isElectron &&

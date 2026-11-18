@@ -436,6 +436,46 @@ describe('androidRelayNotificationService', () => {
     ).toEqual(['wss://app.example/']);
   });
 
+  it.each([
+    { enabled: undefined, muted: false, blocked: false, expected: true },
+    { enabled: true, muted: false, blocked: false, expected: true },
+    { enabled: false, muted: false, blocked: false, expected: false },
+    { enabled: undefined, muted: true, blocked: false, expected: false },
+    { enabled: undefined, muted: false, blocked: true, expected: false },
+  ])('preserves private-group background notification policy: %j', async ({ enabled, muted, blocked, expected }) => {
+    const publicKey = '33'.repeat(32);
+    const identity = new NostrPrivateKeySigner(moduleMocks.privateKey);
+    const epochPrivateKey = `${'0'.repeat(63)}2`;
+    const epochPubkey = new NostrPrivateKeySigner(epochPrivateKey).pubkey;
+    const encrypted = await identity.encrypt(await identity.user(), epochPrivateKey, 'nip44');
+    moduleMocks.chats.push({
+      public_key: publicKey, type: 'group', name: 'Existing group',
+      meta: { notifications_enabled: enabled, muted, blocked,
+        current_epoch_public_key: epochPubkey,
+        group_epoch_keys: [{ epoch_number: 0, epoch_public_key: epochPubkey,
+          epoch_private_key_encrypted: encrypted }] },
+    });
+    await requestAndroidRelayNotificationsAfterLogin();
+    expect(moduleMocks.plugin.configure.mock.calls[0][0].conversations).toEqual([
+      expect.objectContaining({ chatPubkey: publicKey, notificationsEnabled: expected }),
+    ]);
+    expect(moduleMocks.plugin.configure.mock.calls[0][0].recipientKeys).toContainEqual({
+      recipientPubkey: epochPubkey, privateKey: epochPrivateKey,
+    });
+  });
+
+  it('refreshes Android policy when a legacy group is explicitly disabled', () => {
+    const group = { avatar: '', epochPublicKey: GROUP_EPOCH_PUBKEY, meta: {},
+      name: 'Existing group', publicKey: '33'.repeat(32), type: 'group' as const };
+    const original = createAndroidNotificationConversationSignature([group]);
+    expect(createAndroidNotificationConversationSignature([
+      { ...group, meta: { notifications_enabled: false } },
+    ])).not.toBe(original);
+    expect(createAndroidNotificationConversationSignature([
+      { ...group, meta: { notifications_enabled: true } },
+    ])).toBe(original);
+  });
+
   it('hides per-conversation details by default', () => {
     expect(readAndroidRelayConversationDetailsPreference()).toBe(false);
   });

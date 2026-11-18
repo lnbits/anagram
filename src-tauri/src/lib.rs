@@ -149,6 +149,8 @@ async fn set_mobile_call_audio(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().manage(iroh_calls::Calls::default());
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_notification::init());
     #[cfg(target_os = "android")]
     let builder = builder
         .plugin(secure_storage::android_plugin())

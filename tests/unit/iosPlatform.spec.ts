@@ -41,8 +41,6 @@ it.each([
   { userAgent: 'iPhone', enabled: false, maxTouchPoints: 5 },
   { userAgent: 'Macintosh', enabled: false, maxTouchPoints: 5 },
   { userAgent: 'Android', enabled: true, maxTouchPoints: 5 },
-  { userAgent: 'Macintosh', enabled: true, maxTouchPoints: 0 },
-  { userAgent: 'Windows', enabled: true, maxTouchPoints: 0 },
   { userAgent: 'Linux', enabled: false, maxTouchPoints: 0 },
 ])('preserves notifications for $userAgent (native=$enabled)', async (platform) => {
   native.enabled = platform.enabled;
@@ -54,7 +52,21 @@ it.each([
   expect(requestPermission).toHaveBeenCalledOnce();
 });
 
+it.each(['Macintosh', 'Windows', 'Linux'])(
+  'uses native notifications on Tauri %s without browser permission',
+  async (userAgent) => {
+    vi.stubGlobal('navigator', { userAgent, maxTouchPoints: 0 });
+    delete (window as any).Notification;
+    expect(isBrowserNotificationSupported()).toBe(true);
+    expect(getBrowserNotificationPermission()).toBe('native');
+    expect(await requestBrowserNotificationPermission()).toBe('native');
+    expect(await requestBrowserNotificationsAfterLogin()).toBe('native');
+    expect(requestPermission).not.toHaveBeenCalled();
+  },
+);
+
 it('preserves the existing Electron notification path', async () => {
+  native.enabled = false;
   vi.stubGlobal('navigator', { userAgent: 'Macintosh', maxTouchPoints: 0 });
   (window as any).desktopRuntime = {
     isElectron: true,

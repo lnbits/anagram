@@ -208,7 +208,7 @@ test('encrypted DM, reaction, edit, reload and private group', async ({ browser 
   await expect(
     b.getByTestId('message-bubble').filter({ hasText: 'Hello encrypted group' }),
   ).toBeVisible();
-  // Accepted private groups retain numeric badges independently of notification opt-in.
+  // Existing private groups notify by default; an explicit opt-out must persist.
   await b.getByTestId('chat-item').filter({ hasText: 'My Self' }).click();
   await expect(b.getByTestId('chat-thread')).toHaveAttribute('data-chat-public-key', bob.pubkey);
   const groupRow = b.getByTestId('chat-item').filter({ hasText: 'Private test group' });
@@ -228,9 +228,24 @@ test('encrypted DM, reaction, edit, reload and private group', async ({ browser 
   const groupMenu = groupRow.locator('..').getByTestId('chat-item-actions-button');
   await groupRow.hover();
   await groupMenu.click();
+  await b.getByRole('menuitem', { name: 'Disable notifications', exact: true }).click();
+  await groupMenu.click();
+  await expect(b.getByRole('menuitem', { name: 'Enable notifications', exact: true })).toBeVisible();
+  await b.reload();
+  await expect(groupRow).toBeVisible();
+  await groupRow.hover();
+  await groupMenu.click();
+  await expect(b.getByRole('menuitem', { name: 'Enable notifications', exact: true })).toBeVisible();
+  await b.evaluate(() => {
+    Object.defineProperty(window, 'Notification', { configurable: true, value: class {
+      static permission = 'granted';
+      static async requestPermission() { return 'granted'; }
+    } });
+  });
   await b.getByRole('menuitem', { name: 'Enable notifications', exact: true }).click();
   await groupMenu.click();
-  await b.getByRole('menuitem', { name: 'Disable notifications', exact: true }).click();
+  await expect(b.getByRole('menuitem', { name: 'Disable notifications', exact: true })).toBeVisible();
+  await b.keyboard.press('Escape');
   await groupRow.click();
   await expect(groupRow.locator('.badge')).toHaveCount(0);
   // A missing personal ticket must not lock out an owner who is already a member.

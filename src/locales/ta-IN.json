@@ -158,6 +158,7 @@
   "common.save": "சேமி",
   "common.open": "திற",
   "common.pageFound": "பக்கம் கிடைக்கவில்லை",
+  "common.partialSync": "பகுதியளவு ஒத்திசைக்கப்பட்டது",
   "common.pending": "நிலுவையில் உள்ளது",
   "common.pendingTarget": "நிலுவையில் உள்ள இலக்கு",
   "common.pendingTargets": "நிலுவையில் உள்ள இலக்குகள்",
@@ -888,5 +889,16 @@
   "chat.dadBotExamples": "Nostr மற்றும் Anagram க்கான பயனுள்ள பாட்களை உருவாக்குவது எளிது; அதில் அபாரமான சாத்தியங்கள் உள்ளன. சில எடுத்துக்காட்டுகளை இங்கே பாருங்கள்:",
   "chat.historyKeys": "குழு விசைகள் மீட்கப்படுகின்றன…",
   "chat.historyMessages": "செய்திகள் ஏற்றப்படுகின்றன…",
-  "chat.historyRetry": "சில வரலாற்றை ஏற்ற முடியவில்லை. மீண்டும் முயல மேலே உருட்டவும் அல்லது மேலும் என்பதைத் தேர்ந்தெடுக்கவும்."
+  "chat.historyRetry": "சில வரலாற்றை ஏற்ற முடியவில்லை. மீண்டும் முயல மேலே உருட்டவும் அல்லது மேலும் என்பதைத் தேர்ந்தெடுக்கவும்.",
+  "startup.relaySummary": "{success} synchronized · {error} failed · {pending} pending",
+  "startup.relayState.success": "Synchronized",
+  "startup.relayState.error": "Failed",
+  "startup.relayState.pending": "Pending",
+  "startup.relayState.retrying": "Retrying",
+  "startup.relayReason.timeout": "No completion response before the deadline",
+  "startup.relayReason.unavailable": "Connection unavailable",
+  "startup.relayReason.closed": "Request closed before completion",
+  "startup.relayReason.auth": "Relay requires authentication or access",
+  "startup.relayReason.rate-limited": "Relay rate limit reached",
+  "startup.localFailure": "Relay results could not be fully applied. Retry this startup step from Developer settings."
 }

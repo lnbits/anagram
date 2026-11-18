@@ -1,6 +1,6 @@
 {
   "name": "anagram",
-  "version": "0.9.0",
+  "version": "0.9.10",
   "private": true,
   "type": "module",
   "scripts": {
@@ -33,8 +33,8 @@
   },
   "devDependencies": {
     "@playwright/test": "^1",
-    "@sveltejs/adapter-static": "^4.0.0",
-    "@sveltejs/kit": "^3.0.0",
+    "@sveltejs/adapter-static": "^4.0.1",
+    "@sveltejs/kit": "^3.1.1",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tauri-apps/cli": "^2",
     "@types/node": "^24",

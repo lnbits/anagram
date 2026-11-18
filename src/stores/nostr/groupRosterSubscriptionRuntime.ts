@@ -1,3 +1,4 @@
+import { startupRelayObserver } from '#src/stores/nostr/startupRelayTracking.ts';
 import NostrClient, {
   ClientEvent,
   type NostrFilter,
@@ -130,7 +131,7 @@ export function createGroupRosterSubscriptionRuntime({
             signature,
             prepare: () => ensureRelayConnections(relayUrls),
             applied: () => groupRosterApplyQueue,
-            start: (onEose: () => void, onClose: () => void) =>
+            start: (onEose: () => void, onClose: () => void, onInitialSync: (completed: string[], pending: string[]) => void) =>
               subscribeWithReqLogging(
                 'group-roster',
                 'group-roster',
@@ -152,6 +153,8 @@ export function createGroupRosterSubscriptionRuntime({
                     apply(wrapped, relayUrls);
                   },
                   onEose,
+                  onInitialSync,
+                  onRelayStatus: startupRelayObserver(ndk, ['group-rosters-subscribe'], signature, relayUrls),
                   onClose,
                 },
                 { signature, ...buildSubscriptionRelayDetails(relayUrls) }
@@ -159,7 +162,7 @@ export function createGroupRosterSubscriptionRuntime({
           };
         })
       );
-      await subscriptions.waitForEose();
+      await subscriptions.waitForInitialSync();
       await hydrateMemberProfiles();
     } finally {
       initialHydrationCount -= 1;

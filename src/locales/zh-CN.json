@@ -158,6 +158,7 @@
   "common.save": "保存",
   "common.open": "打开",
   "common.pageFound": "找不到页面",
+  "common.partialSync": "部分已同步",
   "common.pending": "待办的",
   "common.pendingTarget": "待定目标",
   "common.pendingTargets": "待定目标",
@@ -888,5 +889,16 @@
   "chat.dadBotExamples": "为 Nostr 和 Anagram 构建实用机器人很简单，而且能发挥强大作用。在这里查看一些示例：",
   "chat.historyKeys": "正在恢复群组密钥…",
   "chat.historyMessages": "正在加载消息…",
-  "chat.historyRetry": "部分历史记录无法加载。向上滚动或选择“更多”重试。"
+  "chat.historyRetry": "部分历史记录无法加载。向上滚动或选择“更多”重试。",
+  "startup.relaySummary": "{success} synchronized · {error} failed · {pending} pending",
+  "startup.relayState.success": "Synchronized",
+  "startup.relayState.error": "Failed",
+  "startup.relayState.pending": "Pending",
+  "startup.relayState.retrying": "Retrying",
+  "startup.relayReason.timeout": "No completion response before the deadline",
+  "startup.relayReason.unavailable": "Connection unavailable",
+  "startup.relayReason.closed": "Request closed before completion",
+  "startup.relayReason.auth": "Relay requires authentication or access",
+  "startup.relayReason.rate-limited": "Relay rate limit reached",
+  "startup.localFailure": "Relay results could not be fully applied. Retry this startup step from Developer settings."
 }

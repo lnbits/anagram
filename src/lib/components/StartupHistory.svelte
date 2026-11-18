@@ -3,16 +3,19 @@
   import { useNostrStore } from '#src/stores/nostrStore.svelte.ts';
   import { translate } from '#src/i18n.ts';
   import {
+    getStartupHistoryStepsValue,
     isStartupLockedStepIdValue,
     type StartupTimedSnapshot,
   } from '#src/stores/nostr/startupState.ts';
   import Icon from './Icon.svelte';
+  import StartupRelayStatus from './StartupRelayStatus.svelte';
 
   const nostr = useNostrStore();
   const state = toStore(() => ({
     steps: nostr.startupSteps.map((step) => ({
       ...step,
-      internalTasks: step.internalTasks.map((task) => ({ ...task })),
+      relays: step.relays?.map((relay) => ({ ...relay })),
+      internalTasks: step.internalTasks.map((task) => ({ ...task, relays: task.relays?.map((relay) => ({ ...relay })) })),
     })),
     display: { ...nostr.startupDisplay },
     restoring: nostr.isRestoringStartupState,
@@ -24,7 +27,7 @@
   } catch {
     /* Optional UI preference. */
   }
-  $: steps = [...$state.steps].sort((a, b) => a.order - b.order);
+  $: steps = getStartupHistoryStepsValue($state.steps);
   $: active = steps.filter(
     (step) =>
       step.status === 'in_progress' ||
@@ -54,15 +57,20 @@
       : `${(step.durationMs / 1000).toFixed(step.durationMs >= 10000 ? 0 : 1)} s`;
   }
   function meta(step: StartupTimedSnapshot) {
+    if (step.relays?.length) return typeof step.eventCount === 'number'
+      ? $translate(step.eventCount === 1 ? 'common.eventCount.one' : 'common.eventCount.many', { count: Math.max(0, Math.floor(step.eventCount)) })
+      : '';
     // Relay/signer exceptions can contain private input; display only a fixed status.
     const status = $translate(
       step.status === 'success'
         ? 'common.completed'
-        : step.status === 'error'
-          ? 'common.failed'
-          : step.status === 'in_progress'
-            ? 'common.progress'
-            : 'common.pending',
+        : step.status === 'partial'
+          ? 'common.partialSync'
+          : step.status === 'error'
+            ? 'common.failed'
+            : step.status === 'in_progress'
+              ? 'common.progress'
+              : 'common.pending',
       { duration: duration(step) },
     );
     return typeof step.eventCount === 'number' && Number.isFinite(step.eventCount)
@@ -72,7 +80,9 @@
 </script>
 
 {#snippet indicator(step: StartupTimedSnapshot)}
-  {#if step.status === 'in_progress'}
+  {#if step.relays?.length}
+    <StartupRelayStatus {step} />
+  {:else if step.status === 'in_progress'}
     <span class="mini-progress" aria-label={$translate('common.progress')}></span>
   {:else}<span
       class="status-icon"
@@ -202,7 +212,7 @@
   }
   .step-row {
     display: grid;
-    grid-template-columns: 34px 22px minmax(0, 1fr) auto;
+    grid-template-columns: 34px 28px minmax(0, 1fr) auto;
     gap: 7px;
     align-items: start;
   }
@@ -238,7 +248,7 @@
   }
   .task-row {
     display: grid;
-    grid-template-columns: 22px minmax(0, 1fr) auto;
+    grid-template-columns: 28px minmax(0, 1fr) auto;
     gap: 7px;
     align-items: start;
   }
@@ -303,13 +313,13 @@
   }
   @media (max-width: 420px) {
     .step-row {
-      grid-template-columns: 34px 22px minmax(0, 1fr);
+      grid-template-columns: 34px 28px minmax(0, 1fr);
     }
     .duration {
       grid-column: 3;
     }
     .task-row {
-      grid-template-columns: 22px minmax(0, 1fr);
+      grid-template-columns: 28px minmax(0, 1fr);
     }
     .task-row .duration {
       grid-column: 2;

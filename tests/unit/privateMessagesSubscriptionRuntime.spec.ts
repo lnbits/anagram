@@ -1,9 +1,4 @@
-import { EventEmitter } from 'node:events';
-import NostrClient, {
-  type ClientEvent,
-  type NostrFilter,
-  type NostrSubscription,
-} from '#src/lib/nostr/client.ts';
+import NostrClient, { type ClientEvent, type NostrFilter } from '#src/lib/nostr/client.ts';
 import { RELAY_QUERY_TIMEOUT_MS } from '#src/stores/nostr/constants.ts';
 import { createPrivateMessagesSubscriptionRuntime } from '#src/stores/nostr/privateMessagesSubscriptionRuntime.ts';
 import { createStartupRuntime } from '#src/stores/nostr/startupRuntime.ts';
@@ -11,7 +6,6 @@ import {
   createInitialStartupStepSnapshots,
   type StartupDisplaySnapshot,
 } from '#src/stores/nostr/startupState.ts';
-import { observeConnectedRelayEose } from '#src/stores/nostr/subscriptionEose.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const serviceMocks = vi.hoisted(() => ({
@@ -39,6 +33,7 @@ const RELAY_URLS = ['wss://relay.example/'];
 type SubscriptionOptions = {
   onEvent?: (event: ClientEvent) => void;
   onEose?: () => void;
+  onInitialSync?: (completed: string[], pending: string[]) => void;
   onClose?: () => void;
 };
 
@@ -295,42 +290,75 @@ describe('privateMessagesSubscriptionRuntime', () => {
     );
   });
 
-  it('starts step 16 despite a slow live snapshot and an unavailable relay', async () => {
-    vi.useFakeTimers();
-    const healthy = { connected: true };
-    const unavailable = { connected: false };
-    const subscription = Object.assign(new EventEmitter(), {
-      relaySet: { relays: new Set([healthy, unavailable]) },
-      eosesSeen: new Set(),
-      stop: vi.fn(),
+  it('reports partial startup without complete coverage, continues history and accepts late recovery', async () => {
+    let options!: SubscriptionOptions;
+    const stop = vi.fn();
+    const subscribeWithReqLogging = vi.fn((_label, _requestLabel, _filters, handlers) => {
+      options = handlers;
+      return { stop } as never;
     });
-    const subscribeWithReqLogging = vi.fn((_label, _requestLabel, _filters, options) => {
-      observeConnectedRelayEose(subscription as unknown as NostrSubscription, options.onEose);
-      return subscription as never;
-    });
-    const { runtime, startPrivateMessagesStartupBackfill, startupRuntime } = createRuntime({
-      subscribeWithReqLogging,
-    });
+    const context = createRuntime({ subscribeWithReqLogging });
+    const { runtime, startupRuntime, startPrivateMessagesStartupBackfill } = context;
     await runtime.subscribePrivateMessagesForLoggedInUser(false, { startupTrackStep: true });
     runtime.startPrivateMessagesHistoryRestore();
-    await vi.advanceTimersByTimeAsync(RELAY_QUERY_TIMEOUT_MS + 1000);
-    expect(startPrivateMessagesStartupBackfill).toHaveBeenCalledTimes(1);
-
-    subscription.eosesSeen.add(healthy);
-    await vi.advanceTimersByTimeAsync(100);
-    expect(startPrivateMessagesStartupBackfill).toHaveBeenCalledExactlyOnceWith(
-      LOGGED_IN_PUBLIC_KEY,
-      [LOGGED_IN_PUBLIC_KEY],
-      RELAY_URLS,
-      90,
+    options.onInitialSync?.(RELAY_URLS, ['wss://unavailable.example/']);
+    expect(startupRuntime.getStartupStepSnapshot('private-messages-subscribe').status).toBe(
+      'partial',
     );
+    expect(context.privateMessagesSubscriptionLiveCoverageAt).toBeNull();
+    expect(startPrivateMessagesStartupBackfill).toHaveBeenCalledOnce();
+    expect(stop).not.toHaveBeenCalled();
+
+    const event = {
+      id: 'a'.repeat(64),
+      relay: { url: RELAY_URLS[0] },
+      created_at: 100,
+    } as ClientEvent;
+    options.onEvent?.(event);
+    expect(context.queuePrivateMessageIngestion).toHaveBeenLastCalledWith(
+      expect.objectContaining(event),
+      LOGGED_IN_PUBLIC_KEY,
+      { priority: 'foreground', live: true },
+    );
+    const late = { ...event, relay: { url: 'wss://unavailable.example/' } } as ClientEvent;
+    options.onEvent?.(late);
+    expect(context.queuePrivateMessageIngestion).toHaveBeenLastCalledWith(
+      expect.objectContaining(late),
+      LOGGED_IN_PUBLIC_KEY,
+      { priority: 'foreground' },
+    );
+
+    options.onInitialSync?.([...RELAY_URLS, 'wss://unavailable.example/'], []);
+    options.onEose?.();
     expect(startupRuntime.getStartupStepSnapshot('private-messages-subscribe').status).toBe(
       'success',
     );
-    expect(subscribeWithReqLogging).toHaveBeenCalledTimes(1);
-    expect(subscription.stop).not.toHaveBeenCalled();
-    expect(subscription.listenerCount('eose')).toBe(0);
-    expect(subscription.listenerCount('close')).toBe(0);
+    expect(subscribeWithReqLogging).toHaveBeenCalledOnce();
+    expect(stop).not.toHaveBeenCalled();
+    runtime.stopPrivateMessagesLiveSubscription();
+  });
+
+  it('reports failed startup when no relay completed and allows later recovery', async () => {
+    let options!: SubscriptionOptions;
+    const context = createRuntime({
+      subscribeWithReqLogging: vi.fn((_label, _requestLabel, _filters, handlers) => {
+        options = handlers;
+        return { stop: vi.fn() } as never;
+      }),
+    });
+    await context.runtime.subscribePrivateMessagesForLoggedInUser(false, {
+      startupTrackStep: true,
+    });
+    options.onInitialSync?.([], RELAY_URLS);
+    expect(context.startupRuntime.getStartupStepSnapshot('private-messages-subscribe').status).toBe(
+      'error',
+    );
+    expect(context.privateMessagesSubscriptionLiveCoverageAt).toBeNull();
+    options.onEose?.();
+    expect(context.startupRuntime.getStartupStepSnapshot('private-messages-subscribe').status).toBe(
+      'success',
+    );
+    context.runtime.stopPrivateMessagesLiveSubscription();
   });
 
   it('does not leave history waiting on a listener that failed to start', async () => {

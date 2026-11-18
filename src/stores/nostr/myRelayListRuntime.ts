@@ -1,3 +1,4 @@
+import { startupRelayObserver } from '#src/stores/nostr/startupRelayTracking.ts';
 import { privateStorageRelayService } from '#src/services/privateStorageRelayService.ts';
 import type { Event } from 'nostr-tools';
 import NostrClient, {
@@ -312,7 +313,7 @@ export function createMyRelayListRuntime({
     restoreMyRelayListPromise = (async () => {
       try {
         await subscribeMyRelayListUpdates(seedRelayUrls);
-        await desiredSubscriptions.waitForEose();
+        await desiredSubscriptions.waitForInitialSync();
         completeStartupStep('my-relay-list');
       } catch (error) {
         failStartupStep('my-relay-list', error);
@@ -453,7 +454,7 @@ export function createMyRelayListRuntime({
           await getLoggedInSignerUser();
         },
         applied: () => myRelayListApplyQueue,
-        start: (onEose, onClose) => {
+        start: (onEose, onClose, onInitialSync) => {
           myRelayListSubscriptionSignature = signature;
           myRelayListSubscription = subscribeWithReqLogging(
             'my-relay-list',
@@ -473,6 +474,8 @@ export function createMyRelayListRuntime({
                 void applyOwnRelayList(wrappedEvent);
               },
               onEose,
+              onInitialSync,
+              onRelayStatus: startupRelayObserver(ndk, ['my-relay-list', 'my-relays-subscribe'], signature, relayUrls),
               onClose,
             },
             { signature, ...buildSubscriptionRelayDetails(relayUrls) },

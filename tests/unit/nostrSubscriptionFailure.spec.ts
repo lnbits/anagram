@@ -1,9 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
-import NostrClient, { NostrRelayStatus } from '#src/lib/nostr/client.ts';
+import NostrClient, {
+  NostrRelayStatus,
+  type NostrSubscriptionOptions,
+} from '#src/lib/nostr/client.ts';
+import { RELAY_QUERY_TIMEOUT_MS } from '#src/stores/nostr/constants.ts';
 
-async function setup(urls: string[], auth = false, includeRelayDuplicates = false) {
+async function setup(
+  urls: string[],
+  auth = false,
+  includeRelayDuplicates = false,
+  onInitialSync?: NostrSubscriptionOptions['onInitialSync'],
+) {
   const client = new NostrClient();
   const handlers = new Map<string, any>();
+  const starts = new Map<string, number>();
   for (const url of urls) vi.spyOn(client.pool.getRelay(url, false), 'connect').mockResolvedValue();
   vi.spyOn(client.transport, 'getExistingRelay').mockImplementation(
     (url) =>
@@ -11,6 +21,7 @@ async function setup(urls: string[], auth = false, includeRelayDuplicates = fals
         connected: true,
         onauth: auth ? vi.fn() : undefined,
         subscribe: (_filters: unknown, options: unknown) => {
+          starts.set(url, (starts.get(url) ?? 0) + 1);
           handlers.set(url, options);
           return { close: vi.fn() };
         },
@@ -21,10 +32,10 @@ async function setup(urls: string[], auth = false, includeRelayDuplicates = fals
     onEvent = vi.fn();
   const subscription = client.subscribe(
     { kinds: [1059] },
-    { relayUrls: urls, onClose, onEose, onEvent, includeRelayDuplicates },
+    { relayUrls: urls, onClose, onEose, onEvent, includeRelayDuplicates, onInitialSync },
   );
   await vi.waitFor(() => expect(handlers.size).toBe(urls.length));
-  return { client, handlers, subscription, onClose, onEose, onEvent };
+  return { client, handlers, subscription, onClose, onEose, onEvent, starts };
 }
 
 describe('relay subscription failure propagation', () => {
@@ -203,3 +214,78 @@ it.each([false, true])(
     subscription.stop();
   },
 );
+
+it('bounds partial live synchronization and retries only the silent relay without inventing EOSE', async () => {
+  vi.useFakeTimers();
+  const good = 'wss://healthy.example/',
+    slow = 'wss://silent.example/';
+  const onInitialSync = vi.fn();
+  const { handlers, subscription, onEose, onEvent, starts } = await setup(
+    [good, slow],
+    false,
+    false,
+    onInitialSync,
+  );
+  try {
+    handlers.get(good).oneose();
+    await vi.advanceTimersByTimeAsync(RELAY_QUERY_TIMEOUT_MS);
+    expect(onInitialSync).toHaveBeenLastCalledWith([good], [slow]);
+    expect(subscription.eoseReceived).toBe(false);
+    expect(onEose).not.toHaveBeenCalled();
+    handlers
+      .get(good)
+      .onevent({
+        id: 'live',
+        kind: 1059,
+        tags: [],
+        content: '',
+        created_at: 1,
+        pubkey: 'a'.repeat(64),
+      });
+    expect(onEvent).toHaveBeenCalledOnce();
+    const stale = handlers.get(slow);
+    await vi.advanceTimersByTimeAsync(RELAY_QUERY_TIMEOUT_MS);
+    expect(starts.get(good)).toBe(1);
+    expect(starts.get(slow)).toBe(2);
+    stale.oneose();
+    expect(onEose).not.toHaveBeenCalled();
+    handlers.get(slow).oneose();
+    expect(onInitialSync).toHaveBeenLastCalledWith([good, slow], []);
+    expect(onEose).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(starts.get(slow)).toBe(2);
+  } finally {
+    subscription.stop();
+    vi.useRealTimers();
+  }
+});
+
+it('keeps failed live targets retryable and cancels retries when the owner stops', async () => {
+  vi.useFakeTimers();
+  const url = 'wss://unavailable.example/';
+  const onInitialSync = vi.fn();
+  const { handlers, subscription, onEose, onClose, starts, client } = await setup(
+    [url],
+    false,
+    false,
+    onInitialSync,
+  );
+  try {
+    handlers.get(url).onclose('unavailable');
+    expect(onInitialSync).toHaveBeenLastCalledWith([], [url]);
+    expect(subscription.closed).toBe(false);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onEose).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(RELAY_QUERY_TIMEOUT_MS);
+    expect(starts.get(url)).toBe(2);
+    subscription.stop();
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(starts.get(url)).toBe(2);
+    client.pool.emit('relay:connect', client.pool.getRelay(url, false));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(starts.get(url)).toBe(2);
+  } finally {
+    subscription.stop();
+    vi.useRealTimers();
+  }
+});

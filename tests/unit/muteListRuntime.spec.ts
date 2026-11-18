@@ -226,4 +226,21 @@ describe('mute list runtime', () => {
     expect(runtime.isPubkeyMuted(PUBKEY_C)).toBe(false);
     expect(runtime.isPubkeyBlocked(PUBKEY_C)).toBe(true);
   });
+
+  it('does not undo a local block when a startup retry returns an older snapshot', async () => {
+    const { ndk, runtime } = createRuntime();
+    const snapshot = new ClientEvent(ndk, {
+      kind: MUTE_LIST_KIND,
+      pubkey: LOGGED_IN_PUBKEY,
+      created_at: 1_700_000_000,
+      content: 'older-empty-list',
+      tags: [],
+    });
+    vi.spyOn(ndk, 'fetchEvent').mockResolvedValue(snapshot);
+    vi.spyOn(ClientEvent.prototype, 'publishReplaceable').mockResolvedValue(undefined as never);
+    await runtime.restoreMuteList();
+    await runtime.setPubkeyBlocked(PUBKEY_C, true);
+    await runtime.restoreMuteList();
+    expect(runtime.isPubkeyBlocked(PUBKEY_C)).toBe(true);
+  });
 });

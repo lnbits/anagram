@@ -158,6 +158,7 @@
   "common.save": "सहेजें",
   "common.open": "खुला",
   "common.pageFound": "पेज नहीं मिला",
+  "common.partialSync": "आंशिक रूप से सिंक किया गया",
   "common.pending": "लंबित",
   "common.pendingTarget": "लंबित लक्ष्य",
   "common.pendingTargets": "लंबित लक्ष्य",
@@ -888,5 +889,16 @@
   "chat.dadBotExamples": "Nostr और Anagram के लिए उपयोगी बॉट बनाना आसान है और इससे शानदार संभावनाएँ मिलती हैं। कुछ उदाहरण यहाँ देखें:",
   "chat.historyKeys": "समूह की कुंजियाँ पुनर्प्राप्त हो रही हैं…",
   "chat.historyMessages": "संदेश लोड हो रहे हैं…",
-  "chat.historyRetry": "कुछ इतिहास लोड नहीं हो सका। दोबारा कोशिश करने के लिए ऊपर स्क्रॉल करें या और चुनें।"
+  "chat.historyRetry": "कुछ इतिहास लोड नहीं हो सका। दोबारा कोशिश करने के लिए ऊपर स्क्रॉल करें या और चुनें।",
+  "startup.relaySummary": "{success} synchronized · {error} failed · {pending} pending",
+  "startup.relayState.success": "Synchronized",
+  "startup.relayState.error": "Failed",
+  "startup.relayState.pending": "Pending",
+  "startup.relayState.retrying": "Retrying",
+  "startup.relayReason.timeout": "No completion response before the deadline",
+  "startup.relayReason.unavailable": "Connection unavailable",
+  "startup.relayReason.closed": "Request closed before completion",
+  "startup.relayReason.auth": "Relay requires authentication or access",
+  "startup.relayReason.rate-limited": "Relay rate limit reached",
+  "startup.localFailure": "Relay results could not be fully applied. Retry this startup step from Developer settings."
 }

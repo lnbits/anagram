@@ -158,6 +158,7 @@
   "common.save": "సేవ్ చేయి",
   "common.open": "తెరవండి",
   "common.pageFound": "పేజీ కనుగొనబడలేదు",
+  "common.partialSync": "పాక్షికంగా సమకాలీకరించబడింది",
   "common.pending": "పెండింగ్‌లో ఉంది",
   "common.pendingTarget": "పెండింగ్ లక్ష్యం",
   "common.pendingTargets": "పెండింగ్ లక్ష్యాలు",
@@ -888,5 +889,16 @@
   "chat.dadBotExamples": "Nostr, Anagram కోసం ఉపయోగకరమైన బాట్‌లను నిర్మించడం సులభం, అద్భుతమైన అవకాశాలను అందిస్తుంది. కొన్ని ఉదాహరణలు ఇక్కడ చూడండి:",
   "chat.historyKeys": "గ్రూప్ కీలను పునరుద్ధరిస్తోంది…",
   "chat.historyMessages": "సందేశాలు లోడ్ అవుతున్నాయి…",
-  "chat.historyRetry": "కొంత చరిత్రను లోడ్ చేయలేకపోయింది. మళ్లీ ప్రయత్నించడానికి పైకి స్క్రోల్ చేయండి లేదా మరిన్ని ఎంచుకోండి."
+  "chat.historyRetry": "కొంత చరిత్రను లోడ్ చేయలేకపోయింది. మళ్లీ ప్రయత్నించడానికి పైకి స్క్రోల్ చేయండి లేదా మరిన్ని ఎంచుకోండి.",
+  "startup.relaySummary": "{success} synchronized · {error} failed · {pending} pending",
+  "startup.relayState.success": "Synchronized",
+  "startup.relayState.error": "Failed",
+  "startup.relayState.pending": "Pending",
+  "startup.relayState.retrying": "Retrying",
+  "startup.relayReason.timeout": "No completion response before the deadline",
+  "startup.relayReason.unavailable": "Connection unavailable",
+  "startup.relayReason.closed": "Request closed before completion",
+  "startup.relayReason.auth": "Relay requires authentication or access",
+  "startup.relayReason.rate-limited": "Relay rate limit reached",
+  "startup.localFailure": "Relay results could not be fully applied. Retry this startup step from Developer settings."
 }

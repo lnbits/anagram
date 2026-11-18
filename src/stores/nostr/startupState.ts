@@ -1,3 +1,5 @@
+import type { StartupRelaySnapshot } from '#src/stores/nostr/startupRelayTracking.ts';
+
 export const STARTUP_STEP_DEFINITIONS = [
   { id: 'my-relays-restore', order: 1, label: 'startup.restoreMyRelayList' },
   { id: 'my-relays-subscribe', order: 2, label: 'startup.subscribeMyRelayListUpdates' },
@@ -34,6 +36,28 @@ export const STARTUP_STEP_DEFINITIONS = [
 ] as const;
 
 export type StartupStepId = (typeof STARTUP_STEP_DEFINITIONS)[number]['id'];
+
+// Startup execution and history share this order. Other definitions remain available
+// for explicitly requested work, but must not appear as permanently pending steps.
+export const STARTUP_RESTORE_STEP_ORDER = [
+  'my-relays-restore',
+  'my-relays-subscribe',
+  'outbound-message-replay',
+  'private-preferences',
+  'private-contact-list-restore',
+  'group-identity-secrets',
+  'contact-cursor-state',
+  'private-contact-list-subscribe',
+  'contact-profile-subscribe',
+  'contact-relay-list-subscribe',
+  'private-messages-subscribe',
+  'group-rosters-subscribe',
+  'message-history-restore',
+] as const satisfies readonly StartupStepId[];
+
+const STARTUP_RESTORE_STEP_INDEX = new Map<StartupStepId, number>(
+  STARTUP_RESTORE_STEP_ORDER.map((id, index) => [id, index]),
+);
 
 export const STARTUP_LOCKED_STEP_IDS = [
   'private-preferences',
@@ -114,7 +138,7 @@ export const STARTUP_INTERNAL_TASK_DEFINITIONS = [
 
 export type StartupInternalTaskId = (typeof STARTUP_INTERNAL_TASK_DEFINITIONS)[number]['id'];
 export type StartupTrackId = StartupStepId | StartupInternalTaskId;
-export type StartupStepStatus = 'pending' | 'in_progress' | 'success' | 'error';
+export type StartupStepStatus = 'pending' | 'in_progress' | 'success' | 'partial' | 'error';
 
 export interface StartupTimedSnapshot {
   id: string;
@@ -125,6 +149,7 @@ export interface StartupTimedSnapshot {
   durationMs: number | null;
   errorMessage: string | null;
   eventCount: number | null;
+  relays?: StartupRelaySnapshot[];
 }
 
 export interface StartupInternalTaskSnapshot extends StartupTimedSnapshot {
@@ -142,6 +167,22 @@ export interface StartupDisplaySnapshot {
   label: string | null;
   status: StartupStepStatus | null;
   showProgress: boolean;
+}
+
+export function getStartupHistoryStepsValue(
+  steps: readonly StartupStepSnapshot[],
+): StartupStepSnapshot[] {
+  const order = (step: StartupStepSnapshot) =>
+    STARTUP_RESTORE_STEP_INDEX.get(step.id) ?? STARTUP_RESTORE_STEP_ORDER.length + step.order;
+
+  return steps
+    .filter(
+      (step) =>
+        STARTUP_RESTORE_STEP_INDEX.has(step.id) ||
+        step.status !== 'pending' ||
+        step.internalTasks.some((task) => task.status !== 'pending'),
+    )
+    .sort((a, b) => order(a) - order(b));
 }
 
 export function createInitialStartupStepSnapshots(): StartupStepSnapshot[] {
@@ -178,12 +219,13 @@ export function beginStartupTimedSnapshotValue<TSnapshot extends StartupTimedSna
 
 export function completeStartupTimedSnapshotValue<TSnapshot extends StartupTimedSnapshot>(
   step: TSnapshot,
-  now: number
+  now: number,
+  partial = false,
 ): TSnapshot {
   const startedAt = step.startedAt ?? now;
   return {
     ...step,
-    status: 'success',
+    status: partial ? 'partial' : 'success',
     startedAt,
     completedAt: now,
     durationMs: Math.max(0, now - startedAt),

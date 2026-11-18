@@ -121,11 +121,18 @@ test('startup progress updates without blocking the inbox and keeps private erro
       .toBe(false);
     await page.evaluate(async () => {
       const { useNostrStore } = await import('/src/stores/nostrStore.svelte.ts');
+      const { STARTUP_RESTORE_STEP_ORDER } = await import('/src/stores/nostr/startupState.ts');
+      const scheduledSteps = new Set<string>(STARTUP_RESTORE_STEP_ORDER);
       const nostr = useNostrStore();
       nostr.startupSteps = nostr.startupSteps.map((step) => ({
         ...step,
-        status: step.id === 'message-history-restore' ? 'in_progress' : 'success',
+        status: !scheduledSteps.has(step.id)
+          ? 'pending'
+          : step.id === 'message-history-restore'
+            ? 'in_progress'
+            : 'success',
         internalTasks: [],
+        relays: [],
       }));
       const failed = nostr.startupSteps.find((step) => step.id === 'my-relays-restore')!;
       failed.status = 'error';
@@ -133,12 +140,59 @@ test('startup progress updates without blocking the inbox and keeps private erro
     });
     const progress = page.getByTestId('history-sync-status').getByRole('status');
     await expect(progress).toBeVisible();
-    await expect(progress).toContainText('Restore message history');
+    await expect(progress).toHaveText('13/13 Restore message history');
     await page.getByRole('button', { name: 'Show startup history', exact: true }).click();
+    await expect(page.locator('#startup-history-details ol > li')).toHaveCount(13);
+    for (const label of [
+      'Refresh group relay lists',
+      'Sync logged-in contact profile',
+      'Sync recent chat contacts',
+    ]) {
+      await expect(page.locator('#startup-history-details')).not.toContainText(label);
+    }
     await expect(page.locator('#startup-history-details')).toContainText('Failed');
     await expect(page.locator('#startup-history-details')).not.toContainText(
       'PRIVATE_SIGNER_ERROR_SENTINEL',
     );
+    await page.evaluate(async () => {
+      const { useNostrStore } = await import('/src/stores/nostrStore.svelte.ts');
+      const step = useNostrStore().startupSteps.find((s) => s.id === 'private-preferences')!;
+      step.relays = [
+        { relayUrl: 'wss://healthy.example/', status: 'success' },
+        { relayUrl: 'wss://failed.example/', status: 'error', reason: 'timeout' },
+        { relayUrl: 'wss://pending.example/', status: 'pending' },
+      ];
+    });
+    const relayBar = page.getByTestId('startup-relay-status-private-preferences');
+    await expect(relayBar.locator('.green')).toHaveCount(1);
+    await expect(relayBar.locator('.red')).toHaveCount(1);
+    await expect(relayBar.locator('.gray')).toHaveCount(1);
+    await relayBar.focus();
+    await page.keyboard.press('Enter');
+    const relayDialog = page.getByRole('dialog', { name: 'Relay Status: Restore encrypted private preferences' });
+    await expect(relayDialog).toBeVisible();
+    await expect(relayDialog).toContainText('wss://healthy.example/');
+    await expect(relayDialog).toContainText('No completion response before the deadline');
+    await page.evaluate(async () => {
+      const { useNostrStore } = await import('/src/stores/nostrStore.svelte.ts');
+      const step = useNostrStore().startupSteps.find((s) => s.id === 'private-preferences')!;
+      step.relays = step.relays!.map((relay) => ({ relayUrl: relay.relayUrl, status: 'retrying' }));
+    });
+    await expect(relayDialog.getByText('Retrying', { exact: true })).toHaveCount(3);
+    await page.evaluate(async () => {
+      const { useNostrStore } = await import('/src/stores/nostrStore.svelte.ts');
+      const step = useNostrStore().startupSteps.find((s) => s.id === 'private-preferences')!;
+      step.relays = step.relays!.map((relay) => ({ relayUrl: relay.relayUrl, status: 'success' }));
+    });
+    await expect(relayDialog).toContainText('3 synchronized');
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 850 });
+      await expect(relayDialog).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+    await page.keyboard.press('Escape');
+    await expect(relayDialog).toHaveCount(0);
+    await expect(relayBar).toBeFocused();
     await page.getByRole('button', { name: 'contacts', exact: true }).click();
     await expect(page.getByTestId('contact-list-search')).toBeVisible();
     await expect(progress).toBeVisible();

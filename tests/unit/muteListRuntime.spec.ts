@@ -243,4 +243,26 @@ describe('mute list runtime', () => {
     await runtime.restoreMuteList();
     expect(runtime.isPubkeyBlocked(PUBKEY_C)).toBe(true);
   });
+
+  it('orders rapid block changes after the restored event and retries failed publication', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+    const { ndk, runtime } = createRuntime();
+    vi.spyOn(ndk, 'fetchEvent').mockResolvedValue(new ClientEvent(ndk, {
+      kind: MUTE_LIST_KIND, pubkey: LOGGED_IN_PUBKEY, created_at: 1_800_000_000,
+      content: 'empty-list', tags: [],
+    }));
+    const published: number[] = [];
+    const publish = vi.spyOn(ClientEvent.prototype, 'publishReplaceable').mockImplementation(function () {
+      published.push(this.created_at!);
+      return Promise.resolve(undefined as never);
+    });
+    await runtime.setPubkeyBlocked(PUBKEY_B, true);
+    await runtime.setPubkeyBlocked(PUBKEY_C, true);
+    expect(published).toEqual([1_800_000_001, 1_800_000_002]);
+    publish.mockRejectedValueOnce(new Error('Offline'));
+    await expect(runtime.setPubkeyBlocked(PUBKEY_D, true)).rejects.toThrow('Offline');
+    expect(runtime.isPubkeyBlocked(PUBKEY_D)).toBe(true);
+    await runtime.setPubkeyBlocked(PUBKEY_D, true);
+    expect(publish).toHaveBeenCalledTimes(4);
+  });
 });

@@ -458,7 +458,7 @@ export function createMuteListRuntime({
     );
     const muteListEvent = new ClientEvent(ndk, {
       kind: MUTE_LIST_KIND,
-      created_at: Math.floor(Date.now() / 1000),
+      created_at: Math.max(Math.floor(Date.now() / 1000), latestMuteListCreatedAt + 1),
       pubkey: user.pubkey,
       content: await encryptMuteListTags(buildMuteListTags(mutedPubkeys, blockedPubkeys)),
       tags: [],
@@ -466,6 +466,7 @@ export function createMuteListRuntime({
 
     const relaySet = NostrRelaySet.fromRelayUrls(relayUrls, ndk, false);
     await muteListEvent.publishReplaceable(relaySet);
+    latestMuteListCreatedAt = muteListEvent.created_at ?? latestMuteListCreatedAt;
     updateStoredEventSinceFromCreatedAt(muteListEvent.created_at);
     hasRestoredMuteList = true;
   }
@@ -549,6 +550,9 @@ export function createMuteListRuntime({
         nextBlockedPubkeys.has(normalizedPubkey) === blocked &&
         nextMutedPubkeys.size === mutedPubkeySet.size
       ) {
+        // A previous attempt may have saved the local block but failed to
+        // publish it. An explicit retry must still reach the relays.
+        await publishMuteList(seedRelayUrls);
         return;
       }
 

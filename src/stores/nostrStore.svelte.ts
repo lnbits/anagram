@@ -60,6 +60,7 @@ import {
   STARTUP_STEP_MIN_PROGRESS_MS,
 } from '#src/stores/nostr/constants.ts';
 import { createContactProfileRuntime } from '#src/stores/nostr/contactProfileRuntime.ts';
+import { createContactCursorSubscriptionRuntime } from '#src/stores/nostr/contactCursorSubscriptionRuntime.ts';
 import { createContactRelayRuntime } from '#src/stores/nostr/contactRelayRuntime.ts';
 import { createContactSubscriptionsRuntime } from '#src/stores/nostr/contactSubscriptionsRuntime.ts';
 import { createDeveloperDiagnosticsRuntime } from '#src/stores/nostr/developerDiagnostics.ts';
@@ -813,6 +814,10 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     if (options.publishIfCreated) {
       await publishPrivatePreferences(nextPreferences);
     }
+
+    void contactCursorSubscriptions.subscribe().catch((error) => {
+      console.warn('Failed to subscribe to contact read status', error);
+    });
 
     return nextPreferences;
   }
@@ -1721,7 +1726,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     setVisibleProfileTargets,
     hasActiveContactHydration,
     resetContactSubscriptionsRuntimeState,
-    subscribeContactProfileUpdates,
+    subscribeContactProfileUpdates: subscribeContactProfileUpdatesImpl,
     subscribeContactRelayListUpdates,
   } = createContactSubscriptionsRuntime({
     applyOwnPrivateRelayList,
@@ -1912,7 +1917,8 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
   const {
     applyGroupMembershipRosterEvent,
     applyContactCursorStateToContact,
-
+    compareContactCursorState,
+    observeContactCursorEvent,
     createGroupChat,
     fetchContactCursorEvents,
     fetchGroupMembershipFollowSetPubkeys,
@@ -1991,6 +1997,32 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
   publishGroupIdentitySecretRuntime = publishGroupIdentitySecretImpl;
   publishGroupMembershipFollowSetRuntime = publishGroupMembershipFollowSetImpl;
   publishGroupMembershipRosterFollowSetRuntime = publishGroupMembershipRosterFollowSetImpl;
+
+  const contactCursorSubscriptions = createContactCursorSubscriptionRuntime({
+    ndk,
+    getLoggedInPublicKeyHex,
+    deriveContactCursorDTag,
+    resolveLoggedInReadRelayUrls,
+    ensureRelayConnections,
+    decryptContactCursorContent,
+    compareContactCursorState,
+    observeContactCursorEvent,
+    applyContactCursorStateToContact,
+    reloadReadState: async (current) => {
+      const { useMessageStore } = await import('#src/stores/messageStore.svelte.ts');
+      if (!current()) return;
+      await Promise.all([chatStore.reload(), useMessageStore().reloadLoadedMessages()]);
+    },
+  });
+
+  onDispose(() => contactCursorSubscriptions.reset());
+
+  async function subscribeContactProfileUpdates(seedRelayUrls: string[] = [], force = false): Promise<void> {
+    await Promise.all([
+      subscribeContactProfileUpdatesImpl(seedRelayUrls, force),
+      contactCursorSubscriptions.subscribe(seedRelayUrls),
+    ]);
+  }
 
   const { getIrohRelays, getIrohRelaySettings, saveIrohRelaySettings } =
     createIrohSettingsRuntime({
@@ -2215,7 +2247,10 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     set relayStatusVersion(value) {
       relayStatusVersion = value;
     },
-    resetContactSubscriptionsRuntimeState,
+    resetContactSubscriptionsRuntimeState: () => {
+      contactCursorSubscriptions.reset();
+      resetContactSubscriptionsRuntimeState();
+    },
     resetEventSinceForFreshLogin,
     resetCalls: () => {
       publicGroups.stop();

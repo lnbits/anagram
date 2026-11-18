@@ -1,13 +1,20 @@
 // URLs are local handles, never network addresses. Keeping one media element
 // preserves autoplay permission, sink selection and mobile audio routing.
+const progress = new Map<string, () => number>();
+export const callStreamReceived = (url: string) => progress.get(url)?.() ?? 0;
 const streams = new Map<string, MediaStream>();
-export function registerCallStream(stream: MediaStream): { url: string; close(): void } {
+export function registerCallStream(
+  stream: MediaStream,
+  received?: () => number,
+): { url: string; close(): void } {
   const url = `anagram-call:${crypto.randomUUID()}`;
   streams.set(url, stream);
+  if (received) progress.set(url, received);
   return {
     url,
     close() {
       streams.delete(url);
+      progress.delete(url);
       stream.getTracks().forEach((track) => track.stop());
     },
   };

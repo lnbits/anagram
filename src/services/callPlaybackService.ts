@@ -12,13 +12,7 @@ export function primeCallAudio(): void {
   audio.muted = false;
   void audio.play().catch(() => {});
 }
-export async function setCallSpeaker(element: HTMLMediaElement, deviceId: string): Promise<void> {
-  if (typeof element.setSinkId !== 'function') {
-    if (!deviceId) return;
-    throw new Error('Audio output selection is unavailable in this browser');
-  }
-  await element.setSinkId(deviceId);
-}
+export { setCallSpeaker, releaseCallSpeaker, watchCallStreamPlayback } from './callAudioOutput.ts';
 
 // Players call this on timeupdate as well as progress: WebKit may append MSE
 // segments without emitting progress, leaving a playing call behind live audio.

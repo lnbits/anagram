@@ -19,11 +19,13 @@
     "release:version": "node scripts/set-release-version.mjs",
     "release:check": "node scripts/set-release-version.mjs --check",
     "verify:iroh": "node scripts/verify-iroh.mjs",
-    "assets:social": "node scripts/render-social-cards.mjs"
+    "assets:social": "node scripts/render-social-cards.mjs",
+    "test:call-audio:lab": "node scripts/call-audio-lab.mjs"
   },
   "dependencies": {
     "@noble/hashes": "2.0.1",
     "@scure/bip39": "2.0.1",
+    "@soundtouchjs/core": "2.1.1",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "jsqr": "1.4.0",

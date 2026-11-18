@@ -66,3 +66,26 @@ it('acknowledges a bounded decoder batch once and preserves packet arrival spaci
   await dispatch({ type: 'close', id: 4 });
   expect(port.close).toHaveBeenCalledOnce();
 });
+
+it('drops capture already stale before encoding and acknowledges it without sending', async () => {
+  const sent = vi.fn();
+  vi.stubGlobal('postMessage', sent);
+  vi.stubGlobal('onmessage', undefined);
+  await import('#src/services/callAudio.worker.ts');
+  const dispatch = (data: any) => globalThis.onmessage!({ data } as MessageEvent);
+  const port = { onmessage: (_event: any) => {}, postMessage: vi.fn(), close: vi.fn() };
+  await dispatch({ type: 'encode', id: 8, generation: 1, port });
+  port.onmessage({
+    data: {
+      sequence: 0,
+      pcm: new Float32Array(960),
+      at: performance.timeOrigin + performance.now() - 1600,
+    },
+  });
+  expect(sent).not.toHaveBeenCalled();
+  expect(port.postMessage).toHaveBeenCalledWith({ ack: true });
+  const at = performance.timeOrigin + performance.now() - 300;
+  port.onmessage({ data: { sequence: 1, pcm: new Float32Array(960), at } });
+  expect(sent).toHaveBeenCalledWith(expect.objectContaining({ type: 'packet', at }));
+  await dispatch({ type: 'close', id: 8 });
+});

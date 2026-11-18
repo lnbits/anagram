@@ -72,6 +72,6 @@ export default defineConfig(({ command }) => ({
     },
   },
   // Call workers import this lazily; prebundle it to avoid reloading an active dev call.
-  optimizeDeps: { include: ['libopus-wasm'] },
+  optimizeDeps: { include: ['libopus-wasm', '@soundtouchjs/core'] },
   clearScreen: false,
 }));

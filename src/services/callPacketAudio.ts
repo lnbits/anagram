@@ -20,7 +20,10 @@ type Listener = (message: {
   type: string;
   packet?: Uint8Array;
   at?: number;
-  stats?: unknown;
+  stats?: Record<string, unknown>;
+  renderedSamples?: number;
+  underrunSamples?: number;
+  renderBufferedMs?: number;
 }) => void;
 interface Engine {
   context: AudioContext;
@@ -33,8 +36,19 @@ let engine: Engine | undefined;
 let preparing: Promise<Engine> | undefined;
 let nextId = 0;
 // Only current stream counters are retained; no media, peer IDs or persistence.
-const diagnostics = new Map<number, unknown>();
+const diagnostics = new Map<number, Record<string, unknown>>();
+const sendDiagnostics = new Map<number, () => Record<string, unknown>>();
+const captureDiagnostics = new Map<number, Record<string, unknown>>();
 export const callPacketAudioDiagnostics = () => [...diagnostics.values()];
+// Numeric counters and applied processing settings only; no audio or device IDs.
+export const callAudioDiagnostics = () => ({
+  at: performance.timeOrigin + performance.now(),
+  context: engine?.context.state,
+  outputLatencyMs: (engine?.context.outputLatency ?? 0) * 1000,
+  capture: [...captureDiagnostics.values()],
+  send: [...sendDiagnostics.values()].map((read) => read()),
+  receive: callPacketAudioDiagnostics(),
+});
 
 export async function prepareCallPacketAudio(): Promise<(() => void) | undefined> {
   // WebKitGTK's realtime AudioWorklet thread can exhaust RLIMIT_RTTIME and
@@ -111,6 +125,8 @@ export async function prepareCallPacketAudio(): Promise<(() => void) | undefined
         current.worker.terminate();
         current.listeners.clear();
         diagnostics.clear();
+        captureDiagnostics.clear();
+        sendDiagnostics.clear();
         void current.context.close();
         if (engine === current) {
           engine = undefined;
@@ -134,8 +150,23 @@ function audioNode(mode: 'capture' | 'playback', generation: number, listener: L
     outputChannelCount: [1],
     channelCount: 1,
     channelCountMode: 'explicit',
-    processorOptions: { mode, captureFrames: CALL_AUDIO_QUEUE_FRAMES },
+    processorOptions: {
+      mode,
+      captureFrames: CALL_AUDIO_QUEUE_FRAMES,
+      captureEpoch: performance.timeOrigin + performance.now() - current.context.currentTime * 1000,
+    },
   });
+  const clock = () => {
+    if (mode === 'capture' && current.context.state === 'running')
+      node.port.postMessage({
+        captureEpoch:
+          performance.timeOrigin + performance.now() - current.context.currentTime * 1000,
+      });
+  };
+  current.context.addEventListener('statechange', clock);
+  node.port.onmessage = ({ data }) => {
+    if (data.type === 'render') listener(data);
+  };
   const channel = new MessageChannel();
   current.listeners.set(id, listener);
   node.onprocessorerror = () => listener({ type: 'error' });
@@ -154,6 +185,9 @@ function audioNode(mode: 'capture' | 'playback', generation: number, listener: L
       closed = true;
       current.listeners.delete(id);
       diagnostics.delete(id);
+      captureDiagnostics.delete(id);
+      current.context.removeEventListener('statechange', clock);
+      node.port.onmessage = null;
       node.onprocessorerror = null;
       node.port.postMessage({ close: true });
       node.disconnect();
@@ -169,6 +203,8 @@ export function createPacketAudioReceiver(onError: () => void): CallMediaReceive
   // Preserve IPC bursts in order, including while the decoder is briefly busy.
   type Arrival = { packet: Uint8Array; at: number };
   const queued = new CallAudioQueue<Arrival>();
+  let received = 0;
+  const report: Record<string, unknown> = { receivedAt: 0, decodedAt: 0, renderedAt: 0 };
   const post = (first: Arrival, now: number) => {
     const packets = [first];
     // A busy WebView can take longer than a 20 ms packet to process a worker
@@ -184,8 +220,23 @@ export function createPacketAudioReceiver(onError: () => void): CallMediaReceive
   const state = audioNode('playback', 0, (message) => {
     if (closed) return;
     if (message.type === 'error') onError();
+    if (message.type === 'render') {
+      Object.assign(report, {
+        renderedSamples: message.renderedSamples,
+        underrunSamples: message.underrunSamples,
+        renderBufferedMs: message.renderBufferedMs,
+        renderedAt: performance.timeOrigin + performance.now(),
+      });
+    }
+    if (message.type === 'playout' || message.type === 'received') {
+      Object.assign(report, message.stats, {
+        receiveQueueMs: queued.ageMs(performance.now()),
+        receiveQueueFrames: queued.length,
+      });
+      if (message.type === 'playout') report.decodedAt = performance.timeOrigin + performance.now();
+    }
+    diagnostics.set(state.id, { ...report });
     if (message.type === 'received') {
-      diagnostics.set(state.id, message.stats);
       pending = false;
       const now = performance.now();
       const next = queued.shift(now);
@@ -194,12 +245,14 @@ export function createPacketAudioReceiver(onError: () => void): CallMediaReceive
   });
   const destination = state.current.context.createMediaStreamDestination();
   state.node.connect(destination);
-  const handle = registerCallStream(destination.stream);
+  const handle = registerCallStream(destination.stream, () => received);
   return {
     url: handle.url,
     append(packet) {
       if (closed || packet.byteLength > MAX_AUDIO_PACKET_BYTES) return;
       const now = performance.now();
+      received++;
+      report.receivedAt = performance.timeOrigin + now;
       const arrival = { packet, at: performance.timeOrigin + now };
       if (pending) queued.push(arrival, now);
       else post(arrival, now);
@@ -216,7 +269,7 @@ export function createPacketAudioReceiver(onError: () => void): CallMediaReceive
 
 function recordPacketAudioSource(
   stream: MediaStream,
-  send: (packet: Uint8Array) => void,
+  send: (packet: Uint8Array, capturedAt: number) => void,
   onError: () => void,
 ): () => void {
   let stopped = false;
@@ -234,11 +287,26 @@ function recordPacketAudioSource(
         performance.timeOrigin + performance.now() - message.at > CALL_AUDIO_BACKLOG_MS
       )
         return;
-      send(message.packet);
+      const capturedAt =
+        (message.at ?? performance.timeOrigin + performance.now()) - performance.timeOrigin;
+      captureDiagnostics.set(state.id, {
+        captureAgeMs: Math.max(0, performance.now() - capturedAt),
+        encodedAt: performance.timeOrigin + performance.now(),
+        ...processingSettings,
+      });
+      send(message.packet, capturedAt);
     }
   });
   const source = state.current.context.createMediaStreamSource(stream);
   const track = stream.getAudioTracks()[0];
+  const settings = track.getSettings?.();
+  const processingSettings = {
+    echoCancellation: settings?.echoCancellation,
+    noiseSuppression: settings?.noiseSuppression,
+    autoGainControl: settings?.autoGainControl,
+    sampleRate: settings?.sampleRate,
+    channelCount: settings?.channelCount,
+  };
   track.addEventListener('unmute', state.current.recovery.resume);
   source.connect(state.node);
   // A connected, silent output keeps capture processing alive in WebKit.
@@ -255,7 +323,11 @@ function recordPacketAudioSource(
 
 // One encoder per room microphone, with a separate bounded sender per peer.
 // A slow participant cannot hold up other participants or duplicate Opus work.
-type AudioConsumer = { packet(data: Uint8Array): void; error(): void; close(): void };
+type AudioConsumer = {
+  packet(data: Uint8Array, capturedAt: number): void;
+  error(): void;
+  close(): void;
+};
 const captures = new WeakMap<MediaStreamTrack, { consumers: Set<AudioConsumer>; stop(): void }>();
 export function recordPacketAudio(
   stream: MediaStream,
@@ -269,8 +341,8 @@ export function recordPacketAudio(
     const consumers = new Set<AudioConsumer>();
     const stop = recordPacketAudioSource(
       new MediaStream([track]),
-      (packet) => {
-        for (const consumer of [...consumers]) consumer.packet(packet);
+      (packet, capturedAt) => {
+        for (const consumer of [...consumers]) consumer.packet(packet, capturedAt);
       },
       () => {
         for (const consumer of [...consumers]) consumer.error();
@@ -283,6 +355,12 @@ export function recordPacketAudio(
   let closed = false,
     inFlight = 0;
   const pending = new CallAudioQueue<Uint8Array>();
+  const diagnosticId = ++nextId;
+  sendDiagnostics.set(diagnosticId, () => ({
+    inFlight,
+    queuedFrames: pending.length,
+    queueAgeMs: pending.ageMs(performance.now()),
+  }));
   const transmit = async (packet: Uint8Array) => {
     inFlight++;
     const stamp = (packet: Uint8Array) => {
@@ -325,6 +403,7 @@ export function recordPacketAudio(
     if (closed) return;
     closed = true;
     pending.clear();
+    sendDiagnostics.delete(diagnosticId);
     current.consumers.delete(consumer);
     if (!current.consumers.size) {
       current.stop();
@@ -334,8 +413,8 @@ export function recordPacketAudio(
   const consumer: AudioConsumer = {
     error: onError,
     close,
-    packet(data) {
-      if (closed) return;
+    packet(data, capturedAt) {
+      if (closed || performance.now() - capturedAt > CALL_AUDIO_BACKLOG_MS) return;
       // Encoded messages may arrive after the source was muted. The encoder is
       // still acknowledged upstream, but none of this speech should be sent.
       if (!track.enabled) {
@@ -344,7 +423,7 @@ export function recordPacketAudio(
       }
       // Retain two concurrent sends, but preserve speech queued behind a brief
       // IPC stall. Each peer drains independently of every other participant.
-      if (inFlight >= 2) pending.push(data, performance.now());
+      if (inFlight >= 2) pending.push(data, performance.now(), capturedAt);
       else void transmit(data);
     },
   };

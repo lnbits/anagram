@@ -5,21 +5,33 @@ import { CALL_AUDIO_QUEUE_FRAMES } from '#src/services/callAudioQueue.ts';
 
 function createProcessor(mode: 'capture' | 'playback') {
   let Processor: any;
+  const clock = { currentFrame: 0, sampleRate: 48000 };
   runInNewContext(
     readFileSync(new URL('../../src/services/callAudio.worklet.js', import.meta.url), 'utf8'),
     {
       Float32Array,
+      get currentFrame() {
+        return clock.currentFrame;
+      },
+      sampleRate: clock.sampleRate,
       AudioWorkletProcessor: class {
-        port = { onmessage: undefined };
+        port = { onmessage: undefined, postMessage() {} };
       },
       registerProcessor: (_name: string, value: any) => {
         Processor = value;
       },
     },
   );
-  return new Processor({
-    processorOptions: { mode, captureFrames: CALL_AUDIO_QUEUE_FRAMES },
+  const processor = new Processor({
+    processorOptions: { mode, captureFrames: CALL_AUDIO_QUEUE_FRAMES, captureEpoch: 1000 },
   });
+  const process = processor.process.bind(processor);
+  processor.process = (...args: unknown[]) => {
+    const result = process(...args);
+    clock.currentFrame += 128;
+    return result;
+  };
+  return processor;
 }
 
 it('retains capture through a short worker stall with a bounded number of outstanding frames', () => {
@@ -82,4 +94,20 @@ it('keeps playback continuous across a delayed codec reply without growing the q
   }
   expect(pulls).toBeGreaterThan(40);
   expect(maxQueued).toBeLessThanOrEqual(3);
+});
+
+it('timestamps capture before codec queues and keeps the microphone output silent', () => {
+  const processor = createProcessor('capture');
+  const frames: any[] = [];
+  processor.port.onmessage({ data: { port: { postMessage: (data: any) => frames.push(data) } } });
+  for (let i = 0; i < 15; i++) {
+    const output = new Float32Array(128);
+    processor.process([[new Float32Array(128).fill(0.5)]], [[output]]);
+    expect(output.every((sample) => sample === 0)).toBe(true);
+  }
+  expect(frames.map((frame) => frame.at)).toEqual([1000, 1020]);
+  processor.port.onmessage({ data: { captureEpoch: 2000 } });
+  for (let i = 0; i < 8; i++)
+    processor.process([[new Float32Array(128)]], [[new Float32Array(128)]]);
+  expect(frames.at(-1).at).toBe(2040);
 });

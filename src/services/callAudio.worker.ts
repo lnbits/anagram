@@ -1,4 +1,5 @@
-import { CallAudioQueue } from './callAudioQueue.ts';
+import { CallAudioPlayout } from './callAudioPlayout.ts';
+import { CALL_AUDIO_BACKLOG_MS, CallAudioQueue } from './callAudioQueue.ts';
 import { Application, createEncoder, createDecoder, loadLibopus } from 'libopus-wasm';
 import {
   CallAudioJitterBuffer,
@@ -69,14 +70,16 @@ globalThis.onmessage = async ({ data }) => {
           if (credits) {
             credits--;
             send({ id, type: 'packet', ...frame });
-          } else pending.push(frame, performance.now());
+          } else pending.push(frame, performance.now(), frame.at - performance.timeOrigin);
         };
         port.onmessage = ({ data: input }) => {
           if (closed) return;
           try {
+            const at = input.at ?? performance.timeOrigin + performance.now();
+            if (performance.timeOrigin + performance.now() - at > CALL_AUDIO_BACKLOG_MS) return;
             const opus = encoder.encodeFloat(input.pcm, { frameSize: 960, maxPacketBytes: 1000 });
             deliver({
-              at: performance.timeOrigin + performance.now(),
+              at,
               packet: packAudio({
                 generation: data.generation,
                 sequence: input.sequence,
@@ -111,21 +114,28 @@ globalThis.onmessage = async ({ data }) => {
       let decoder = await createDecoder({ sampleRate: 48000, channels: 1, maxFrameSize: 960 });
       let jitter = new CallAudioJitterBuffer();
       let generation: number | undefined;
+      let playout = new CallAudioPlayout();
+      let lastReport = 0;
+      const stats = () => ({ ...jitter.stats, bufferedMs: jitter.bufferedMs, ...playout.stats });
 
       port.onmessage = () => {
         if (closed) return;
         try {
-          const frame = jitter.pull(performance.now());
-          const pcm =
-            frame && decoder
+          const now = performance.now();
+          const pcm = playout.pull(now, jitter, () => {
+            const frame = jitter.pull(now);
+            return frame && decoder
               ? decoder.decodeFloat(frame.packet?.opus ?? null, {
                   decodeFec: frame.fec,
                   frameSize: 960,
                   maxFrameSize: 960,
                 })
               : new Float32Array(960);
-          // Only the negotiated 20 ms format is accepted, including malformed peers.
-          if (pcm.length !== 960) throw new Error('Unexpected audio duration');
+          });
+          if (now - lastReport >= 250) {
+            lastReport = now;
+            send({ id, type: 'playout', stats: stats() });
+          }
           port.postMessage({ pcm }, [pcm.buffer]);
         } catch {
           send({ id, type: 'error' });
@@ -153,11 +163,12 @@ globalThis.onmessage = async ({ data }) => {
             }
             decoder = replacement;
             jitter = new CallAudioJitterBuffer();
+            playout = new CallAudioPlayout();
             generation = packet.generation;
           }
           jitter.push(packet, arrival);
         },
-        stats: () => jitter.stats,
+        stats,
         close() {
           closed = true;
           port.close();

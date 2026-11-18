@@ -34,7 +34,6 @@ jobs:
     env:
       ANAGRAM_CALL_TEST_PARTICIPANTS: ${{ matrix.participants }}
       ANAGRAM_CALL_TEST_SCENARIO: group
-      ANAGRAM_CALL_TEST_BUILD_CONFIG: ${{ runner.temp }}/native-call-build.json
     strategy:
       fail-fast: false
       matrix:
@@ -98,8 +97,12 @@ jobs:
           image: ubuntu-24.04
       - name: Build native call probe
         timeout-minutes: 22
+        env:
+          ANAGRAM_CALL_TEST_BUILD_CONFIG: ${{ runner.temp }}/native-call-build.json
         run: node scripts/native-calls/build.mjs
       - name: Exercise isolated native Linux group calls and screen sharing
+        env:
+          ANAGRAM_CALL_TEST_BUILD_CONFIG: ${{ runner.temp }}/native-call-build.json
         run: xvfb-run -a -s '-screen 0 1600x1800x24' dbus-run-session -- bash scripts/native-calls/linux.sh
       - uses: actions/upload-artifact@v4
         if: always()
@@ -116,8 +119,6 @@ jobs:
         os: [macos-latest, macos-15-intel, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    env:
-      ANAGRAM_CALL_TEST_BUILD_CONFIG: ${{ runner.temp }}/native-call-build.json
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -139,8 +140,12 @@ jobs:
           image: ${{ matrix.os }}
       - name: Build native call probe
         timeout-minutes: 22
+        env:
+          ANAGRAM_CALL_TEST_BUILD_CONFIG: ${{ runner.temp }}/native-call-build.json
         run: node scripts/native-calls/build.mjs
       - name: Exercise calls in the native WebView
+        env:
+          ANAGRAM_CALL_TEST_BUILD_CONFIG: ${{ runner.temp }}/native-call-build.json
         run: node scripts/native-calls/run.mjs
       - uses: actions/upload-artifact@v4
         if: always()

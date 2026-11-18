@@ -4,24 +4,24 @@ import { createWriteStream } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createBuildConfig, probeSettings, probeUrl, readBuildConfig } from './build-config.mjs';
 import { createServer } from 'vite';
 import { chromium } from '@playwright/test';
 import { startIrohTestProxy } from '../iroh-test-proxy.cjs';
 import { runCommand } from './command.mjs';
 import { createTestCertificate } from './certificate.mjs';
+import { findLinuxProbeWindow } from './window.mjs';
 
 const linuxNative = process.argv.includes('--linux') && process.platform === 'linux';
 const browserOnly = process.argv.includes('--browser');
-// Linux group participants run in separate apps, matching their real audio graphs.
-const participants = Number(process.env.ANAGRAM_CALL_TEST_PARTICIPANTS || (browserOnly ? 6 : 4));
-const scenario = process.env.ANAGRAM_CALL_TEST_SCENARIO || 'all';
-const media = process.env.ANAGRAM_CALL_TEST_MEDIA || 'video';
-if (!['audio', 'video'].includes(media)) throw new Error('Choose audio or video call media');
-if (!['all', 'direct', 'group', 'legacy'].includes(scenario))
-  throw new Error('Choose all, direct, group or legacy call scenarios');
-if (!Number.isInteger(participants) || participants < 2 || participants > 6)
-  throw new Error('Choose 2 to 6 test participants');
+// Each participant gets its own WebView, codec worker, audio graph and native IPC queue.
+const isolateGroups = linuxNative || (!browserOnly && process.platform === 'darwin');
+const settings = probeSettings(browserOnly);
+const { participants, scenario } = settings;
+const buildConfigPath = !browserOnly && process.env.ANAGRAM_CALL_TEST_BUILD_CONFIG;
+const config = buildConfigPath
+  ? await readBuildConfig(buildConfigPath, settings)
+  : createBuildConfig(settings);
 if (
   !browserOnly &&
   !linuxNative &&
@@ -39,9 +39,9 @@ await Promise.all(
   ),
 );
 const directory = await mkdtemp(join(tmpdir(), 'anagram-native-calls-'));
-const token = randomUUID();
-const url = `http://127.0.0.1:5189/__native_calls?token=${token}&native=${browserOnly ? 0 : 1}&participants=${participants}&scenario=${scenario}&media=${media}`;
-const cases = linuxNative && scenario === 'all' ? ['direct', 'group', 'legacy'] : [scenario];
+const { token } = config;
+const url = probeUrl(config);
+const cases = isolateGroups && scenario === 'all' ? ['direct', 'group', 'legacy'] : [scenario];
 let currentCase = cases[0],
   nextPeer = 0;
 const apps = [],
@@ -49,7 +49,7 @@ const apps = [],
   barriers = new Map();
 const queues = Array.from({ length: participants }, () => []),
   waiters = new Map();
-const isolated = () => linuxNative && currentCase === 'group';
+const isolated = () => isolateGroups && currentCase === 'group';
 const readJson = async (request) => {
   let body = '';
   for await (const chunk of request) {
@@ -70,6 +70,8 @@ let server,
   finish,
   reject;
 let result;
+let diagnosingFailure = false;
+let saveEvents = Promise.resolve();
 const resetResult = () => {
   result = new Promise((resolve, fail) => {
     finish = resolve;
@@ -101,19 +103,25 @@ const waitFor = async (check, milliseconds, description) => {
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
 };
-const startNativeProbe = (pid) => {
+const startNativeProbe = async (pid) => {
   if (process.platform === 'darwin') {
+    const peer = apps.findIndex((client) => client.pid === pid);
+    const tile = isolated()
+      ? `set size of window 1 to {420, 540}
+         set position of window 1 to {${(peer % 2) * 420}, ${26 + Math.floor(peer / 2) * 280}}`
+      : '';
     command('osascript', [
       '-e',
-      `tell application "System Events" to set frontmost of first process whose unix id is ${pid} to true`,
-      '-e',
-      'tell application "System Events" to key code 49',
+      `tell application "System Events"
+      tell (first process whose unix id is ${pid})
+        set frontmost to true
+        ${tile}
+        key code 49
+      end tell
+    end tell`,
     ]);
   } else if (linuxNative) {
-    const window = command('xdotool', ['search', '--sync', '--pid', String(pid)])
-      .trim()
-      .split('\n')
-      .at(-1);
+    const window = await findLinuxProbeWindow(pid, command);
     // Keep every test tile visible without saturating software compositing in Xvfb.
     command('xdotool', ['windowsize', window, '800', '600']);
     if (isolated()) {
@@ -134,6 +142,8 @@ const startNativeProbe = (pid) => {
     ]);
   }
 };
+// Compare native, WebKit and relay CPU when investigating hosted macOS stalls.
+let sampleTimer;
 let app, timer;
 try {
   const cert = createTestCertificate(directory, command);
@@ -269,7 +279,21 @@ try {
                   lastStage = data.stage;
                   console.log(lastStage);
                 }
-                await writeFile(join(artifacts, 'events.json'), JSON.stringify(events, null, 2));
+                if (isolated() && data.stage?.endsWith(': failed') && !diagnosingFailure) {
+                  diagnosingFailure = true;
+                  for (let peer = 0; peer < participants; peer++) {
+                    if (peer === data.peer) continue;
+                    queues[peer].push({ kind: 'snapshot' });
+                    waiters.get(peer)?.();
+                  }
+                }
+                // A failed observer may finish first while its sender waits at a barrier.
+                if (isolated() && data.done && !data.passed && diagnosingFailure)
+                  await new Promise((resolve) => setTimeout(resolve, 1600));
+                saveEvents = saveEvents.then(() =>
+                  writeFile(join(artifacts, 'events.json'), JSON.stringify(events, null, 2)),
+                );
+                await saveEvents;
                 response.writeHead(204).end();
                 if (data.done) {
                   if (!isolated() || !data.passed) finish(data);
@@ -293,7 +317,11 @@ try {
                             ? browserPage.getByRole('button').click()
                             : browserPage.keyboard.press('Space');
                         void gesture.catch(reject);
-                      } else startNativeProbe(isolated() ? apps[data.peer].pid : app.pid);
+                      } else {
+                        void startNativeProbe(isolated() ? apps[data.peer].pid : app.pid).catch(
+                          reject,
+                        );
+                      }
                     } catch (error) {
                       reject(error);
                     }
@@ -322,7 +350,7 @@ try {
     ],
   });
   await server.listen();
-  if (!browserOnly) {
+  if (!browserOnly && !buildConfigPath) {
     console.log('Building native debug app with isolated probe URL');
     const build = launch(
       'cargo',
@@ -334,6 +362,24 @@ try {
     const [code] = await once(build, 'exit');
     clearTimeout(buildTimer);
     if (code !== 0) throw new Error(`Native build failed (${code}); see build.log`);
+  }
+  if (!browserOnly && process.platform === 'darwin') {
+    const usage = createWriteStream(join(artifacts, 'process-usage.log'));
+    logs.push(usage);
+    const sample = () => {
+      const ps = spawn('ps', ['-A', '-r', '-o', 'pid,ppid,%cpu,rss,comm']);
+      let data = '';
+      ps.stdout.on('data', (chunk) => {
+        data += chunk;
+      });
+      ps.on('close', () =>
+        usage.write(
+          `${new Date().toISOString()} ${lastStage}\n${data.split('\n').slice(0, 26).join('\n')}\n`,
+        ),
+      );
+      ps.on('error', (error) => usage.write(`ps: ${error.message}\n`));
+    };
+    sampleTimer = setInterval(sample, 5000);
   }
   const completedCases = [];
   for (const selected of cases) {
@@ -390,9 +436,9 @@ try {
               async () =>
                 events
                   .slice(eventStart)
-                  .some((event) => event.peer === peer && event.stage === 'ready'),
+                  .some((event) => event.peer === peer && event.stage === 'started'),
               45000,
-              `Client ${peer} readiness`,
+              `Client ${peer} start gesture`,
             ),
           ]);
         }
@@ -448,6 +494,7 @@ try {
   process.exitCode = 1;
 } finally {
   clearTimeout(timer);
+  clearInterval(sampleTimer);
   if (browser) await browser.close();
   for (const child of children.reverse()) {
     if (child.exitCode !== null || child.signalCode !== null) continue;

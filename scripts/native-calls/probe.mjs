@@ -20,7 +20,7 @@ const participant = new URL(location.href).searchParams.get('participant');
 const ownPeer = participant === null ? null : Number(participant);
 const token = new URL(location.href).searchParams.get('token');
 const report = async (data) => {
-  document.querySelector('pre').textContent = JSON.stringify(data, null, 2);
+  if (data.stage) document.querySelector('pre').textContent = data.stage;
   await fetch(`/__native_calls/report?token=${token}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -123,6 +123,12 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
       time: p.element.currentTime,
       frames: p.frames,
       pictureChanges: p.pictureChanges,
+      media: !p.video
+        ? 'audio'
+        : kind === 'group' &&
+            calls[p.peer]?.participants.some((member) => member.screenUrl === p.url)
+          ? 'screen'
+          : 'camera',
       audioSamples: p.audioSamples,
       paused: p.element.paused,
       playError: p.playError,
@@ -134,7 +140,9 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
       ]),
     })),
   });
-  const stage = (name) => report({ stage: `${kind}: ${name}`, ...snapshot() });
+  // Full snapshots synchronously read pixels from every local source. Collect them
+  // on failure and completion, outside the timed playback observations.
+  const stage = (name) => report({ stage: `${kind}: ${name}` });
   const healthy = () => {
     assert(!errors.length, () => JSON.stringify(snapshot()));
     return (
@@ -215,6 +223,12 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
         const messages = await response.json();
         for (const message of messages) {
           if (signalStopped) return;
+          if (message.kind === 'snapshot') {
+            await report({ diagnostic: true, ...snapshot() });
+            await delay(350);
+            await report({ diagnostic: true, ...snapshot() });
+            continue;
+          }
           const call = calls[ownPeer];
           void Promise.resolve(
             message.kind === 'media'
@@ -245,16 +259,18 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
           const endpoint = await createIrohCallEndpoint(['https://127.0.0.1:7004/']);
           const wrap = (connection) => {
             connections[i].push(connection);
-            const sendAudio = connection.sendAudio;
-            if (sendAudio)
-              connection.sendAudio = async (data) => {
-                const at = performance.now();
-                await sendAudio(data);
-                const elapsed = performance.now() - at;
-                sendCosts[i].count++;
-                sendCosts[i].totalMs += elapsed;
-                sendCosts[i].maxMs = Math.max(sendCosts[i].maxMs, elapsed);
-              };
+            for (const method of ['sendAudio', 'sendAudioBatch']) {
+              const send = connection[method];
+              if (send)
+                connection[method] = async (data) => {
+                  const at = performance.now();
+                  await send(data);
+                  const elapsed = performance.now() - at;
+                  sendCosts[i].count++;
+                  sendCosts[i].totalMs += elapsed;
+                  sendCosts[i].maxMs = Math.max(sendCosts[i].maxMs, elapsed);
+                };
+            }
             return connection;
           };
           return {
@@ -274,7 +290,16 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
               return send(frame);
             },
             onError,
-            options,
+            options?.sendAudioBatch
+              ? {
+                  ...options,
+                  sendAudioBatch: (frames) => {
+                    recording.sent += frames.length;
+                    recording.lastSent = performance.now();
+                    return options.sendAudioBatch(frames);
+                  },
+                }
+              : options,
           );
           recordings.add(recording);
           return () => {
@@ -498,7 +523,16 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
           assert(
             !p.video ||
               (p.frames > previous.frames + 2 && p.pictureChanges > previous.pictureChanges + 2),
-            () => `Video stopped displaying: ${JSON.stringify(snapshot())}`,
+            () =>
+              `Video stopped displaying: ${JSON.stringify({
+                ...snapshot(),
+                stalledPlayer: {
+                  index: [...players].indexOf(p),
+                  previous,
+                  frames: p.frames,
+                  pictureChanges: p.pictureChanges,
+                },
+              })}`,
           );
           assert(
             p.video || p.audioSamples > previous.audioSamples + 3,

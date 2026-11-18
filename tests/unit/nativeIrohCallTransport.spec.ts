@@ -47,6 +47,21 @@ it('sends media as binary IPC with the scoped session and handle', async () => {
   expect(sends[1][2].headers['x-call-audio']).toBe('1');
   connection.close();
 });
+it('sends queued audio as length-prefixed datagrams on the same scoped connection', async () => {
+  const connection = await connect();
+  await connection.sendAudioBatch!([packet(1), packet(2)]);
+  expect(invoke).toHaveBeenCalledWith(
+    'iroh_call_send',
+    new Uint8Array(batch(packet(1), packet(2))),
+    {
+      headers: {
+        'x-call-session': expect.any(String),
+        'x-call-connection': '2',
+        'x-call-audio': 'batch',
+      },
+    },
+  );
+});
 it('drains a bounded native audio batch without one IPC round trip per packet', async () => {
   const connection = await connect();
   for (let i = 1; i <= 4; i++) await expect(connection.recvAudio!()).resolves.toEqual(packet(i));
@@ -55,6 +70,17 @@ it('drains a bounded native audio batch without one IPC round trip per packet', 
   connection.close();
   await expect(connection.recvAudio!()).rejects.toThrow('closed');
 });
+it('drains an available burst after a full read and returns to normal after catching up', async () => {
+  const sizes = [4, 12, 1, 1];
+  let sequence = 0;
+  receive = async () => batch(...Array.from({ length: sizes.shift()! }, () => packet(sequence++)));
+  const connection = await connect();
+  for (let i = 0; i < 18; i++) await expect(connection.recvAudio!()).resolves.toEqual(packet(i));
+  const reads = invoke.mock.calls.filter(([, args]) => args.operation === 'recvAudio');
+  expect(reads.map(([, args]) => args.args.burst)).toEqual([false, true, true, false]);
+  connection.close();
+});
+
 it.each([
   new ArrayBuffer(0),
   new ArrayBuffer(4409),

@@ -1,3 +1,4 @@
+import { MAX_AUDIO_PACKET_BYTES, MAX_NATIVE_AUDIO_BATCH } from './callAudioPackets.ts';
 import { invoke } from '@tauri-apps/api/core';
 import { mergeCallLanes, type RawConnection } from './callTransportLanes.ts';
 import type { CallEndpoint, CallEndReason } from '#src/types/call.ts';
@@ -14,12 +15,13 @@ function connection(handle: number): RawConnection {
   let reason: string | undefined;
   let closed = false;
   let audio: Uint8Array[] = [];
-  const send = (data: Uint8Array, audio: boolean) =>
+  let burst = false;
+  const send = (data: Uint8Array, lane: '0' | '1' | 'batch') =>
     invoke<void>('iroh_call_send', data, {
       headers: {
         'x-call-session': clientSession,
         'x-call-connection': String(handle),
-        'x-call-audio': audio ? '1' : '0',
+        'x-call-audio': lane,
       },
     });
   const receive = async (operation: string, args = {}) => {
@@ -32,17 +34,37 @@ function connection(handle: number): RawConnection {
   };
   return {
     transportStats: () => command('stats', { connection: handle }),
-    send: (data) => send(data, false),
-    send_audio: (data) => send(data, true),
+    send: (data) => send(data, '0'),
+    send_audio: (data) => send(data, '1'),
+    async sendAudioBatch(packets) {
+      if (
+        !packets.length ||
+        packets.length > MAX_NATIVE_AUDIO_BATCH ||
+        packets.some((p) => p.length <= 14 || p.length > MAX_AUDIO_PACKET_BYTES)
+      )
+        throw new Error('Invalid audio batch');
+      const bytes = new Uint8Array(packets.reduce((n, p) => n + 2 + p.length, 0));
+      const view = new DataView(bytes.buffer);
+      let offset = 0;
+      for (const packet of packets) {
+        view.setUint16(offset, packet.length);
+        bytes.set(packet, offset + 2);
+        offset += 2 + packet.length;
+      }
+      await send(bytes, 'batch');
+    },
     async recv_audio() {
       if (closed) throw new Error('Call connection closed');
       if (!audio.length) {
-        const bytes = await receive('recvAudio');
+        // A full read signals a backlog. Drain more available datagrams on the next IPC round trip.
+        const limit = burst ? MAX_NATIVE_AUDIO_BATCH : 4;
+        const bytes = await receive('recvAudio', { burst });
         if (closed) throw new Error('Call connection closed');
-        if (!bytes.length || bytes.length > 4408) throw new Error('Invalid audio batch');
+        if (!bytes.length || bytes.length > limit * (MAX_AUDIO_PACKET_BYTES + 2))
+          throw new Error('Invalid audio batch');
         const frames: Uint8Array[] = [];
         for (let offset = 0; offset < bytes.length;) {
-          if (offset + 2 > bytes.length || frames.length === 4)
+          if (offset + 2 > bytes.length || frames.length === limit)
             throw new Error('Invalid audio batch');
           const size = (bytes[offset] << 8) | bytes[offset + 1];
           offset += 2;
@@ -57,6 +79,7 @@ function connection(handle: number): RawConnection {
           frames.push(bytes.subarray(offset, offset + size));
           offset += size;
         }
+        burst = frames.length >= 4;
         audio = frames;
       }
       return audio.shift()!;

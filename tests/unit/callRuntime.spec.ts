@@ -428,12 +428,14 @@ describe('call negotiation and lifetime', () => {
 
   it('does not replace the original call failure with a history publication error', async () => {
     const h = setup();
-    h.deps.sendSignal.mockRejectedValue(new Error('Invitation delivery failed'));
+    vi.mocked(h.endpoint.connect).mockRejectedValue(new Error('Connection failed'));
     h.deps.onEnded.mockRejectedValue(new Error('History delivery failed'));
     await h.runtime.start(peer, 'audio');
-    await Promise.resolve();
+    const offer = h.deps.sendSignal.mock.calls[0][1];
+    await h.runtime.receiveSignal(peer, { ...offer, action: 'accept' });
+    await vi.waitFor(() => expect(h.runtime.session?.phase).toBe('ended'));
     expect(h.runtime.error).toBe('call.error.failed');
-    expect(h.runtime.failureDetail).toBe('Invitation delivery failed');
+    expect(h.runtime.failureDetail).toBe('Connection failed');
     expect(h.runtime.session?.endReason).toBe('failed');
   });
 
@@ -652,23 +654,37 @@ describe('call negotiation and lifetime', () => {
     expect(h.runtime.session?.phase).toBe('active');
     expect(h.microphone.stop).not.toHaveBeenCalled();
   });
-  it('still fails an undelivered answer without an authenticated Iroh connection', async () => {
+  it('retries a rejected answer until the connection deadline', async () => {
+    vi.useFakeTimers();
     const h = setup();
     await h.runtime.receiveSignal(
       peer,
       invite({ mode: 'audio', mimeType: 'audio/webm;codecs=opus' }),
     );
     vi.mocked(h.endpoint.accept).mockImplementationOnce(() => new Promise(() => {}));
-    h.deps.sendSignal.mockRejectedValueOnce(new Error('Relay refused the answer'));
+    h.deps.sendSignal.mockRejectedValue(new Error('Relay refused the answer'));
     await h.runtime.accept('audio');
-    expect(h.runtime.session?.endReason).toBe('failed');
+    expect(h.runtime.session?.phase).toBe('connecting');
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.deps.sendSignal.mock.calls.filter(([, s]) => s.action === 'accept')).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(28_000);
+    expect(h.runtime.session?.endReason).toBe('timeout');
     expect(h.microphone.stop).toHaveBeenCalledOnce();
   });
-  it('still fails an undelivered invitation when no peer has acknowledged it', async () => {
+  it('retries a rejected invitation until its fixed deadline', async () => {
+    vi.useFakeTimers();
     const h = setup();
-    h.deps.sendSignal.mockRejectedValueOnce(new Error('Relay refused the invitation'));
+    h.deps.sendSignal.mockRejectedValue(new Error('Relay refused the invitation'));
     await h.runtime.start(peer, 'audio');
-    expect(h.runtime.session?.endReason).toBe('failed');
+    const offer = h.deps.sendSignal.mock.calls[0][1];
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(h.runtime.session?.phase).toBe('outgoing');
+    expect(h.deps.sendSignal).toHaveBeenCalledTimes(7);
+    expect(h.deps.sendSignal.mock.calls.every(([, s]) => s.expiresAt === offer.expiresAt)).toBe(
+      true,
+    );
+    await vi.advanceTimersByTimeAsync(48_000);
+    expect(h.runtime.session?.endReason).toBe('timeout');
     expect(h.microphone.stop).toHaveBeenCalledOnce();
   });
   it('aborts malformed media frames and releases devices', async () => {
@@ -702,7 +718,7 @@ describe('call negotiation and lifetime', () => {
     await h.runtime.start(peer, 'video');
     expect(h.deps.getMedia).not.toHaveBeenCalled();
   });
-  it('ends negotiation after ten seconds without a matching custom DM', async () => {
+  it('times out without a matching peer response rather than claiming unsupported software', async () => {
     vi.useFakeTimers();
     const h = setup();
     await h.runtime.start(peer, 'audio');
@@ -713,14 +729,155 @@ describe('call negotiation and lifetime', () => {
       action: 'ringing',
       callId: crypto.randomUUID(),
     });
-    await vi.advanceTimersByTimeAsync(9999);
+    await vi.advanceTimersByTimeAsync(59_999);
     expect(h.runtime.session?.phase).toBe('outgoing');
     await vi.advanceTimersByTimeAsync(1);
-    expect(h.runtime.session?.endReason).toBe('unsupported');
+    expect(h.runtime.session?.endReason).toBe('timeout');
     expect(h.microphone.stop).toHaveBeenCalledOnce();
     expect(h.endpoint.close).toHaveBeenCalledOnce();
     await h.runtime.receiveSignal(peer, { ...offer, action: 'ringing' });
     expect(h.runtime.session?.phase).toBe('ended');
+  });
+  it('completes negotiation when the first invite, ringing response, and answer are all lost', async () => {
+    vi.useFakeTimers();
+    const caller = setup(),
+      recipient = setup();
+    recipient.deps.getOwnPubkey = () => peer;
+    let invites = 0,
+      ringings = 0,
+      answers = 0;
+    let accepted!: (connection: CallConnection) => void;
+    vi.mocked(recipient.endpoint.accept).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          accepted = resolve;
+        }),
+    );
+    vi.mocked(caller.endpoint.connect).mockImplementation(async () => {
+      accepted(recipient.connection);
+      return caller.connection;
+    });
+    caller.deps.sendSignal.mockImplementation(async (_, control: CallSignal) => {
+      if (control.action === 'invite' && ++invites === 1) return;
+      await recipient.runtime.receiveSignal(own, control);
+    });
+    recipient.deps.sendSignal.mockImplementation(async (_, control: CallSignal) => {
+      if (control.action === 'ringing' && ++ringings === 1) return;
+      if (control.action === 'accept' && ++answers === 1) return;
+      await caller.runtime.receiveSignal(peer, control);
+    });
+    await caller.runtime.start(peer, 'audio');
+    expect(recipient.runtime.session).toBeNull();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(recipient.runtime.session?.phase).toBe('incoming');
+    expect(caller.runtime.session?.peerConfirmed).toBe(false);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(caller.runtime.session?.peerConfirmed).toBe(true);
+    await recipient.runtime.accept();
+    expect(caller.runtime.session?.phase).toBe('outgoing');
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(caller.runtime.session?.phase).toBe('active');
+    expect(recipient.runtime.session?.phase).toBe('active');
+    expect(answers).toBe(2);
+    expect(caller.endpoint.connect).toHaveBeenCalledOnce();
+    expect(recipient.endpoint.accept).toHaveBeenCalledOnce();
+    const attempts =
+      caller.deps.sendSignal.mock.calls.length + recipient.deps.sendSignal.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(
+      caller.deps.sendSignal.mock.calls.length + recipient.deps.sendSignal.mock.calls.length,
+    ).toBe(attempts);
+  });
+  it('retries relay-acknowledged invitations until the peer responds, then stops', async () => {
+    vi.useFakeTimers();
+    const h = setup();
+    await h.runtime.start(peer, 'audio');
+    const offer = h.deps.sendSignal.mock.calls[0][1];
+    // A relay accepted the first publication, but the recipient route was still connecting.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.deps.sendSignal).toHaveBeenCalledTimes(2);
+    expect(h.deps.sendSignal.mock.calls[1][1]).toEqual(offer);
+    await h.runtime.receiveSignal(peer, { ...offer, action: 'ringing' });
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(h.deps.sendSignal).toHaveBeenCalledTimes(2);
+    expect(h.runtime.session?.phase).toBe('outgoing');
+  });
+  it('replies to duplicate invites without recapturing media or extending the deadline', async () => {
+    vi.useFakeTimers();
+    const h = setup();
+    const offer = invite();
+    await h.runtime.receiveSignal(peer, offer);
+    await h.runtime.receiveSignal(peer, offer);
+    expect(h.deps.sendSignal).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(2000);
+    await h.runtime.receiveSignal('f'.repeat(64), offer);
+    expect(h.deps.sendSignal).toHaveBeenCalledOnce();
+    await h.runtime.receiveSignal(peer, offer);
+    expect(h.deps.sendSignal).toHaveBeenCalledTimes(2);
+    expect(h.deps.sendSignal.mock.calls[1][1]).toEqual(h.deps.sendSignal.mock.calls[0][1]);
+    expect(h.deps.getMedia).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(58_000);
+    expect(h.runtime.session?.endReason).toBe('timeout');
+    const sends = h.deps.sendSignal.mock.calls.length;
+    await h.runtime.receiveSignal(peer, offer);
+    expect(h.deps.sendSignal).toHaveBeenCalledTimes(sends);
+  });
+  it('retries an acknowledged but lost answer until the authenticated connection opens', async () => {
+    vi.useFakeTimers();
+    const h = setup();
+    const offer = invite();
+    let connected!: (connection: CallConnection) => void;
+    vi.mocked(h.endpoint.accept).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          connected = resolve;
+        }),
+    );
+    await h.runtime.receiveSignal(peer, offer);
+    await h.runtime.accept();
+    await vi.advanceTimersByTimeAsync(2000);
+    const answers = h.deps.sendSignal.mock.calls.filter(([, s]) => s.action === 'accept');
+    expect(answers).toHaveLength(2);
+    expect(answers[0][1]).toEqual(answers[1][1]);
+    // Duplicate invitations do not restart accept or create another endpoint.
+    await h.runtime.receiveSignal(peer, offer);
+    expect(h.endpoint.accept).toHaveBeenCalledOnce();
+    expect(h.deps.createEndpoint).toHaveBeenCalledOnce();
+    connected(h.connection);
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.runtime.session?.phase).toBe('active');
+    expect(h.deps.sendSignal.mock.calls.filter(([, s]) => s.action === 'accept')).toHaveLength(2);
+  });
+  it.each(['end', 'reset'] as const)(
+    'stops retries on %s even if a publication finishes late',
+    async (action) => {
+      vi.useFakeTimers();
+      const h = setup();
+      let published!: () => void;
+      h.deps.sendSignal.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            published = resolve;
+          }),
+      );
+      const starting = h.runtime.start(peer, 'audio');
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(h.deps.sendSignal).toHaveBeenCalledOnce();
+      h.runtime[action]();
+      published();
+      await starting;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.deps.sendSignal.mock.calls.filter(([, s]) => s.action === 'invite')).toHaveLength(1);
+      expect(h.microphone.stop).toHaveBeenCalledOnce();
+    },
+  );
+  it('does not retry an old account’s invitation after the signer changes', async () => {
+    vi.useFakeTimers();
+    const h = setup();
+    await h.runtime.start(peer, 'audio');
+    h.deps.getOwnPubkey = () => 'f'.repeat(64);
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.deps.sendSignal).toHaveBeenCalledOnce();
   });
   it('acknowledges an incoming invite before any device permission request', async () => {
     const h = setup();

@@ -1,4 +1,8 @@
-import { MAX_AUDIO_PACKET_BYTES } from './callAudioPackets.ts';
+import {
+  MAX_AUDIO_PACKET_BYTES,
+  MAX_NATIVE_AUDIO_BATCH,
+  MAX_DECODE_BATCH,
+} from './callAudioPackets.ts';
 import {
   CallAudioQueue,
   CALL_AUDIO_BACKLOG_MS,
@@ -163,10 +167,19 @@ export function createPacketAudioReceiver(onError: () => void): CallMediaReceive
   let closed = false,
     pending = false;
   // Preserve IPC bursts in order, including while the decoder is briefly busy.
-  const queued = new CallAudioQueue<Uint8Array>();
-  const post = (packet: Uint8Array) => {
+  type Arrival = { packet: Uint8Array; at: number };
+  const queued = new CallAudioQueue<Arrival>();
+  const post = (first: Arrival, now: number) => {
+    const packets = [first];
+    // A busy WebView can take longer than a 20 ms packet to process a worker
+    // acknowledgement. Drain only packets already waiting, without delaying live audio.
+    while (packets.length < MAX_DECODE_BATCH) {
+      const next = queued.shift(now);
+      if (!next) break;
+      packets.push(next);
+    }
     pending = true;
-    state.current.worker.postMessage({ id: state.id, type: 'packet', packet });
+    state.current.worker.postMessage({ id: state.id, type: 'packets', packets });
   };
   const state = audioNode('playback', 0, (message) => {
     if (closed) return;
@@ -174,8 +187,9 @@ export function createPacketAudioReceiver(onError: () => void): CallMediaReceive
     if (message.type === 'received') {
       diagnostics.set(state.id, message.stats);
       pending = false;
-      const next = queued.shift(performance.now());
-      if (next) post(next);
+      const now = performance.now();
+      const next = queued.shift(now);
+      if (next) post(next, now);
     }
   });
   const destination = state.current.context.createMediaStreamDestination();
@@ -185,8 +199,10 @@ export function createPacketAudioReceiver(onError: () => void): CallMediaReceive
     url: handle.url,
     append(packet) {
       if (closed || packet.byteLength > MAX_AUDIO_PACKET_BYTES) return;
-      if (pending) queued.push(packet, performance.now());
-      else post(packet);
+      const now = performance.now();
+      const arrival = { packet, at: performance.timeOrigin + now };
+      if (pending) queued.push(arrival, now);
+      else post(arrival, now);
     },
     close() {
       closed = true;
@@ -269,10 +285,24 @@ export function recordPacketAudio(
   const pending = new CallAudioQueue<Uint8Array>();
   const transmit = async (packet: Uint8Array) => {
     inFlight++;
-    const frame = packet.slice();
-    new DataView(frame.buffer).setUint32(2, options?.audioGeneration ?? 1);
+    const stamp = (packet: Uint8Array) => {
+      const frame = packet.slice();
+      new DataView(frame.buffer).setUint32(2, options?.audioGeneration ?? 1);
+      return frame;
+    };
     try {
-      await send(frame);
+      const first = stamp(packet);
+      const now = performance.now();
+      const second = options?.sendAudioBatch ? pending.shift(now) : undefined;
+      if (second && options?.sendAudioBatch) {
+        const frames = [first, stamp(second)];
+        while (frames.length < MAX_NATIVE_AUDIO_BATCH) {
+          const next = pending.shift(now);
+          if (!next) break;
+          frames.push(stamp(next));
+        }
+        await options.sendAudioBatch(frames);
+      } else await send(first);
     } catch (error) {
       if (!closed) {
         close();

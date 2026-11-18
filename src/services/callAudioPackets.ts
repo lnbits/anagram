@@ -7,6 +7,10 @@ export const AUDIO_PACKET_KIND = 9;
 export const AUDIO_PACKET_SAMPLES = 960;
 export const AUDIO_PACKET_MS = 20;
 export const MAX_AUDIO_PACKET_BYTES = 1100;
+// At most 240 ms of queued speech per native IPC call. Each packet stays a distinct datagram.
+export const MAX_NATIVE_AUDIO_BATCH = 12;
+// Bound the work before a decoder worker acknowledges a queued burst.
+export const MAX_DECODE_BATCH = 8;
 const HEADER = 14;
 export interface AudioPacket {
   generation: number;

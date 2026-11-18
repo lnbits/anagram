@@ -43,6 +43,9 @@ function videoFrames(
   video.style.cssText =
     'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none';
   document.body.append(video);
+  // A live video can supply an encoder frame directly at its native size. Only
+  // copy through a canvas when scaling or when the engine lacks that constructor.
+  let directFrames = true;
   const interval = Math.ceil(1000 / Math.max(1, Math.min(24, frameRate))) + 1;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let finish: (() => void) | undefined;
@@ -85,12 +88,22 @@ function videoFrames(
               const scale = Math.min(1, maxWidth / video.videoWidth, maxHeight / video.videoHeight);
               const width = Math.max(2, Math.floor(video.videoWidth * scale));
               const height = Math.max(2, Math.floor(video.videoHeight * scale));
+              const timestamp = Math.round(performance.now() * 1000);
+              if (directFrames && width === video.videoWidth && height === video.videoHeight) {
+                try {
+                  controller.enqueue(new VideoFrame(video, { timestamp }));
+                  resolve();
+                  return;
+                } catch (error) {
+                  if (!(error instanceof DOMException) || error.name !== 'NotSupportedError')
+                    throw error;
+                  directFrames = false;
+                }
+              }
               if (canvas.width !== width) canvas.width = width;
               if (canvas.height !== height) canvas.height = height;
               paint.drawImage(video, 0, 0, canvas.width, canvas.height);
-              controller.enqueue(
-                new VideoFrame(canvas, { timestamp: Math.round(performance.now() * 1000) }),
-              );
+              controller.enqueue(new VideoFrame(canvas, { timestamp }));
             } catch (error) {
               controller.error(error);
               close();
@@ -248,6 +261,7 @@ type Consumer = {
   options?: CallRecordingOptions;
   busy: boolean;
   needsKey: boolean;
+  pending?: { frame: Uint8Array; at: number };
   stopped: boolean;
   since: number;
   slowUntil: number;
@@ -317,6 +331,42 @@ export function recordPacketVideo(
     const fail = () => {
       for (const c of [...consumers]) if (!c.stopped) c.error();
     };
+    // Keep at most one dependent frame behind a pending send on each link.
+    // A dropped delta requires a new keyframe, even if an older queued frame
+    // is still independently deliverable to this peer.
+    const transmit = async (c: Consumer, frame: Uint8Array) => {
+      c.busy = true;
+      c.since = performance.now();
+      try {
+        await c.send(frame.slice());
+        if (stopped || c.stopped) return;
+        const now = performance.now();
+        c.slowUntil = now - c.since > 180 ? now + 2000 : 0;
+        // A single slow peer must not lower the shared encoder for
+        // everyone. Adapt at most once a second when all peers lag.
+        if (
+          now - congestedAt >= 1000 &&
+          [...consumers].every(
+            (peer) => peer.stopped || peer.slowUntil > now || (peer.busy && now - peer.since > 180),
+          )
+        ) {
+          congestedAt = now;
+          currentBitrate = Math.max(Math.min(bitrate, 200000), Math.floor(currentBitrate * 0.8));
+        }
+      } catch (error) {
+        c.pending = undefined;
+        c.needsKey = true;
+        if (!c.stopped) (c.options?.onSendError ?? c.error)(error);
+      } finally {
+        c.busy = false;
+        const queued = c.pending;
+        c.pending = undefined;
+        if (!stopped && !c.stopped && queued) {
+          if (performance.now() - queued.at <= 500) void transmit(c, queued.frame);
+          else c.needsKey = true;
+        }
+      }
+    };
     let encoder: VideoEncoder;
     try {
       encoder = new VideoEncoder({
@@ -330,43 +380,17 @@ export function recordPacketVideo(
           chunk.copyTo(frame.subarray(11));
           for (const c of consumers) {
             if (c.stopped) continue;
+            const key = chunk.type === 'key';
+            if (c.needsKey && !key) continue;
             if (c.busy) {
-              c.needsKey = true;
+              if (!c.pending || key) {
+                c.pending = { frame, at: performance.now() };
+                c.needsKey = false;
+              } else c.needsKey = true;
               continue;
             }
-            if (c.needsKey && chunk.type !== 'key') continue;
             c.needsKey = false;
-            c.busy = true;
-            c.since = performance.now();
-            // Runtime adds the camera/screen type; never let one peer mutate another's frame.
-            void c
-              .send(frame.slice())
-              .then(() => {
-                if (stopped || c.stopped) return;
-                const now = performance.now();
-                c.slowUntil = now - c.since > 180 ? now + 2000 : 0;
-                // A single slow peer must not lower the shared encoder for
-                // everyone. Adapt at most once a second when all peers lag.
-                if (
-                  now - congestedAt >= 1000 &&
-                  [...consumers].every(
-                    (peer) =>
-                      peer.stopped || peer.slowUntil > now || (peer.busy && now - peer.since > 180),
-                  )
-                ) {
-                  congestedAt = now;
-                  currentBitrate = Math.max(
-                    Math.min(bitrate, 200000),
-                    Math.floor(currentBitrate * 0.8),
-                  );
-                }
-              })
-              .catch((error) => {
-                if (!c.stopped) (c.options?.onSendError ?? c.error)(error);
-              })
-              .finally(() => {
-                c.busy = false;
-              });
+            void transmit(c, frame);
           }
         },
       });
@@ -466,6 +490,7 @@ export function recordPacketVideo(
   return () => {
     if (consumer.stopped) return;
     consumer.stopped = true;
+    consumer.pending = undefined;
     active.consumers.delete(consumer);
     if (!active.consumers.size) active.stop();
   };

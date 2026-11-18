@@ -246,6 +246,24 @@ describe('live call playback recovery', () => {
     expect(element.currentTime).toBeCloseTo(10.05);
   });
 
+  it('plays through modest video drift after a seek and recovers if playback stops again', () => {
+    vi.useFakeTimers();
+    const ranges = [[0, 10]];
+    const { element, seek } = media(9, ranges);
+    followCallLive(element);
+    vi.advanceTimersByTime(1600);
+    element.currentTime = 10.1; // The decoder is presenting again.
+    seek.mockClear();
+    ranges[0][1] = 10.9;
+    followCallLive(element);
+    expect(seek).not.toHaveBeenCalled();
+    expect(element.playbackRate).toBe(1.1);
+    vi.advanceTimersByTime(1100);
+    followCallLive(element);
+    expect(seek).toHaveBeenCalledExactlyOnceWith(10.55);
+    expect(element.playbackRate).toBe(1);
+  });
+
   it('still corrects large video drift and buffer gaps during the settling window', () => {
     vi.useFakeTimers();
     const ranges = [[0, 10]];

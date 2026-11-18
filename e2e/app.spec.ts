@@ -883,6 +883,14 @@ test('fresh login restores historical DMs from the advertised inbox relay withou
   await publishFixture(dmRelay, [wrapped]);
   const consoleOutput: string[] = [],
     wire: string[] = [];
+  // Resource Timing has a bounded buffer and may omit the module after reload.
+  // Capture requests outside the page, retaining Vite's exact HMR URL.
+  let messageServiceUrl: string | undefined;
+  page.on('request', (request) => {
+    if (/\/src\/services\/chatDataService\.ts(?:\?|$)/.test(request.url())) {
+      messageServiceUrl = request.url();
+    }
+  });
   page.on('console', (message) => consoleOutput.push(message.text()));
   page.on('websocket', (socket) =>
     socket.on('framesent', ({ payload }) => wire.push(String(payload))),
@@ -905,12 +913,10 @@ test('fresh login restores historical DMs from the advertised inbox relay withou
 
   // Import the same module instance as the running app, including Vite's HMR
   // timestamp when this test reuses an already-running development server.
-  await page.evaluate(async () => {
-    const serviceUrl = performance
-      .getEntriesByType('resource')
-      .map((entry) => entry.name)
-      .find((url) => /\/src\/services\/chatDataService\.ts(?:\?|$)/.test(url));
-    if (!serviceUrl) throw new Error('Live message service module was not loaded');
+  expect(messageServiceUrl, 'Live message service module was requested').toBeTruthy();
+  await page.evaluate(async (serviceUrl) => {
+    // Regression: instrumentation must work without retained resource timings.
+    performance.clearResourceTimings();
     const { chatDataService } = await import(serviceUrl);
     const original = chatDataService.createMessage.bind(chatDataService);
     const barrier = new Promise<void>((resolve) => {
@@ -921,7 +927,7 @@ test('fresh login restores historical DMs from the advertised inbox relay withou
       await barrier;
       return original(...args);
     };
-  });
+  }, messageServiceUrl!);
   await publishFixture(dmRelay, [
     nip59.wrapEvent(
       { kind: 14, tags: [['p', own]], content: 'Visible before the database commit' },
@@ -969,19 +975,16 @@ test('fresh login restores historical DMs from the advertised inbox relay withou
     page.getByTestId('message-bubble').filter({ hasText: 'Visible before the database commit' }),
   ).toHaveCount(1);
   // A failed message write must leave ciphertext available for a later retry.
-  await page.evaluate(async () => {
-    const serviceUrl = performance
-      .getEntriesByType('resource')
-      .map((entry) => entry.name)
-      .find((url) => /\/src\/services\/chatDataService\.ts(?:\?|$)/.test(url));
-    const { chatDataService } = await import(serviceUrl!);
+  await page.evaluate(async (serviceUrl) => {
+    performance.clearResourceTimings();
+    const { chatDataService } = await import(serviceUrl);
     const original = chatDataService.createMessage.bind(chatDataService);
     chatDataService.createMessage = async (...args) => {
       chatDataService.createMessage = original;
       (window as any).__failedMessageWrite = true;
       throw new Error('Simulated database interruption');
     };
-  });
+  }, messageServiceUrl!);
   await publishFixture(dmRelay, [
     nip59.wrapEvent(
       {

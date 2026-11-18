@@ -3,7 +3,13 @@ set -euo pipefail
 cache=${1:?Pass an apt archive directory}
 media_cache_hit=${2?Pass the media cache hit flag}
 mkdir -p "$cache"
+sources=$(mktemp -d)
+chmod 755 "$sources"
+trap 'rm -rf "$sources"' EXIT
+node "$(dirname "$0")/apt-sources.mjs" "${3:-/etc/apt}" "$sources"
 options=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
+  -o "Dir::Etc::sourcelist=$sources/sources.list" -o "Dir::Etc::sourceparts=$sources/sources.list.d"
+  -o APT::Update::Error-Mode=any
   -o "Dir::Cache::archives=$cache" -o APT::Keep-Downloaded-Packages=true)
 
 # Refresh signed indexes even when reusing downloaded packages. apt still checks

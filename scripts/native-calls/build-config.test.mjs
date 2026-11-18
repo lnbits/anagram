@@ -62,7 +62,7 @@ test(
         await writeFile(commands, '');
         const result = spawnSync(
           'bash',
-          ['scripts/native-calls/linux-dependencies.sh', join(directory, 'cache'), hit],
+          ['scripts/native-calls/linux-dependencies.sh', join(directory, 'cache'), hit, directory],
           {
             env: {
               ...process.env,
@@ -76,12 +76,32 @@ test(
         const calls = (await readFile(commands, 'utf8')).trim().split('\n');
         assert.equal(calls.length, 2);
         assert.match(calls[0], / update$/);
+        assert.match(calls[0], /APT::Update::Error-Mode=any/);
+        assert.match(calls[0], /Dir::Etc::sourceparts=.*\/sources.list.d/);
         assert.match(calls[1], /Acquire::Retries=3/);
         assert.match(calls[1], /libavcodec60/);
         assert.match(calls[1], /libwebkit2gtk-4.1-dev/);
         assert.equal(calls[1].includes('ninja-build'), hit !== 'true');
         assert.equal(calls[1].includes('libavcodec-dev'), hit !== 'true');
       }
+      await writeFile(commands, '');
+      await writeFile(
+        join(directory, 'sudo'),
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$COMMANDS"\nexit 100\n',
+      );
+      const failed = spawnSync(
+        'bash',
+        ['scripts/native-calls/linux-dependencies.sh', join(directory, 'cache'), 'true', directory],
+        {
+          env: {
+            ...process.env,
+            PATH: `${directory}${delimiter}${process.env.PATH}`,
+            COMMANDS: commands,
+          },
+        },
+      );
+      assert.equal(failed.status, 100);
+      assert.equal((await readFile(commands, 'utf8')).trim().split('\n').length, 1);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

@@ -65,7 +65,10 @@ jobs:
         id: apt-cache
         with:
           path: ${{ runner.temp }}/native-call-apt/*.deb
-          key: native-call-apt-ubuntu24-${{ runner.arch }}-${{ steps.image.outputs.version }}-${{ hashFiles('scripts/native-calls/linux-dependencies.sh') }}
+          key: native-call-apt-v2-ubuntu24-${{ runner.arch }}-${{ hashFiles('scripts/native-calls/linux-dependencies.sh') }}-${{ steps.image.outputs.version }}
+          # Reuse signed/hash-checked packages across runner image revisions.
+          restore-keys: |
+            native-call-apt-v2-ubuntu24-${{ runner.arch }}-${{ hashFiles('scripts/native-calls/linux-dependencies.sh') }}-
       - name: Install native media and display dependencies
         timeout-minutes: 12
         env:

@@ -14,7 +14,8 @@ import { findLinuxProbeWindow } from './window.mjs';
 
 const linuxNative = process.argv.includes('--linux') && process.platform === 'linux';
 const browserOnly = process.argv.includes('--browser');
-// Linux group participants run in separate apps, matching their real audio graphs.
+// Each participant gets its own WebView, codec worker, audio graph and native IPC queue.
+const isolateGroups = linuxNative || (!browserOnly && process.platform === 'darwin');
 const settings = probeSettings(browserOnly);
 const { participants, scenario } = settings;
 const buildConfigPath = !browserOnly && process.env.ANAGRAM_CALL_TEST_BUILD_CONFIG;
@@ -40,7 +41,7 @@ await Promise.all(
 const directory = await mkdtemp(join(tmpdir(), 'anagram-native-calls-'));
 const { token } = config;
 const url = probeUrl(config);
-const cases = linuxNative && scenario === 'all' ? ['direct', 'group', 'legacy'] : [scenario];
+const cases = isolateGroups && scenario === 'all' ? ['direct', 'group', 'legacy'] : [scenario];
 let currentCase = cases[0],
   nextPeer = 0;
 const apps = [],
@@ -48,7 +49,7 @@ const apps = [],
   barriers = new Map();
 const queues = Array.from({ length: participants }, () => []),
   waiters = new Map();
-const isolated = () => linuxNative && currentCase === 'group';
+const isolated = () => isolateGroups && currentCase === 'group';
 const readJson = async (request) => {
   let body = '';
   for await (const chunk of request) {
@@ -102,11 +103,20 @@ const waitFor = async (check, milliseconds, description) => {
 };
 const startNativeProbe = async (pid) => {
   if (process.platform === 'darwin') {
+    const peer = apps.findIndex((client) => client.pid === pid);
+    const tile = isolated()
+      ? `set size of window 1 to {420, 540}
+         set position of window 1 to {${(peer % 2) * 420}, ${26 + Math.floor(peer / 2) * 280}}`
+      : '';
     command('osascript', [
       '-e',
-      `tell application "System Events" to set frontmost of first process whose unix id is ${pid} to true`,
-      '-e',
-      'tell application "System Events" to key code 49',
+      `tell application "System Events"
+      tell (first process whose unix id is ${pid})
+        set frontmost to true
+        ${tile}
+        key code 49
+      end tell
+    end tell`,
     ]);
   } else if (linuxNative) {
     const window = await findLinuxProbeWindow(pid, command);
@@ -390,9 +400,9 @@ try {
               async () =>
                 events
                   .slice(eventStart)
-                  .some((event) => event.peer === peer && event.stage === 'ready'),
+                  .some((event) => event.peer === peer && event.stage === 'started'),
               45000,
-              `Client ${peer} readiness`,
+              `Client ${peer} start gesture`,
             ),
           ]);
         }

@@ -285,9 +285,10 @@ pub struct CallConnection {
 impl CallConnection {
     // Amortize native WebView IPC latency without discarding ordinary bursts.
     // Datagram reads are cancellation-safe; stream reads must never use this.
-    pub async fn recv_audio_batch(&self) -> Result<Vec<u8>, JsError> {
+    pub async fn recv_audio_batch(&self, burst: bool) -> Result<Vec<u8>, JsError> {
+        let limit = if burst { 12 } else { 4 };
         let mut packets = std::collections::VecDeque::from([self.recv_audio().await?]);
-        for _ in 1..4 {
+        for _ in 1..limit {
             let Some(next) = self.conn.read_datagram().now_or_never() else {
                 break;
             };
@@ -296,7 +297,7 @@ impl CallConnection {
                 packets.push_back(data.to_vec());
             }
         }
-        let mut bytes = Vec::with_capacity(4408);
+        let mut bytes = Vec::with_capacity(packets.iter().map(|packet| packet.len() + 2).sum());
         for packet in packets {
             bytes.extend_from_slice(&(packet.len() as u16).to_be_bytes());
             bytes.extend_from_slice(&packet);

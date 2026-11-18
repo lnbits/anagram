@@ -15,6 +15,7 @@ function connection(handle: number): RawConnection {
   let reason: string | undefined;
   let closed = false;
   let audio: Uint8Array[] = [];
+  let burst = false;
   const send = (data: Uint8Array, lane: '0' | '1' | 'batch') =>
     invoke<void>('iroh_call_send', data, {
       headers: {
@@ -55,12 +56,15 @@ function connection(handle: number): RawConnection {
     async recv_audio() {
       if (closed) throw new Error('Call connection closed');
       if (!audio.length) {
-        const bytes = await receive('recvAudio');
+        // A full read signals a backlog. Drain more available datagrams on the next IPC round trip.
+        const limit = burst ? MAX_NATIVE_AUDIO_BATCH : 4;
+        const bytes = await receive('recvAudio', { burst });
         if (closed) throw new Error('Call connection closed');
-        if (!bytes.length || bytes.length > 4408) throw new Error('Invalid audio batch');
+        if (!bytes.length || bytes.length > limit * (MAX_AUDIO_PACKET_BYTES + 2))
+          throw new Error('Invalid audio batch');
         const frames: Uint8Array[] = [];
         for (let offset = 0; offset < bytes.length;) {
-          if (offset + 2 > bytes.length || frames.length === 4)
+          if (offset + 2 > bytes.length || frames.length === limit)
             throw new Error('Invalid audio batch');
           const size = (bytes[offset] << 8) | bytes[offset + 1];
           offset += 2;
@@ -75,6 +79,7 @@ function connection(handle: number): RawConnection {
           frames.push(bytes.subarray(offset, offset + size));
           offset += size;
         }
+        burst = frames.length >= 4;
         audio = frames;
       }
       return audio.shift()!;

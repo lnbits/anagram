@@ -302,7 +302,7 @@ pub async fn iroh_call(
         }
         "recvAudio" => {
             return connection
-                .recv_audio_batch()
+                .recv_audio_batch(args.get("burst").and_then(Value::as_bool) == Some(true))
                 .await
                 .map(Response::new)
                 .map_err(|e| e.to_string())

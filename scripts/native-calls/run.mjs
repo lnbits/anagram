@@ -70,6 +70,8 @@ let server,
   finish,
   reject;
 let result;
+let diagnosingFailure = false;
+let saveEvents = Promise.resolve();
 const resetResult = () => {
   result = new Promise((resolve, fail) => {
     finish = resolve;
@@ -277,7 +279,21 @@ try {
                   lastStage = data.stage;
                   console.log(lastStage);
                 }
-                await writeFile(join(artifacts, 'events.json'), JSON.stringify(events, null, 2));
+                if (isolated() && data.stage?.endsWith(': failed') && !diagnosingFailure) {
+                  diagnosingFailure = true;
+                  for (let peer = 0; peer < participants; peer++) {
+                    if (peer === data.peer) continue;
+                    queues[peer].push({ kind: 'snapshot' });
+                    waiters.get(peer)?.();
+                  }
+                }
+                // A failed observer may finish first while its sender waits at a barrier.
+                if (isolated() && data.done && !data.passed && diagnosingFailure)
+                  await new Promise((resolve) => setTimeout(resolve, 1600));
+                saveEvents = saveEvents.then(() =>
+                  writeFile(join(artifacts, 'events.json'), JSON.stringify(events, null, 2)),
+                );
+                await saveEvents;
                 response.writeHead(204).end();
                 if (data.done) {
                   if (!isolated() || !data.passed) finish(data);

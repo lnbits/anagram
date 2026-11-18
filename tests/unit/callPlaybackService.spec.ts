@@ -9,7 +9,9 @@ function media(currentTime: number, ranges: number[][], seeking = false) {
   });
   const element = {
     buffered: {
-      length: ranges.length,
+      get length() {
+        return ranges.length;
+      },
       start: (index: number) => ranges[index][0],
       end: (index: number) => ranges[index][1],
     },
@@ -195,6 +197,62 @@ describe('live call playback recovery', () => {
     const { element, seek } = media(8, [[0, 10]], true);
     followCallLive(element);
     expect(seek).not.toHaveBeenCalled();
+  });
+
+  it('lets video decode between uneven delivery bursts without losing later recovery', () => {
+    vi.useFakeTimers();
+    const ranges = [[0, 10]];
+    const { element, seek } = media(9, ranges);
+    followCallLive(element);
+    expect(seek).toHaveBeenCalledExactlyOnceWith(9.65);
+    // The previous seek has completed, but a fresh chunk arrives before the
+    // decoder has settled. Progress events and the watchdog must not seek again.
+    ranges[0][1] = 10.4;
+    for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(250);
+      followCallLive(element);
+    }
+    expect(seek).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(250);
+    followCallLive(element);
+    expect(seek).toHaveBeenCalledTimes(2);
+    expect(element.currentTime).toBeCloseTo(10.05);
+  });
+
+  it('still corrects large video drift and buffer gaps during the settling window', () => {
+    vi.useFakeTimers();
+    const ranges = [[0, 10]];
+    const { element, seek } = media(9, ranges);
+    followCallLive(element);
+    ranges[0][1] = 12;
+    followCallLive(element);
+    expect(seek).toHaveBeenCalledTimes(2);
+    expect(element.currentTime).toBeCloseTo(11.65);
+    ranges[0] = [12, 12.4];
+    followCallLive(element);
+    expect(seek).toHaveBeenCalledTimes(3);
+    expect(element.currentTime).toBeCloseTo(12.05);
+  });
+
+  it.each(['pause', 'empty', 'detach'])('clears video settling state on %s', (reason) => {
+    vi.useFakeTimers();
+    const ranges = [[0, 10]];
+    const { element, seek } = media(9, ranges);
+    const stop = watchCallLive(element);
+    followCallLive(element);
+    if (reason === 'detach') stop();
+    else {
+      if (reason === 'pause')
+        Object.defineProperty(element, 'paused', { value: true, writable: true });
+      else ranges.length = 0;
+      followCallLive(element);
+      if (reason === 'pause') Object.defineProperty(element, 'paused', { value: false });
+    }
+    ranges[0] = [0, 10.4];
+    followCallLive(element);
+    expect(seek).toHaveBeenCalledTimes(2);
+    stop();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('seeks into the latest playable range rather than a gap', () => {

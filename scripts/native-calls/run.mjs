@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createWriteStream } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { tmpdir, cpus, freemem, totalmem } from 'node:os';
 import { resolve, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'vite';
@@ -57,6 +57,30 @@ const readJson = async (request) => {
     if (body.length > 1000000) throw new Error('Oversized probe request');
   }
   return JSON.parse(body);
+};
+// Sample on reports in the driver process, never on a WebView's media thread.
+// CPU deltas distinguish an overloaded runner from a stalled media pipeline.
+let previousCpus = cpus();
+const resources = () => {
+  const current = cpus();
+  let idle = 0,
+    total = 0;
+  for (let i = 0; i < current.length; i++) {
+    const before = previousCpus[i]?.times;
+    if (!before) continue;
+    for (const [kind, value] of Object.entries(current[i].times)) {
+      const delta = Math.max(0, value - before[kind]);
+      total += delta;
+      if (kind === 'idle') idle += delta;
+    }
+  }
+  previousCpus = current;
+  return {
+    cpuCount: current.length,
+    cpuBusyPercent: total ? 100 * (1 - idle / total) : null,
+    freeMemoryBytes: freemem(),
+    totalMemoryBytes: totalmem(),
+  };
 };
 const children = [],
   logs = [],
@@ -264,7 +288,7 @@ try {
               }
               if (target.pathname === '/__native_calls/report' && request.method === 'POST') {
                 const data = await readJson(request);
-                events.push({ at: new Date().toISOString(), ...data });
+                events.push({ at: new Date().toISOString(), ...data, resources: resources() });
                 if (data.stage) {
                   lastStage = data.stage;
                   console.log(lastStage);

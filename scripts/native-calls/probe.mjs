@@ -124,6 +124,17 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
       frames: p.frames,
       pictureChanges: p.pictureChanges,
       audioSamples: p.audioSamples,
+      audioMeterTicks: p.audioMeterTicks,
+      maxAudioMeterGapMs: p.maxAudioMeterGapMs,
+      audioIdleMs: p.lastAudioAt === undefined ? null : performance.now() - p.lastAudioAt,
+      decodedFrames: p.decoder?.frames,
+      decodeIdleMs: p.decoder?.at === undefined ? null : performance.now() - p.decoder.at,
+      decoderState: p.decoder?.instance?.state,
+      decodeQueueSize: p.decoder?.instance?.decodeQueueSize,
+      width: p.element.videoWidth,
+      height: p.element.videoHeight,
+      seeking: p.element.seeking,
+      playbackRate: p.element.playbackRate,
       paused: p.element.paused,
       playError: p.playError,
       readyState: p.element.readyState,
@@ -288,7 +299,30 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
             if (!stopping) errors.push(message);
             onError();
           };
-          const receiver = createCallMediaReceiver(mime, () => failed(`receiver ${i}: ${mime}`));
+          // Count decoder outputs without retaining frames or reading pixels.
+          // This distinguishes packet/codec stalls from canvas presentation stalls.
+          const Decoder = globalThis.VideoDecoder;
+          const decoder = { frames: 0, at: undefined, instance: undefined };
+          let receiver;
+          try {
+            if (mime === 'video/vp8;anagram=1')
+              globalThis.VideoDecoder = class extends Decoder {
+                constructor(init) {
+                  super({
+                    ...init,
+                    output(frame) {
+                      decoder.frames++;
+                      decoder.at = performance.now();
+                      init.output(frame);
+                    },
+                  });
+                  decoder.instance = this;
+                }
+              };
+            receiver = createCallMediaReceiver(mime, () => failed(`receiver ${i}: ${mime}`));
+          } finally {
+            if (Decoder) globalThis.VideoDecoder = Decoder;
+          }
           const video = mime.startsWith('video/');
           // WebKitGTK can overflow its sample offsets if a metered element is
           // reused for a new MSE timeline. The app does not attach this test-only
@@ -306,6 +340,10 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
             pictureChanges: 0,
             chunks: 0,
             audioSamples: 0,
+            audioMeterTicks: 0,
+            maxAudioMeterGapMs: 0,
+            lastAudioAt: undefined,
+            decoder: mime === 'video/vp8;anagram=1' ? decoder : undefined,
           };
           players.add(player);
           const stopFollowing = watchCallLive(element, video ? 'video' : 'audio');
@@ -353,8 +391,13 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
             silent.gain.value = 0;
             audioSource.connect(analyser).connect(silent).connect(monitorContext.destination);
             const samples = new Float32Array(analyser.fftSize);
-            let lastAudioTime = 0;
+            let lastAudioTime = 0,
+              lastMeterAt = performance.now();
             audioTimer = setInterval(() => {
+              const now = performance.now();
+              player.audioMeterTicks++;
+              player.maxAudioMeterGapMs = Math.max(player.maxAudioMeterGapMs, now - lastMeterAt);
+              lastMeterAt = now;
               const time = element.currentTime;
               analyser.getFloatTimeDomainData(samples);
               // WebKit may retain the analyser's last block after a stalled MSE
@@ -363,8 +406,10 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
                 time > lastAudioTime &&
                 !element.paused &&
                 samples.some((sample) => Math.abs(sample) > 0.01)
-              )
+              ) {
                 player.audioSamples++;
+                player.lastAudioAt = now;
+              }
               lastAudioTime = time;
             }, 100);
           }
@@ -482,6 +527,7 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
             frames: p.frames,
             pictureChanges: p.pictureChanges,
             audioSamples: p.audioSamples,
+            audioMeterTicks: p.audioMeterTicks,
           },
         ]),
       );
@@ -502,13 +548,14 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
           );
           assert(
             p.video || p.audioSamples > previous.audioSamples + 3,
-            () => `Decoded audio went silent: ${JSON.stringify(snapshot())}`,
+            () => `Decoded audio went silent: ${JSON.stringify({ previous, ...snapshot() })}`,
           );
           baseline.set(p, {
             time: p.element.currentTime,
             frames: p.frames,
             pictureChanges: p.pictureChanges,
             audioSamples: p.audioSamples,
+            audioMeterTicks: p.audioMeterTicks,
           });
         }
         await stage(`${name} ${5 * (sample + 1)}s`);

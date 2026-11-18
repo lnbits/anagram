@@ -3,7 +3,7 @@ import NostrClient from '#src/lib/nostr/client.ts';
 import { createCallSignalingRuntime } from '#src/stores/nostr/callSignalingRuntime.ts';
 import { CALL_PROTOCOL, CALL_SIGNAL_KIND, type CallSignal } from '#src/types/call.ts';
 import { ROOM_PROTOCOL } from '#src/types/callRoom.ts';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('#src/services/contactsService.ts', () => ({
   contactsService: {
@@ -15,8 +15,82 @@ vi.mock('#src/services/contactsService.ts', () => ({
     })),
   },
 }));
+afterEach(() => vi.mocked(contactsService.getContactByPublicKey).mockReset().mockResolvedValue({
+  type: 'user', meta: {}, sendMessagesToAppRelays: false,
+  relays: [{ url: 'wss://recipient.example', read: true, write: true }],
+} as never));
 
 describe('call signaling publication', () => {
+  it.each(['call', 'room'])('sends selected DR %s controls without legacy routes or discovery', async (kind) => {
+    const peer = 'a'.repeat(64), own = 'b'.repeat(64);
+    vi.mocked(contactsService.getContactByPublicKey).mockResolvedValueOnce({ type: 'user', meta: {}, relays: [] } as never);
+    const refreshRelays = vi.fn(() => new Promise<void>(() => {}));
+    const getAppRelays = vi.fn(() => []);
+    const sendRumor = vi.fn(), sendRatchet = vi.fn(async (_peer, event) => event);
+    const runtime = createCallSignalingRuntime({ ndk: new NostrClient(), getOwnPubkey: () => own,
+      isBlocked: () => false, refreshRelays, getAppRelays, sendRumor, sendRatchet });
+    if (kind === 'call') await runtime.sendCallSignal(peer, {
+      protocol: CALL_PROTOCOL, action: 'end', reason: 'hangup', callId: crypto.randomUUID(),
+      mode: 'audio', expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    else await runtime.sendRoomSignal(peer, { protocol: ROOM_PROTOCOL, action: 'closed',
+      roomId: crypto.randomUUID(), senderSession: crypto.randomUUID(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString() }, []);
+    expect(sendRatchet).toHaveBeenCalledOnce();
+    expect(sendRumor).not.toHaveBeenCalled();
+    expect(refreshRelays).not.toHaveBeenCalled();
+    expect(getAppRelays).not.toHaveBeenCalled();
+  });
+
+  it.each([['call', 'group'], ['call', 'blocked'], ['room', 'group'], ['room', 'blocked']])(
+    'rejects %s controls for a local %s peer before either transport', async (kind, reason) => {
+      const sendRatchet = vi.fn(async (_peer, event) => event), sendRumor = vi.fn(), refreshRelays = vi.fn();
+      if (reason === 'group') vi.mocked(contactsService.getContactByPublicKey)
+        .mockResolvedValueOnce({ type: 'group', meta: {}, relays: [] } as never);
+      const runtime = createCallSignalingRuntime({ ndk: new NostrClient(), getOwnPubkey: () => 'b'.repeat(64),
+        isBlocked: () => reason === 'blocked', refreshRelays, getAppRelays: () => [], sendRumor, sendRatchet });
+      const sending = kind === 'call' ? runtime.sendCallSignal('a'.repeat(64), {
+        protocol: CALL_PROTOCOL, action: 'end', reason: 'hangup', callId: crypto.randomUUID(),
+        mode: 'audio', expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }) : runtime.sendRoomSignal('a'.repeat(64), { protocol: ROOM_PROTOCOL, action: 'closed',
+        roomId: crypto.randomUUID(), senderSession: crypto.randomUUID(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString() }, ['wss://room.example']);
+      await expect(sending).rejects.toThrow();
+      expect(sendRatchet).not.toHaveBeenCalled();
+      expect(sendRumor).not.toHaveBeenCalled();
+      expect(refreshRelays).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['call', 'room'])('uses the selected ratchet for %s controls without a gift-wrap fallback', async (kind) => {
+    const own = 'b'.repeat(64), peer = 'a'.repeat(64);
+    const sendRumor = vi.fn();
+    let failure: Error | undefined;
+    const sendRatchet = vi.fn(async (_peer, event) => {
+      if (failure) throw failure;
+      return event;
+    });
+    const runtime = createCallSignalingRuntime({
+      ndk: new NostrClient(), getOwnPubkey: () => own, isBlocked: () => false,
+      refreshRelays: async () => {}, getAppRelays: () => [], sendRumor, sendRatchet,
+    });
+    const send = () => kind === 'call' ? runtime.sendCallSignal(peer, {
+      protocol: CALL_PROTOCOL, action: 'end', reason: 'hangup', callId: crypto.randomUUID(),
+      mode: 'audio', expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }) : runtime.sendRoomSignal(peer, {
+      protocol: ROOM_PROTOCOL, action: 'closed', roomId: crypto.randomUUID(),
+      senderSession: crypto.randomUUID(), expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }, ['wss://room.example']);
+    await send();
+    expect(sendRatchet).toHaveBeenCalledWith(peer, expect.objectContaining({
+      kind: CALL_SIGNAL_KIND, pubkey: own, tags: [['p', peer]],
+    }));
+    expect(sendRumor).not.toHaveBeenCalled();
+    failure = new Error('Ratchet session unavailable');
+    await expect(send()).rejects.toThrow(failure);
+    expect(sendRumor).not.toHaveBeenCalled();
+  });
+
   it('sends the dedicated rumor inside a recipient-only gift wrap', async () => {
     const peer = 'a'.repeat(64);
     const own = 'b'.repeat(64);
@@ -36,6 +110,7 @@ describe('call signaling publication', () => {
       refreshRelays: vi.fn().mockResolvedValue(undefined),
       getAppRelays: () => [],
       sendRumor,
+      sendRatchet: async () => null,
     });
     await runtime.sendCallSignal(peer.toUpperCase(), signal);
     expect(sendRumor).toHaveBeenCalledWith(
@@ -61,6 +136,7 @@ describe('call signaling publication', () => {
       refreshRelays,
       getAppRelays: () => [],
       sendRumor,
+      sendRatchet: async () => null,
     });
     const signal = {
       protocol: ROOM_PROTOCOL as typeof ROOM_PROTOCOL,
@@ -97,6 +173,7 @@ describe('call signaling publication', () => {
       },
       getAppRelays: () => [],
       sendRumor,
+      sendRatchet: async () => null,
     });
     await runtime.sendCallSignal('a'.repeat(64), {
       protocol: CALL_PROTOCOL,
@@ -129,6 +206,7 @@ describe('call signaling publication', () => {
         refreshRelays: async () => {},
         getAppRelays: () => [],
         sendRumor,
+        sendRatchet: async () => null,
       });
       await runtime.sendCallSignal('a'.repeat(64), {
         protocol: CALL_PROTOCOL,
@@ -166,6 +244,7 @@ describe('call signaling publication', () => {
         },
         getAppRelays: () => ['wss://app.example'],
         sendRumor,
+        sendRatchet: async () => null,
       });
       await runtime.sendCallSignal('a'.repeat(64), {
         protocol: CALL_PROTOCOL,
@@ -197,6 +276,7 @@ describe('call signaling publication', () => {
       },
       getAppRelays: () => [],
       sendRumor,
+      sendRatchet: async () => null,
     });
     await expect(
       runtime.sendCallSignal('a'.repeat(64), {
@@ -221,6 +301,7 @@ it('sends through cached routes while metadata discovery is stalled', async () =
     refreshRelays: () => new Promise(() => {}),
     getAppRelays: () => [],
     sendRumor,
+    sendRatchet: async () => null,
   });
   await runtime.sendCallSignal('a'.repeat(64), {
     protocol: CALL_PROTOCOL,
@@ -256,6 +337,7 @@ it('retries failed cached delivery using freshly discovered routes', async () =>
     refreshRelays: async () => {},
     getAppRelays: () => [],
     sendRumor,
+    sendRatchet: async () => null,
   });
   await runtime.sendCallSignal('a'.repeat(64), {
     protocol: CALL_PROTOCOL,

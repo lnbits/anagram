@@ -62,6 +62,22 @@ afterEach(() => {
 });
 
 describe('bot interaction logout cleanup', () => {
+  it('deletes stored ratchet sessions even when database enumeration is unavailable', async () => {
+    const { RatchetStorage } = await import('#src/stores/nostr/ratchetStorage.ts');
+    const store = new RatchetStorage(owner);
+    await store.put('session', 'private session state');
+    const list = indexedDB.databases.bind(indexedDB);
+    expect((await list()).some(({ name }) => name === 'anagram-ratchet')).toBe(true);
+    Object.defineProperty(indexedDB, 'databases', { value: undefined });
+    const { clearPersistedAppState } = await import('#src/utils/logoutCleanup.ts');
+    try {
+      await clearPersistedAppState();
+      expect(await list()).toEqual([]);
+    } finally {
+      await store.close();
+    }
+  });
+
   it('retains unfinished logout across restart and finds account databases without enumeration', async () => {
     const { PublicGroupData } = await import('#src/services/publicGroupData.ts');
     const first = new PublicGroupData(owner),

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, it } from 'vitest';
@@ -45,7 +45,7 @@ it.each([
 ])(
   'preserves packaged hooks, arguments and working directory with $name',
   ({ backend, session, display, expected }) => {
-    const dir = mkdtempSync(join(tmpdir(), 'anagram launcher '));
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'anagram launcher ')));
     try {
       mkdirSync(join(dir, 'usr/bin'), { recursive: true });
       mkdirSync(join(dir, 'apprun-hooks'));

@@ -260,6 +260,7 @@ export function createOutboundMessageReplayRuntime({
         }
 
         const message = await chatDataService.getMessageByEventId(outboundEvent.event.id);
+        if (message?.meta?.protocol === 'ndr') continue;
         if (!message) {
           skippedEventCount += 1;
           logMessageRelayDiagnostics(

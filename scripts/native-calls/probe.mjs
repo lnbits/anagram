@@ -50,6 +50,22 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
     errors = [];
   const sendCosts = ids.map(() => ({ count: 0, totalMs: 0, maxMs: 0 }));
   const recordings = new Set();
+  const transitions = [];
+  const trace = (event, details) => {
+    if (transitions.length === 192) transitions.shift();
+    transitions.push({ ms: Math.round(performance.now() - clockStart), event, ...details });
+  };
+  // Keep negotiation metadata only. Room links and signal payloads contain secrets.
+  const traceSignal = (direction, peer, signal) => {
+    trace(direction, {
+      peer: ids.indexOf(peer),
+      action: signal.action,
+      media: signal.signal?.action,
+      reason: signal.reason ?? signal.signal?.reason,
+      call: signal.signal?.callId,
+      revision: signal.revision,
+    });
+  };
   let stopping = false;
   // New test elements may need the same user gesture as the app's Play audio
   // recovery button. The runner supplies a real keyboard event, never a policy override.
@@ -72,6 +88,13 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
       return null;
     }
   };
+  const remotePeer = (p) => {
+    if (kind === 'direct') return 1 - p.peer;
+    const member = calls[p.peer]?.participants.find(
+      (m) => m.audioUrl === p.url || m.videoUrl === p.url || m.screenUrl === p.url,
+    );
+    return member && ids.indexOf(member.pubkey);
+  };
   const snapshot = () => ({
     elapsedSeconds: (performance.now() - clockStart) / 1000,
     sourceSeconds: context.currentTime - audioStart,
@@ -79,7 +102,16 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
     kind,
     legacy,
     phases: calls.map((c) => c.session?.phase),
-    failures: calls.map((c) => c.failureDetail),
+    failures: calls.map((c) => c.failureDetail || c.error),
+    participants: calls.map((c) =>
+      c.participants?.map((p) => ({
+        peer: ids.indexOf(p.pubkey),
+        phase: p.phase,
+        error: p.error || p.deviceError,
+        muted: p.microphoneMuted,
+      })),
+    ),
+    transitions,
     errors,
     sourceCanvases: [...document.querySelectorAll('#sources canvas')].map((canvas) => ({
       width: canvas.width,
@@ -129,6 +161,7 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
             calls[p.peer]?.participants.some((member) => member.screenUrl === p.url)
           ? 'screen'
           : 'camera',
+      remotePeer: remotePeer(p),
       audioSamples: p.audioSamples,
       paused: p.element.paused,
       playError: p.playError,
@@ -209,6 +242,7 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
     return response.json();
   };
   const sendWire = async (kind, to, signal) => {
+    traceSignal('send', to, signal);
     const response = await fetch(`/__native_calls/signals?token=${token}`, {
       method: 'POST',
       body: JSON.stringify({ kind, peer: ids.indexOf(to), from: ids[ownPeer], signal }),
@@ -229,6 +263,7 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
             await report({ diagnostic: true, ...snapshot() });
             continue;
           }
+          traceSignal('receive', message.from, message.signal);
           const call = calls[ownPeer];
           void Promise.resolve(
             message.kind === 'media'
@@ -256,8 +291,32 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
         getCamera: async () => camera(),
         getScreen: async () => camera(1280, 720),
         createEndpoint: async () => {
+          trace('endpoint-create', { peer: i });
           const endpoint = await createIrohCallEndpoint(['https://127.0.0.1:7004/']);
-          const wrap = (connection) => {
+          const connect = async (method, args) => {
+            const call = method === 'connect' ? args[2] : args[1];
+            trace(method, { call });
+            let connection;
+            try {
+              connection = await endpoint[method](...args);
+              trace('linked', { call });
+            } catch (error) {
+              trace('link-error', { call, error: String(error) });
+              throw error;
+            }
+            const sendFrame = connection.send;
+            connection.send = async (bytes) => {
+              if (bytes[0] !== 8) return sendFrame(bytes);
+              trace('mute-send', { call, value: bytes[1] });
+              await sendFrame(bytes);
+              trace('mute-sent', { call, value: bytes[1] });
+            };
+            const recvFrame = connection.recv;
+            connection.recv = async () => {
+              const bytes = await recvFrame();
+              if (bytes[0] === 8) trace('mute-received', { call, value: bytes[1] });
+              return bytes;
+            };
             connections[i].push(connection);
             for (const method of ['sendAudio', 'sendAudioBatch']) {
               const send = connection[method];
@@ -275,8 +334,12 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
           };
           return {
             ...endpoint,
-            connect: async (...args) => wrap(await endpoint.connect(...args)),
-            accept: async (...args) => wrap(await endpoint.accept(...args)),
+            online: async () => {
+              await endpoint.online();
+              trace('endpoint-online', { peer: i });
+            },
+            connect: (...args) => connect('connect', args),
+            accept: (...args) => connect('accept', args),
           };
         },
         record: (stream, mime, send, onError, options) => {

@@ -1,3 +1,4 @@
+import { createAnonymousRelayDiscovery } from './anonymousRelayDiscovery.ts';
 import { paceRelayRequests } from '#src/lib/nostr/relayPacing.ts';
 import { normalizeRumor } from '#src/lib/nostr/normalizeRumor.ts';
 import { guardRelayAuthentication } from '#src/lib/nostr/relayAuthentication.ts';
@@ -21,7 +22,6 @@ import {
 import { BunkerSigner, type BunkerPointer } from 'nostr-tools/nip46';
 import { normalizeURL } from 'nostr-tools/utils';
 import {
-  createAnonymousRelayDiscovery,
   createPrivateRelayPublisher,
   isPrivateRelayEvent,
   splitRelayDiscoveryFilters,

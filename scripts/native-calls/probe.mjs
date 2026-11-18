@@ -523,7 +523,16 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
           assert(
             !p.video ||
               (p.frames > previous.frames + 2 && p.pictureChanges > previous.pictureChanges + 2),
-            () => `Video stopped displaying: ${JSON.stringify(snapshot())}`,
+            () =>
+              `Video stopped displaying: ${JSON.stringify({
+                ...snapshot(),
+                stalledPlayer: {
+                  index: [...players].indexOf(p),
+                  previous,
+                  frames: p.frames,
+                  pictureChanges: p.pictureChanges,
+                },
+              })}`,
           );
           assert(
             p.video || p.audioSamples > previous.audioSamples + 3,

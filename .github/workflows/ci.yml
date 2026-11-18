@@ -9,14 +9,9 @@ permissions:
 concurrency:
   group: checks-${{ github.ref }}
   # Let a main run finish if it has already started deploying the site.
-  # During PR #122 diagnosis, let running checks finish before the focused rerun.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event.pull_request.number != 122 }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
-  # TEMPORARY PR #122 focus: these jobs passed on e4d9732.
-  # Remove these PR-specific skips and rerun the full suite after native fixes.
-  # Main, other PRs and manual workflow_dispatch runs retain full coverage.
   static-checks:
-    if: github.event.pull_request.number != 122
     name: Static checks
     runs-on: ubuntu-24.04
     steps:
@@ -32,7 +27,6 @@ jobs:
       - run: npm run verify:iroh
       - run: npm run quality:all
   unit-tests:
-    if: github.event.pull_request.number != 122
     name: Unit tests
     runs-on: ubuntu-24.04
     steps:
@@ -59,7 +53,6 @@ jobs:
       - name: Test mobile packaging and startup guards
         run: python3 -B -m unittest discover -s scripts/release-smoke -p 'test_*.py'
   web-build:
-    if: github.event.pull_request.number != 122
     name: Web build
     runs-on: ubuntu-24.04
     steps:
@@ -88,7 +81,6 @@ jobs:
         with:
           path: build/
   pwa-tests:
-    if: github.event.pull_request.number != 122
     name: PWA tests
     needs: web-build
     runs-on: ubuntu-24.04
@@ -115,7 +107,6 @@ jobs:
           overwrite: true
           retention-days: 7
   messaging-tests:
-    if: github.event.pull_request.number != 122
     name: Messaging tests
     runs-on: ubuntu-24.04
     steps:
@@ -137,7 +128,6 @@ jobs:
           overwrite: true
           retention-days: 7
   recovery-security-tests:
-    if: github.event.pull_request.number != 122
     name: Recovery and security tests
     runs-on: ubuntu-24.04
     steps:

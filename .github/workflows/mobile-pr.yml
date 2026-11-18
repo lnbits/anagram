@@ -21,8 +21,7 @@ permissions:
   contents: read
 concurrency:
   group: mobile-pr-${{ github.ref }}
-  # TEMPORARY PR #122 focus: preserve results from jobs already running.
-  cancel-in-progress: ${{ github.event.pull_request.number != 122 }}
+  cancel-in-progress: true
 jobs:
   android-build:
     name: Android APK build
@@ -134,8 +133,6 @@ jobs:
           overwrite: true
           retention-days: 7
   ios-packaging-checks:
-    # TEMPORARY PR #122 focus: passed on e4d9732; restore for final validation.
-    if: github.event.pull_request.number != 122
     name: iPhone packaging and DNS checks
     runs-on: macos-15
     timeout-minutes: 10
@@ -147,8 +144,6 @@ jobs:
           xcrun clang -Wall -Wextra -Werror scripts/release-smoke/test_ios_dns.c -o /tmp/anagram-ios-dns-test
           /tmp/anagram-ios-dns-test
   ios-build:
-    # TEMPORARY PR #122 focus: build and startup passed on e4d9732.
-    if: github.event.pull_request.number != 122
     name: iPhone simulator build
     runs-on: macos-15
     timeout-minutes: 60
@@ -206,7 +201,6 @@ jobs:
           overwrite: true
           retention-days: 7
   ios-startup:
-    if: github.event.pull_request.number != 122
     name: iPhone simulator startup
     needs: ios-build
     runs-on: macos-15

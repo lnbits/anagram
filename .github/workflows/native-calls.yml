@@ -26,11 +26,8 @@ permissions:
   contents: read
 concurrency:
   group: native-calls-${{ github.ref }}
-  # TEMPORARY PR #122 focus: preserve results from jobs already running.
-  cancel-in-progress: ${{ github.event.pull_request.number != 122 }}
+  cancel-in-progress: true
 jobs:
-  # PR #122 temporarily skips proven-green checks in the other workflows.
-  # Keep the requested four-participant Linux case and the macOS/Windows cases.
   linux-calls:
     runs-on: ubuntu-24.04
     timeout-minutes: 60

@@ -28,6 +28,33 @@ function media(currentTime: number, ranges: number[][], seeking = false) {
 }
 
 describe('live call playback recovery', () => {
+  it('retries its own stalled video seek only after the deadline and substantial drift', () => {
+    vi.useFakeTimers();
+    const ranges = [[0, 3]];
+    const { element, seek } = media(2, ranges);
+    const stop = watchCallLive(element);
+    vi.advanceTimersByTime(250);
+    expect(element.currentTime).toBeCloseTo(2.65);
+    // WebKit can stay seeking at the beginning of a new buffered range while
+    // newer frames continue arriving. A pending seek must not block recovery forever.
+    Object.defineProperty(element, 'seeking', { value: true });
+    ranges.splice(0, 1, [0, 2.5], [2.65, 5]);
+    vi.advanceTimersByTime(1250);
+    expect(seek).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(250);
+    expect(element.currentTime).toBeCloseTo(4.65);
+    expect(seek).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1500);
+    expect(seek).toHaveBeenCalledTimes(2); // No drift: give the decoder time.
+    ranges[1][1] = 7;
+    vi.advanceTimersByTime(250);
+    expect(element.currentTime).toBeCloseTo(6.65);
+    stop();
+    ranges[1][1] = 10;
+    followCallLive(element);
+    expect(seek).toHaveBeenCalledTimes(3); // Detach forgets the pending seek.
+  });
+
   it('waits for playback to resume before catching up a paused stream', () => {
     vi.useFakeTimers();
     const ranges = [[0, 10]];

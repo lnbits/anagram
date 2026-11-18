@@ -35,7 +35,7 @@ export function followCallLive(
   // of repeatedly moving the paused cursor on every timer/progress event.
   if (!element) return;
   if (element.paused || !element.buffered.length) videoSeekAt.delete(element);
-  if (element.paused || element.seeking || !element.buffered.length) {
+  if (element.paused || !element.buffered.length) {
     resetAudioRate(element);
     return;
   }
@@ -43,6 +43,20 @@ export function followCallLive(
   const start = element.buffered.start(latest);
   const end = element.buffered.end(latest);
   const lag = end - element.currentTime;
+  if (element.seeking) {
+    resetAudioRate(element);
+    // WebKit can retain a pending seek at a buffer gap indefinitely. Retry only
+    // our own video correction, after settling time and substantial new backlog.
+    // Ordinary seeks and audio must still finish without interference.
+    const started = videoSeekAt.get(element);
+    if (
+      kind !== 'video' ||
+      started === undefined ||
+      performance.now() - started < 1500 ||
+      lag <= 1.5
+    )
+      return;
+  }
   if (kind === 'audio') {
     // Repeated seeks make the decoder rebuffer and can add as much delay as
     // they remove. Drain modest backlog smoothly, with hysteresis so chunk

@@ -453,7 +453,7 @@ export function recordPacketVideo(
             if (encoder.encodeQueueSize >= 2 || now - lastFrame < (1000 / fps) * 0.9) continue;
             // If nobody can accept a frame, skip encoding it. Besides wasting
             // CPU, encoding unseen deltas would force another costly keyframe.
-            if (![...consumers].some((c) => !c.stopped && (!c.busy || !c.pending))) continue;
+            if (![...consumers].some((c) => !c.stopped && !c.busy)) continue;
             if (now - congestedAt > 5000 && currentBitrate < bitrate) {
               currentBitrate = Math.min(bitrate, Math.floor(currentBitrate * 1.1));
               congestedAt = now;

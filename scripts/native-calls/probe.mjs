@@ -1,5 +1,6 @@
 // Loaded only by run.mjs, inside the real Tauri WebView (or Chromium for harness checks).
 import { isTauri } from '@tauri-apps/api/core';
+import { assert } from './assert.mjs';
 import { createCallRuntime } from '/src/stores/nostr/callRuntime.svelte.ts';
 import { createCallRoomRuntime } from '/src/stores/nostr/callRoomRuntime.svelte.ts';
 import { createIrohCallEndpoint } from '/src/services/irohCallTransport.ts';
@@ -27,9 +28,6 @@ const report = async (data) => {
   });
 };
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const assert = (condition, message) => {
-  if (!condition) throw new Error(message);
-};
 const wait = async (check, description) => {
   const deadline = performance.now() + 30000;
   while (!check()) {
@@ -61,6 +59,19 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
   window.addEventListener('keydown', resumePlayback);
   const clockStart = performance.now();
   const audioStart = context.currentTime;
+  // Fixture-only pixel diagnostics distinguish a frozen capture from transport
+  // or decoder stalls when a native quality/profile change replaces the reader.
+  const pixel = (source) => {
+    try {
+      const sample = document.createElement('canvas');
+      sample.width = sample.height = 1;
+      const paint = sample.getContext('2d', { willReadFrequently: true });
+      paint.drawImage(source, 0, 0, 1, 1);
+      return [...paint.getImageData(0, 0, 1, 1).data.slice(0, 3)];
+    } catch {
+      return null;
+    }
+  };
   const snapshot = () => ({
     elapsedSeconds: (performance.now() - clockStart) / 1000,
     sourceSeconds: context.currentTime - audioStart,
@@ -70,12 +81,24 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
     phases: calls.map((c) => c.session?.phase),
     failures: calls.map((c) => c.failureDetail),
     errors,
+    sourceCanvases: [...document.querySelectorAll('#sources canvas')].map((canvas) => ({
+      width: canvas.width,
+      height: canvas.height,
+      pixel: pixel(canvas),
+    })),
     captureVideos: [...document.querySelectorAll('video[aria-hidden="true"]')].map((video) => ({
       time: video.currentTime,
       paused: video.paused,
       readyState: video.readyState,
       width: video.videoWidth,
       height: video.videoHeight,
+      pixel: pixel(video),
+      tracks: video.srcObject?.getVideoTracks().map((track) => ({
+        enabled: track.enabled,
+        muted: track.muted,
+        state: track.readyState,
+        settings: track.getSettings(),
+      })),
     })),
     packetAudio: callPacketAudioDiagnostics(),
     audioSend: sendCosts.map((s) => ({
@@ -113,7 +136,7 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
   });
   const stage = (name) => report({ stage: `${kind}: ${name}`, ...snapshot() });
   const healthy = () => {
-    assert(!errors.length, JSON.stringify(snapshot()));
+    assert(!errors.length, () => JSON.stringify(snapshot()));
     return (
       localPeers.every((i) => calls[i]) &&
       calls.every(
@@ -464,22 +487,22 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
       );
       for (let sample = 0; sample < 5; sample++) {
         await delay(5000);
-        assert(healthy(), `Call ended during ${name}: ${JSON.stringify(snapshot())}`);
+        assert(healthy(), () => `Call ended during ${name}: ${JSON.stringify(snapshot())}`);
         assert(players.size === playerCount, 'A media lane disappeared');
         for (const p of players) {
           const previous = baseline.get(p);
           assert(
             previous && !p.element.paused && p.element.currentTime > previous.time + 0.5,
-            `Playback stalled: ${JSON.stringify(snapshot())}`,
+            () => `Playback stalled: ${JSON.stringify(snapshot())}`,
           );
           assert(
             !p.video ||
               (p.frames > previous.frames + 2 && p.pictureChanges > previous.pictureChanges + 2),
-            `Video stopped displaying: ${JSON.stringify(snapshot())}`,
+            () => `Video stopped displaying: ${JSON.stringify(snapshot())}`,
           );
           assert(
             p.video || p.audioSamples > previous.audioSamples + 3,
-            `Decoded audio went silent: ${JSON.stringify(snapshot())}`,
+            () => `Decoded audio went silent: ${JSON.stringify(snapshot())}`,
           );
           baseline.set(p, {
             time: p.element.currentTime,
@@ -494,7 +517,7 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
         const b = p.element.buffered;
         assert(
           p.element.srcObject || (b.length && b.end(b.length - 1) - b.start(0) < 15),
-          `Unbounded playback buffer: ${JSON.stringify(snapshot())}`,
+          () => `Unbounded playback buffer: ${JSON.stringify(snapshot())}`,
         );
       }
     };
@@ -545,7 +568,8 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
     }));
     assert(
       muteChecks.every((check) => (check.samples === 0) === check.muted),
-      `Microphone mute did not silence exactly its receivers: ${JSON.stringify({ muteChecks, ...snapshot() })}`,
+      () =>
+        `Microphone mute did not silence exactly its receivers: ${JSON.stringify({ muteChecks, ...snapshot() })}`,
     );
     await barrier('mute-verified');
     await stage('muted; disconnecting one peer connection');

@@ -281,8 +281,13 @@ export function recordPacketAudio(
     } finally {
       inFlight--;
       if (!closed) {
-        const next = pending.shift(performance.now());
-        if (next) void transmit(next);
+        // Track muting silences future capture, not speech already queued for
+        // this peer. Do not drain that backlog after a slow IPC send completes.
+        if (!track.enabled) pending.clear();
+        else {
+          const next = pending.shift(performance.now());
+          if (next) void transmit(next);
+        }
       }
     }
   };
@@ -301,6 +306,12 @@ export function recordPacketAudio(
     close,
     packet(data) {
       if (closed) return;
+      // Encoded messages may arrive after the source was muted. The encoder is
+      // still acknowledged upstream, but none of this speech should be sent.
+      if (!track.enabled) {
+        pending.clear();
+        return;
+      }
       // Retain two concurrent sends, but preserve speech queued behind a brief
       // IPC stall. Each peer drains independently of every other participant.
       if (inFlight >= 2) pending.push(data, performance.now());

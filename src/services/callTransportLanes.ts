@@ -16,9 +16,29 @@ export interface RawCallEndpoint extends CallEndpoint {
 // and never drain an unbounded backlog into JavaScript while another lane waits.
 export function mergeCallLanes(connection: RawConnection): CallConnection {
   type Result = { lane: number; data?: Uint8Array; error?: unknown };
-  const pending: Array<Promise<Result> | undefined> = [];
+  const pending = new Set<number>();
+  const received: Array<Result | undefined> = [];
+  let waiting: Promise<void> | undefined;
+  let wake: (() => void) | undefined;
   let ready = false;
   let closed = false;
+  function notify() {
+    waiting = undefined;
+    wake?.();
+    wake = undefined;
+  }
+  async function readLane(lane: number) {
+    pending.add(lane);
+    let result: Result;
+    try {
+      result = { lane, data: await connection.recv_lane(lane) };
+    } catch (error) {
+      result = { lane, error };
+    }
+    if (closed) return;
+    received[lane] = result;
+    notify();
+  }
   return {
     ...(connection.stats_json
       ? { transportStats: async () => JSON.parse(connection.stats_json!()) }
@@ -35,23 +55,31 @@ export function mergeCallLanes(connection: RawConnection): CallConnection {
     ...(connection.sendAudioBatch ? { sendAudioBatch: connection.sendAudioBatch } : {}),
     send: (data) => connection.send(data),
     async recv() {
-      if (closed) throw new Error('Call connection closed');
-      const count = ready ? 4 : 1;
-      for (let lane = 0; lane < count; lane++) {
-        pending[lane] ??= connection.recv_lane(lane).then(
-          (data) => ({ lane, data }),
-          (error) => ({ lane, error }),
-        );
+      while (!closed) {
+        const count = ready ? 4 : 1;
+        for (let lane = 0; lane < count; lane++) if (!pending.has(lane)) void readLane(lane);
+        // Prefer ready control frames. Each lane keeps just its own read and result.
+        // Repeatedly racing media against an idle lane retains every winning frame
+        // until that lane settles; packet audio can leave its reliable lane idle forever.
+        const result = received.find((entry) => entry !== undefined);
+        if (result) {
+          received[result.lane] = undefined;
+          pending.delete(result.lane);
+          if (!result.data) throw result.error;
+          if (result.lane === 0 && result.data.length === 1 && result.data[0] === 2) ready = true;
+          return result.data;
+        }
+        waiting ??= new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+        await waiting;
       }
-      const result = await Promise.race(pending.slice(0, count));
-      if (!result || closed) throw new Error('Call connection closed');
-      pending[result.lane] = undefined;
-      if (!result.data) throw result.error;
-      if (result.lane === 0 && result.data.length === 1 && result.data[0] === 2) ready = true;
-      return result.data;
+      throw new Error('Call connection closed');
     },
     close(reason) {
       closed = true;
+      received.length = 0;
+      notify();
       connection.close(reason);
     },
     end_reason: () => connection.end_reason?.(),

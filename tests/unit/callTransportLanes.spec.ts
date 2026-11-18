@@ -20,7 +20,7 @@ describe('independent call transport streams', () => {
       stats_json: () => JSON.stringify({ relayOnly: true, rttMs: 25, paths: 1 }),
     };
     const connection = mergeCallLanes(raw);
-    void connection.recv();
+    const pending = connection.recv();
     await expect(connection.recvAudio!()).resolves.toEqual(new Uint8Array([9, 1, 42]));
     await connection.sendAudio!(new Uint8Array([9, 1, 42]));
     expect(raw.send_audio).toHaveBeenCalledOnce();
@@ -29,6 +29,7 @@ describe('independent call transport streams', () => {
       rttMs: 25,
     });
     connection.close();
+    await expect(pending).rejects.toThrow('closed');
   });
   it('delivers readiness first, then audio and heartbeats while video is blocked, without read-ahead', async () => {
     const lanes = Array.from({ length: 4 }, () => deferred<Uint8Array>());
@@ -55,6 +56,38 @@ describe('independent call transport streams', () => {
     expect(raw.recv_lane.mock.calls.filter(([lane]) => lane === 3)).toHaveLength(1);
     connection.close();
     await expect(connection.recv()).rejects.toThrow('closed');
+  });
+  it('attaches one listener to a dormant lane throughout a video call', async () => {
+    // Count subscriptions on the idle read and its derived promises. Promise.race
+    // used to subscribe to the same pending result once per delivered video frame.
+    let listeners = 0;
+    class IdleRead<T> extends Promise<T> {
+      override then<A = T, B = never>(
+        fulfilled?: ((value: T) => A | PromiseLike<A>) | null,
+        rejected?: ((reason: unknown) => B | PromiseLike<B>) | null,
+      ) {
+        listeners++;
+        return super.then(fulfilled, rejected);
+      }
+    }
+    const idle = new IdleRead<Uint8Array>(() => {});
+    const control = deferred<Uint8Array>();
+    const connection = mergeCallLanes({
+      recv_lane: (lane) =>
+        lane === 0 ? control.promise : lane === 2 ? Promise.resolve(Uint8Array.of(3)) : idle,
+      recv: vi.fn(),
+      send: vi.fn(),
+      close: vi.fn(),
+    });
+    const first = connection.recv();
+    control.resolve(Uint8Array.of(2));
+    await first;
+    // Subsequent control reads can stay blocked between heartbeats.
+    control.promise = new Promise(() => {});
+    for (let i = 0; i < 100; i++)
+      await expect(connection.recv()).resolves.toEqual(Uint8Array.of(3));
+    expect(listeners).toBe(2); // One reader for each dormant media lane.
+    connection.close();
   });
   it('keeps the legacy transport when newer bindings or negotiation are absent', async () => {
     const connection = { send: vi.fn(), recv: vi.fn(), close: vi.fn() };

@@ -1,3 +1,4 @@
+import { relayFailureKind, relayStatusRetryAt } from '#src/stores/nostr/relayTrafficPolicy.ts';
 import { NostrKind } from '#src/lib/nostr/client.ts';
 import { chatDataService } from '#src/services/chatDataService.ts';
 import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
@@ -21,22 +22,18 @@ interface OutboundMessageReplayRuntimeDeps {
   logMessageRelayDiagnostics: (
     phase: string,
     details: Record<string, unknown>,
-    level?: 'info' | 'warn' | 'error'
+    level?: 'info' | 'warn' | 'error',
   ) => void;
   retryDirectMessageRelay: (
     messageId: number,
     relayUrl: string,
     scope: 'recipient' | 'self',
-    options?: RetryDirectMessageRelayOptions
+    options?: RetryDirectMessageRelayOptions,
   ) => Promise<void>;
 }
 
 type OutboundReplayReason =
-  | 'startup'
-  | 'browser-online'
-  | 'relay-connected'
-  | 'periodic-sweep'
-  | 'reconnect-healing';
+  'startup' | 'browser-online' | 'relay-connected' | 'periodic-sweep' | 'reconnect-healing';
 
 function isBrowserOffline(): boolean {
   return typeof navigator !== 'undefined' && navigator.onLine === false;
@@ -59,7 +56,7 @@ function shouldReplayRelayStatus(
   relayStatus: MessageRelayStatus,
   _options: {
     forceImmediate: boolean;
-  }
+  },
 ): relayStatus is MessageRelayStatus & {
   direction: 'outbound';
   scope: 'recipient' | 'self';
@@ -73,6 +70,11 @@ function shouldReplayRelayStatus(
     return false;
   }
 
+  if (
+    relayFailureKind(relayStatus.detail) === 'terminal' ||
+    relayStatusRetryAt(relayStatus) > Date.now()
+  )
+    return false;
   return toRetryAgeMs(relayStatus.updated_at) >= OUTBOUND_MESSAGE_REPLAY_RETRY_COOLDOWN_MS;
 }
 
@@ -83,7 +85,7 @@ function sortReplayRelayStatuses(
       scope: 'recipient' | 'self';
       status: 'pending' | 'failed';
     }
-  >
+  >,
 ): Array<
   MessageRelayStatus & {
     direction: 'outbound';
@@ -171,7 +173,7 @@ export function createOutboundMessageReplayRuntime({
 
   function queueOutboundMessageReplay(
     reason: OutboundReplayReason,
-    delayMs = OUTBOUND_MESSAGE_REPLAY_SWEEP_INTERVAL_MS
+    delayMs = OUTBOUND_MESSAGE_REPLAY_SWEEP_INTERVAL_MS,
   ): void {
     if (!hasWindow() || !getLoggedInPublicKeyHex()) {
       return;
@@ -240,20 +242,20 @@ export function createOutboundMessageReplayRuntime({
         const retryableRelayStatuses = sortReplayRelayStatuses(
           outboundEvent.relay_statuses
             .filter((relayStatus) =>
-              shouldReplayRelayStatus(relayStatus, { forceImmediate: false })
+              shouldReplayRelayStatus(relayStatus, { forceImmediate: false }),
             )
             .filter(
               (relayStatus) =>
                 (!relayScope ||
                   relayScope.has(
-                    inputSanitizerService.normalizeRelayWs(relayStatus.relay_url) ?? ''
+                    inputSanitizerService.normalizeRelayWs(relayStatus.relay_url) ?? '',
                   )) &&
                 Date.now() -
                   (lastAttempts.get(
-                    `${outboundEvent.event.id}:${relayStatus.scope}:${relayStatus.relay_url}`
+                    `${outboundEvent.event.id}:${relayStatus.scope}:${relayStatus.relay_url}`,
                   ) ?? 0) >=
-                  OUTBOUND_MESSAGE_REPLAY_RETRY_COOLDOWN_MS
-            )
+                  OUTBOUND_MESSAGE_REPLAY_RETRY_COOLDOWN_MS,
+            ),
         );
         if (retryableRelayStatuses.length === 0) {
           continue;
@@ -270,7 +272,7 @@ export function createOutboundMessageReplayRuntime({
               eventId: outboundEvent.event.id,
               relayCount: retryableRelayStatuses.length,
             },
-            'warn'
+            'warn',
           );
           continue;
         }
@@ -283,7 +285,7 @@ export function createOutboundMessageReplayRuntime({
 
           lastAttempts.set(
             `${outboundEvent.event.id}:${relayStatus.scope}:${relayStatus.relay_url}`,
-            Date.now()
+            Date.now(),
           );
           attemptedRelayCount += 1;
           logMessageRelayDiagnostics('outbox-retry-start', {
@@ -317,7 +319,7 @@ export function createOutboundMessageReplayRuntime({
                 scope: relayStatus.scope,
                 error: error instanceof Error ? error.message : String(error ?? ''),
               },
-              'warn'
+              'warn',
             );
           }
         }

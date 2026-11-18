@@ -39,6 +39,8 @@ jobs:
       - name: Generate SvelteKit configuration
         run: npx svelte-kit sync
       - run: npm run test:unit
+      - name: Test native call setup
+        run: node --test scripts/native-calls/*.test.mjs
       - name: Test standalone poll bot and encrypted interactions
         run: |
           cmp src/stores/nostr/botKeyboardProtocol.ts bot-example/poll/vendor/botKeyboardProtocol.ts

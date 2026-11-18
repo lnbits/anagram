@@ -1,8 +1,21 @@
-import { relaySyncReason, type RelaySyncUpdate, type RelaySyncObserver } from '#src/stores/nostr/startupRelayTracking.ts';
+import {
+  relaySyncReason,
+  type RelaySyncUpdate,
+  type RelaySyncObserver,
+} from '#src/stores/nostr/startupRelayTracking.ts';
+import {
+  RelayTrafficPolicy,
+  relayFailureKind,
+  type RelayCommand,
+} from '#src/stores/nostr/relayTrafficPolicy.ts';
+import type { AbstractRelay } from 'nostr-tools/abstract-relay';
 import { paceRelayRequests } from '#src/lib/nostr/relayPacing.ts';
 import { normalizeRumor } from '#src/lib/nostr/normalizeRumor.ts';
 import { guardRelayAuthentication } from '#src/lib/nostr/relayAuthentication.ts';
-import { RELAY_QUERY_TIMEOUT_MS } from '#src/stores/nostr/constants.ts';
+import {
+  RELAY_CONNECT_RETRY_MAX_DELAY_MS,
+  RELAY_QUERY_TIMEOUT_MS,
+} from '#src/stores/nostr/constants.ts';
 import { unwrapInWorker } from './cryptoWorker';
 import {
   SimplePool,
@@ -528,8 +541,7 @@ export async function giftUnwrap(
       'Unable to decrypt seal',
     ),
   );
-  if (options?.requireEmptySealTags && rumor.sig)
-    throw new Error('Group rumor must be unsigned');
+  if (options?.requireEmptySealTags && rumor.sig) throw new Error('Group rumor must be unsigned');
   return new ClientEvent(wrap.ndk, normalizeRumor(rumor, seal.pubkey));
 }
 export class NostrRelayList extends ClientEvent {
@@ -601,6 +613,7 @@ export class NostrRelay extends Emitter {
         this.connectionStats.connectedAt = Date.now();
         relay.onclose = () => {
           this.status = NostrRelayStatus.DISCONNECTED;
+          this.client.cancelRelayTraffic(this.url);
           this.client.pool.emit('relay:disconnect', this);
         };
         this.client.pool.emit('relay:connect', this);
@@ -744,21 +757,31 @@ export class NostrSubscription extends Emitter {
       let retryTimer: ReturnType<typeof setTimeout> | undefined;
       let connecting = false;
       let attempted = false;
+      let refused = false;
       const report = (status: RelaySyncUpdate['status'], reason?: RelaySyncUpdate['reason']) =>
         this.opts.onRelayStatus?.({ relayUrl: target.url, status, ...(reason ? { reason } : {}) });
       let requestGeneration = 0;
       let retryDelay = RELAY_QUERY_TIMEOUT_MS;
       const retryUnfinished = () => {
-        if (!this.opts.onInitialSync || this.closed || retryTimer !== undefined) return;
-        retryTimer = setTimeout(() => {
-          retryTimer = undefined;
-          cancelAuth?.();
-          requestGeneration++;
-          currentSubscription?.close();
-          currentSubscription = undefined;
-          void startTarget();
-        }, retryDelay);
-        retryDelay = Math.min(retryDelay * 2, 60000);
+        if (!this.opts.onInitialSync || this.closed || refused || retryTimer !== undefined) return;
+        const connectionDelay = Math.max(
+          this.client.relayConnectionRetryDelay?.(target.url) ?? 0,
+          this.client.relayTrafficPolicy(target.url).delay('REQ'),
+        );
+        retryTimer = setTimeout(
+          () => {
+            retryTimer = undefined;
+            cancelAuth?.();
+            requestGeneration++;
+            currentSubscription?.close();
+            currentSubscription = undefined;
+            void startTarget();
+          },
+          Math.min(2147483647, connectionDelay > 0 ? connectionDelay : retryDelay),
+        );
+        // Waiting for a socket cooldown is not another failed query attempt.
+        if (connectionDelay <= 0)
+          retryDelay = Math.min(retryDelay * 2, RELAY_CONNECT_RETRY_MAX_DELAY_MS);
       };
       const settle = () => {
         settledTargets.add(target);
@@ -771,7 +794,11 @@ export class NostrSubscription extends Emitter {
         report('error', relaySyncReason(reason));
         this.emit('closed', reason, target);
         settle();
-        retryUnfinished();
+        if (relayFailureKind(reason) === 'terminal') {
+          refused = true;
+          clearTimeout(retryTimer);
+          retryTimer = undefined;
+        } else retryUnfinished();
         if (!this.opts.onInitialSync && targets.every((item) => this.failedTargets.has(item)))
           this.stop();
       };
@@ -785,7 +812,7 @@ export class NostrSubscription extends Emitter {
         },
       });
       const startTarget = async () => {
-        if (this.closed || connecting) return;
+        if (this.closed || connecting || refused) return;
         connecting = true;
         report(attempted ? 'retrying' : 'pending');
         attempted = true;
@@ -801,6 +828,10 @@ export class NostrSubscription extends Emitter {
         }
         this.failedTargets.delete(target);
         try {
+          if ((this.client.relayConnectionRetryDelay?.(target.url) ?? 0) > 0)
+            throw new Error('Relay connection is cooling down; will retry when ready');
+          const trafficBlock = this.client.relayTrafficPolicy(target.url).blockReason('REQ');
+          if (trafficBlock) throw new Error(trafficBlock);
           await target.connect();
           if (this.closed) return;
           // A guarded connect can be deferred during backoff. Do not bypass it
@@ -935,6 +966,90 @@ export function filterFromId(id: string): Filter {
     };
   throw new Error('Invalid event identifier');
 }
+/** Preserve relay feedback before nostr-tools reduces OK/CLOSED to plain strings.
+ * All callers still use the same transport, pacing and app-owned retry loops. */
+export function guardRelayTraffic(
+  transport: AbstractRelay,
+  policy: RelayTrafficPolicy,
+  owner: () => string | undefined = () => undefined,
+): () => void {
+  const pending = new Map<string, RelayCommand | 'AUTH'>();
+  const send = transport.send.bind(transport);
+  transport.send = (message) => {
+    try {
+      const [type, value] = JSON.parse(message);
+      const id = type === 'EVENT' || type === 'AUTH' ? value?.id : value;
+      if (typeof id === 'string') {
+        if (type === 'CLOSE') pending.delete(id);
+        else if (type === 'EVENT' || type === 'REQ' || type === 'COUNT' || type === 'AUTH') {
+          pending.set(id, type);
+          if (pending.size > 2048) pending.delete(pending.keys().next().value!);
+        }
+      }
+    } catch {
+      /* The transport owns malformed frame handling. */
+    }
+    return send(message);
+  };
+  const paced = paceRelayRequests(
+    transport,
+    policy,
+    (id, reason) => {
+      const sub = transport.openSubs.get(id);
+      queueMicrotask(() => {
+        if (sub && transport.openSubs.get(id) === sub) sub.close(reason);
+      });
+    },
+    owner,
+  );
+  const receive = transport._onmessage.bind(transport);
+  transport._onmessage = (event) => {
+    let replacement: string | undefined;
+    if (
+      typeof event.data === 'string' &&
+      /^\s*\[\s*"(?:OK|CLOSED|EOSE|COUNT|NOTICE)"/.test(event.data)
+    ) {
+      try {
+        const frame: unknown[] = JSON.parse(event.data);
+        const type = frame[0],
+          id = frame[1];
+        const command = typeof id === 'string' ? pending.get(id) : undefined;
+        const refused = type === 'CLOSED' || (type === 'OK' && frame[2] === false);
+        if (refused && command && command !== 'AUTH') {
+          const index = type === 'OK' ? 3 : 2;
+          const reason = typeof frame[index] === 'string' ? (frame[index] as string) : '';
+          const kind = relayFailureKind(reason);
+          if (kind === 'rate-limited') {
+            policy.rateLimited(command, reason, frame[index + 1]);
+            paced.pump();
+          } else if (kind === 'transient') {
+            // Keep an explicit server verdict distinct from a transport error,
+            // including after its plain-text detail has been persisted.
+            frame[index] = `relay-rejected: ${reason || 'Relay refused the request.'}`;
+            replacement = JSON.stringify(frame);
+          }
+        } else if (
+          type === 'NOTICE' &&
+          typeof id === 'string' &&
+          relayFailureKind(id) === 'rate-limited'
+        ) {
+          // NOTICE has no command id: a rate-limit ban applies to all data traffic.
+          for (const command of ['EVENT', 'REQ', 'COUNT'] as const) policy.rateLimited(command, id);
+          paced.pump();
+        }
+        if (typeof id === 'string' && type !== 'NOTICE' && type !== 'EOSE') pending.delete(id);
+      } catch {
+        /* Leave malformed frames to nostr-tools. */
+      }
+    }
+    receive(replacement === undefined ? event : ({ data: replacement } as MessageEvent));
+  };
+  return () => {
+    pending.clear();
+    paced.cancel();
+  };
+}
+
 class RelayTransport extends SimplePool {
   getExistingRelay(url: string) {
     return this.relays.get(url);
@@ -946,7 +1061,19 @@ export default class NostrClient {
   transport = new RelayTransport({ enableReconnect: false });
   pool = new RelayPool(this);
   signer?: NostrSigner;
+  private trafficPolicies = new Map<string, RelayTrafficPolicy>();
+  private trafficCancellations = new Map<string, () => void>();
+  cancelRelayTraffic(url: string): void {
+    this.trafficCancellations.get(normalizeURL(url))?.();
+  }
+  relayTrafficPolicy(url: string): RelayTrafficPolicy {
+    const key = normalizeURL(url);
+    let policy = this.trafficPolicies.get(key);
+    if (!policy) this.trafficPolicies.set(key, (policy = new RelayTrafficPolicy()));
+    return policy;
+  }
   relayConnectionFilter?: (relay: string) => boolean;
+  relayConnectionRetryDelay?: (relay: string) => number;
   relayAuthDefaultPolicy?: (...args: any[]) => any;
   constructor(
     options: {
@@ -966,7 +1093,10 @@ export default class NostrClient {
       const relay = this.pool.getRelay(url, false);
       if (transport && !guarded.has(transport)) {
         guarded.add(transport);
-        paceRelayRequests(transport);
+        this.trafficCancellations.set(
+          normalizeURL(url),
+          guardRelayTraffic(transport, this.relayTrafficPolicy(url), () => this.signer?.pubkey),
+        );
         guardRelayAuthentication(transport, {
           authenticated: () => {
             relay.status = NostrRelayStatus.AUTHENTICATED;

@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 vi.mock('libopus-wasm', () => ({
   Application: { Voip: 0 },
   loadLibopus: async () => {},
+  createDecoder: async () => ({ free() {} }),
   createEncoder: async () => ({ encodeFloat: () => new Uint8Array([1]), free() {} }),
 }));
 afterEach(() => {
@@ -33,4 +34,58 @@ it('retains encoded frames in order while the UI is briefly unable to acknowledg
   await dispatch({ type: 'encoded', id: 1 });
   expect(sent).toHaveBeenCalledTimes(count);
   expect(port.close).toHaveBeenCalledOnce();
+});
+
+it('acknowledges a bounded decoder batch once and preserves packet arrival spacing', async () => {
+  const sent = vi.fn();
+  vi.stubGlobal('postMessage', sent);
+  vi.stubGlobal('onmessage', undefined);
+  const { packAudio, MAX_DECODE_BATCH } = await import('#src/services/callAudioPackets.ts');
+  await import('#src/services/callAudio.worker.ts');
+  const dispatch = (data: unknown) => globalThis.onmessage!({ data } as MessageEvent);
+  const port = { onmessage: undefined, close: vi.fn() };
+  await dispatch({ type: 'decode', id: 4, port });
+  const packets = Array.from({ length: MAX_DECODE_BATCH }, (_, sequence) => ({
+    packet: packAudio({
+      generation: 1,
+      sequence,
+      timestamp: sequence * 960,
+      opus: Uint8Array.of(1),
+    }),
+    at: performance.timeOrigin + sequence * 20,
+  }));
+  await dispatch({ type: 'packets', id: 4, packets });
+  expect(sent).toHaveBeenCalledTimes(1);
+  expect(sent).toHaveBeenCalledWith({
+    id: 4,
+    type: 'received',
+    stats: expect.objectContaining({ received: MAX_DECODE_BATCH, jitterMs: 0, duplicate: 0 }),
+  });
+  await dispatch({ type: 'packets', id: 4, packets: [...packets, packets[0]] });
+  expect(sent).toHaveBeenLastCalledWith({ id: 4, type: 'error' });
+  await dispatch({ type: 'close', id: 4 });
+  expect(port.close).toHaveBeenCalledOnce();
+});
+
+it('drops capture already stale before encoding and acknowledges it without sending', async () => {
+  const sent = vi.fn();
+  vi.stubGlobal('postMessage', sent);
+  vi.stubGlobal('onmessage', undefined);
+  await import('#src/services/callAudio.worker.ts');
+  const dispatch = (data: any) => globalThis.onmessage!({ data } as MessageEvent);
+  const port = { onmessage: (_event: any) => {}, postMessage: vi.fn(), close: vi.fn() };
+  await dispatch({ type: 'encode', id: 8, generation: 1, port });
+  port.onmessage({
+    data: {
+      sequence: 0,
+      pcm: new Float32Array(960),
+      at: performance.timeOrigin + performance.now() - 1600,
+    },
+  });
+  expect(sent).not.toHaveBeenCalled();
+  expect(port.postMessage).toHaveBeenCalledWith({ ack: true });
+  const at = performance.timeOrigin + performance.now() - 300;
+  port.onmessage({ data: { sequence: 1, pcm: new Float32Array(960), at } });
+  expect(sent).toHaveBeenCalledWith(expect.objectContaining({ type: 'packet', at }));
+  await dispatch({ type: 'close', id: 8 });
 });

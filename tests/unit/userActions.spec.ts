@@ -62,7 +62,9 @@ const serviceMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('#src/lib/nostr/client.ts', async () => {
-  const actual = await vi.importActual<typeof import('#src/lib/nostr/client.ts')>('#src/lib/nostr/client.ts');
+  const actual = await vi.importActual<typeof import('#src/lib/nostr/client.ts')>(
+    '#src/lib/nostr/client.ts',
+  );
 
   return {
     ...actual,
@@ -107,7 +109,7 @@ function createDeps() {
           scope,
           status: 'failed',
           detail,
-        })
+        }),
       );
     }),
     buildPendingOutboundRelayStatuses: vi.fn((relayUrls, scope) => {
@@ -116,7 +118,7 @@ function createDeps() {
           relay_url: relayUrl,
           scope,
           status: 'pending',
-        })
+        }),
       );
     }),
     createDirectMessageRumorEvent: vi.fn(
@@ -129,7 +131,7 @@ function createDeps() {
         created_at: createdAt,
         replyToEventId,
         tags: [],
-      })
+      }),
     ),
     createEventDeletionRumorEvent: vi.fn(
       (senderPubkey, recipientPubkey, targetEventId, targetKind, createdAt) => ({
@@ -141,7 +143,7 @@ function createDeps() {
         targetKind,
         created_at: createdAt,
         tags: [],
-      })
+      }),
     ),
     createReactionRumorEvent: vi.fn(
       (
@@ -151,7 +153,7 @@ function createDeps() {
         targetEventId,
         targetAuthorPublicKey,
         targetKind,
-        createdAt
+        createdAt,
       ) => ({
         id: 'reaction-rumor',
         kind: NostrKind.Reaction,
@@ -163,7 +165,7 @@ function createDeps() {
         targetKind,
         created_at: createdAt,
         tags: [],
-      })
+      }),
     ),
     createStoredDirectMessageRumorEvent: vi.fn(() => ({
       id: 'stored-direct-rumor',
@@ -188,10 +190,10 @@ function createDeps() {
     }),
     ndk: {} as never,
     normalizeEventId: vi.fn((value: unknown) =>
-      typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : null
+      typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : null,
     ),
     normalizeRelayStatusUrl: vi.fn((value: string) =>
-      typeof value === 'string' && value.trim() ? value.trim() : null
+      typeof value === 'string' && value.trim() ? value.trim() : null,
     ),
     logMessageRelayDiagnostics: vi.fn(),
     pendingDirectMessageRelayRetryPromises: new Map<string, Promise<void>>(),
@@ -220,7 +222,7 @@ function createDeps() {
         };
       }),
     toIsoTimestampFromUnix: vi.fn((value: number | undefined) =>
-      typeof value === 'number' ? new Date(value * 1000).toISOString() : ''
+      typeof value === 'number' ? new Date(value * 1000).toISOString() : '',
     ),
   };
 
@@ -274,7 +276,7 @@ describe('userActions runtime', () => {
         createdAt: '2026-01-02T00:00:00.000Z',
         replyToEventId: '  REPLY-ID  ',
         publishSelfCopy: true,
-      }
+      },
     );
 
     expect(deps.createDirectMessageRumorEvent).toHaveBeenCalledWith(
@@ -283,7 +285,7 @@ describe('userActions runtime', () => {
       'hello there',
       123456,
       'reply-id',
-      undefined
+      undefined,
     );
     expect(deps.sendGiftWrappedRumor).toHaveBeenCalledWith(
       'r'.repeat(64),
@@ -294,7 +296,7 @@ describe('userActions runtime', () => {
         createdAt: '2026-01-02T00:00:00.000Z',
         replyToEventId: '  REPLY-ID  ',
         publishSelfCopy: true,
-      }
+      },
     );
     expect(giftWrapEvent).toMatchObject({
       id: 'gift-wrap-event',
@@ -310,7 +312,7 @@ describe('userActions runtime', () => {
       '🔥',
       ' TARGET-ID ',
       'B'.repeat(64),
-      ['wss://relay.example']
+      ['wss://relay.example'],
     );
 
     expect(deps.createReactionRumorEvent).toHaveBeenCalledWith(
@@ -320,7 +322,7 @@ describe('userActions runtime', () => {
       'target-id',
       'b'.repeat(64),
       NostrKind.PrivateDirectMessage,
-      123456
+      123456,
     );
     expect(serviceMocks.nostrEventDataService.upsertEvent).toHaveBeenCalledWith({
       event: rumorEvent,
@@ -329,11 +331,34 @@ describe('userActions runtime', () => {
     });
   });
 
+  it('does not let manual retry overwrite or bypass a persisted relay pause', async () => {
+    const deps = createDeps();
+    serviceMocks.chatDataService.getMessageById.mockResolvedValue({ id: 7, event_id: 'event-1' });
+    serviceMocks.nostrEventDataService.getEventById.mockResolvedValue({
+      direction: 'out',
+      event: { id: 'event-1' },
+      relay_statuses: [
+        {
+          ...makeRelayStatus({
+            relay_url: 'wss://relay.example',
+            status: 'failed',
+            detail: 'rate-limited: wait',
+          }),
+          retry_after: new Date(Date.now() + 120000).toISOString(),
+        },
+      ],
+    });
+    await expect(
+      createUserActions(deps).retryDirectMessageRelay(7, 'wss://relay.example', 'recipient'),
+    ).rejects.toThrow('rate-limited');
+    expect(deps.ensureRelayConnections).not.toHaveBeenCalled();
+    expect(deps.appendRelayStatusesToMessageEvent).not.toHaveBeenCalled();
+    expect(deps.publishEventWithRelayStatuses).not.toHaveBeenCalled();
+  });
+
   it('rejects unauthorized retries before reusing or publishing a cached envelope', async () => {
     const deps = createDeps();
-    deps.prepareOutgoingPrivateMessage.mockRejectedValue(
-      new Error('Invalid membership proof'),
-    );
+    deps.prepareOutgoingPrivateMessage.mockRejectedValue(new Error('Invalid membership proof'));
     serviceMocks.chatDataService.getMessageById.mockResolvedValue({
       id: 7,
       event_id: 'event-1',
@@ -355,107 +380,118 @@ describe('userActions runtime', () => {
     expect(deps.publishEventWithRelayStatuses).not.toHaveBeenCalled();
   });
 
-  it('marks relay retries as pending first and failed when republish errors', async () => {
-    const deps = createDeps();
-    const actions = createUserActions(deps);
-    const failureStatuses = [
-      makeRelayStatus({
-        relay_url: 'wss://relay.example',
-        status: 'failed',
-        detail: 'relay down',
-      }),
-    ];
-
-    serviceMocks.chatDataService.getMessageById.mockResolvedValue({
-      id: 7,
-      event_id: 'event-1',
-    });
-    serviceMocks.nostrEventDataService.getEventById.mockResolvedValue({
-      direction: 'out',
-      event: {
-        id: 'event-1',
-        kind: NostrKind.PrivateDirectMessage,
-        created_at: 1700000000,
-        pubkey: 's'.repeat(64),
-        tags: [['p', 'r'.repeat(64)]],
-      },
-    });
-    ndkMocks.giftWrap.mockResolvedValue({
-      kind: NostrKind.GiftWrap,
-      toNostrEvent: async () => ({
-        kind: NostrKind.GiftWrap,
-        id: 'a'.repeat(64),
-        sig: 'b'.repeat(128),
-        tags: [],
-        content: '',
-        pubkey: 'c'.repeat(64),
-        created_at: 1700000000,
-      }),
-    });
-    serviceMocks.nostrEventDataService.upsertEvent.mockImplementation(async (input) => input);
-    deps.publishEventWithRelayStatuses.mockResolvedValue({
-      relayStatuses: failureStatuses,
-      error: new Error('publish failed'),
-    });
-
-    await expect(
-      actions.retryDirectMessageRelay(7, ' wss://relay.example ', 'recipient')
-    ).rejects.toThrow('relay down');
-
-    expect(deps.appendRelayStatusesToMessageEvent).toHaveBeenNthCalledWith(
-      1,
-      7,
-      [
+  it.each(['manual', 'outbox:relay-connected'])(
+    'preserves delivery errors and only bypasses cooldown for a manual retry (%s)',
+    async (trigger) => {
+      const deps = createDeps();
+      const actions = createUserActions(deps);
+      const failureStatuses = [
         makeRelayStatus({
           relay_url: 'wss://relay.example',
-          scope: 'recipient',
-          status: 'pending',
-        }),
-      ],
-      expect.objectContaining({
-        direction: 'out',
-        eventId: 'event-1',
-      })
-    );
-    expect(deps.appendRelayStatusesToMessageEvent).toHaveBeenNthCalledWith(
-      2,
-      7,
-      [
-        makeRelayStatus({
-          relay_url: 'wss://relay.example',
-          scope: 'recipient',
           status: 'failed',
           detail: 'relay down',
         }),
-      ],
-      expect.objectContaining({
+      ];
+
+      serviceMocks.chatDataService.getMessageById.mockResolvedValue({
+        id: 7,
+        event_id: 'event-1',
+      });
+      serviceMocks.nostrEventDataService.getEventById.mockResolvedValue({
         direction: 'out',
-        eventId: 'event-1',
-      })
-    );
-    expect(deps.logMessageRelayDiagnostics).toHaveBeenCalledWith(
-      'retry-start',
-      expect.objectContaining({
-        messageId: 7,
-        eventId: 'event-1',
-        relayUrl: 'wss://relay.example',
-        scope: 'recipient',
-        trigger: 'manual',
-      })
-    );
-    expect(deps.logMessageRelayDiagnostics).toHaveBeenCalledWith(
-      'retry-failed',
-      expect.objectContaining({
-        messageId: 7,
-        eventId: 'event-1',
-        relayUrl: 'wss://relay.example',
-        scope: 'recipient',
-        trigger: 'manual',
-        error: 'relay down',
-      }),
-      'warn'
-    );
-  });
+        event: {
+          id: 'event-1',
+          kind: NostrKind.PrivateDirectMessage,
+          created_at: 1700000000,
+          pubkey: 's'.repeat(64),
+          tags: [['p', 'r'.repeat(64)]],
+        },
+      });
+      ndkMocks.giftWrap.mockResolvedValue({
+        kind: NostrKind.GiftWrap,
+        toNostrEvent: async () => ({
+          kind: NostrKind.GiftWrap,
+          id: 'a'.repeat(64),
+          sig: 'b'.repeat(128),
+          tags: [],
+          content: '',
+          pubkey: 'c'.repeat(64),
+          created_at: 1700000000,
+        }),
+      });
+      serviceMocks.nostrEventDataService.upsertEvent.mockImplementation(async (input) => input);
+      deps.publishEventWithRelayStatuses.mockResolvedValue({
+        relayStatuses: failureStatuses,
+        error: new Error('publish failed'),
+      });
+
+      await expect(
+        actions.retryDirectMessageRelay(
+          7,
+          ' wss://relay.example ',
+          'recipient',
+          trigger === 'manual' ? undefined : { trigger },
+        ),
+      ).rejects.toThrow('relay down');
+      expect(deps.ensureRelayConnections).toHaveBeenCalledWith(['wss://relay.example'], {
+        force: trigger === 'manual',
+      });
+
+      expect(deps.appendRelayStatusesToMessageEvent).toHaveBeenNthCalledWith(
+        1,
+        7,
+        [
+          makeRelayStatus({
+            relay_url: 'wss://relay.example',
+            scope: 'recipient',
+            status: 'pending',
+          }),
+        ],
+        expect.objectContaining({
+          direction: 'out',
+          eventId: 'event-1',
+        }),
+      );
+      expect(deps.appendRelayStatusesToMessageEvent).toHaveBeenNthCalledWith(
+        2,
+        7,
+        [
+          makeRelayStatus({
+            relay_url: 'wss://relay.example',
+            scope: 'recipient',
+            status: 'failed',
+            detail: 'relay down',
+          }),
+        ],
+        expect.objectContaining({
+          direction: 'out',
+          eventId: 'event-1',
+        }),
+      );
+      expect(deps.logMessageRelayDiagnostics).toHaveBeenCalledWith(
+        'retry-start',
+        expect.objectContaining({
+          messageId: 7,
+          eventId: 'event-1',
+          relayUrl: 'wss://relay.example',
+          scope: 'recipient',
+          trigger,
+        }),
+      );
+      expect(deps.logMessageRelayDiagnostics).toHaveBeenCalledWith(
+        'retry-failed',
+        expect.objectContaining({
+          messageId: 7,
+          eventId: 'event-1',
+          relayUrl: 'wss://relay.example',
+          scope: 'recipient',
+          trigger,
+          error: 'relay down',
+        }),
+        'warn',
+      );
+    },
+  );
 
   it('rejects group ticket relay retries when the logged-in user is not the group owner', async () => {
     const deps = createDeps();
@@ -486,7 +522,7 @@ describe('userActions runtime', () => {
     });
 
     await expect(
-      actions.retryGroupEpochTicketRelay(' epoch-ticket ', ' wss://group.example ')
+      actions.retryGroupEpochTicketRelay(' epoch-ticket ', ' wss://group.example '),
     ).rejects.toThrow('Only the owner can retry group epoch ticket delivery.');
 
     expect(deps.ensureGroupIdentitySecretEpochState).not.toHaveBeenCalled();
@@ -533,7 +569,7 @@ describe('userActions runtime', () => {
     });
 
     await expect(
-      actions.retryGroupEpochTicketRelay(' epoch-ticket ', ' wss://group.example ')
+      actions.retryGroupEpochTicketRelay(' epoch-ticket ', ' wss://group.example '),
     ).rejects.toThrow('member relay down');
 
     expect(deps.appendRelayStatusesToGroupMemberTicketEvent).toHaveBeenNthCalledWith(
@@ -552,7 +588,7 @@ describe('userActions runtime', () => {
         direction: 'out',
         eventId: 'epoch-ticket',
         createdAt: '2023-11-14T22:13:20.000Z',
-      })
+      }),
     );
     expect(deps.appendRelayStatusesToGroupMemberTicketEvent).toHaveBeenNthCalledWith(
       2,
@@ -571,7 +607,7 @@ describe('userActions runtime', () => {
         direction: 'out',
         eventId: 'epoch-ticket',
         createdAt: '2023-11-14T22:13:20.000Z',
-      })
+      }),
     );
     expect(deps.giftWrapSignedEvent).toHaveBeenCalled();
   });

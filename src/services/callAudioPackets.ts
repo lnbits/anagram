@@ -7,6 +7,10 @@ export const AUDIO_PACKET_KIND = 9;
 export const AUDIO_PACKET_SAMPLES = 960;
 export const AUDIO_PACKET_MS = 20;
 export const MAX_AUDIO_PACKET_BYTES = 1100;
+// At most 240 ms of queued speech per native IPC call. Each packet stays a distinct datagram.
+export const MAX_NATIVE_AUDIO_BATCH = 12;
+// Bound the work before a decoder worker acknowledges a queued burst.
+export const MAX_DECODE_BATCH = 8;
 const HEADER = 14;
 export interface AudioPacket {
   generation: number;
@@ -69,6 +73,7 @@ export class CallAudioJitterBuffer {
     targetMs: 40,
     jitterMs: 0,
     buffered: 0,
+    bufferedMs: 0,
   };
 
   push(packet: AudioPacket, now: number): void {
@@ -146,6 +151,13 @@ export class CallAudioJitterBuffer {
         if (distance(sequence, next) < 0) this.packets.delete(sequence);
     }
     this.stats.buffered = this.packets.size;
+    this.stats.bufferedMs = this.bufferedMs;
+  }
+
+  get bufferedMs(): number {
+    return this.expected === undefined
+      ? 0
+      : Math.max(0, distance(this.newest, this.expected) + 1) * AUDIO_PACKET_MS;
   }
 
   pull(now: number): { packet: AudioPacket | null; fec: boolean } | null {
@@ -172,6 +184,7 @@ export class CallAudioJitterBuffer {
     this.packets.delete(sequence);
     this.expected = (sequence + 1) >>> 0;
     this.stats.buffered = this.packets.size;
+    this.stats.bufferedMs = this.bufferedMs;
     if (packet) {
       this.misses = 0;
       return { packet, fec: false };
@@ -189,6 +202,7 @@ export class CallAudioJitterBuffer {
       this.playing = false;
       this.packets.clear();
       this.stats.buffered = 0;
+      this.stats.bufferedMs = 0;
       return null;
     }
     return { packet: null, fec: false };

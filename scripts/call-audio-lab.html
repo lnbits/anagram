@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Call audio comparison</title>
+  <style>
+    body {
+      font: 16px system-ui;
+      max-width: 780px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+    }
+    button,
+    select,
+    input {
+      font: inherit;
+      margin: 0.4rem;
+    }
+    pre {
+      white-space: pre-wrap;
+      background: #eee;
+      padding: 1rem;
+    }
+    audio {
+      display: block;
+    }
+    label {
+      display: block;
+    }
+  </style>
+  <h1>Call audio comparison</h1>
+  <p>
+    This local test plays remote audio through a selected pipeline and measures the microphone after
+    browser processing. Use the same laptop speakers, volume and position for each run. Stay silent
+    first, then speak while the reference plays. A local speech file is more representative than the
+    default tone.
+  </p>
+  <p>
+    The three pipelines run locally. This isolates audio processing; it does not test Iroh
+    networking or prove two-way call quality. Nothing is uploaded.
+  </p>
+  <label
+    >Playback pipeline
+    <select id="mode">
+      <option value="packet">Current Opus packets</option>
+      <option value="webm">WebM / 100 ms recorder chunks</option>
+      <option value="webrtc">Browser WebRTC reference</option>
+    </select></label
+  >
+  <label>Optional local speech file <input id="file" type="file" accept="audio/*" /></label>
+  <label
+    ><input id="record" type="checkbox" /> Keep a microphone recording for local listening</label
+  >
+  <button id="start">Start comparison</button
+  ><button id="stop" disabled>Stop</button>
+  <p id="status">Ready</p>
+  <audio id="remote" autoplay></audio>
+  <div id="recording"></div>
+  <pre id="metrics">No measurement yet.</pre>
+  <script type="module" src="/src/dev/callAudioLab.ts"></script>
+</html>

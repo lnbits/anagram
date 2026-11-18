@@ -1,25 +1,27 @@
 import { expect, test } from '@playwright/test';
 
-for (const { nativeAck, startupDelay, continuity } of [
+for (const { nativeAck, startupDelay, continuity, captureClockLag = 0 } of [
   { nativeAck: false, startupDelay: 0, continuity: false },
   { nativeAck: true, startupDelay: 0, continuity: false },
   { nativeAck: false, startupDelay: 1800, continuity: false },
   { nativeAck: true, startupDelay: 0, continuity: true },
+  { nativeAck: false, startupDelay: 0, continuity: false, captureClockLag: 1800 },
 ]) {
-  test(`Opus worker and AudioWorklet play decoded audio through loss, jitter and a relay stall (native acknowledgements: ${nativeAck}, startup delay: ${startupDelay} ms, continuity: ${continuity})`, async ({
+  test(`Opus worker and AudioWorklet play decoded audio through loss, jitter and a relay stall (native acknowledgements: ${nativeAck}, startup delay: ${startupDelay} ms, continuity: ${continuity}, capture clock lag: ${captureClockLag} ms)`, async ({
     page,
   }, info) => {
     await page.route('**/__packet-audio', (route) =>
       route.fulfill({ contentType: 'text/html', body: '<button>Start</button>' }),
     );
     await page.goto('/__packet-audio');
-    const options = { nativeAck, startupDelay, continuity };
-    await page.evaluate(async ({ nativeAck, startupDelay, continuity }) => {
+    const options = { nativeAck, startupDelay, continuity, captureClockLag };
+    await page.evaluate(async ({ nativeAck, startupDelay, continuity, captureClockLag }) => {
       const { prepareCallPacketAudio, recordCallMedia, createCallMediaReceiver } =
         await import('/src/services/callMediaService.ts');
       const { OPUS_CALL_MIME, unpackAudio } = await import('/src/services/callAudioPackets.ts');
       const { attachCallMedia } = await import('/src/services/callStreamRegistry.ts');
-      const { callPacketAudioDiagnostics } = await import('/src/services/callPacketAudio.ts');
+      const { callPacketAudioDiagnostics, callAudioDiagnostics } =
+        await import('/src/services/callPacketAudio.ts');
       const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
       const run = async () => {
         // Match the negotiated packet sample rate for the synthetic microphone.
@@ -79,7 +81,7 @@ for (const { nativeAck, startupDelay, continuity } of [
             await delay(5);
           }
           throw new Error(
-            `No decoded ${frequency} Hz audio; errors=${errors} time=${audio.currentTime} stats=${JSON.stringify(callPacketAudioDiagnostics())} max=${Math.max(...spectrum)}`,
+            `No decoded ${frequency} Hz audio; errors=${errors} time=${audio.currentTime} packets=${count} sourceState=${context.state} stats=${JSON.stringify(callAudioDiagnostics())} max=${Math.max(...spectrum)}`,
           );
         };
         // Measure the rendered samples on the audio thread, not a UI timer
@@ -128,30 +130,44 @@ for (const { nativeAck, startupDelay, continuity } of [
         let inFlight = 0,
           maxInFlight = 0;
         const captureStarted = performance.now();
-        const stop = recordCallMedia(
-          destination.stream,
-          OPUS_CALL_MIME,
-          async (frame) => {
-            const n = count++;
-            // Exercise a cold device/stream graph without sleeping in the test's
-            // readiness check or changing the actual codec/receiver.
-            if (performance.now() - captureStarted < startupDelay) return;
-            if (!continuity && n % 19 === 0) return; // deterministic packet loss
-            const ms = continuity ? 0 : stall ? 650 : [0, 10, 30, 5][n % 4];
-            sequences.push(unpackAudio(frame)!.sequence);
-            const timer = setTimeout(() => {
-              timers.delete(timer);
-              receiver.append(frame);
-            }, ms);
-            timers.add(timer);
-            if (nativeAck) {
-              maxInFlight = Math.max(maxInFlight, ++inFlight);
-              await delay(continuity && n % 50 < 2 ? 70 : 35);
-              inFlight--;
-            }
-          },
-          () => errors.push('encoder'),
-        );
+        // Simulate the wall clock advancing before the audio render clock starts.
+        // Frames must still reach the real encoder and decoder after startup.
+        globalThis.AudioWorkletNode = class extends WorkletNode {
+          constructor(...args: ConstructorParameters<typeof WorkletNode>) {
+            if (args[2]?.processorOptions?.mode === 'capture')
+              args[2].processorOptions.captureEpoch -= captureClockLag;
+            super(...args);
+          }
+        };
+        let stop: () => void;
+        try {
+          stop = recordCallMedia(
+            destination.stream,
+            OPUS_CALL_MIME,
+            async (frame) => {
+              const n = count++;
+              // Exercise a cold device/stream graph without sleeping in the test's
+              // readiness check or changing the actual codec/receiver.
+              if (performance.now() - captureStarted < startupDelay) return;
+              if (!continuity && n % 19 === 0) return; // deterministic packet loss
+              const ms = continuity ? 0 : stall ? 650 : [0, 10, 30, 5][n % 4];
+              sequences.push(unpackAudio(frame)!.sequence);
+              const timer = setTimeout(() => {
+                timers.delete(timer);
+                receiver.append(frame);
+              }, ms);
+              timers.add(timer);
+              if (nativeAck) {
+                maxInFlight = Math.max(maxInFlight, ++inFlight);
+                await delay(continuity && n % 50 < 2 ? 70 : 35);
+                inFlight--;
+              }
+            },
+            () => errors.push('encoder'),
+          );
+        } finally {
+          globalThis.AudioWorkletNode = WorkletNode;
+        }
         const timings: number[] = [];
         try {
           await audio.play();

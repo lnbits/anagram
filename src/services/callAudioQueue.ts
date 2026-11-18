@@ -11,10 +11,19 @@ export class CallAudioQueue<T> {
       this.frames.shift();
   }
 
-  push(value: T, now: number) {
+  get length() {
+    return this.frames.length;
+  }
+
+  ageMs(now: number) {
+    return this.frames.length ? Math.max(0, now - this.frames[0].at) : 0;
+  }
+
+  push(value: T, now: number, capturedAt = now) {
     this.expire(now);
     if (this.frames.length === CALL_AUDIO_QUEUE_FRAMES) this.frames.shift();
-    this.frames.push({ value, at: now });
+    if (now - capturedAt > CALL_AUDIO_BACKLOG_MS) return;
+    this.frames.push({ value, at: capturedAt });
   }
 
   shift(now: number): T | undefined {

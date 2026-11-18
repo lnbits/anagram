@@ -31,3 +31,15 @@ it('clears queued speech when its stream closes', () => {
   queue.push(2, 0);
   expect(queue.shift(0)).toBe(2);
 });
+
+it('keeps the original capture age across successive queues', () => {
+  const encoded = new CallAudioQueue<number>(),
+    sending = new CallAudioQueue<number>();
+  encoded.push(1, 500, 0);
+  const packet = encoded.shift(1000)!;
+  sending.push(packet, 1000, 0);
+  expect(sending.ageMs(1400)).toBe(1400);
+  expect(sending.shift(1501)).toBeUndefined();
+  sending.push(2, 2000, 0);
+  expect(sending.length).toBe(0);
+});

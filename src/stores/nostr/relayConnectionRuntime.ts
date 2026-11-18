@@ -267,6 +267,15 @@ export function createRelayConnectionRuntime({
     );
   };
 
+  // Subscription recovery shares this deadline instead of independently polling
+  // a guarded connect and backing off again without making a socket attempt.
+  ndk.relayConnectionRetryDelay = (relayUrl) => {
+    const normalizedRelayUrl = normalizeRelayClientUrl(relayUrl);
+    if (!normalizedRelayUrl || ndk.pool.relays.get(normalizedRelayUrl)?.connected) return 0;
+    const nextAttemptAt = relayConnectRetryStateByUrl.get(normalizedRelayUrl)?.nextAttemptAt;
+    return Math.max(0, (nextAttemptAt ?? 0) - Date.now());
+  };
+
   function getRelayConnectionAttemptBlockReason(relayUrl: string): string | null {
     const normalizedRelayUrl = normalizeRelayClientUrl(relayUrl);
     if (!normalizedRelayUrl || !isUsableRelayClientUrl(normalizedRelayUrl)) {
@@ -292,6 +301,8 @@ export function createRelayConnectionRuntime({
       retryState.nextAttemptAt - Date.now(),
     )}ms.`;
   }
+
+  const connectedSince = new Map<string, number>();
 
   function clearRelayConnectRetryState(relayUrl: string): void {
     const normalizedRelayUrl = normalizeRelayClientUrl(relayUrl);
@@ -458,7 +469,7 @@ export function createRelayConnectionRuntime({
       logRelayLifecycle('connecting', relay);
     });
     ndk.pool.on('relay:connect', (relay) => {
-      clearRelayConnectRetryState(relay.url);
+      connectedSince.set(relay.url, Date.now());
       authenticatedRelayUrls.delete(relay.url);
       bumpRelayStatusVersion();
       logRelayLifecycle('connect', relay);
@@ -474,6 +485,10 @@ export function createRelayConnectionRuntime({
       logRelayLifecycle('ready', relay);
     });
     ndk.pool.on('relay:disconnect', (relay) => {
+      const since = connectedSince.get(relay.url);
+      if (since !== undefined && Date.now() - since >= 60_000)
+        clearRelayConnectRetryState(relay.url);
+      connectedSince.delete(relay.url);
       recordRelayConnectFailure(relay);
       authenticatedRelayUrls.delete(relay.url);
       bumpRelayStatusVersion();

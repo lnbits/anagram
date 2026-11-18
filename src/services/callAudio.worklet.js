@@ -12,6 +12,11 @@ class CallAudioProcessor extends AudioWorkletProcessor {
     this.captureFrames = options.processorOptions.captureFrames;
     this.credits = this.captureFrames;
     this.sequence = 0;
+    this.captureStarted = false;
+    this.captureEpoch = options.processorOptions.captureEpoch;
+    this.renderedSamples = 0;
+    this.underrunSamples = 0;
+    this.reportSamples = 0;
     this.input = new Float32Array(960);
     this.offset = 0;
     this.output = [];
@@ -21,6 +26,10 @@ class CallAudioProcessor extends AudioWorkletProcessor {
       if (data.close) {
         this.active = false;
         this.link?.close();
+        return;
+      }
+      if (data.captureEpoch !== undefined) {
+        this.captureEpoch = data.captureEpoch;
         return;
       }
       this.link = data.port;
@@ -37,15 +46,24 @@ class CallAudioProcessor extends AudioWorkletProcessor {
     if (!this.active) return false;
     const out = outputs[0][0];
     if (this.mode === 'capture') {
+      if (!this.captureStarted) {
+        this.captureStarted = true;
+        this.port.postMessage({ type: 'capture-started' });
+      }
       const input = inputs[0]?.[0];
       for (let i = 0; i < out.length; i++) {
         this.input[this.offset++] = input?.[i] ?? 0;
         if (this.offset === 960) {
           if (this.link && this.credits > 0) {
             this.credits--;
-            this.link.postMessage({ pcm: this.input, sequence: this.sequence }, [
-              this.input.buffer,
-            ]);
+            this.link.postMessage(
+              {
+                pcm: this.input,
+                sequence: this.sequence,
+                at: this.captureEpoch + ((currentFrame + i - 959) / sampleRate) * 1000,
+              },
+              [this.input.buffer],
+            );
             this.input = new Float32Array(960);
           }
           this.sequence = (this.sequence + 1) >>> 0;
@@ -56,11 +74,22 @@ class CallAudioProcessor extends AudioWorkletProcessor {
       for (let i = 0; i < out.length; i++) {
         if (this.output.length) {
           out[i] = this.output[0][this.readOffset++];
+          this.renderedSamples++;
           if (this.readOffset === 960) {
             this.output.shift();
             this.readOffset = 0;
           }
-        }
+        } else this.underrunSamples++;
+      }
+      this.reportSamples += out.length;
+      if (this.reportSamples >= 48000) {
+        this.reportSamples = 0;
+        this.port.postMessage({
+          type: 'render',
+          renderedSamples: this.renderedSamples,
+          underrunSamples: this.underrunSamples,
+          renderBufferedMs: (this.output.length * 960 - this.readOffset) / 48,
+        });
       }
       if (this.link && this.output.length < PLAYBACK_FRAMES && !this.pending) {
         this.pending = true;

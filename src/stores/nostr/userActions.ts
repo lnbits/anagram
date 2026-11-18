@@ -1,3 +1,4 @@
+import { relayStatusRetryAt } from '#src/stores/nostr/relayTrafficPolicy.ts';
 import NostrClient, {
   giftWrap,
   isValidNip05,
@@ -30,7 +31,11 @@ import type {
 import type { MessageRelayStatus } from '#src/types/chat.ts';
 
 interface UserActionsDeps {
-  prepareOutgoingPrivateMessage: (rumor: ClientEvent, recipient: string, retry?: boolean) => Promise<void>;
+  prepareOutgoingPrivateMessage: (
+    rumor: ClientEvent,
+    recipient: string,
+    retry?: boolean,
+  ) => Promise<void>;
   appendRelayStatusesToGroupMemberTicketEvent: (
     groupPublicKey: string,
     memberPublicKey: string,
@@ -466,6 +471,15 @@ export function createUserActions({
         throw new Error('No outbound nostr event found for this message.');
       }
 
+      const previousStatus = storedEvent.relay_statuses?.find(
+        (status) =>
+          status.relay_url === normalizedRelayUrl &&
+          status.scope === scope &&
+          status.direction === 'outbound',
+      );
+      if (previousStatus && relayStatusRetryAt(previousStatus) > Date.now())
+        throw new Error('rate-limited: Relay requested a pause before retrying this message.');
+
       const rumorEvent = createStoredDirectMessageRumorEvent(storedEvent.event);
       if (!rumorEvent) {
         throw new Error('Failed to rebuild the direct message event for retry.');
@@ -498,7 +512,7 @@ export function createUserActions({
       );
 
       try {
-        await ensureRelayConnections([normalizedRelayUrl]);
+        await ensureRelayConnections([normalizedRelayUrl], { force: trigger === 'manual' });
         const recipient =
           scope === 'self'
             ? new NostrUser({ pubkey: signer.pubkey })

@@ -10,7 +10,6 @@ import {
   CALL_CONNECT_TIMEOUT_MS,
   CALL_PROTOCOL,
   CALL_RING_TIMEOUT_MS,
-  CALL_SUPPORT_TIMEOUT_MS,
   type CallConnection,
   type CallTransportStats,
   type CallEndpoint,
@@ -37,6 +36,13 @@ const DEFAULT_VIDEO_PROFILE: CallVideoProfile = {
   screenBitrate: 1_500_000,
   screenFrameRate: 15,
 };
+const HANDSHAKE_RETRY_MS = 2000;
+interface HandshakeDelivery {
+  signal: CallSignal;
+  pending: boolean;
+  lastSent?: number;
+  timer?: ReturnType<typeof setInterval>;
+}
 export interface CallRuntimeDeps {
   packetVideoSupported?(): Promise<boolean>;
   preparePacketAudio?(): Promise<(() => void) | undefined>;
@@ -91,7 +97,8 @@ interface Context {
   stream?: MediaStream;
   stopRecording?: () => void;
   stopVideoRecording?: () => void;
-  supportTimeout?: ReturnType<typeof setTimeout>;
+  handshake?: HandshakeDelivery;
+  ownPubkey: string | null;
   timeout?: ReturnType<typeof setTimeout>;
   heartbeat?: ReturnType<typeof setInterval>;
   mime: string;
@@ -195,7 +202,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     transportDiagnostics = null;
     remember(ctx.peer, ctx.id);
     clearTimeout(ctx.timeout);
-    clearTimeout(ctx.supportTimeout);
+    stopHandshake(ctx);
     clearInterval(ctx.heartbeat);
     clearInterval(ctx.recoveryTimer);
     clearTimeout(ctx.qualityTimer);
@@ -243,6 +250,43 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     clearTimeout(ctx.timeout);
     ctx.timeout = setTimeout(() => finish(ctx, 'timeout'), ms);
   }
+  function stopHandshake(ctx: Context) {
+    clearInterval(ctx.handshake?.timer);
+    ctx.handshake = undefined;
+  }
+  async function publishHandshake(ctx: Context) {
+    const delivery = ctx.handshake;
+    if (!alive(ctx) || !delivery || delivery.pending) return;
+    if (
+      deps.getOwnPubkey() !== ctx.ownPubkey ||
+      Date.parse(delivery.signal.expiresAt) <= Date.now()
+    ) {
+      stopHandshake(ctx);
+      return;
+    }
+    if (delivery.lastSent !== undefined && Date.now() - delivery.lastSent < HANDSHAKE_RETRY_MS)
+      return;
+    delivery.lastSent = Date.now();
+    delivery.pending = true;
+    try {
+      // A relay ACK is not a peer ACK. Each attempt re-resolves routes and
+      // respects relay backoff; the call deadline bounds this retry loop.
+      await deps.sendSignal(ctx.peer, delivery.signal);
+    } catch {
+      // A later attempt may reach a recovered relay. Only peer responses,
+      // cancellation, or the existing call deadline end initial negotiation.
+    } finally {
+      delivery.pending = false;
+    }
+  }
+  function beginHandshake(ctx: Context, control: CallSignal, retry = true) {
+    if (!alive(ctx) || ctx.connection) return Promise.resolve();
+    stopHandshake(ctx);
+    ctx.handshake = { signal: control, pending: false };
+    if (retry)
+      ctx.handshake.timer = setInterval(() => void publishHandshake(ctx), HANDSHAKE_RETRY_MS);
+    return publishHandshake(ctx);
+  }
   function captureFailed(ctx: Context, cause: unknown) {
     if (!alive(ctx)) return;
     fail(ctx, cause);
@@ -253,7 +297,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     ctx.mediaRecovery = incoming.mediaRecoveryVersion === 1;
     ctx.multiplexed = incoming.transportVersion === 2;
     ctx.reconnectSupported = incoming.reconnectSupported === true;
-    clearTimeout(ctx.supportTimeout);
+    if (ctx.handshake?.signal.action === 'invite') stopHandshake(ctx);
     ctx.splitMedia = incoming.mediaVersion === 2;
     ctx.peerPacketVideo = ctx.splitMedia && incoming.packetVideoVersion === 1;
     ctx.peerPacketAudio = ctx.splitMedia && incoming.packetAudioVersion === 1;
@@ -276,6 +320,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     id: string,
   ): Context {
     const ctx: Context = {
+      ownPubkey: deps.getOwnPubkey(),
       id,
       peer,
       mode,
@@ -408,6 +453,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         if (ctx.connection === connection) fail(ctx, new Error('Audio encoder failed'));
       },
       {
+        sendAudioBatch: ctx.packetAudio ? connection.sendAudioBatch : undefined,
         audioGeneration: (ctx.audioGeneration = (ctx.audioGeneration ?? 0) + 1),
         ...(ctx.splitMedia ? { onStreamRestart: () => connection.send(new Uint8Array([4])) } : {}),
         onSendError: (cause) => {
@@ -797,7 +843,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
             });
           if (ctx.screenStream) void resumeScreenRecording(ctx);
         } else if (data[0] === AUDIO_PACKET_KIND && ctx.packetAudio && ctx.ready) {
-          ctx.receiver?.append(data);
+          if (!session?.remoteMicrophoneMuted) ctx.receiver?.append(data);
         } else if (data[0] === 0 && data.length > 1 && ctx.ready && !ctx.packetAudio) {
           ctx.receiver?.append(data.subarray(1));
         } else if (data[0] === 3 && data.length > 1 && ctx.ready && ctx.splitMedia) {
@@ -900,7 +946,19 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
           ctx.ready &&
           ctx.peerMuteStateSupported
         ) {
-          patch({ remoteMicrophoneMuted: data[1] === 1 });
+          const muted = data[1] === 1;
+          if (ctx.packetAudio && muted && !session?.remoteMicrophoneMuted) {
+            // Sender queues cannot retract audio already decoded at this peer.
+            // Replacing only its audio receiver discards jitter/PCM backlog and
+            // leaves a silent stream attached until unmute brings fresh packets.
+            checkMediaChangeRate(ctx);
+            ctx.receiver?.close();
+            ctx.receiver = deps.createReceiver(OPUS_CALL_MIME, () => {
+              if (ctx.linkRevision === revision) fail(ctx, new Error('Audio decoder failed'));
+            });
+            remoteMediaUrl = ctx.receiver.url;
+          }
+          patch({ remoteMicrophoneMuted: muted });
         } else if (data[0] !== 1 || data.length !== 1) {
           throw new Error('Unexpected call frame');
         }
@@ -923,7 +981,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       while (alive(ctx) && ctx.linkRevision === revision) {
         const packet = await connection.recvAudio!();
         if (!alive(ctx) || ctx.linkRevision !== revision) return;
-        if (ctx.ready) ctx.receiver?.append(packet);
+        if (ctx.ready && !session?.remoteMicrophoneMuted) ctx.receiver?.append(packet);
       }
     } catch (cause) {
       if (alive(ctx) && ctx.linkRevision === revision) recover(ctx, cause);
@@ -951,6 +1009,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         return;
       }
       ctx.connection = connection;
+      stopHandshake(ctx);
       ctx.packetVideo = Boolean(ctx.localPacketVideo && ctx.peerPacketVideo);
       ctx.packetAudio = Boolean(
         ctx.releasePacketAudio && ctx.peerPacketAudio && endpoint.datagrams,
@@ -1017,15 +1076,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       patch({ phase: 'outgoing' });
       armTimeout(ctx, CALL_RING_TIMEOUT_MS);
       ctx.inviteSent = true;
-      try {
-        await deps.sendSignal(peer, signal(ctx, 'invite'));
-      } catch (cause) {
-        // An authenticated ringing/accept response proves delivery even if the
-        // publishing relay loses its acknowledgement. Do not end that call.
-        if (!ctx.peerConfirmed) throw cause;
-      }
-      if (alive(ctx) && !ctx.peerConfirmed)
-        ctx.supportTimeout = setTimeout(() => finish(ctx, 'unsupported'), CALL_SUPPORT_TIMEOUT_MS);
+      await beginHandshake(ctx, signal(ctx, 'invite'));
     } catch (cause) {
       fail(ctx, cause);
     }
@@ -1104,6 +1155,18 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       }
       return;
     }
+    if (
+      ctx?.peer === peer &&
+      ctx.id === incoming.callId &&
+      ctx.mode === incoming.mode &&
+      session?.direction === 'incoming' &&
+      Date.parse(incoming.expiresAt) > Date.now()
+    ) {
+      // Re-answer a retried invite without allocating another endpoint or
+      // extending the deadline. Publication is rate limited across relays.
+      void publishHandshake(ctx);
+      return;
+    }
     if (seen(peer, incoming.callId) || ctx?.id === incoming.callId) return;
     const contact = await deps.resolvePeer(peer);
     if (receivedGeneration !== generation || deps.getOwnPubkey() !== own) return;
@@ -1127,7 +1190,14 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     const next = reserve(peer, contact.name, incoming.mode, 'incoming', incoming.callId);
     confirmPeer(next, incoming);
     armTimeout(next, Math.max(1, Date.parse(incoming.expiresAt) - Date.now()));
-    void deps.sendSignal(peer, signal(next, 'ringing')).catch(() => {});
+    void beginHandshake(
+      next,
+      {
+        ...signal(next, 'ringing'),
+        expiresAt: incoming.expiresAt,
+      },
+      false,
+    );
   }
   async function accept(mode?: CallMode) {
     const ctx = context;
@@ -1141,13 +1211,10 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       if (!(await prepare(ctx, captureMode))) return;
       // Start accepting before publication so a fast caller cannot outrun the listener.
       void connect(ctx, invite);
-      try {
-        await deps.sendSignal(ctx.peer, signal(ctx, 'accept'));
-      } catch (cause) {
-        // The caller could only establish this authenticated connection after
-        // receiving our fresh endpoint address. A late relay error is obsolete.
-        if (!ctx.connection && !session?.startedAt) throw cause;
-      }
+      await beginHandshake(ctx, {
+        ...signal(ctx, 'accept'),
+        expiresAt: new Date(Date.now() + CALL_CONNECT_TIMEOUT_MS).toISOString(),
+      });
     } catch (cause) {
       fail(ctx, cause);
     }

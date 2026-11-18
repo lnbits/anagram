@@ -5,6 +5,7 @@
   import {
     followCallLive,
     setCallSpeaker,
+    releaseCallSpeaker,
     watchCallLive,
   } from '#src/services/callPlaybackService.ts';
   export let url = '';
@@ -49,6 +50,7 @@
   onDestroy(() => {
     attempt++;
     stopFollowing?.();
+    releaseCallSpeaker(element);
     if (element) {
       element.pause();
       element.srcObject = null;

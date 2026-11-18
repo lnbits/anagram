@@ -178,17 +178,23 @@ impl CallEndpoint {
             .map_err(js_error)?;
         let result = timeout(Duration::from_secs(10), async {
             let mut sends = Vec::new();
-            let mut recvs = Vec::new();
+            let mut incoming = Vec::new();
+            // Open in lane order, but do not spend a relay round trip waiting
+            // for each echo before writing the call ID on the next lane.
             for lane in 0..if lanes { 4 } else { 1 } {
-                let (mut send, mut recv) = conn.open_bi().await.map_err(js_error)?;
+                let (mut send, recv) = conn.open_bi().await.map_err(js_error)?;
                 send.set_priority(4 - lane).map_err(js_error)?;
                 send.write_all(call_id.as_bytes()).await.map_err(js_error)?;
-                let mut confirmation = vec![0; call_id.len()];
+                sends.push(Mutex::new(send));
+                incoming.push(recv);
+            }
+            let mut recvs = Vec::with_capacity(incoming.len());
+            let mut confirmation = vec![0; call_id.len()];
+            for mut recv in incoming {
                 recv.read_exact(&mut confirmation).await.map_err(js_error)?;
                 if confirmation != call_id.as_bytes() {
                     return Err(JsError::new("Call confirmation failed"));
                 }
-                sends.push(Mutex::new(send));
                 recvs.push(Mutex::new(recv));
             }
             Ok((sends, recvs))
@@ -285,9 +291,10 @@ pub struct CallConnection {
 impl CallConnection {
     // Amortize native WebView IPC latency without discarding ordinary bursts.
     // Datagram reads are cancellation-safe; stream reads must never use this.
-    pub async fn recv_audio_batch(&self) -> Result<Vec<u8>, JsError> {
+    pub async fn recv_audio_batch(&self, burst: bool) -> Result<Vec<u8>, JsError> {
+        let limit = if burst { 12 } else { 4 };
         let mut packets = std::collections::VecDeque::from([self.recv_audio().await?]);
-        for _ in 1..4 {
+        for _ in 1..limit {
             let Some(next) = self.conn.read_datagram().now_or_never() else {
                 break;
             };
@@ -296,7 +303,7 @@ impl CallConnection {
                 packets.push_back(data.to_vec());
             }
         }
-        let mut bytes = Vec::with_capacity(4408);
+        let mut bytes = Vec::with_capacity(packets.iter().map(|packet| packet.len() + 2).sum());
         for packet in packets {
             bytes.extend_from_slice(&(packet.len() as u16).to_be_bytes());
             bytes.extend_from_slice(&packet);

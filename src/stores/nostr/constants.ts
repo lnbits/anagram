@@ -75,7 +75,8 @@ export const RELAY_FIRST_HEALTHY_WAIT_MS = 1500;
 export const RELAY_PUBLISH_TIMEOUT_MS = 2500;
 export const RELAY_QUERY_TIMEOUT_MS = 10000;
 export const RELAY_CONNECT_RETRY_BASE_DELAY_MS = 10 * 1000;
-export const RELAY_CONNECT_RETRY_MAX_DELAY_MS = 5 * 60 * 1000;
+// Keep socket recovery within the same one-minute bound as subscription recovery.
+export const RELAY_CONNECT_RETRY_MAX_DELAY_MS = 60 * 1000;
 export const RELAY_CONNECT_RETRY_JITTER_RATIO = 0.2;
 export const RECONNECT_HEALING_PRIVATE_MESSAGES_EOSE_TIMEOUT_MS = 8 * 1000;
 export const BACKGROUND_GROUP_CONTACT_REFRESH_COOLDOWN_MS = 5 * 1000;

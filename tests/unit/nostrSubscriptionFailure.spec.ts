@@ -232,16 +232,14 @@ it('bounds partial live synchronization and retries only the silent relay withou
     expect(onInitialSync).toHaveBeenLastCalledWith([good], [slow]);
     expect(subscription.eoseReceived).toBe(false);
     expect(onEose).not.toHaveBeenCalled();
-    handlers
-      .get(good)
-      .onevent({
-        id: 'live',
-        kind: 1059,
-        tags: [],
-        content: '',
-        created_at: 1,
-        pubkey: 'a'.repeat(64),
-      });
+    handlers.get(good).onevent({
+      id: 'live',
+      kind: 1059,
+      tags: [],
+      content: '',
+      created_at: 1,
+      pubkey: 'a'.repeat(64),
+    });
     expect(onEvent).toHaveBeenCalledOnce();
     const stale = handlers.get(slow);
     await vi.advanceTimersByTimeAsync(RELAY_QUERY_TIMEOUT_MS);
@@ -286,6 +284,121 @@ it('keeps failed live targets retryable and cancels retries when the owner stops
     expect(starts.get(url)).toBe(2);
   } finally {
     subscription.stop();
+    vi.useRealTimers();
+  }
+});
+
+it('recovers at the socket deadline without polling or inflating query backoff', async () => {
+  vi.useFakeTimers();
+  const good = 'wss://healthy.example/',
+    bad = 'wss://cooling.example/';
+  const { client, handlers, subscription, starts, onEose } = await setup(
+    [good, bad],
+    false,
+    false,
+    vi.fn(),
+  );
+  try {
+    handlers.get(good).oneose();
+    let retryAt = Date.now() + 45000;
+    client.relayConnectionRetryDelay = (url) =>
+      url === bad ? Math.max(0, retryAt - Date.now()) : 0;
+    const connect = vi.mocked(client.pool.getRelay(bad, false).connect);
+    handlers.get(bad).onclose('connection closed');
+    await vi.advanceTimersByTimeAsync(44000);
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(onEose).not.toHaveBeenCalled();
+    // Another owner can extend the deadline; recheck without a socket attempt.
+    retryAt += 10000;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(connect).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(starts.get(good)).toBe(1);
+    expect(starts.get(bad)).toBe(2);
+    // Cooldown deferrals did not consume exponential query retry steps.
+    handlers.get(bad).onclose('temporary query failure');
+    await vi.advanceTimersByTimeAsync(RELAY_QUERY_TIMEOUT_MS);
+    expect(starts.get(bad)).toBe(3);
+    handlers.get(bad).oneose();
+    expect(onEose).toHaveBeenCalledOnce();
+  } finally {
+    subscription.stop();
+    vi.useRealTimers();
+  }
+});
+
+it('cancels a cooldown wait when stopped and recovers early on an external reconnect', async () => {
+  vi.useFakeTimers();
+  const url = 'wss://cooling.example/';
+  const { client, handlers, subscription, starts } = await setup([url], false, false, vi.fn());
+  try {
+    client.relayConnectionRetryDelay = () => 60000;
+    handlers.get(url).onclose('connection closed');
+    await vi.advanceTimersByTimeAsync(1000);
+    client.relayConnectionRetryDelay = () => 0;
+    client.pool.emit('relay:connect', client.pool.getRelay(url, false));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(starts.get(url)).toBe(2);
+    client.relayConnectionRetryDelay = () => 60000;
+    handlers.get(url).onclose('connection closed again');
+    subscription.stop();
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(starts.get(url)).toBe(2);
+  } finally {
+    subscription.stop();
+    vi.useRealTimers();
+  }
+});
+
+it('does not retry definitive subscription refusals on timers or reconnect, and preserves healthy coverage', async () => {
+  vi.useFakeTimers();
+  try {
+    const bad = 'wss://blocked.example/',
+      good = 'wss://healthy.example/';
+    const { client, handlers, subscription, starts, onEose } = await setup(
+      [bad, good],
+      false,
+      false,
+      vi.fn(),
+    );
+    handlers.get(bad).onclose('blocked: kind not allowed');
+    handlers.get(good).oneose();
+    await vi.advanceTimersByTimeAsync(120000);
+    client.pool.emit('relay:connect', client.pool.getRelay(bad, false));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(starts.get(bad)).toBe(1);
+    expect(starts.get(good)).toBe(1);
+    expect(onEose).not.toHaveBeenCalled();
+    subscription.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it('uses the shared rate-limit deadline for query recovery without restarting healthy relays', async () => {
+  vi.useFakeTimers();
+  try {
+    const bad = 'wss://limited.example/',
+      good = 'wss://healthy.example/';
+    const { client, handlers, subscription, starts } = await setup(
+      [bad, good],
+      false,
+      false,
+      vi.fn(),
+    );
+    client.relayTrafficPolicy(bad).rateLimited('REQ', 'rate-limited: wait', 45000);
+    handlers.get(bad).onclose('rate-limited: wait');
+    handlers.get(good).oneose();
+    await vi.advanceTimersByTimeAsync(44999);
+    expect(starts.get(bad)).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(starts.get(bad)).toBe(2);
+    expect(starts.get(good)).toBe(1);
+    subscription.stop();
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(starts.get(bad)).toBe(2);
+  } finally {
     vi.useRealTimers();
   }
 });

@@ -1,3 +1,4 @@
+import NostrClient from '#src/lib/nostr/client.ts';
 import { contactsService } from '#src/services/contactsService.ts';
 import { NostrPrivateKeySigner, NostrRelaySet, NostrRelayStatus } from '#src/lib/nostr/client.ts';
 import { RELAY_PUBLISH_TIMEOUT_MS } from '#src/stores/nostr/constants.ts';
@@ -48,6 +49,35 @@ function createRuntime(
 describe('relayPublishRuntime', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('persists the shared relay pause on failed messages, but clears it on success', async () => {
+    const ndk = new NostrClient();
+    const url = 'wss://limited.example/';
+    ndk.relayTrafficPolicy(url).rateLimited('EVENT', 'rate-limited: wait', 120000);
+    const { runtime } = createRuntime({ overrides: { ndk } });
+    const statuses = runtime.buildFailedOutboundRelayStatuses(
+      [url],
+      'recipient',
+      'rate-limited: wait',
+    );
+    expect(Date.parse(statuses[0].retry_after!)).toBe(ndk.relayTrafficPolicy(url).retryAt('EVENT'));
+    vi.spyOn(NostrRelaySet, 'fromRelayUrls').mockReturnValue({
+      relays: new Set([
+        {
+          url,
+          status: NostrRelayStatus.CONNECTED,
+          publish: vi.fn(async () => true),
+        },
+      ]),
+    } as never);
+    const success = await runtime.publishEventWithRelayStatuses(
+      { sig: 'signed' } as never,
+      [url],
+      'recipient',
+    );
+    expect(success.relayStatuses[0].status).toBe('published');
+    expect(success.relayStatuses[0].retry_after).toBeUndefined();
   });
 
   it('orders rapid group profile updates after the restored profile timestamp', async () => {

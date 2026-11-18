@@ -61,6 +61,20 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
   window.addEventListener('keydown', resumePlayback);
   const clockStart = performance.now();
   const audioStart = context.currentTime;
+  // Fixture-only scheduling counters separate UI starvation from slow transport
+  // acknowledgements. No media data or participant identities are retained.
+  const scheduling = { samples: 0, totalDelayMs: 0, maxDelayMs: 0, over100Ms: 0 };
+  let lastTick = performance.now();
+  const schedulingTimer = setInterval(() => {
+    const now = performance.now();
+    const delayMs = Math.max(0, now - lastTick - 50);
+    lastTick = now;
+    scheduling.samples++;
+    scheduling.totalDelayMs += delayMs;
+    scheduling.maxDelayMs = Math.max(scheduling.maxDelayMs, delayMs);
+    if (delayMs > 100) scheduling.over100Ms++;
+  }, 50);
+  cleanup.push(() => clearInterval(schedulingTimer));
   // Fixture-only pixel diagnostics distinguish a frozen capture from transport
   // or decoder stalls when a native quality/profile change replaces the reader.
   const pixel = (source) => {
@@ -77,6 +91,12 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
   const snapshot = () => ({
     elapsedSeconds: (performance.now() - clockStart) / 1000,
     sourceSeconds: context.currentTime - audioStart,
+    scheduling: {
+      samples: scheduling.samples,
+      meanDelayMs: scheduling.totalDelayMs / Math.max(1, scheduling.samples),
+      maxDelayMs: scheduling.maxDelayMs,
+      over100Ms: scheduling.over100Ms,
+    },
     monitorSeconds: monitorContexts.map((c) => c?.currentTime),
     kind,
     legacy,

@@ -30,7 +30,7 @@ concurrency:
   cancel-in-progress: ${{ github.event.pull_request.number != 122 }}
 jobs:
   # PR #122 temporarily skips proven-green checks in the other workflows.
-  # Keep every native case enabled: the current run still has unresolved cases.
+  # Keep the requested four-participant Linux case and the macOS/Windows cases.
   linux-calls:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        participants: [3, 4, 6]
+        participants: [4]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

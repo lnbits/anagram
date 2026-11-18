@@ -1,4 +1,4 @@
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createWriteStream } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -8,6 +8,9 @@ import { createBuildConfig, probeSettings, probeUrl, readBuildConfig } from './b
 import { createServer } from 'vite';
 import { chromium } from '@playwright/test';
 import { startIrohTestProxy } from '../iroh-test-proxy.cjs';
+import { runCommand } from './command.mjs';
+import { createTestCertificate } from './certificate.mjs';
+import { findLinuxProbeWindow } from './window.mjs';
 
 const linuxNative = process.argv.includes('--linux') && process.platform === 'linux';
 const browserOnly = process.argv.includes('--browser');
@@ -75,8 +78,11 @@ const resetResult = () => {
   void result.catch(() => {});
 };
 resetResult();
-const command = (file, args, options = {}) =>
-  execFileSync(file, args, { encoding: 'utf8', ...options });
+const command = (file, args, options = {}) => {
+  lastStage = `Command: ${file} ${args[0] ?? ''}`;
+  console.log(lastStage);
+  return runCommand(file, args, options);
+};
 const launch = (file, args, name, env = process.env) => {
   const log = createWriteStream(join(artifacts, `${name}.log`));
   logs.push(log);
@@ -94,7 +100,7 @@ const waitFor = async (check, milliseconds, description) => {
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
 };
-const startNativeProbe = (pid) => {
+const startNativeProbe = async (pid) => {
   if (process.platform === 'darwin') {
     command('osascript', [
       '-e',
@@ -103,10 +109,7 @@ const startNativeProbe = (pid) => {
       'tell application "System Events" to key code 49',
     ]);
   } else if (linuxNative) {
-    const window = command('xdotool', ['search', '--sync', '--pid', String(pid)])
-      .trim()
-      .split('\n')
-      .at(-1);
+    const window = await findLinuxProbeWindow(pid, command);
     // Keep every test tile visible without saturating software compositing in Xvfb.
     command('xdotool', ['windowsize', window, '800', '600']);
     if (isolated()) {
@@ -129,30 +132,7 @@ const startNativeProbe = (pid) => {
 };
 let app, timer;
 try {
-  const cert = join(directory, 'cert.pem');
-  command(
-    process.env.OPENSSL || 'openssl',
-    [
-      'req',
-      '-x509',
-      '-newkey',
-      'rsa:2048',
-      '-nodes',
-      '-days',
-      '1',
-      '-subj',
-      '/CN=Anagram disposable call test',
-      '-addext',
-      'subjectAltName=DNS:localhost,IP:127.0.0.1',
-      '-addext',
-      'basicConstraints=critical,CA:FALSE',
-      '-keyout',
-      join(directory, 'key.pem'),
-      '-out',
-      cert,
-    ],
-    { stdio: 'ignore' },
-  );
+  const cert = createTestCertificate(directory, command);
   if (!browserOnly && !linuxNative) {
     const fingerprint = command(process.env.OPENSSL || 'openssl', [
       'x509',
@@ -185,12 +165,19 @@ try {
           fingerprint,
           '/Library/Keychains/System.keychain',
         ]);
+      // Fail with the platform's trust error before an opaque Iroh timeout.
+      for (const hostname of ['localhost', '127.0.0.1']) {
+        command('security', ['verify-cert', '-c', cert, '-p', 'ssl', '-s', hostname], {
+          stdio: 'inherit',
+        });
+      }
     } else {
-      // Use the Windows store tool directly: a child Windows PowerShell session
-      // launched from pwsh may not have the Cert: provider initialized.
-      command('certutil.exe', ['-user', '-addstore', 'Root', cert]);
-      removeTrust = () =>
-        command('certutil.exe', ['-user', '-delstore', 'Root', fingerprint]);
+      // The current-user Root store can display an unattended confirmation
+      // dialog. Disposable GitHub-hosted Windows runners already run as admin;
+      // use their machine store and remove only this short-lived certificate.
+      // Register cleanup first in case installation fails after adding it.
+      removeTrust = () => command('certutil.exe', ['-delstore', 'Root', fingerprint]);
+      command('certutil.exe', ['-addstore', 'Root', cert]);
     }
   }
   const relayConfig = join(directory, 'relay.toml');
@@ -302,7 +289,11 @@ try {
                             ? browserPage.getByRole('button').click()
                             : browserPage.keyboard.press('Space');
                         void gesture.catch(reject);
-                      } else startNativeProbe(isolated() ? apps[data.peer].pid : app.pid);
+                      } else {
+                        void startNativeProbe(isolated() ? apps[data.peer].pid : app.pid).catch(
+                          reject,
+                        );
+                      }
                     } catch (error) {
                       reject(error);
                     }
@@ -475,6 +466,8 @@ try {
       process.exitCode = 1;
     }
   }
-  await rm(directory, { recursive: true, force: true });
+  // WebView subprocesses can finish a profile write just after the app exits.
+  // Retry transient ENOTEMPTY/EBUSY without replacing the recorded test failure.
+  await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   logs.forEach((log) => log.end());
 }

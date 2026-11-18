@@ -23,6 +23,7 @@ export async function setCallSpeaker(element: HTMLMediaElement, deviceId: string
 // Players call this on timeupdate as well as progress: WebKit may append MSE
 // segments without emitting progress, leaving a playing call behind live audio.
 const catchingUpAudio = new WeakSet<HTMLMediaElement>();
+const videoSeekAt = new WeakMap<HTMLMediaElement, number>();
 function resetAudioRate(element: HTMLMediaElement): void {
   if (catchingUpAudio.delete(element)) element.playbackRate = 1;
 }
@@ -33,7 +34,8 @@ export function followCallLive(
   // A pause can keep receiving chunks. Catch up once playback resumes instead
   // of repeatedly moving the paused cursor on every timer/progress event.
   if (!element) return;
-  if (element.paused || element.seeking || !element.buffered.length) {
+  if (element.paused || !element.buffered.length) videoSeekAt.delete(element);
+  if (element.paused || !element.buffered.length) {
     resetAudioRate(element);
     return;
   }
@@ -41,6 +43,20 @@ export function followCallLive(
   const start = element.buffered.start(latest);
   const end = element.buffered.end(latest);
   const lag = end - element.currentTime;
+  if (element.seeking) {
+    resetAudioRate(element);
+    // WebKit can retain a pending seek at a buffer gap indefinitely. Retry only
+    // our own video correction, after settling time and substantial new backlog.
+    // Ordinary seeks and audio must still finish without interference.
+    const started = videoSeekAt.get(element);
+    if (
+      kind !== 'video' ||
+      started === undefined ||
+      performance.now() - started < 1500 ||
+      lag <= 1.5
+    )
+      return;
+  }
   if (kind === 'audio') {
     // Repeated seeks make the decoder rebuffer and can add as much delay as
     // they remove. Drain modest backlog smoothly, with hysteresis so chunk
@@ -73,7 +89,20 @@ export function followCallLive(
     } else if (lag <= 0.25) resetAudioRate(element);
     return;
   }
-  if (lag > 0.6) element.currentTime = Math.max(start, end - 0.35);
+  if (lag > 0.6) {
+    const now = performance.now();
+    // Uneven delivery can cross the threshold again just after a seek completes.
+    // Let the decoder render between modest corrections; a large backlog or a
+    // lost buffered range must still recover immediately during this window.
+    if (
+      lag <= 1.5 &&
+      element.currentTime >= start &&
+      now - (videoSeekAt.get(element) ?? -Infinity) < 1500
+    )
+      return;
+    videoSeekAt.set(element, now);
+    element.currentTime = Math.max(start, end - 0.35);
+  }
 }
 
 // A stalled WebView can stop emitting both progress and timeupdate. Keep the
@@ -86,5 +115,6 @@ export function watchCallLive(
   return () => {
     clearInterval(timer);
     resetAudioRate(element);
+    videoSeekAt.delete(element);
   };
 }

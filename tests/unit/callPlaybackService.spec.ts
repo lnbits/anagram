@@ -9,7 +9,9 @@ function media(currentTime: number, ranges: number[][], seeking = false) {
   });
   const element = {
     buffered: {
-      length: ranges.length,
+      get length() {
+        return ranges.length;
+      },
       start: (index: number) => ranges[index][0],
       end: (index: number) => ranges[index][1],
     },
@@ -26,6 +28,33 @@ function media(currentTime: number, ranges: number[][], seeking = false) {
 }
 
 describe('live call playback recovery', () => {
+  it('retries its own stalled video seek only after the deadline and substantial drift', () => {
+    vi.useFakeTimers();
+    const ranges = [[0, 3]];
+    const { element, seek } = media(2, ranges);
+    const stop = watchCallLive(element);
+    vi.advanceTimersByTime(250);
+    expect(element.currentTime).toBeCloseTo(2.65);
+    // WebKit can stay seeking at the beginning of a new buffered range while
+    // newer frames continue arriving. A pending seek must not block recovery forever.
+    Object.defineProperty(element, 'seeking', { value: true });
+    ranges.splice(0, 1, [0, 2.5], [2.65, 5]);
+    vi.advanceTimersByTime(1250);
+    expect(seek).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(250);
+    expect(element.currentTime).toBeCloseTo(4.65);
+    expect(seek).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1500);
+    expect(seek).toHaveBeenCalledTimes(2); // No drift: give the decoder time.
+    ranges[1][1] = 7;
+    vi.advanceTimersByTime(250);
+    expect(element.currentTime).toBeCloseTo(6.65);
+    stop();
+    ranges[1][1] = 10;
+    followCallLive(element);
+    expect(seek).toHaveBeenCalledTimes(3); // Detach forgets the pending seek.
+  });
+
   it('waits for playback to resume before catching up a paused stream', () => {
     vi.useFakeTimers();
     const ranges = [[0, 10]];
@@ -195,6 +224,62 @@ describe('live call playback recovery', () => {
     const { element, seek } = media(8, [[0, 10]], true);
     followCallLive(element);
     expect(seek).not.toHaveBeenCalled();
+  });
+
+  it('lets video decode between uneven delivery bursts without losing later recovery', () => {
+    vi.useFakeTimers();
+    const ranges = [[0, 10]];
+    const { element, seek } = media(9, ranges);
+    followCallLive(element);
+    expect(seek).toHaveBeenCalledExactlyOnceWith(9.65);
+    // The previous seek has completed, but a fresh chunk arrives before the
+    // decoder has settled. Progress events and the watchdog must not seek again.
+    ranges[0][1] = 10.4;
+    for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(250);
+      followCallLive(element);
+    }
+    expect(seek).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(250);
+    followCallLive(element);
+    expect(seek).toHaveBeenCalledTimes(2);
+    expect(element.currentTime).toBeCloseTo(10.05);
+  });
+
+  it('still corrects large video drift and buffer gaps during the settling window', () => {
+    vi.useFakeTimers();
+    const ranges = [[0, 10]];
+    const { element, seek } = media(9, ranges);
+    followCallLive(element);
+    ranges[0][1] = 12;
+    followCallLive(element);
+    expect(seek).toHaveBeenCalledTimes(2);
+    expect(element.currentTime).toBeCloseTo(11.65);
+    ranges[0] = [12, 12.4];
+    followCallLive(element);
+    expect(seek).toHaveBeenCalledTimes(3);
+    expect(element.currentTime).toBeCloseTo(12.05);
+  });
+
+  it.each(['pause', 'empty', 'detach'])('clears video settling state on %s', (reason) => {
+    vi.useFakeTimers();
+    const ranges = [[0, 10]];
+    const { element, seek } = media(9, ranges);
+    const stop = watchCallLive(element);
+    followCallLive(element);
+    if (reason === 'detach') stop();
+    else {
+      if (reason === 'pause')
+        Object.defineProperty(element, 'paused', { value: true, writable: true });
+      else ranges.length = 0;
+      followCallLive(element);
+      if (reason === 'pause') Object.defineProperty(element, 'paused', { value: false });
+    }
+    ranges[0] = [0, 10.4];
+    followCallLive(element);
+    expect(seek).toHaveBeenCalledTimes(2);
+    stop();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('seeks into the latest playable range rather than a gap', () => {

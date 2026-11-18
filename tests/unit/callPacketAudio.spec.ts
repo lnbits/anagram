@@ -122,6 +122,7 @@ it('preserves sender backlog in order without delaying another peer, and clears 
   const { posted, worker, release, recordPacketAudio } = await mockEngine();
   const { packAudio, unpackAudio } = await import('#src/services/callAudioPackets.ts');
   const track = new EventTarget() as MediaStreamTrack;
+  track.enabled = true;
   const stream = new MediaStream([track]);
   const received: number[] = [];
   const generations: number[] = [];
@@ -189,6 +190,66 @@ it('preserves sender backlog in order without delaying another peer, and clears 
   } finally {
     stopSlow();
     stopFast();
+    release?.();
+  }
+});
+
+it('discards queued speech and late encoder output while the microphone is muted', async () => {
+  const { posted, worker, release, recordPacketAudio } = await mockEngine();
+  const { packAudio, unpackAudio } = await import('#src/services/callAudioPackets.ts');
+  const track = new EventTarget() as MediaStreamTrack;
+  track.enabled = true;
+  const sent: number[] = [];
+  const acknowledgements: Array<() => void> = [];
+  const error = vi.fn();
+  const stop = recordPacketAudio(
+    new MediaStream([track]),
+    async (bytes) => {
+      sent.push(unpackAudio(bytes)!.sequence);
+      await new Promise<void>((resolve) => acknowledgements.push(resolve));
+    },
+    error,
+  );
+  const id = posted.find((message) => message.type === 'encode').id;
+  const deliver = (sequence: number) =>
+    worker.onmessage({
+      data: {
+        id,
+        type: 'packet',
+        packet: packAudio({
+          sequence,
+          generation: 1,
+          timestamp: sequence * 960,
+          opus: new Uint8Array([1]),
+        }),
+      },
+    });
+  const acknowledge = async () => {
+    acknowledgements.splice(0).forEach((resolve) => resolve());
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+  try {
+    for (let sequence = 0; sequence < 10; sequence++) deliver(sequence);
+    expect(sent).toEqual([0, 1]);
+    track.enabled = false;
+    // Completing a send must not drain pre-mute speech from the peer FIFO.
+    await acknowledge();
+    expect(sent).toEqual([0, 1]);
+    // The codec can still deliver frames captured before track.enabled changed.
+    for (let sequence = 10; sequence < 15; sequence++) deliver(sequence);
+    expect(sent).toEqual([0, 1]);
+    // Keep acknowledging the encoder even while dropping its output.
+    expect(posted.filter((message) => message.type === 'encoded')).toHaveLength(15);
+    track.enabled = true;
+    deliver(15);
+    await acknowledge();
+    expect(sent).toEqual([0, 1, 15]);
+    expect(posted.filter((message) => message.type === 'encode')).toHaveLength(1);
+    expect(error).not.toHaveBeenCalled();
+  } finally {
+    stop();
+    await acknowledge();
     release?.();
   }
 });

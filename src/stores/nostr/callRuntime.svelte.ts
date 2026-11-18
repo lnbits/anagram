@@ -797,7 +797,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
             });
           if (ctx.screenStream) void resumeScreenRecording(ctx);
         } else if (data[0] === AUDIO_PACKET_KIND && ctx.packetAudio && ctx.ready) {
-          ctx.receiver?.append(data);
+          if (!session?.remoteMicrophoneMuted) ctx.receiver?.append(data);
         } else if (data[0] === 0 && data.length > 1 && ctx.ready && !ctx.packetAudio) {
           ctx.receiver?.append(data.subarray(1));
         } else if (data[0] === 3 && data.length > 1 && ctx.ready && ctx.splitMedia) {
@@ -900,7 +900,19 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
           ctx.ready &&
           ctx.peerMuteStateSupported
         ) {
-          patch({ remoteMicrophoneMuted: data[1] === 1 });
+          const muted = data[1] === 1;
+          if (ctx.packetAudio && muted && !session?.remoteMicrophoneMuted) {
+            // Sender queues cannot retract audio already decoded at this peer.
+            // Replacing only its audio receiver discards jitter/PCM backlog and
+            // leaves a silent stream attached until unmute brings fresh packets.
+            checkMediaChangeRate(ctx);
+            ctx.receiver?.close();
+            ctx.receiver = deps.createReceiver(OPUS_CALL_MIME, () => {
+              if (ctx.linkRevision === revision) fail(ctx, new Error('Audio decoder failed'));
+            });
+            remoteMediaUrl = ctx.receiver.url;
+          }
+          patch({ remoteMicrophoneMuted: muted });
         } else if (data[0] !== 1 || data.length !== 1) {
           throw new Error('Unexpected call frame');
         }
@@ -923,7 +935,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       while (alive(ctx) && ctx.linkRevision === revision) {
         const packet = await connection.recvAudio!();
         if (!alive(ctx) || ctx.linkRevision !== revision) return;
-        if (ctx.ready) ctx.receiver?.append(packet);
+        if (ctx.ready && !session?.remoteMicrophoneMuted) ctx.receiver?.append(packet);
       }
     } catch (cause) {
       if (alive(ctx) && ctx.linkRevision === revision) recover(ctx, cause);

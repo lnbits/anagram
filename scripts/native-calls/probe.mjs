@@ -64,6 +64,19 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
   // Fixture-only scheduling counters separate UI starvation from slow transport
   // acknowledgements. No media data or participant identities are retained.
   const scheduling = { samples: 0, totalDelayMs: 0, maxDelayMs: 0, over100Ms: 0 };
+  const measurementCosts = Object.fromEntries(
+    ['videoReadback', 'audioReadback', 'sourceDrawing', 'snapshotPixels'].map((name) => [
+      name,
+      { count: 0, totalMs: 0, maxMs: 0 },
+    ]),
+  );
+  const measured = (name, started) => {
+    const cost = measurementCosts[name];
+    const elapsed = performance.now() - started;
+    cost.count++;
+    cost.totalMs += elapsed;
+    cost.maxMs = Math.max(cost.maxMs, elapsed);
+  };
   let lastTick = performance.now();
   const schedulingTimer = setInterval(() => {
     const now = performance.now();
@@ -78,6 +91,7 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
   // Fixture-only pixel diagnostics distinguish a frozen capture from transport
   // or decoder stalls when a native quality/profile change replaces the reader.
   const pixel = (source) => {
+    const started = performance.now();
     try {
       const sample = document.createElement('canvas');
       sample.width = sample.height = 1;
@@ -86,6 +100,8 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
       return [...paint.getImageData(0, 0, 1, 1).data.slice(0, 3)];
     } catch {
       return null;
+    } finally {
+      measured('snapshotPixels', started);
     }
   };
   const snapshot = () => ({
@@ -97,6 +113,7 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
       maxDelayMs: scheduling.maxDelayMs,
       over100Ms: scheduling.over100Ms,
     },
+    measurementCosts,
     monitorSeconds: monitorContexts.map((c) => c?.currentTime),
     kind,
     legacy,
@@ -196,6 +213,7 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
     const track = stream.getVideoTracks()[0];
     let colour = 0;
     const draw = setInterval(() => {
+      const started = performance.now();
       colour = (colour + 0x9e3779) & 0xffffff;
       paint.fillStyle = `#${colour.toString(16).padStart(6, '0')}`;
       paint.fillRect(0, 0, canvas.width, canvas.height);
@@ -205,6 +223,7 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
         paint.fillText(`Screen share ${colour} — 1280 × 720`, 32, 64);
       }
       if (manual) track.requestFrame();
+      measured('sourceDrawing', started);
     }, 1000 / 24);
     cleanup.push(() => {
       clearInterval(draw);
@@ -349,6 +368,7 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
                 sampledAt = performance.now();
                 pixels.drawImage(element, 0, 0, 1, 1);
                 const current = pixels.getImageData(0, 0, 1, 1).data;
+                measured('videoReadback', sampledAt);
                 if (
                   previous.reduce(
                     (sum, value, index) => sum + Math.abs(value - current[index]),
@@ -378,7 +398,9 @@ async function scenario(kind, context, monitorContexts, legacy = false) {
             let lastAudioTime = 0;
             audioTimer = setInterval(() => {
               const time = element.currentTime;
+              const started = performance.now();
               analyser.getFloatTimeDomainData(samples);
+              measured('audioReadback', started);
               // WebKit may retain the analyser's last block after a stalled MSE
               // player stops consuming audio. Only count newly played samples.
               if (

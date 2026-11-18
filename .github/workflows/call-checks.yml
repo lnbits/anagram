@@ -59,14 +59,17 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run verify:iroh
-      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Install WebKit and its dependencies
+        if: runner.os == 'macOS'
+        run: npx playwright install --with-deps webkit
+      - name: Install Linux browser and audio dependencies
+        if: runner.os == 'Linux'
+        run: bash scripts/native-calls/browser-dependencies.sh "${{ matrix.browser }}"
       - name: Start virtual audio output
         if: runner.os == 'Linux'
         # Firefox needs a working output device for AudioContext.resume(), even
         # when the test generates and measures its audio entirely in the browser.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils
           pulseaudio --start --exit-idle-time=-1
           pactl load-module module-null-sink sink_name=call_tests rate=48000 channels=2
           pactl set-default-sink call_tests

@@ -76,38 +76,34 @@ async function mockEngine() {
 it('preserves brief decoder stalls and bounds a sustained decoder backlog', async () => {
   const { posted, worker, release, createPacketAudioReceiver } = await mockEngine();
   const receiver = createPacketAudioReceiver(vi.fn());
+  const batches = () => posted.filter((message) => message.type === 'packets');
+  const sequences = () =>
+    batches().flatMap((m) => m.packets.map((p: { packet: Uint8Array }) => p.packet[0]));
   const received = () => {
-    const last = posted.filter((message) => message.type === 'packet').at(-1);
+    const last = batches().at(-1);
     worker.onmessage({ data: { id: last.id, type: 'received', stats: {} } });
   };
   try {
     receiver.append(new Uint8Array(1101));
-    expect(posted.filter((message) => message.type === 'packet')).toHaveLength(0);
+    expect(batches()).toHaveLength(0);
     for (let i = 1; i <= 4; i++) receiver.append(new Uint8Array([i]));
-    for (let i = 0; i < 4; i++) received();
-    expect(posted.filter((m) => m.type === 'packet').map((m) => m.packet[0])).toEqual([1, 2, 3, 4]);
+    expect(sequences()).toEqual([1]); // Do not queue a second unacknowledged worker message.
+    received();
+    expect(sequences()).toEqual([1, 2, 3, 4]);
+    received();
     for (let i = 5; i <= 20; i++) receiver.append(new Uint8Array([i]));
     for (let i = 0; i < 16; i++) received();
-    expect(
-      posted
-        .filter((m) => m.type === 'packet')
-        .map((m) => m.packet[0])
-        .slice(4),
-    ).toEqual(Array.from({ length: 16 }, (_, i) => i + 5));
+    expect(sequences().slice(4)).toEqual(Array.from({ length: 16 }, (_, i) => i + 5));
     for (let i = 21; i <= 120; i++) receiver.append(new Uint8Array([i]));
     for (let i = 0; i <= CALL_AUDIO_QUEUE_FRAMES; i++) received();
-    expect(
-      posted
-        .filter((m) => m.type === 'packet')
-        .map((m) => m.packet[0])
-        .slice(20),
-    ).toEqual([
+    expect(sequences().slice(20)).toEqual([
       21,
       ...Array.from(
         { length: CALL_AUDIO_QUEUE_FRAMES },
         (_, i) => 121 - CALL_AUDIO_QUEUE_FRAMES + i,
       ),
     ]);
+    expect(Math.max(...batches().map((m) => m.packets.length))).toBe(8);
     receiver.close();
     const count = posted.length;
     receiver.append(new Uint8Array([21]));

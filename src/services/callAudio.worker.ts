@@ -1,10 +1,15 @@
 import { CallAudioQueue } from './callAudioQueue.ts';
 import { Application, createEncoder, createDecoder, loadLibopus } from 'libopus-wasm';
-import { CallAudioJitterBuffer, packAudio, unpackAudio } from './callAudioPackets.ts';
+import {
+  CallAudioJitterBuffer,
+  MAX_DECODE_BATCH,
+  packAudio,
+  unpackAudio,
+} from './callAudioPackets.ts';
 
 type Stream = {
   close(): void;
-  packet?(data: Uint8Array): Promise<void>;
+  packet?(data: Uint8Array, arrival: number): Promise<void>;
   ack?(): void;
   stats?(): unknown;
 };
@@ -28,9 +33,17 @@ globalThis.onmessage = async ({ data }) => {
       (await streams.get(id))?.ack?.();
       return;
     }
-    if (data.type === 'packet') {
+    if (data.type === 'packets') {
+      if (
+        !Array.isArray(data.packets) ||
+        !data.packets.length ||
+        data.packets.length > MAX_DECODE_BATCH
+      )
+        throw new Error('Invalid decoder batch');
       const stream = await streams.get(id);
-      await stream?.packet?.(data.packet);
+      for (const { packet, at } of data.packets) {
+        await stream?.packet?.(packet, at - performance.timeOrigin);
+      }
       send({ id, type: 'received', stats: stream?.stats?.() });
       return;
     }
@@ -120,7 +133,8 @@ globalThis.onmessage = async ({ data }) => {
         }
       };
       return {
-        async packet(bytes) {
+        async packet(bytes, arrival) {
+          if (closed) return;
           const packet = unpackAudio(bytes);
           if (!packet) return;
           if (generation !== undefined && ((packet.generation - generation) | 0) < 0) return;
@@ -141,7 +155,7 @@ globalThis.onmessage = async ({ data }) => {
             jitter = new CallAudioJitterBuffer();
             generation = packet.generation;
           }
-          jitter.push(packet, performance.now());
+          jitter.push(packet, arrival);
         },
         stats: () => jitter.stats,
         close() {

@@ -75,6 +75,79 @@ test('blocking a conversation survives reload and rejects later messages', async
   }
 });
 
+test('muting a chat survives reload, keeps messages and resumes notifications after unmute', async ({
+  browser,
+}) => {
+  const sender = await bootstrapUser(browser, TEST_ACCOUNTS.persistMuteSender);
+  const receiver = await bootstrapUser(browser, TEST_ACCOUNTS.persistMuteReceiver);
+  const activity: string[] = [];
+  const mutedMessage = 'Delivered without a notification';
+  const unmutedMessage = 'Notifications are enabled again';
+  try {
+    await establishAcceptedDirectChat(sender, receiver);
+    const row = receiver.page
+      .locator(`[data-testid="chat-item"][data-chat-public-key="${sender.session.publicKey}"]`)
+      .locator('..');
+    await row.getByRole('button', { name: 'Chat actions' }).click();
+    await receiver.page.getByRole('menuitem', { name: 'Mute', exact: true }).click();
+    await expect(row).toHaveClass(/muted/);
+    await reloadAndWaitForApp(receiver.page);
+    await waitForStartup(receiver.page);
+    await expect(row).toHaveClass(/muted/);
+    await navigateInApp(receiver.page, '/contacts');
+    const list = receiver.page.getByTestId('contacts-list');
+    const mutedSection = list.getByRole('button', { name: /Muted/ });
+    await expect(mutedSection).toContainText('1');
+    await receiver.page.exposeFunction('recordMuteTestActivity', (text: string) =>
+      activity.push(text),
+    );
+    await receiver.page.evaluate(() => {
+      window.addEventListener('anagram:foreground-message-activity', (event) => {
+        void (window as any).recordMuteTestActivity((event as CustomEvent).detail.messageText);
+      });
+    });
+    await receiver.page.bringToFront();
+    async function sendAfterNewSecond(text: string) {
+      await sender.page.waitForFunction(
+        (second) => Math.floor(Date.now() / 1000) > second,
+        Math.floor(Date.now() / 1000),
+      );
+      await sendMessage(sender.page, text);
+    }
+    await sendAfterNewSecond(mutedMessage);
+    await expect
+      .poll(() =>
+        receiver.page.evaluate(
+          async ({ key, text }) => {
+            const { chatDataService } = await import('/src/services/chatDataService.ts');
+            const messages = await chatDataService.listLatestMessages(key, 10);
+            return messages.rows.some((row) => row.message === text);
+          },
+          { key: sender.session.publicKey, text: mutedMessage },
+        ),
+      )
+      .toBe(true);
+    expect(activity).not.toContain(mutedMessage);
+    await mutedSection.click();
+    const contact = list
+      .locator(`[data-testid="contact-item"][data-public-key="${sender.session.publicKey}"]`)
+      .locator('..');
+    await contact.getByRole('button', { name: 'Contact actions' }).click();
+    await contact.getByRole('menuitem', { name: 'Unmute', exact: true }).click();
+    await expect(mutedSection).toContainText('0');
+    await sendAfterNewSecond(unmutedMessage);
+    await expect.poll(() => activity).toContain(unmutedMessage);
+    expect(activity).not.toContain(mutedMessage);
+    await navigateToChat(receiver.page, sender.session.publicKey);
+    await expect(row).not.toHaveClass(/muted/);
+    await expect(receiver.page.getByTestId('chat-thread')).toContainText(mutedMessage);
+    await expect(receiver.page.getByTestId('chat-thread')).toContainText(unmutedMessage);
+    expect(receiver.browserErrors).toEqual([]);
+  } finally {
+    await disposeUsers(sender, receiver);
+  }
+});
+
 for (const conversation of ['direct message', 'private group']) {
   test(`reading a ${conversation} on desktop clears unread state on an open mobile session`, async ({
     browser,

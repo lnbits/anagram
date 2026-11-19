@@ -47,8 +47,9 @@ export interface ContactMetadata {
   private_contact_list_member?: boolean;
   muted?: boolean;
   blocked?: boolean;
-  // Local block/unblock still waiting for an encrypted account-list publication.
+  // Local mute/block choices still waiting for an encrypted account-list publication.
   pending_block?: boolean;
+  pending_mute?: boolean;
   blocked_at?: string;
   group_private_key_encrypted?: string;
   // Locally observed recovery branches that must survive reloads.

@@ -113,7 +113,9 @@ export function createPrivateContactMembershipRuntime({
       existingChat.meta && typeof existingChat.meta.accepted_at === 'string'
         ? existingChat.meta.accepted_at.trim()
         : '';
-    if (currentInboxState === 'accepted' && acceptedAt) {
+    // A saved contact remains listed when blocked. Restoring membership is
+    // not an explicit unblock action.
+    if (currentInboxState === 'blocked' || (currentInboxState === 'accepted' && acceptedAt)) {
       return;
     }
 

@@ -160,8 +160,14 @@ test('contact search, add, mute, block, unblock and delete preserve contact navi
   }
   await action('Mute');
   await expect(row.locator('[aria-label="Mute"]')).toBeVisible();
+  await expect(
+    page.getByTestId('contacts-list').getByRole('button', { name: /Muted/ }),
+  ).toContainText('1');
   await action('Unmute');
   await expect(row.locator('[aria-label="Mute"]')).toHaveCount(0);
+  await expect(
+    page.getByTestId('contacts-list').getByRole('button', { name: /Muted/ }),
+  ).toContainText('0');
   await action('Block');
   const list = page.getByTestId('contacts-list');
   await expect(list.getByRole('button', { name: /Blocked/ })).toContainText('1');
@@ -241,6 +247,80 @@ test('blocking moves a contact out of Active when relay restore fails and surviv
   await expect(alice).toBeVisible();
 });
 
+for (const width of [1280, 390])
+  test(`mute and unmute survive relay failures and reloads (${width}px)`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    let rejectReads = true,
+      rejectWrites = true;
+    let rejectedWrites = 0;
+    await page.routeWebSocket(relay, (socket) => {
+      const server = socket.connectToServer();
+      socket.onMessage((raw) => {
+        const [verb, target, ...filters] = JSON.parse(String(raw));
+        if (
+          rejectReads &&
+          verb === 'REQ' &&
+          filters.some((filter) => filter.kinds?.includes(10000))
+        )
+          socket.send(JSON.stringify(['CLOSED', target, 'error: temporarily unavailable']));
+        else if (rejectWrites && verb === 'EVENT' && target.kind === 10000) {
+          rejectedWrites++;
+          socket.send(JSON.stringify(['OK', target.id, false, 'error: temporarily unavailable']));
+        } else server.send(raw);
+      });
+    });
+    const { peer } = await prepare(page);
+    const list = page.getByTestId('contacts-list');
+    const alice = list.locator(`[data-testid="contact-item"][data-public-key="${peer}"]`);
+    const row = alice.locator('..');
+    const section = list.getByRole('button', { name: /Muted/ });
+    const contactState = () =>
+      page.evaluate(async (key) => {
+        const { contactsService } = await import('/src/services/contactsService.ts');
+        return (await contactsService.getContactByPublicKey(key))?.meta;
+      }, peer);
+    const restore = () =>
+      page.evaluate(async () => {
+        const { useNostrStore } = await import('/src/stores/nostrStore.svelte.ts');
+        await useNostrStore()
+          .restoreMuteList()
+          .catch(() => {});
+      });
+    async function action(name: string) {
+      await row.getByRole('button', { name: 'Contact actions' }).click();
+      await row.getByRole('menuitem', { name, exact: true }).click();
+    }
+    await action('Mute');
+    await expect(section).toContainText('1');
+    await expect(alice).toHaveCount(0);
+    await page.reload();
+    await expect(section).toContainText('1');
+    await expect(alice).toHaveCount(0);
+    rejectReads = false;
+    await restore();
+    await expect.poll(() => rejectedWrites).toBeGreaterThan(0);
+    await expect.poll(async () => (await contactState())?.pending_mute).toBe(true);
+    await page.reload();
+    await expect(section).toContainText('1');
+    await section.click();
+    await expect(row.locator('[aria-label="Mute"]')).toBeVisible();
+    await action('Unmute');
+    await expect(section).toContainText('0');
+    await expect(alice).toBeVisible();
+    await expect.poll(async () => (await contactState())?.pending_mute).toBe(false);
+    rejectReads = true;
+    await page.reload();
+    await expect(section).toContainText('0');
+    await expect(alice).toBeVisible();
+    rejectReads = false;
+    rejectWrites = false;
+    await restore();
+    await expect.poll(async () => (await contactState())?.pending_mute).toBeUndefined();
+    await page.reload();
+    await expect(section).toContainText('0');
+    await expect(alice).toBeVisible();
+  });
+
 test('cached request profiles stay out of contacts until acceptance or a reply', async ({
   page,
 }) => {
@@ -297,6 +377,10 @@ test('cached request profiles stay out of contacts until acceptance or a reply',
   await page.getByRole('button', { name: 'chats', exact: true }).click();
   await page.getByTestId('requests-row').click();
   await request('Reply person').getByRole('button', { name: 'Open', exact: true }).click();
+  await expect(page.getByTestId('chat-thread')).toHaveAttribute(
+    'data-chat-public-key',
+    pending[2].publicKey,
+  );
   await page.getByTestId('message-composer-input').fill('Accept through a reply');
   await page.getByTestId('message-send-button').click();
   await page.getByRole('button', { name: 'contacts', exact: true }).click();

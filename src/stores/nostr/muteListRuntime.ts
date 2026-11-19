@@ -49,6 +49,19 @@ interface BlockTargetOptions {
   type?: ContactRecord['type'];
 }
 
+interface PendingMuteListChange {
+  pubkey: string;
+  blocked?: boolean;
+  muted?: boolean;
+}
+
+function hasPendingMuteListChange(contact: ContactRecord): boolean {
+  return (
+    typeof contact.meta.pending_block === 'boolean' ||
+    typeof contact.meta.pending_mute === 'boolean'
+  );
+}
+
 const CHAT_INBOX_STATE_META_KEY = 'inbox_state';
 const CHAT_BLOCKED_AT_META_KEY = 'blocked_at';
 const CONTACT_BLOCKED_AT_META_KEY = 'blocked_at';
@@ -177,7 +190,7 @@ function metadataEqual(first: Record<string, unknown>, second: Record<string, un
   return JSON.stringify(first) === JSON.stringify(second);
 }
 
-function buildBlockedContactName(pubkey: string, options: BlockTargetOptions | undefined): string {
+function buildContactName(pubkey: string, options: BlockTargetOptions | undefined): string {
   const fallbackName = options?.fallbackName?.trim();
   return fallbackName || pubkey.slice(0, 16);
 }
@@ -208,7 +221,7 @@ export function createMuteListRuntime({
   let mutationVersion = 0;
   let latestMuteListCreatedAt = 0;
   let sessionVersion = 0;
-  let savingLocalBlock = false;
+  let savingLocalChange = false;
 
   function currentSession(): () => boolean {
     const version = sessionVersion;
@@ -259,7 +272,7 @@ export function createMuteListRuntime({
   async function applyMuteListContent(
     content: MuteListContent,
     optionsByBlockedPubkey = new Map<string, BlockTargetOptions>(),
-    pendingBlock?: { pubkey: string; blocked: boolean },
+    pendingChange?: PendingMuteListChange,
     isApplicable: () => boolean = () => true,
   ): Promise<void> {
     const isSameSession = currentSession();
@@ -271,6 +284,15 @@ export function createMuteListRuntime({
     const now = new Date().toISOString();
     let didChangeContacts = false;
     let didChangeChats = false;
+    function pendingMeta(pubkey: string): ContactMetadata {
+      if (pendingChange?.pubkey !== pubkey) return {};
+      return {
+        ...(typeof pendingChange.blocked === 'boolean'
+          ? { pending_block: pendingChange.blocked }
+          : {}),
+        ...(typeof pendingChange.muted === 'boolean' ? { pending_mute: pendingChange.muted } : {}),
+      };
+    }
 
     await Promise.all([contactsService.init(), chatDataService.init()]);
     const [contacts, chats] = await Promise.all([
@@ -304,8 +326,7 @@ export function createMuteListRuntime({
         shouldBlock,
         now,
       );
-      if (pendingBlock?.pubkey === normalizedPubkey)
-        nextContactMeta.pending_block = pendingBlock.blocked;
+      Object.assign(nextContactMeta, pendingMeta(normalizedPubkey));
       if (
         isMutedMeta(contactMeta) === shouldMute &&
         isBlockedContactMeta(contactMeta) === shouldBlock &&
@@ -324,25 +345,30 @@ export function createMuteListRuntime({
       didChangeContacts = true;
     }
 
-    for (const blockedPubkey of blockedPubkeys) {
+    // A muted chat may not have a contact record yet. Persist its pending
+    // preference here too, so notification state survives a failed sync/reload.
+    const missingContactPubkeys = new Set([
+      ...blockedPubkeys,
+      ...mutedPubkeys,
+      ...(pendingChange ? [pendingChange.pubkey] : []),
+    ]);
+    for (const pubkey of missingContactPubkeys) {
       if (!isCurrent()) return;
-      if (existingContactPubkeys.has(blockedPubkey)) {
+      if (existingContactPubkeys.has(pubkey)) {
         continue;
       }
 
-      const chat = chatByPubkey.get(blockedPubkey);
-      const options = optionsByBlockedPubkey.get(blockedPubkey);
+      const chat = chatByPubkey.get(pubkey);
+      const options = optionsByBlockedPubkey.get(pubkey);
       const contactType = options?.type ?? (chat?.type === 'group' ? 'group' : 'user');
       const createdContact = await contactsService.createContact({
-        public_key: blockedPubkey,
+        public_key: pubkey,
         type: contactType,
-        name: chat?.name?.trim() || buildBlockedContactName(blockedPubkey, options),
+        name: chat?.name?.trim() || buildContactName(pubkey, options),
         meta: {
-          blocked: true,
-          blocked_at: now,
-          ...(pendingBlock?.pubkey === blockedPubkey
-            ? { pending_block: pendingBlock.blocked }
-            : {}),
+          ...(nextBlockedPubkeySet.has(pubkey) ? { blocked: true, blocked_at: now } : {}),
+          ...(nextMutedPubkeySet.has(pubkey) ? { muted: true } : {}),
+          ...pendingMeta(pubkey),
           ...(contactType === 'group' ? { group: true } : {}),
         },
       });
@@ -454,7 +480,7 @@ export function createMuteListRuntime({
 
   async function restoreMuteList(
     seedRelayUrls: string[] = [],
-    syncPendingBlocks = true,
+    syncPendingChanges = true,
   ): Promise<void> {
     const signal = startupRelaySignal(ndk);
     const isCurrent = currentSession();
@@ -469,7 +495,7 @@ export function createMuteListRuntime({
         if (!hasRestoredMuteList) {
           const cached = await readCachedMuteListContent();
           if (!isCurrent() || signal.aborted) return;
-          if (version === mutationVersion && !savingLocalBlock) {
+          if (version === mutationVersion && !savingLocalChange) {
             mutedPubkeySet = new Set(cached.mutedPubkeys);
             blockedPubkeySet = new Set(cached.blockedPubkeys);
           }
@@ -479,24 +505,30 @@ export function createMuteListRuntime({
         if (
           snapshot !== null &&
           version === mutationVersion &&
-          !savingLocalBlock &&
+          !savingLocalChange &&
           snapshot.createdAt >= latestMuteListCreatedAt
         ) {
           // Keep unsynced local choices through failed reads, publication and
           // reloads. Merge them into the remote list before replacing that list.
           const contacts = await contactsService.listContacts();
-          if (!isCurrent() || signal.aborted || version !== mutationVersion || savingLocalBlock)
+          if (!isCurrent() || signal.aborted || version !== mutationVersion || savingLocalChange)
             return;
-          const pending = contacts.filter(
-            (contact) => typeof contact.meta.pending_block === 'boolean',
-          );
-          const blocked = new Set(snapshot.content.blockedPubkeys);
+          const pending = contacts.filter(hasPendingMuteListChange);
+          const remote = normalizeMuteListContent(snapshot.content, getLoggedInPublicKeyHex());
+          const blocked = new Set(remote.blockedPubkeys);
+          const muted = new Set(remote.mutedPubkeys);
           for (const contact of pending) {
-            if (contact.meta.pending_block) blocked.add(contact.public_key);
-            else blocked.delete(contact.public_key);
+            if (typeof contact.meta.pending_block === 'boolean') {
+              if (contact.meta.pending_block) blocked.add(contact.public_key);
+              else blocked.delete(contact.public_key);
+            }
+            if (typeof contact.meta.pending_mute === 'boolean') {
+              if (contact.meta.pending_mute) muted.add(contact.public_key);
+              else muted.delete(contact.public_key);
+            }
           }
           const normalizedContent = normalizeMuteListContent(
-            { ...snapshot.content, blockedPubkeys: [...blocked] },
+            { mutedPubkeys: [...muted], blockedPubkeys: [...blocked] },
             getLoggedInPublicKeyHex(),
           );
           updateMuteListStartupEntryCount(
@@ -506,13 +538,13 @@ export function createMuteListRuntime({
             normalizedContent,
             undefined,
             undefined,
-            () => version === mutationVersion && !savingLocalBlock,
+            () => version === mutationVersion && !savingLocalChange,
           );
-          if (!isCurrent() || signal.aborted || version !== mutationVersion || savingLocalBlock)
+          if (!isCurrent() || signal.aborted || version !== mutationVersion || savingLocalChange)
             return;
           latestMuteListCreatedAt = snapshot.createdAt;
           hasRestoredMuteList = true;
-          if (pending.length && syncPendingBlocks) await publishMuteList(seedRelayUrls);
+          if (pending.length && syncPendingChanges) await publishMuteList(seedRelayUrls);
         }
 
         completeStartupStep('mute-list');
@@ -545,9 +577,7 @@ export function createMuteListRuntime({
     if (!isCurrent()) return;
     const user = await getLoggedInSignerUser();
     if (!isCurrent()) return;
-    const pending = (await contactsService.listContacts()).filter(
-      (contact) => typeof contact.meta.pending_block === 'boolean',
-    );
+    const pending = (await contactsService.listContacts()).filter(hasPendingMuteListChange);
     if (!isCurrent()) return;
     const version = mutationVersion;
     const { mutedPubkeys, blockedPubkeys } = normalizeMuteListContent(
@@ -576,65 +606,37 @@ export function createMuteListRuntime({
       if (!isCurrent() || version !== mutationVersion) return;
       const meta = { ...contact.meta };
       delete meta.pending_block;
+      delete meta.pending_mute;
       await contactsService.updateContact(contact.id, { metaBase: contact.meta, meta });
     }
   }
 
-  async function setPubkeyMuted(
+  function setPubkeyMuted(
     pubkey: string,
     muted: boolean,
     seedRelayUrls: string[] = [],
   ): Promise<void> {
-    mutationVersion += 1;
-    const isCurrent = currentSession();
-    const mutation = muteListMutationQueue.then(async () => {
-      if (!isCurrent()) return;
-      if (!hasRestoredMuteList) {
-        await restoreMuteList(seedRelayUrls);
-      }
-      if (!isCurrent()) return;
-
-      const loggedInPubkeyHex = getLoggedInPublicKeyHex();
-      const normalizedPubkey = normalizeMuteTargetPubkey(pubkey, loggedInPubkeyHex);
-      if (!normalizedPubkey) {
-        return;
-      }
-
-      if (muted && blockedPubkeySet.has(normalizedPubkey)) {
-        return;
-      }
-
-      const nextMutedPubkeys = new Set(mutedPubkeySet);
-      if (muted) {
-        nextMutedPubkeys.add(normalizedPubkey);
-      } else {
-        nextMutedPubkeys.delete(normalizedPubkey);
-      }
-
-      if (
-        nextMutedPubkeys.size === mutedPubkeySet.size &&
-        nextMutedPubkeys.has(normalizedPubkey) === muted
-      ) {
-        return;
-      }
-
-      latestMuteListCreatedAt = Math.max(latestMuteListCreatedAt, Math.floor(Date.now() / 1000));
-      await applyMuteListContent({
-        mutedPubkeys: Array.from(nextMutedPubkeys),
-        blockedPubkeys: Array.from(blockedPubkeySet),
-      });
-      if (!isCurrent()) return;
-      await publishMuteList(seedRelayUrls);
-    });
-
-    muteListMutationQueue = mutation.catch(() => undefined);
-    return mutation;
+    return setPubkeyPreference(pubkey, { muted }, seedRelayUrls);
   }
 
-  async function setPubkeyBlocked(
+  function setPubkeyBlocked(
     pubkey: string,
     blocked: boolean,
     seedRelayUrls: string[] = [],
+    options: BlockTargetOptions = {},
+  ): Promise<void> {
+    return setPubkeyPreference(
+      pubkey,
+      { blocked, ...(blocked ? { muted: false } : {}) },
+      seedRelayUrls,
+      options,
+    );
+  }
+
+  async function setPubkeyPreference(
+    pubkey: string,
+    change: Omit<PendingMuteListChange, 'pubkey'>,
+    seedRelayUrls: string[],
     options: BlockTargetOptions = {},
   ): Promise<void> {
     mutationVersion += 1;
@@ -646,19 +648,22 @@ export function createMuteListRuntime({
       if (!loggedInPubkeyHex || !normalizedPubkey) {
         return;
       }
-      // A startup read may fail. It must not prevent the local block from
-      // taking effect, or replace other cached blocks with an empty list.
-      savingLocalBlock = true;
+      // A startup read may fail. It must not prevent the local preference from
+      // taking effect, or replace other cached preferences with an empty list.
+      savingLocalChange = true;
       try {
         const cached = await readCachedMuteListContent();
         if (!isCurrent()) return;
         const nextMutedPubkeys = new Set([...cached.mutedPubkeys, ...mutedPubkeySet]);
         const nextBlockedPubkeys = new Set([...cached.blockedPubkeys, ...blockedPubkeySet]);
-        if (blocked) {
-          nextBlockedPubkeys.add(normalizedPubkey);
-          nextMutedPubkeys.delete(normalizedPubkey);
-        } else {
-          nextBlockedPubkeys.delete(normalizedPubkey);
+        if (change.muted === true && nextBlockedPubkeys.has(normalizedPubkey)) return;
+        if (typeof change.blocked === 'boolean') {
+          if (change.blocked) nextBlockedPubkeys.add(normalizedPubkey);
+          else nextBlockedPubkeys.delete(normalizedPubkey);
+        }
+        if (typeof change.muted === 'boolean') {
+          if (change.muted) nextMutedPubkeys.add(normalizedPubkey);
+          else nextMutedPubkeys.delete(normalizedPubkey);
         }
 
         await applyMuteListContent(
@@ -666,14 +671,12 @@ export function createMuteListRuntime({
             mutedPubkeys: Array.from(nextMutedPubkeys),
             blockedPubkeys: Array.from(nextBlockedPubkeys),
           },
-          blocked
-            ? new Map<string, BlockTargetOptions>([[normalizedPubkey, options]])
-            : new Map<string, BlockTargetOptions>(),
-          { pubkey: normalizedPubkey, blocked },
+          new Map<string, BlockTargetOptions>([[normalizedPubkey, options]]),
+          { pubkey: normalizedPubkey, ...change },
         );
       } finally {
         if (isCurrent()) {
-          savingLocalBlock = false;
+          savingLocalChange = false;
           mutationVersion += 1;
         }
       }
@@ -686,7 +689,7 @@ export function createMuteListRuntime({
         await restoreMuteList(seedRelayUrls, false);
         if (!isCurrent()) return;
         if (!hasRestoredMuteList)
-          throw new Error('Saved on this device. Could not sync the block list.');
+          throw new Error('Saved on this device. Could not sync mute and block preferences.');
       }
       await publishMuteList(seedRelayUrls);
     });
@@ -697,7 +700,7 @@ export function createMuteListRuntime({
 
   function resetMuteListRuntimeState(): void {
     sessionVersion += 1;
-    savingLocalBlock = false;
+    savingLocalChange = false;
     mutationVersion += 1;
     latestMuteListCreatedAt = 0;
     restoreMuteListPromise = null;

@@ -255,6 +255,69 @@ describe('mute list runtime', () => {
     expect(runtime.isPubkeyBlocked(PUBKEY_C)).toBe(true);
   });
 
+  it.each([true, false])(
+    'saves muted=%s locally when relay reads fail and syncs it after restart',
+    async (muted) => {
+      const { deps, ndk, runtime } = createRuntime({
+        decryptMuteListContent: vi.fn(async () => ({
+          mutedPubkeys: [PUBKEY_B, ...(!muted ? [PUBKEY_C] : [])],
+          blockedPubkeys: [PUBKEY_D],
+        })),
+      });
+      await contactsServiceMock.createContact({
+        public_key: PUBKEY_C,
+        name: 'Carol',
+        meta: muted ? {} : { muted: true },
+      });
+      const fetch = vi.spyOn(ndk, 'fetchEvent').mockRejectedValue(new Error('Relay unavailable'));
+      const publish = vi
+        .spyOn(ClientEvent.prototype, 'publishReplaceable')
+        .mockResolvedValue(undefined as never);
+
+      await expect(runtime.setPubkeyMuted(PUBKEY_C, muted)).rejects.toThrow();
+      expect(
+        (await contactsServiceMock.listContacts()).find(
+          (contact) => contact.public_key === PUBKEY_C,
+        )?.meta.muted === true,
+      ).toBe(muted);
+      expect(runtime.isPubkeyMuted(PUBKEY_C)).toBe(muted);
+      expect(publish).not.toHaveBeenCalled();
+
+      runtime.resetMuteListRuntimeState();
+      fetch.mockResolvedValue(
+        new ClientEvent(ndk, {
+          kind: MUTE_LIST_KIND,
+          pubkey: LOGGED_IN_PUBKEY,
+          created_at: 1_700_000_000,
+          content: 'remote-list',
+          tags: [],
+        }),
+      );
+      await runtime.restoreMuteList();
+      expect(runtime.isPubkeyMuted(PUBKEY_C)).toBe(muted);
+      expect(runtime.isPubkeyMuted(PUBKEY_B)).toBe(true);
+      expect(runtime.isPubkeyBlocked(PUBKEY_D)).toBe(true);
+      expect(deps.buildMuteListTags).toHaveBeenLastCalledWith(
+        [PUBKEY_B, ...(muted ? [PUBKEY_C] : [])],
+        [PUBKEY_D],
+      );
+    },
+  );
+
+  it('retries a failed mute publication when the requested local state is unchanged', async () => {
+    const { ndk, runtime } = createRuntime();
+    await contactsServiceMock.createContact({ public_key: PUBKEY_C, name: 'Carol' });
+    vi.spyOn(ndk, 'fetchEvent').mockResolvedValue(null);
+    const publish = vi
+      .spyOn(ClientEvent.prototype, 'publishReplaceable')
+      .mockRejectedValueOnce(new Error('Offline'))
+      .mockResolvedValue(undefined as never);
+    await expect(runtime.setPubkeyMuted(PUBKEY_C, true)).rejects.toThrow('Offline');
+    await runtime.setPubkeyMuted(PUBKEY_C, true);
+    expect(runtime.isPubkeyMuted(PUBKEY_C)).toBe(true);
+    expect(publish).toHaveBeenCalledTimes(2);
+  });
+
   it('saves a block locally when the initial relay read fails, then merges it on retry', async () => {
     const { deps, ndk, runtime } = createRuntime({
       decryptMuteListContent: vi.fn(async () => ({ mutedPubkeys: [PUBKEY_B], blockedPubkeys: [] })),
@@ -348,32 +411,60 @@ describe('mute list runtime', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('moves the contact locally before an in-flight startup read finishes', async () => {
-    const { ndk, runtime } = createRuntime();
-    await contactsServiceMock.createContact({ public_key: PUBKEY_C, name: 'Carol' });
-    let finishRead!: (event: null) => void;
-    const fetch = vi
-      .spyOn(ndk, 'fetchEvent')
-      .mockResolvedValue(null)
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            finishRead = resolve;
-          }),
-      );
-    vi.spyOn(ClientEvent.prototype, 'publishReplaceable').mockResolvedValue(undefined as never);
-    const startup = runtime.restoreMuteList();
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
-    const block = runtime.setPubkeyBlocked(PUBKEY_C, true);
-    try {
-      await vi.waitFor(() => expect(runtime.isPubkeyBlocked(PUBKEY_C)).toBe(true));
-      expect((await contactsServiceMock.listContacts())[0]?.meta.blocked).toBe(true);
-    } finally {
-      finishRead(null);
-      await Promise.all([startup, block]);
-    }
+  it.each(['block', 'mute'] as const)(
+    'applies %s locally before an in-flight startup read finishes',
+    async (action) => {
+      const { ndk, runtime } = createRuntime();
+      await contactsServiceMock.createContact({ public_key: PUBKEY_C, name: 'Carol' });
+      let finishRead!: (event: null) => void;
+      const fetch = vi
+        .spyOn(ndk, 'fetchEvent')
+        .mockResolvedValue(null)
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              finishRead = resolve;
+            }),
+        );
+      vi.spyOn(ClientEvent.prototype, 'publishReplaceable').mockResolvedValue(undefined as never);
+      const startup = runtime.restoreMuteList();
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+      const change =
+        action === 'block'
+          ? runtime.setPubkeyBlocked(PUBKEY_C, true)
+          : runtime.setPubkeyMuted(PUBKEY_C, true);
+      const metaKey = action === 'block' ? 'blocked' : 'muted';
+      const pendingKey = action === 'block' ? 'pending_block' : 'pending_mute';
+      const enabled = () =>
+        action === 'block' ? runtime.isPubkeyBlocked(PUBKEY_C) : runtime.isPubkeyMuted(PUBKEY_C);
+      try {
+        await vi.waitFor(() => expect(enabled()).toBe(true));
+        expect((await contactsServiceMock.listContacts())[0]?.meta[metaKey]).toBe(true);
+      } finally {
+        finishRead(null);
+        await Promise.all([startup, change]);
+      }
+      expect(enabled()).toBe(true);
+      expect((await contactsServiceMock.listContacts())[0]?.meta[pendingKey]).toBeUndefined();
+    },
+  );
+
+  it('keeps blocking authoritative when mute is attempted during a failed sync', async () => {
+    const { deps, ndk, runtime } = createRuntime();
+    vi.spyOn(ndk, 'fetchEvent').mockResolvedValue(null);
+    const publish = vi
+      .spyOn(ClientEvent.prototype, 'publishReplaceable')
+      .mockResolvedValue(undefined as never);
+    await runtime.setPubkeyMuted(PUBKEY_C, true);
+    publish.mockRejectedValueOnce(new Error('Offline'));
+    await expect(runtime.setPubkeyBlocked(PUBKEY_C, true)).rejects.toThrow('Offline');
+    await runtime.setPubkeyMuted(PUBKEY_C, true);
     expect(runtime.isPubkeyBlocked(PUBKEY_C)).toBe(true);
-    expect((await contactsServiceMock.listContacts())[0]?.meta.pending_block).toBeUndefined();
+    expect(runtime.isPubkeyMuted(PUBKEY_C)).toBe(false);
+    expect(publish).toHaveBeenCalledTimes(2);
+    await runtime.setPubkeyBlocked(PUBKEY_C, false);
+    expect(runtime.isPubkeyMuted(PUBKEY_C)).toBe(false);
+    expect(deps.buildMuteListTags).toHaveBeenLastCalledWith([], []);
   });
 
   it('orders rapid block changes after the restored event and retries failed publication', async () => {

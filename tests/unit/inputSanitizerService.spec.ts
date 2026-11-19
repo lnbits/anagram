@@ -3,6 +3,19 @@ import { inputSanitizerService } from '#src/services/inputSanitizerService.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('inputSanitizerService', () => {
+  it('preserves pending block and mute changes through stored metadata', () => {
+    for (const value of [true, false]) {
+      const encoded = inputSanitizerService.serializeContactMetadata({
+        pending_block: value,
+        pending_mute: value,
+      });
+      expect(inputSanitizerService.parseStoredContactMetadata(encoded)).toMatchObject({
+        pending_block: value,
+        pending_mute: value,
+      });
+    }
+  });
+
   it('normalizes contact metadata by trimming fields, normalizing owner keys, and deduplicating group members', () => {
     expect(
       inputSanitizerService.normalizeContactMetadata({

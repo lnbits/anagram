@@ -351,6 +351,8 @@ class InputSanitizerService {
         : null;
     const muted = typeof value.muted === 'boolean' ? value.muted : null;
     const blocked = typeof value.blocked === 'boolean' ? value.blocked : null;
+    const pendingBlock = typeof value.pending_block === 'boolean' ? value.pending_block : null;
+    const pendingMute = typeof value.pending_mute === 'boolean' ? value.pending_mute : null;
     const blockedAt = this.readOptionalString(value.blocked_at);
     const groupPrivateKeyEncrypted = this.readOptionalString(value.group_private_key_encrypted);
     const ownerPublicKey = this.normalizeHexKey(
@@ -454,6 +456,13 @@ class InputSanitizerService {
 
     if (typeof blocked === 'boolean') {
       meta.blocked = blocked;
+    }
+
+    if (typeof pendingBlock === 'boolean') {
+      meta.pending_block = pendingBlock;
+    }
+    if (typeof pendingMute === 'boolean') {
+      meta.pending_mute = pendingMute;
     }
 
     if (blockedAt) {

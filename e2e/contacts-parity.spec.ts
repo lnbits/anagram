@@ -163,10 +163,16 @@ test('contact search, add, mute, block, unblock and delete preserve contact navi
   await action('Unmute');
   await expect(row.locator('[aria-label="Mute"]')).toHaveCount(0);
   await action('Block');
+  const list = page.getByTestId('contacts-list');
+  await expect(list.getByRole('button', { name: /Blocked/ })).toContainText('1');
+  await expect(row.locator('[aria-label="Block"]')).toBeVisible();
+  await list.getByRole('button', { name: /Active/ }).click();
+  await expect(alice).toBeVisible();
   await expect(
     page.getByTestId('contact-details').getByRole('button', { name: 'Open Chat', exact: true }),
   ).toBeDisabled();
   await action('Unblock');
+  await expect(list.getByRole('button', { name: /Blocked/ })).toContainText('0');
   await expect(
     page.getByTestId('contact-details').getByRole('button', { name: 'Open Chat', exact: true }),
   ).toBeEnabled();
@@ -179,6 +185,60 @@ test('contact search, add, mute, block, unblock and delete preserve contact navi
   await page.getByRole('dialog').getByRole('button', { name: 'Add contact', exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/contacts/${peer}$`));
   await expect(page.getByTestId('contact-details')).toBeVisible();
+});
+
+test('blocking moves a contact out of Active when relay restore fails and survives reload', async ({
+  page,
+}) => {
+  let rejectMuteList = true;
+  await page.routeWebSocket(relay, (socket) => {
+    const server = socket.connectToServer();
+    socket.onMessage((raw) => {
+      const [verb, id, ...filters] = JSON.parse(String(raw));
+      if (
+        rejectMuteList &&
+        verb === 'REQ' &&
+        filters.some((filter) => filter.kinds?.includes(10000))
+      )
+        socket.send(JSON.stringify(['CLOSED', id, 'error: temporarily unavailable']));
+      else server.send(raw);
+    });
+  });
+  const { peer } = await prepare(page);
+  const list = page.getByTestId('contacts-list');
+  const alice = list.locator(`[data-testid="contact-item"][data-public-key="${peer}"]`);
+  const row = alice.locator('..');
+  await row.getByRole('button', { name: 'Contact actions' }).click();
+  await row.getByRole('menuitem', { name: 'Block', exact: true }).click();
+  await expect(list.getByRole('button', { name: /Blocked/ })).toContainText('1');
+  // The contact was not selected: the collapsed Blocked section owns the row.
+  await expect(alice).toHaveCount(0);
+  await list.getByRole('button', { name: /Blocked/ }).click();
+  await expect(row.locator('[aria-label="Block"]')).toBeVisible();
+  await page.reload();
+  await expect(list.getByRole('button', { name: /Blocked/ })).toContainText('1');
+  await expect(alice).toHaveCount(0);
+
+  rejectMuteList = false;
+  await page.evaluate(async () => {
+    const { useNostrStore } = await import('/src/stores/nostrStore.svelte.ts');
+    await useNostrStore().restoreMuteList();
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(async (key) => {
+        const { contactsService } = await import('/src/services/contactsService.ts');
+        return (await contactsService.getContactByPublicKey(key))?.meta.pending_block;
+      }, peer),
+    )
+    .toBeUndefined();
+  await page.reload();
+  await expect(list.getByRole('button', { name: /Blocked/ })).toContainText('1');
+  await list.getByRole('button', { name: /Blocked/ }).click();
+  await row.getByRole('button', { name: 'Contact actions' }).click();
+  await row.getByRole('menuitem', { name: 'Unblock', exact: true }).click();
+  await expect(list.getByRole('button', { name: /Blocked/ })).toContainText('0');
+  await expect(alice).toBeVisible();
 });
 
 test('cached request profiles stay out of contacts until acceptance or a reply', async ({

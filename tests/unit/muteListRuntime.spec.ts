@@ -1,5 +1,6 @@
 import NostrClient, { ClientEvent } from '#src/lib/nostr/client.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ContactRecord, CreateContactInput, UpdateContactInput } from '#src/types/contact.ts';
 
 const chatDataServiceMock = vi.hoisted(() => ({
   init: vi.fn(async () => {}),
@@ -9,12 +10,12 @@ const chatDataServiceMock = vi.hoisted(() => ({
 }));
 
 const contactsServiceMock = vi.hoisted(() => ({
-  createContact: vi.fn(
-    async (_input: { public_key: string; meta?: Record<string, unknown> }) => null
-  ),
+  createContact: vi.fn(async (_input: CreateContactInput): Promise<ContactRecord | null> => null),
   init: vi.fn(async () => {}),
-  listContacts: vi.fn(async () => []),
-  updateContact: vi.fn(async () => null),
+  listContacts: vi.fn(async (): Promise<ContactRecord[]> => []),
+  updateContact: vi.fn(
+    async (_id: number, _input: UpdateContactInput): Promise<ContactRecord | null> => null,
+  ),
 }));
 
 vi.mock('#src/services/chatDataService.ts', () => ({
@@ -33,7 +34,7 @@ const PUBKEY_B = 'b'.repeat(64);
 const PUBKEY_C = 'c'.repeat(64);
 const PUBKEY_D = 'd'.repeat(64);
 
-function createContact(publicKey: string, meta: Record<string, unknown> = {}) {
+function createContact(publicKey: string, meta: Record<string, unknown> = {}): ContactRecord {
   return {
     id: Number.parseInt(publicKey[0] ?? '1', 16),
     public_key: publicKey,
@@ -102,10 +103,20 @@ describe('mute list runtime', () => {
     chatDataServiceMock.listChats.mockResolvedValue([]);
     chatDataServiceMock.markChatAsRead.mockResolvedValue(undefined);
     chatDataServiceMock.updateChatMeta.mockResolvedValue(undefined);
-    contactsServiceMock.createContact.mockResolvedValue(null);
+    let contacts: ContactRecord[] = [];
+    contactsServiceMock.createContact.mockImplementation(async (input) => {
+      const contact = createContact(input.public_key, input.meta);
+      contacts.push(contact);
+      return contact;
+    });
     contactsServiceMock.init.mockResolvedValue(undefined);
-    contactsServiceMock.listContacts.mockResolvedValue([]);
-    contactsServiceMock.updateContact.mockResolvedValue(null);
+    contactsServiceMock.listContacts.mockImplementation(async () => contacts);
+    contactsServiceMock.updateContact.mockImplementation(async (id, input) => {
+      contacts = contacts.map((contact) =>
+        contact.id === id ? { ...contact, meta: input.meta ?? contact.meta } : contact,
+      );
+      return contacts.find((contact) => contact.id === id) ?? null;
+    });
   });
 
   afterEach(() => {
@@ -137,7 +148,7 @@ describe('mute list runtime', () => {
       createChat(PUBKEY_D, { inbox_state: 'accepted' }),
     ]);
     contactsServiceMock.createContact.mockImplementation(async (input) =>
-      createContact(input.public_key, input.meta)
+      createContact(input.public_key, input.meta),
     );
 
     await runtime.restoreMuteList();
@@ -148,21 +159,21 @@ describe('mute list runtime', () => {
         authors: [LOGGED_IN_PUBKEY],
       },
       expect.anything(),
-      expect.anything()
+      expect.anything(),
     );
     expect(deps.decryptMuteListContent).toHaveBeenCalledWith('encrypted-content');
     expect(deps.updateStartupInternalTask).toHaveBeenCalledWith(
       'contact-cursor-state',
       'mute-list',
-      { eventCount: 2 }
+      { eventCount: 2 },
     );
     expect(contactsServiceMock.updateContact).toHaveBeenCalledWith(
       Number.parseInt(PUBKEY_B[0] ?? '0', 16),
-      { metaBase: {}, meta: { muted: true } }
+      { metaBase: {}, meta: { muted: true } },
     );
     expect(contactsServiceMock.updateContact).toHaveBeenCalledWith(
       Number.parseInt(PUBKEY_C[0] ?? '0', 16),
-      { metaBase: { name: 'Carol', muted: true }, meta: { name: 'Carol' } }
+      { metaBase: { name: 'Carol', muted: true }, meta: { name: 'Carol' } },
     );
     expect(contactsServiceMock.createContact).toHaveBeenCalledWith({
       public_key: PUBKEY_D,
@@ -185,7 +196,7 @@ describe('mute list runtime', () => {
       expect.objectContaining({
         inbox_state: 'blocked',
         blocked_at: expect.any(String),
-      })
+      }),
     );
     expect(chatDataServiceMock.markChatAsRead).not.toHaveBeenCalled();
     expect(deps.bumpContactListVersion).toHaveBeenCalledTimes(1);
@@ -244,18 +255,146 @@ describe('mute list runtime', () => {
     expect(runtime.isPubkeyBlocked(PUBKEY_C)).toBe(true);
   });
 
+  it('saves a block locally when the initial relay read fails, then merges it on retry', async () => {
+    const { deps, ndk, runtime } = createRuntime({
+      decryptMuteListContent: vi.fn(async () => ({ mutedPubkeys: [PUBKEY_B], blockedPubkeys: [] })),
+    });
+    let contacts = [createContact(PUBKEY_C), createContact(PUBKEY_D, { blocked: true })];
+    contactsServiceMock.listContacts.mockImplementation(async () => contacts as never);
+    contactsServiceMock.updateContact.mockImplementation(async (id, input) => {
+      contacts = contacts.map((contact) =>
+        contact.id === id ? { ...contact, meta: input.meta ?? contact.meta } : contact,
+      );
+      return contacts.find((contact) => contact.id === id) as never;
+    });
+    const fetch = vi.spyOn(ndk, 'fetchEvent').mockRejectedValue(new Error('Relay unavailable'));
+    const publish = vi
+      .spyOn(ClientEvent.prototype, 'publishReplaceable')
+      .mockResolvedValue(undefined as never);
+
+    await expect(runtime.setPubkeyBlocked(PUBKEY_C, true)).rejects.toThrow();
+    expect(contacts.find((contact) => contact.public_key === PUBKEY_C)?.meta.blocked).toBe(true);
+    expect(contacts.find((contact) => contact.public_key === PUBKEY_D)?.meta.blocked).toBe(true);
+    expect(runtime.isPubkeyBlocked(PUBKEY_C)).toBe(true);
+    expect(deps.bumpContactListVersion).toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(contacts.find((contact) => contact.public_key === PUBKEY_C)?.meta.pending_block).toBe(
+      true,
+    );
+
+    runtime.resetMuteListRuntimeState();
+    fetch.mockResolvedValue(
+      new ClientEvent(ndk, {
+        kind: MUTE_LIST_KIND,
+        pubkey: LOGGED_IN_PUBKEY,
+        created_at: 1_700_000_000,
+        content: 'remote-list',
+        tags: [],
+      }),
+    );
+    await runtime.restoreMuteList();
+    expect(runtime.isPubkeyBlocked(PUBKEY_C)).toBe(true);
+    expect(runtime.isPubkeyMuted(PUBKEY_B)).toBe(true);
+    expect(deps.buildMuteListTags).toHaveBeenLastCalledWith([PUBKEY_B], [PUBKEY_C]);
+    expect(
+      contacts.find((contact) => contact.public_key === PUBKEY_C)?.meta.pending_block,
+    ).toBeUndefined();
+  });
+
+  it('keeps an offline unblock through restart and removes it from the restored remote list', async () => {
+    const { deps, ndk, runtime } = createRuntime({
+      decryptMuteListContent: vi.fn(async () => ({ mutedPubkeys: [], blockedPubkeys: [PUBKEY_C] })),
+    });
+    await contactsServiceMock.createContact({
+      public_key: PUBKEY_C,
+      name: 'Carol',
+      meta: { blocked: true },
+    });
+    const fetch = vi.spyOn(ndk, 'fetchEvent').mockRejectedValue(new Error('Relay unavailable'));
+    const publish = vi
+      .spyOn(ClientEvent.prototype, 'publishReplaceable')
+      .mockResolvedValue(undefined as never);
+    await expect(runtime.setPubkeyBlocked(PUBKEY_C, false)).rejects.toThrow();
+    expect(runtime.isPubkeyBlocked(PUBKEY_C)).toBe(false);
+    expect((await contactsServiceMock.listContacts())[0]?.meta).toEqual({ pending_block: false });
+    expect(publish).not.toHaveBeenCalled();
+
+    runtime.resetMuteListRuntimeState();
+    fetch.mockResolvedValue(
+      new ClientEvent(ndk, {
+        kind: MUTE_LIST_KIND,
+        pubkey: LOGGED_IN_PUBKEY,
+        created_at: 1_700_000_000,
+        content: 'old-block',
+        tags: [],
+      }),
+    );
+    await runtime.restoreMuteList();
+    expect(runtime.isPubkeyBlocked(PUBKEY_C)).toBe(false);
+    expect(deps.buildMuteListTags).toHaveBeenLastCalledWith([], []);
+    expect((await contactsServiceMock.listContacts())[0]?.meta.pending_block).toBeUndefined();
+  });
+
+  it('does not apply queued blocks or mutes to a new session', async () => {
+    const { deps, ndk, runtime } = createRuntime();
+    const fetch = vi.spyOn(ndk, 'fetchEvent').mockResolvedValue(null);
+    const block = runtime.setPubkeyBlocked(PUBKEY_C, true);
+    const mute = runtime.setPubkeyMuted(PUBKEY_B, true);
+    runtime.resetMuteListRuntimeState();
+    deps.getLoggedInPublicKeyHex.mockReturnValue(PUBKEY_D);
+    await Promise.all([block, mute]);
+    expect(contactsServiceMock.updateContact).not.toHaveBeenCalled();
+    expect(contactsServiceMock.createContact).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('moves the contact locally before an in-flight startup read finishes', async () => {
+    const { ndk, runtime } = createRuntime();
+    await contactsServiceMock.createContact({ public_key: PUBKEY_C, name: 'Carol' });
+    let finishRead!: (event: null) => void;
+    const fetch = vi
+      .spyOn(ndk, 'fetchEvent')
+      .mockResolvedValue(null)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishRead = resolve;
+          }),
+      );
+    vi.spyOn(ClientEvent.prototype, 'publishReplaceable').mockResolvedValue(undefined as never);
+    const startup = runtime.restoreMuteList();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+    const block = runtime.setPubkeyBlocked(PUBKEY_C, true);
+    try {
+      await vi.waitFor(() => expect(runtime.isPubkeyBlocked(PUBKEY_C)).toBe(true));
+      expect((await contactsServiceMock.listContacts())[0]?.meta.blocked).toBe(true);
+    } finally {
+      finishRead(null);
+      await Promise.all([startup, block]);
+    }
+    expect(runtime.isPubkeyBlocked(PUBKEY_C)).toBe(true);
+    expect((await contactsServiceMock.listContacts())[0]?.meta.pending_block).toBeUndefined();
+  });
+
   it('orders rapid block changes after the restored event and retries failed publication', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
     const { ndk, runtime } = createRuntime();
-    vi.spyOn(ndk, 'fetchEvent').mockResolvedValue(new ClientEvent(ndk, {
-      kind: MUTE_LIST_KIND, pubkey: LOGGED_IN_PUBKEY, created_at: 1_800_000_000,
-      content: 'empty-list', tags: [],
-    }));
+    vi.spyOn(ndk, 'fetchEvent').mockResolvedValue(
+      new ClientEvent(ndk, {
+        kind: MUTE_LIST_KIND,
+        pubkey: LOGGED_IN_PUBKEY,
+        created_at: 1_800_000_000,
+        content: 'empty-list',
+        tags: [],
+      }),
+    );
     const published: number[] = [];
-    const publish = vi.spyOn(ClientEvent.prototype, 'publishReplaceable').mockImplementation(function () {
-      published.push(this.created_at!);
-      return Promise.resolve(undefined as never);
-    });
+    const publish = vi
+      .spyOn(ClientEvent.prototype, 'publishReplaceable')
+      .mockImplementation(function () {
+        published.push(this.created_at!);
+        return Promise.resolve(undefined as never);
+      });
     await runtime.setPubkeyBlocked(PUBKEY_B, true);
     await runtime.setPubkeyBlocked(PUBKEY_C, true);
     expect(published).toEqual([1_800_000_001, 1_800_000_002]);

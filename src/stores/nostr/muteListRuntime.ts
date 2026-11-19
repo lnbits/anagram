@@ -1,4 +1,7 @@
-import { startupRelaySignal, startupRelayStatuses } from '#src/stores/nostr/startupRelayTracking.ts';
+import {
+  startupRelaySignal,
+  startupRelayStatuses,
+} from '#src/stores/nostr/startupRelayTracking.ts';
 import NostrClient, {
   ClientEvent,
   NostrRelaySet,
@@ -31,7 +34,7 @@ interface MuteListRuntimeDeps {
   updateStartupInternalTask: (
     parentStepId: 'contact-cursor-state',
     taskId: 'mute-list',
-    updates: { eventCount?: number | null }
+    updates: { eventCount?: number | null },
   ) => void;
   updateStoredEventSinceFromCreatedAt: (value: unknown) => void;
 }
@@ -62,12 +65,12 @@ function normalizeListPubkeys(pubkeys: string[], loggedInPubkeyHex: string | nul
 
 function normalizeMuteListContent(
   content: MuteListContent,
-  loggedInPubkeyHex: string | null
+  loggedInPubkeyHex: string | null,
 ): MuteListContent {
   const blockedPubkeys = normalizeListPubkeys(content.blockedPubkeys, loggedInPubkeyHex);
   const blockedPubkeySet = new Set(blockedPubkeys);
   const mutedPubkeys = normalizeListPubkeys(content.mutedPubkeys, loggedInPubkeyHex).filter(
-    (pubkey) => !blockedPubkeySet.has(pubkey)
+    (pubkey) => !blockedPubkeySet.has(pubkey),
   );
 
   return {
@@ -78,7 +81,7 @@ function normalizeMuteListContent(
 
 function normalizeMuteTargetPubkey(
   pubkey: string,
-  loggedInPubkeyHex: string | null
+  loggedInPubkeyHex: string | null,
 ): string | null {
   const normalizedPubkey = inputSanitizerService.normalizeHexKey(pubkey);
   if (!normalizedPubkey || normalizedPubkey === loggedInPubkeyHex) {
@@ -119,7 +122,7 @@ function buildMutedMeta<TMeta extends { muted?: unknown }>(meta: TMeta, muted: b
 function buildBlockedContactMeta(
   meta: ContactMetadata,
   blocked: boolean,
-  blockedAt: string
+  blockedAt: string,
 ): ContactMetadata {
   const nextMeta = { ...meta };
   if (blocked) {
@@ -139,7 +142,7 @@ function buildBlockedContactMeta(
 function buildBlockedChatMeta(
   meta: Record<string, unknown>,
   blocked: boolean,
-  blockedAt: string
+  blockedAt: string,
 ): Record<string, unknown> {
   const nextMeta = { ...meta };
   if (blocked) {
@@ -204,6 +207,38 @@ export function createMuteListRuntime({
   let hasRestoredMuteList = false;
   let mutationVersion = 0;
   let latestMuteListCreatedAt = 0;
+  let sessionVersion = 0;
+  let savingLocalBlock = false;
+
+  function currentSession(): () => boolean {
+    const version = sessionVersion;
+    const account = getLoggedInPublicKeyHex();
+    return () => version === sessionVersion && account === getLoggedInPublicKeyHex();
+  }
+
+  async function readCachedMuteListContent(): Promise<MuteListContent> {
+    const [contacts, chats] = await Promise.all([
+      contactsService.listContacts(),
+      chatDataService.listChats(),
+    ]);
+    return normalizeMuteListContent(
+      {
+        mutedPubkeys: [
+          ...contacts
+            .filter((contact) => isMutedMeta(contact.meta))
+            .map((contact) => contact.public_key),
+          ...chats.filter((chat) => isMutedMeta(chat.meta)).map((chat) => chat.public_key),
+        ],
+        blockedPubkeys: [
+          ...contacts
+            .filter((contact) => isBlockedContactMeta(contact.meta))
+            .map((contact) => contact.public_key),
+          ...chats.filter((chat) => isBlockedChatMeta(chat.meta)).map((chat) => chat.public_key),
+        ],
+      },
+      getLoggedInPublicKeyHex(),
+    );
+  }
 
   function isPubkeyMuted(pubkey: string): boolean {
     const normalizedPubkey = inputSanitizerService.normalizeHexKey(pubkey);
@@ -223,8 +258,12 @@ export function createMuteListRuntime({
 
   async function applyMuteListContent(
     content: MuteListContent,
-    optionsByBlockedPubkey = new Map<string, BlockTargetOptions>()
+    optionsByBlockedPubkey = new Map<string, BlockTargetOptions>(),
+    pendingBlock?: { pubkey: string; blocked: boolean },
+    isApplicable: () => boolean = () => true,
   ): Promise<void> {
+    const isSameSession = currentSession();
+    const isCurrent = () => isSameSession() && isApplicable();
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
     const { mutedPubkeys, blockedPubkeys } = normalizeMuteListContent(content, loggedInPubkeyHex);
     const nextMutedPubkeySet = new Set(mutedPubkeys);
@@ -238,6 +277,7 @@ export function createMuteListRuntime({
       contactsService.listContacts(),
       chatDataService.listChats(),
     ]);
+    if (!isCurrent()) return;
     const existingContactPubkeys = new Set<string>();
     const chatByPubkey = new Map<string, ChatRow>();
 
@@ -249,6 +289,7 @@ export function createMuteListRuntime({
     }
 
     for (const contact of contacts) {
+      if (!isCurrent()) return;
       const normalizedPubkey = normalizeMuteTargetPubkey(contact.public_key, loggedInPubkeyHex);
       if (!normalizedPubkey) {
         continue;
@@ -261,14 +302,16 @@ export function createMuteListRuntime({
       const nextContactMeta = buildBlockedContactMeta(
         buildMutedMeta(contactMeta, shouldMute),
         shouldBlock,
-        now
+        now,
       );
+      if (pendingBlock?.pubkey === normalizedPubkey)
+        nextContactMeta.pending_block = pendingBlock.blocked;
       if (
         isMutedMeta(contactMeta) === shouldMute &&
         isBlockedContactMeta(contactMeta) === shouldBlock &&
         metadataEqual(
           contactMeta as Record<string, unknown>,
-          nextContactMeta as Record<string, unknown>
+          nextContactMeta as Record<string, unknown>,
         )
       ) {
         continue;
@@ -282,6 +325,7 @@ export function createMuteListRuntime({
     }
 
     for (const blockedPubkey of blockedPubkeys) {
+      if (!isCurrent()) return;
       if (existingContactPubkeys.has(blockedPubkey)) {
         continue;
       }
@@ -296,6 +340,9 @@ export function createMuteListRuntime({
         meta: {
           blocked: true,
           blocked_at: now,
+          ...(pendingBlock?.pubkey === blockedPubkey
+            ? { pending_block: pendingBlock.blocked }
+            : {}),
           ...(contactType === 'group' ? { group: true } : {}),
         },
       });
@@ -306,6 +353,7 @@ export function createMuteListRuntime({
     }
 
     for (const chat of chats) {
+      if (!isCurrent()) return;
       const normalizedPubkey = normalizeMuteTargetPubkey(chat.public_key, loggedInPubkeyHex);
       if (!normalizedPubkey) {
         continue;
@@ -317,7 +365,7 @@ export function createMuteListRuntime({
       const nextChatMeta = buildBlockedChatMeta(
         buildMutedMeta(chatMeta, shouldMute),
         shouldBlock,
-        now
+        now,
       );
       const shouldMarkChatRead = shouldBlock && Number(chat.unread_count ?? 0) > 0;
 
@@ -331,11 +379,13 @@ export function createMuteListRuntime({
       }
 
       if (shouldMarkChatRead) {
+        if (!isCurrent()) return;
         await chatDataService.markChatAsRead(chat.public_key);
         didChangeChats = true;
       }
     }
 
+    if (!isCurrent()) return;
     mutedPubkeySet = nextMutedPubkeySet;
     blockedPubkeySet = nextBlockedPubkeySet;
 
@@ -356,7 +406,7 @@ export function createMuteListRuntime({
   }
 
   async function fetchMuteListContent(
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<{ content: MuteListContent; createdAt: number } | null> {
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
     if (!loggedInPubkeyHex) {
@@ -382,11 +432,12 @@ export function createMuteListRuntime({
         cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
         startupTrackId: 'mute-list',
       },
-      relaySet
+      relaySet,
     );
     if (!fetchedEvent) {
       // An unfinished replica is not evidence that the existing mute list is empty.
-      if (startupRelayStatuses(ndk, 'mute-list').some((relay) => relay.status !== 'success')) return null;
+      if (startupRelayStatuses(ndk, 'mute-list').some((relay) => relay.status !== 'success'))
+        return null;
       return {
         content: { blockedPubkeys: [], mutedPubkeys: [] },
         createdAt: 0,
@@ -401,8 +452,12 @@ export function createMuteListRuntime({
     };
   }
 
-  async function restoreMuteList(seedRelayUrls: string[] = []): Promise<void> {
+  async function restoreMuteList(
+    seedRelayUrls: string[] = [],
+    syncPendingBlocks = true,
+  ): Promise<void> {
     const signal = startupRelaySignal(ndk);
+    const isCurrent = currentSession();
     if (restoreMuteListPromise) {
       return restoreMuteListPromise;
     }
@@ -411,50 +466,96 @@ export function createMuteListRuntime({
     const version = mutationVersion;
     restoreMuteListPromise = (async () => {
       try {
+        if (!hasRestoredMuteList) {
+          const cached = await readCachedMuteListContent();
+          if (!isCurrent() || signal.aborted) return;
+          if (version === mutationVersion && !savingLocalBlock) {
+            mutedPubkeySet = new Set(cached.mutedPubkeys);
+            blockedPubkeySet = new Set(cached.blockedPubkeys);
+          }
+        }
         const snapshot = await fetchMuteListContent(seedRelayUrls);
-        if (signal.aborted) return;
-        if (snapshot !== null && version === mutationVersion && snapshot.createdAt >= latestMuteListCreatedAt) {
-          const normalizedContent = normalizeMuteListContent(snapshot.content, getLoggedInPublicKeyHex());
-          updateMuteListStartupEntryCount(
-            normalizedContent.mutedPubkeys.length + normalizedContent.blockedPubkeys.length
+        if (signal.aborted || !isCurrent()) return;
+        if (
+          snapshot !== null &&
+          version === mutationVersion &&
+          !savingLocalBlock &&
+          snapshot.createdAt >= latestMuteListCreatedAt
+        ) {
+          // Keep unsynced local choices through failed reads, publication and
+          // reloads. Merge them into the remote list before replacing that list.
+          const contacts = await contactsService.listContacts();
+          if (!isCurrent() || signal.aborted || version !== mutationVersion || savingLocalBlock)
+            return;
+          const pending = contacts.filter(
+            (contact) => typeof contact.meta.pending_block === 'boolean',
           );
-          await applyMuteListContent(normalizedContent);
+          const blocked = new Set(snapshot.content.blockedPubkeys);
+          for (const contact of pending) {
+            if (contact.meta.pending_block) blocked.add(contact.public_key);
+            else blocked.delete(contact.public_key);
+          }
+          const normalizedContent = normalizeMuteListContent(
+            { ...snapshot.content, blockedPubkeys: [...blocked] },
+            getLoggedInPublicKeyHex(),
+          );
+          updateMuteListStartupEntryCount(
+            normalizedContent.mutedPubkeys.length + normalizedContent.blockedPubkeys.length,
+          );
+          await applyMuteListContent(
+            normalizedContent,
+            undefined,
+            undefined,
+            () => version === mutationVersion && !savingLocalBlock,
+          );
+          if (!isCurrent() || signal.aborted || version !== mutationVersion || savingLocalBlock)
+            return;
           latestMuteListCreatedAt = snapshot.createdAt;
           hasRestoredMuteList = true;
+          if (pending.length && syncPendingBlocks) await publishMuteList(seedRelayUrls);
         }
 
         completeStartupStep('mute-list');
       } catch (error) {
-        if (signal.aborted) return;
+        if (signal.aborted || !isCurrent()) return;
         failStartupStep('mute-list', error);
         throw error;
       }
     })().finally(() => {
-      restoreMuteListPromise = null;
+      if (isCurrent()) restoreMuteListPromise = null;
     });
 
     return restoreMuteListPromise;
   }
 
   async function publishMuteList(seedRelayUrls: string[] = []): Promise<void> {
+    const isCurrent = currentSession();
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
     if (!loggedInPubkeyHex) {
       throw new Error('Missing public key in localStorage. Login is required.');
     }
 
     const relayUrls = await resolveLoggedInPublishRelayUrls(seedRelayUrls);
+    if (!isCurrent()) return;
     if (relayUrls.length === 0) {
       throw new Error('Cannot publish mute list without at least one relay.');
     }
 
     await ensureRelayConnections(relayUrls);
+    if (!isCurrent()) return;
     const user = await getLoggedInSignerUser();
+    if (!isCurrent()) return;
+    const pending = (await contactsService.listContacts()).filter(
+      (contact) => typeof contact.meta.pending_block === 'boolean',
+    );
+    if (!isCurrent()) return;
+    const version = mutationVersion;
     const { mutedPubkeys, blockedPubkeys } = normalizeMuteListContent(
       {
         mutedPubkeys: Array.from(mutedPubkeySet),
         blockedPubkeys: Array.from(blockedPubkeySet),
       },
-      loggedInPubkeyHex
+      loggedInPubkeyHex,
     );
     const muteListEvent = new ClientEvent(ndk, {
       kind: MUTE_LIST_KIND,
@@ -465,22 +566,33 @@ export function createMuteListRuntime({
     });
 
     const relaySet = NostrRelaySet.fromRelayUrls(relayUrls, ndk, false);
+    if (!isCurrent()) return;
     await muteListEvent.publishReplaceable(relaySet);
-    latestMuteListCreatedAt = muteListEvent.created_at ?? latestMuteListCreatedAt;
+    if (!isCurrent()) return;
+    latestMuteListCreatedAt = Math.max(muteListEvent.created_at ?? 0, latestMuteListCreatedAt);
     updateStoredEventSinceFromCreatedAt(muteListEvent.created_at);
     hasRestoredMuteList = true;
+    for (const contact of pending) {
+      if (!isCurrent() || version !== mutationVersion) return;
+      const meta = { ...contact.meta };
+      delete meta.pending_block;
+      await contactsService.updateContact(contact.id, { metaBase: contact.meta, meta });
+    }
   }
 
   async function setPubkeyMuted(
     pubkey: string,
     muted: boolean,
-    seedRelayUrls: string[] = []
+    seedRelayUrls: string[] = [],
   ): Promise<void> {
     mutationVersion += 1;
+    const isCurrent = currentSession();
     const mutation = muteListMutationQueue.then(async () => {
+      if (!isCurrent()) return;
       if (!hasRestoredMuteList) {
         await restoreMuteList(seedRelayUrls);
       }
+      if (!isCurrent()) return;
 
       const loggedInPubkeyHex = getLoggedInPublicKeyHex();
       const normalizedPubkey = normalizeMuteTargetPubkey(pubkey, loggedInPubkeyHex);
@@ -511,6 +623,7 @@ export function createMuteListRuntime({
         mutedPubkeys: Array.from(nextMutedPubkeys),
         blockedPubkeys: Array.from(blockedPubkeySet),
       });
+      if (!isCurrent()) return;
       await publishMuteList(seedRelayUrls);
     });
 
@@ -522,50 +635,59 @@ export function createMuteListRuntime({
     pubkey: string,
     blocked: boolean,
     seedRelayUrls: string[] = [],
-    options: BlockTargetOptions = {}
+    options: BlockTargetOptions = {},
   ): Promise<void> {
     mutationVersion += 1;
+    const isCurrent = currentSession();
     const mutation = muteListMutationQueue.then(async () => {
-      if (!hasRestoredMuteList) {
-        await restoreMuteList(seedRelayUrls);
-      }
-
+      if (!isCurrent()) return;
       const loggedInPubkeyHex = getLoggedInPublicKeyHex();
       const normalizedPubkey = normalizeMuteTargetPubkey(pubkey, loggedInPubkeyHex);
-      if (!normalizedPubkey) {
+      if (!loggedInPubkeyHex || !normalizedPubkey) {
         return;
       }
+      // A startup read may fail. It must not prevent the local block from
+      // taking effect, or replace other cached blocks with an empty list.
+      savingLocalBlock = true;
+      try {
+        const cached = await readCachedMuteListContent();
+        if (!isCurrent()) return;
+        const nextMutedPubkeys = new Set([...cached.mutedPubkeys, ...mutedPubkeySet]);
+        const nextBlockedPubkeys = new Set([...cached.blockedPubkeys, ...blockedPubkeySet]);
+        if (blocked) {
+          nextBlockedPubkeys.add(normalizedPubkey);
+          nextMutedPubkeys.delete(normalizedPubkey);
+        } else {
+          nextBlockedPubkeys.delete(normalizedPubkey);
+        }
 
-      const nextMutedPubkeys = new Set(mutedPubkeySet);
-      const nextBlockedPubkeys = new Set(blockedPubkeySet);
-      if (blocked) {
-        nextBlockedPubkeys.add(normalizedPubkey);
-        nextMutedPubkeys.delete(normalizedPubkey);
-      } else {
-        nextBlockedPubkeys.delete(normalizedPubkey);
+        await applyMuteListContent(
+          {
+            mutedPubkeys: Array.from(nextMutedPubkeys),
+            blockedPubkeys: Array.from(nextBlockedPubkeys),
+          },
+          blocked
+            ? new Map<string, BlockTargetOptions>([[normalizedPubkey, options]])
+            : new Map<string, BlockTargetOptions>(),
+          { pubkey: normalizedPubkey, blocked },
+        );
+      } finally {
+        if (isCurrent()) {
+          savingLocalBlock = false;
+          mutationVersion += 1;
+        }
       }
-
-      if (
-        nextBlockedPubkeys.size === blockedPubkeySet.size &&
-        nextBlockedPubkeys.has(normalizedPubkey) === blocked &&
-        nextMutedPubkeys.size === mutedPubkeySet.size
-      ) {
-        // A previous attempt may have saved the local block but failed to
-        // publish it. An explicit retry must still reach the relays.
-        await publishMuteList(seedRelayUrls);
-        return;
+      if (!isCurrent()) return;
+      // Finish any older restore after saving locally. Its stale snapshot may
+      // not overwrite the user's choice or clear its pending publication.
+      await restoreMuteListPromise?.catch(() => {});
+      if (!isCurrent()) return;
+      if (!hasRestoredMuteList) {
+        await restoreMuteList(seedRelayUrls, false);
+        if (!isCurrent()) return;
+        if (!hasRestoredMuteList)
+          throw new Error('Saved on this device. Could not sync the block list.');
       }
-
-      latestMuteListCreatedAt = Math.max(latestMuteListCreatedAt, Math.floor(Date.now() / 1000));
-      await applyMuteListContent(
-        {
-          mutedPubkeys: Array.from(nextMutedPubkeys),
-          blockedPubkeys: Array.from(nextBlockedPubkeys),
-        },
-        blocked
-          ? new Map<string, BlockTargetOptions>([[normalizedPubkey, options]])
-          : new Map<string, BlockTargetOptions>()
-      );
       await publishMuteList(seedRelayUrls);
     });
 
@@ -574,6 +696,8 @@ export function createMuteListRuntime({
   }
 
   function resetMuteListRuntimeState(): void {
+    sessionVersion += 1;
+    savingLocalBlock = false;
     mutationVersion += 1;
     latestMuteListCreatedAt = 0;
     restoreMuteListPromise = null;

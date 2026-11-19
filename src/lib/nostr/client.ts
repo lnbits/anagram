@@ -587,6 +587,7 @@ export class NostrRelay extends Emitter {
   connectivity: any = {};
   connectionStats: NostrRelayConnectionStats = { attempts: 0, success: 0, durations: [] };
   private pending?: Promise<void>;
+  private connectionGeneration = 0;
   constructor(
     public url: string,
     private client: NostrClient,
@@ -601,6 +602,7 @@ export class NostrRelay extends Emitter {
       return Promise.reject(new Error('Relay connection rejected by URL policy'));
     if (this.connected) return Promise.resolve();
     return (this.pending ??= (async () => {
+      const generation = ++this.connectionGeneration;
       this.status = NostrRelayStatus.CONNECTING;
       this.client.pool.emit('relay:connecting', this);
       this.connectionStats.attempts++;
@@ -611,7 +613,12 @@ export class NostrRelay extends Emitter {
         this.status = NostrRelayStatus.CONNECTED;
         this.connectionStats.success++;
         this.connectionStats.connectedAt = Date.now();
+        let disconnected = false;
         relay.onclose = () => {
+          // Idle cleanup can report the same closed socket again. Only the
+          // current connection's first close may cancel traffic and delay retries.
+          if (disconnected || generation !== this.connectionGeneration) return;
+          disconnected = true;
           this.status = NostrRelayStatus.DISCONNECTED;
           this.client.cancelRelayTraffic(this.url);
           this.client.pool.emit('relay:disconnect', this);

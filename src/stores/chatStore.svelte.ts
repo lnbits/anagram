@@ -1321,53 +1321,27 @@ export const useChatStore = createStore('chatStore', () => {
 
   async function blockChat(chatId: string): Promise<void> {
     const normalizedChatId = normalizeChatIdentifier(chatId);
-    if (!normalizedChatId) {
-      return;
-    }
-
-    const blockedAt = new Date().toISOString();
-    let nextMetaToPersist: ChatMetadata | null = null;
-
-    chats = chats.map((chat) => {
-      if (chat.id !== normalizedChatId) {
-        return chat;
-      }
-
-      nextMetaToPersist = buildBlockedChatMeta(chat.meta as ChatMetadata, blockedAt);
-      return {
-        ...chat,
-        unreadCount: 0,
-        meta: nextMetaToPersist,
-      };
-    });
-
-    if (!nextMetaToPersist) {
-      await chatDataService.init();
-      const existingRow = await chatDataService.getChatByPublicKey(normalizedChatId);
-      if (!existingRow) {
-        return;
-      }
-
-      nextMetaToPersist = buildBlockedChatMeta(existingRow.meta as ChatMetadata, blockedAt);
-    }
-
-    if (selectedChatId === normalizedChatId) {
-      selectedChatId = resolveDefaultSelectedChatId(
-        chats.filter((chat) => chat.id !== normalizedChatId),
-      );
-    }
-
-    if (!nextMetaToPersist) {
-      return;
-    }
-
+    if (!normalizedChatId) return;
+    const account = getLoggedInPublicKey();
+    const target = chats.find((chat) => chat.id === normalizedChatId);
+    const { useNostrStore } = await import('#src/stores/nostrStore.svelte.ts');
+    if (account !== getLoggedInPublicKey()) return;
     try {
-      await Promise.all([
-        chatDataService.updateChatMeta(normalizedChatId, nextMetaToPersist),
-        chatDataService.markChatAsRead(normalizedChatId),
-      ]);
-    } catch (error) {
-      console.error('Failed to block chat request', error);
+      // Use the same encrypted account list as Contacts. A chat-only flag is
+      // overwritten by that list on the next startup restore.
+      await useNostrStore().blockPubkey(normalizedChatId, undefined, {
+        fallbackName: target?.name,
+        type: target?.type,
+      });
+    } finally {
+      // Local blocking takes effect even if publishing fails. Preserve it and
+      // let the caller display the relay error so the user can retry.
+      if (account === getLoggedInPublicKey() && selectedChatId === normalizedChatId &&
+          chats.some((chat) => chat.id === normalizedChatId && chat.meta.inbox_state === 'blocked')) {
+        selectedChatId = resolveDefaultSelectedChatId(
+          chats.filter((chat) => chat.id !== normalizedChatId),
+        );
+      }
     }
   }
 

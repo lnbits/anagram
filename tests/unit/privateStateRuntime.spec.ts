@@ -385,6 +385,26 @@ describe('privateStateRuntime', () => {
     ).toBeLessThan(0);
   });
 
+  it('orders rapid read publications and cancels publication when the account changes during encryption', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-18T00:00:00Z'));
+    const deps = createDeps();
+    const runtime = createPrivateStateRuntime(deps);
+    const restoredAt = Math.floor(Date.now() / 1000) + 10;
+    runtime.observeContactCursorEvent(`sha256:secret${'a'.repeat(64)}`, restoredAt);
+    await runtime.publishContactCursor('a'.repeat(64), { at: '2026-11-17T00:00:00Z', eventId: null });
+    await runtime.publishContactCursor('a'.repeat(64), { at: '2026-11-18T00:00:00Z', eventId: null });
+    const events = ndkMocks.publishReplaceable.mock.calls.map(([event]) => event);
+    expect(events[0].created_at).toBe(restoredAt + 1);
+    expect(events[1].created_at).toBe(events[0].created_at + 1);
+    deps.encryptContactCursorContent.mockImplementationOnce(async () => {
+      deps.getLoggedInPublicKeyHex.mockReturnValue('c'.repeat(64));
+      return 'encrypted';
+    });
+    await runtime.publishContactCursor('a'.repeat(64), { at: '2026-11-18T00:00:01Z', eventId: null });
+    expect(ndkMocks.publishReplaceable).toHaveBeenCalledTimes(2);
+  });
+
   it('publishes the first contact cursor immediately and coalesces trailing updates', async () => {
     vi.useFakeTimers();
     const deps = createDeps({

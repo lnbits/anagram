@@ -43,6 +43,7 @@ export function createProfileHydrationRuntime({
 }: Dependencies) {
   const tasks = new Map<string, Task>();
   const active = new Map<string, { stop: () => void; authors: Map<string, Task> }>();
+  let accountReadRelays = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let generation = 0;
   const normalizeUrls = (urls: string[]) => [
@@ -61,7 +62,12 @@ export function createProfileHydrationRuntime({
     for (const url of normalizeUrls(urls))
       if (!task.routes.has(url)) task.routes.set(url, { due: 0, attempts: 0, completed: false });
   }
-  function request(targets: Target[], priorityKeys: string[] = []) {
+  function request(
+    targets: Target[],
+    priorityKeys: string[] = [],
+    accountReadRelayUrls: string[] = [],
+  ) {
+    accountReadRelays = new Set(normalizeUrls(accountReadRelayUrls));
     const priority = new Set([getOwnPublicKey(), ...priorityKeys]);
     const wanted = new Set(
       targets.filter((target) => !isBlocked(target.publicKey)).map((target) => target.publicKey),
@@ -150,11 +156,15 @@ export function createProfileHydrationRuntime({
     deadline = setTimeout(() => finish(false), 10000);
     try {
       subscription = subscribe(
-        batch.flatMap(({ task }) =>
-          [0, 10002, 10050, ...(task.publicKey === getOwnPublicKey() ? [10013] : [])].map(
+        batch.flatMap(({ task }) => {
+          // The live account subscription already reads its private storage list
+          // on personal read relays. An indexer or discovered outbox still needs a lookup.
+          const fetchPrivateList =
+            task.publicKey === getOwnPublicKey() && !accountReadRelays.has(url);
+          return [0, 10002, 10050, ...(fetchPrivateList ? [10013] : [])].map(
             (kind) => ({ kinds: [kind], authors: [task.publicKey], limit: 1 }),
-          ),
-        ),
+          );
+        }),
         [url],
         (event) => {
           const task = authors.get(event.pubkey);
@@ -196,6 +206,7 @@ export function createProfileHydrationRuntime({
     for (const batch of [...active.values()]) batch.stop();
     active.clear();
     tasks.clear();
+    accountReadRelays.clear();
   }
   return { request, reset };
 }

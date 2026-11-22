@@ -366,12 +366,14 @@ async function startMockRelayProxy(options = {}) {
   let rateLimitRejections = 0;
   const frames = [];
   const receivedFrames = [];
+  const connectionChanges = [];
   const activeSignatures = new Map();
   let duplicateActiveSignatures = 0;
   const rateLimit = options.rateLimit ?? null;
   const trafficSnapshot = () => ({
     frames: frames.slice(),
     receivedFrames: receivedFrames.slice(),
+    connectionChanges: connectionChanges.slice(),
     connectionCount: acceptedConnectionCount,
     activeConnections: sessions.size,
     maxConcurrentConnections,
@@ -436,6 +438,7 @@ async function startMockRelayProxy(options = {}) {
     clientSocket.setNoDelay(true);
 
     const session = {
+      connectionId: ++nextConnectionId,
       clientSocket,
       isClientClosed: false,
       pendingRequests: [],
@@ -443,7 +446,8 @@ async function startMockRelayProxy(options = {}) {
       upstream: null,
     };
     sessions.add(session);
-    const connectionId = ++nextConnectionId;
+    const { connectionId } = session;
+    connectionChanges.push({ connectionId, open: true });
     maxConcurrentConnections = Math.max(maxConcurrentConnections, sessions.size);
 
     const closeSession = ({ destroyClient = true } = {}) => {
@@ -452,6 +456,7 @@ async function startMockRelayProxy(options = {}) {
       }
       session.isClientClosed = true;
       sessions.delete(session);
+      connectionChanges.push({ connectionId, open: false });
       for (const key of activeSignatures.keys())
         if (key.startsWith(`${connectionId}:`)) activeSignatures.delete(key);
       if (destroyClient) {
@@ -729,6 +734,9 @@ async function startMockRelayProxy(options = {}) {
     resetTraffic: () => {
       frames.length = 0;
       receivedFrames.length = 0;
+      connectionChanges.length = 0;
+      for (const { connectionId } of sessions)
+        connectionChanges.push({ connectionId, open: true });
       for (const session of sessions) session.frameTimes.length = 0;
       acceptedConnectionCount = 0;
       maxConcurrentConnections = sessions.size;

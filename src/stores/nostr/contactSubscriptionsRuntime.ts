@@ -546,6 +546,10 @@ export function createContactSubscriptionsRuntime({
       return;
     }
     const fallback = await resolveTrackedContactReadRelayUrls(seedRelayUrls);
+    // A contact or group seed is only a hint for this lookup.
+    const accountReadRelays = seedRelayUrls.length
+      ? await resolveTrackedContactReadRelayUrls()
+      : fallback;
     const tracked = new Set([self, ...(await listTrackedContactPubkeys())]);
     const contacts = await contactsService.listContacts();
     const visibleRelayUrls = inputSanitizerService.normalizeReadableRelayUrls(
@@ -615,6 +619,7 @@ export function createContactSubscriptionsRuntime({
           })),
       ),
       visibleProfileKeys,
+      accountReadRelays,
     );
     trackedContactPubkeys = tracked;
     await subscriptions.reconcile(

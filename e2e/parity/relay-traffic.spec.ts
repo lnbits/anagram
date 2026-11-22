@@ -1,6 +1,7 @@
 // Original Anagram behavioral scenarios, using the Svelte client and nostr-tools.
 import { randomBytes } from 'node:crypto';
 import { expect, test } from '@playwright/test';
+import { isPrivateRelayEvent, splitRelayDiscoveryFilters } from 'nostr-pubsub/private-relays';
 import { type RelayTrafficSnapshot, startMockRelayProxy } from '../../scripts/mock-relay-proxy.cjs';
 import {
   acceptFirstRequest,
@@ -27,6 +28,39 @@ function counts(traffic: RelayTrafficSnapshot) {
     connections: traffic.connectionCount,
     maxConcurrentConnections: traffic.maxConcurrentConnections,
   };
+}
+
+// Account reception, each public lookup key and each anonymous send require
+// separate connections. Check actual wire filters and overlapping socket lifetimes.
+function expectIsolatedConnections(traffic: RelayTrafficSnapshot) {
+  const scopes = new Map<number, string>();
+  for (const frame of traffic.frames) {
+    let scope: string;
+    if (frame.command === 'REQ') {
+      const { receiver, discovery } = splitRelayDiscoveryFilters(frame.filters);
+      if (discovery.length) {
+        expect(receiver).toHaveLength(0);
+        expect(discovery).toHaveLength(1);
+        const filter = discovery[0]![0]!;
+        scope = filter.authors ? 'author:' + filter.authors[0] : 'device:' + filter['#p']![0];
+      } else scope = 'account';
+    } else if (frame.command === 'EVENT') {
+      scope = isPrivateRelayEvent(frame) ? 'send:' + frame.eventId : 'account';
+    } else continue;
+    const previous = scopes.get(frame.connectionId);
+    if (previous !== undefined) expect(scope).toBe(previous);
+    scopes.set(frame.connectionId, scope);
+  }
+  expect([...scopes.values()].filter((scope) => scope === 'account')).toHaveLength(1);
+  const active = new Set<string>();
+  for (const { connectionId, open } of traffic.connectionChanges) {
+    const scope = scopes.get(connectionId);
+    if (!scope) continue; // A handshake can precede its first frame at the snapshot boundary.
+    if (open) {
+      expect(active.has(scope), 'concurrent sockets for ' + scope).toBe(false);
+      active.add(scope);
+    } else active.delete(scope);
+  }
 }
 
 test('saved state restores once, healthy resume is quiet, and an immediate DM passes a strict relay limit', async ({
@@ -89,7 +123,7 @@ test('saved state restores once, healthy resume is quiet, and an immediate DM pa
         fresh.frames.filter((frame) => frame.command === 'EVENT' && frame.kind !== 30078),
       ).toHaveLength(0);
       expect(fresh.duplicateActiveSignatures).toBe(0);
-      expect(fresh.maxConcurrentConnections).toBe(1);
+      expectIsolatedConnections(fresh);
       expect(fresh.rateLimitRejections).toBe(0);
     }
 
@@ -366,7 +400,7 @@ test('fresh login can send immediately while background history is restoring', a
     expect(wraps).toHaveLength(2);
     expect(new Set(wraps.map((frame) => frame.eventId)).size).toBe(2);
     expect(traffic.rateLimitRejections).toBe(0);
-    expect(traffic.maxConcurrentConnections).toBe(1);
+    expectIsolatedConnections(traffic);
     await info.attach('login-immediate-send-traffic', {
       body: JSON.stringify(traffic, null, 2),
       contentType: 'application/json',

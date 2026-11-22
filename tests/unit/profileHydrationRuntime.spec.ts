@@ -210,10 +210,12 @@ it('keeps discovering the account inbox after finding its profile and follows hi
     onRelayList,
     isBlocked: () => false,
   });
-  runtime.request([{ publicKey: key, relayUrls: ['wss://indexer.test'] }]);
+  runtime.request([{ publicKey: key, relayUrls: ['wss://account.test'] }], [], [
+    'wss://account.test/',
+  ]);
   await vi.advanceTimersByTimeAsync(1);
   const call = subscribe.mock.calls[0] as any;
-  expect(call[0].map((filter: any) => filter.kinds[0])).toEqual([0, 10002, 10050, 10013]);
+  expect(call[0].map((filter: any) => filter.kinds[0])).toEqual([0, 10002, 10050]);
   call[2](
     new ClientEvent(client, {
       pubkey: key,
@@ -234,6 +236,9 @@ it('keeps discovering the account inbox after finding its profile and follows hi
   );
   await vi.advanceTimersByTimeAsync(1);
   expect(subscribe).toHaveBeenCalledTimes(2);
+  const outboxCall = subscribe.mock.calls[1] as any;
+  expect(outboxCall[1]).toEqual(['wss://outbox.test/']);
+  expect(outboxCall[0].map((filter: any) => filter.kinds[0])).toEqual([0, 10002, 10050, 10013]);
   (subscribe.mock.calls[1] as any)[2](
     new ClientEvent(client, {
       pubkey: key,

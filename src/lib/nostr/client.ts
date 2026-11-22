@@ -581,7 +581,7 @@ export class NostrRelay extends Emitter {
   private pending?: Promise<void>;
   constructor(
     public url: string,
-    private client: NostrClient,
+    readonly client: NostrClient,
   ) {
     super();
   }
@@ -718,7 +718,9 @@ export class NostrSubscription extends Emitter {
     const urls = this.opts.relaySet?.relayUrls ??
       this.opts.relayUrls ?? [...this.client.pool.relays.keys()];
     const seen = new Set<string>();
-    const targets = urls.map((url) => this.client.pool.getRelay(url, false));
+    const targets = this.opts.relaySet
+      ? [...this.opts.relaySet.relays]
+      : urls.map((url) => this.client.pool.getRelay(url, false));
     this.opts.relaySet ??= new NostrRelaySet(new Set(targets), this.client);
     urls.forEach((url) => this.relayFilters.set(url, this.filters));
     const scoped = splitRelayDiscoveryFilters(this.filters);
@@ -753,7 +755,7 @@ export class NostrSubscription extends Emitter {
         for (const target of targets) {
           for (const [index, filters] of scoped.discovery.entries())
             this.closers.push(
-              this.client.discovery.subscribe(
+              target.client.discovery.subscribe(
                 filters,
                 {
                   onEvent: (event) => deliver(event, target),
@@ -771,7 +773,7 @@ export class NostrSubscription extends Emitter {
               ),
             );
           if (scoped.receiver.length) {
-            const ordinary = new NostrSubscription(this.client, scoped.receiver, {
+            const ordinary = new NostrSubscription(target.client, scoped.receiver, {
               relayUrls: [target.url],
               includeRelayDuplicates: this.opts.includeRelayDuplicates,
               onEvent: (event) => deliver(event.rawEvent() as Event, target),
@@ -805,7 +807,7 @@ export class NostrSubscription extends Emitter {
           if (this.closed) return;
           // A guarded connect can be deferred during backoff. Do not bypass it
           // with ensureRelay(), which would reopen the socket on every request.
-          const relay = this.client.transport.getExistingRelay(target.url);
+          const relay = target.client.transport.getExistingRelay(target.url);
           if (!relay?.connected) throw new Error('Relay connection unavailable; will retry');
           let authRetried = false;
           const fail = (reason: unknown) => {
@@ -905,8 +907,8 @@ export class NostrSubscription extends Emitter {
       const reconnected = (relay: NostrRelay) => {
         if (relay === target && !this.closed && this.failedTargets.has(target)) void startTarget();
       };
-      this.client.pool.on('relay:connect', reconnected);
-      this.closers.push({ close: () => this.client.pool.off('relay:connect', reconnected) });
+      target.client.pool.on('relay:connect', reconnected);
+      this.closers.push({ close: () => target.client.pool.off('relay:connect', reconnected) });
       void startTarget();
     }
   }

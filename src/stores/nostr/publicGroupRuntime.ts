@@ -18,10 +18,12 @@ import type { Message, MessageAttachmentMetadata, MessageRelayStatus } from '#sr
 import { redactPublicLinks } from '#src/utils/publicMessage.ts';
 import { previewUrl } from '#src/utils/linkPreview.ts';
 import { writable, get, type Readable } from 'svelte/store';
-import type NostrClient from '#src/lib/nostr/client.ts';
+import NostrClient from '#src/lib/nostr/client.ts';
 import { createPublicGroupActivityRuntime } from './publicGroupActivityRuntime.ts';
+import { normalizeRelayStatusUrlsValue } from './valueUtils.ts';
 import {
   ClientEvent,
+  NostrRelaySet,
   type NostrEvent,
   type NostrFilter,
   type NostrSigner,
@@ -101,9 +103,21 @@ export function createPublicGroupRuntime(deps: Dependencies) {
   let account = '',
     data: PublicGroupData | undefined,
     view = 0;
+  const publicRoomReader = new NostrClient({ authenticate: false });
   const activity = createPublicGroupActivityRuntime({
     client: deps.client, account: deps.account, database: () => data,
-    relays: relayUrls, notify: deps.notify,
+    relaySet: async (hints) => {
+      const configured = await deps.relays();
+      const accountUrls = new Set(normalizeRelayStatusUrlsValue(configured));
+      const urls = await relayUrls(hints, configured);
+      // A room's advertised relay is a public reading hint. Only account relays
+      // may receive the signed-in identity during background activity checks.
+      const relays = urls.map((url) =>
+        (accountUrls.has(url) ? deps.client : publicRoomReader).pool.getRelay(url, false),
+      );
+      return new NostrRelaySet(new Set(relays));
+    },
+    notify: deps.notify,
     changed: (row) => state.update((s) => ({ ...s,
       rooms: s.rooms.map((current) => current.address === row.address
         ? { ...row, room: newerRoom(current.room, row.room) ? current.room : row.room }
@@ -195,6 +209,8 @@ export function createPublicGroupRuntime(deps: Dependencies) {
   function stop() {
     stopView();
     activity.stop();
+    for (const relay of publicRoomReader.pool.relays.values()) relay.disconnect();
+    publicRoomReader.pool.relays.clear();
     void data?.close();
     data = undefined;
     account = '';
@@ -245,8 +261,8 @@ export function createPublicGroupRuntime(deps: Dependencies) {
     }));
     activity.sync(get(state).rooms);
   }
-  async function relayUrls(hints: string[]) {
-    const configured = await deps.relays();
+  async function relayUrls(hints: string[], accountRelays?: string[]) {
+    const configured = accountRelays ?? (await deps.relays());
     // Normalize each list separately so eight preferred relays cannot crowd out app relays.
     const urls = [
       ...new Set([

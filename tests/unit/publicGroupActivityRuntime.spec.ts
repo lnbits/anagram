@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, expect, it, vi } from 'vitest';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools';
-import NostrClient, { type NostrSubscriptionOptions } from '#src/lib/nostr/client.ts';
+import NostrClient, { NostrRelaySet, type NostrSubscriptionOptions } from '#src/lib/nostr/client.ts';
 import { PublicGroupData, type SavedPublicRoom } from '#src/services/publicGroupData.ts';
 import { parsePublicRoom } from '#src/stores/nostr/publicGroups.ts';
 import { createPublicGroupActivityRuntime } from '#src/stores/nostr/publicGroupActivityRuntime.ts';
@@ -59,7 +59,7 @@ async function setup() {
     client: { subscribe } as unknown as NostrClient,
     account: () => account,
     database: () => db,
-    relays: async (urls) => urls,
+    relaySet: async (urls) => NostrRelaySet.fromRelayUrls(urls, new NostrClient(), false),
     changed: (row) => {
       saved = row;
     },

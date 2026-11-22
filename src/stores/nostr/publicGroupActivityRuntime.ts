@@ -1,5 +1,5 @@
 import type NostrClient from '#src/lib/nostr/client.ts';
-import type { NostrEvent, NostrSubscription } from '#src/lib/nostr/client.ts';
+import type { NostrEvent, NostrRelaySet, NostrSubscription } from '#src/lib/nostr/client.ts';
 import type { PublicGroupData, SavedPublicRoom } from '#src/services/publicGroupData.ts';
 import { roomPolicy, validRoomMessage } from './publicGroups.ts';
 
@@ -8,7 +8,7 @@ export function createPublicGroupActivityRuntime(deps: {
   client: NostrClient;
   account: () => string | null;
   database: () => PublicGroupData | undefined;
-  relays: (hints: string[]) => Promise<string[]>;
+  relaySet: (hints: string[]) => Promise<NostrRelaySet>;
   changed: (row: SavedPublicRoom) => void;
   notify?: (row: SavedPublicRoom, event: NostrEvent) => void;
   failed: () => void;
@@ -101,7 +101,7 @@ export function createPublicGroupActivityRuntime(deps: {
           rows.set(row.address, saved);
           deps.changed(saved);
         }
-        const urls = await deps.relays(saved.room.relays);
+        const relaySet = await deps.relaySet(saved.room.relays);
         if (!active()) return;
         // Only recent activity; opening/paging the thread remains the history hydrator.
         subscription = deps.client.subscribe(
@@ -114,7 +114,7 @@ export function createPublicGroupActivityRuntime(deps: {
             },
           ],
           {
-            relayUrls: urls,
+            relaySet,
             onEvent: (event) => {
               if (active()) void ingest(row.address, event.rawEvent()).catch(deps.failed);
             },

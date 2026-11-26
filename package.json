@@ -29,7 +29,7 @@
     "jsqr": "1.4.0",
     "libopus-wasm": "0.4.1",
     "nostr-double-ratchet": "0.0.183",
-    "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.41/nostr-pubsub-0.5.41.tgz",
+    "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.42/nostr-pubsub-0.5.42.tgz",
     "nostr-tools": "^2",
     "qrcode": "^1.5.4"
   },

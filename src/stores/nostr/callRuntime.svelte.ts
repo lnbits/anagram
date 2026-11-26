@@ -84,6 +84,8 @@ interface Context {
   audioGeneration?: number;
   resetAudioOnUnmute?: boolean;
   statsPending?: boolean;
+  minRttMs?: number;
+  networkCongested?: boolean;
   releaseAudioRoute?: () => void;
   id: string;
   peer: string;
@@ -512,6 +514,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         if (ctx.connection === connection) retryVideo(ctx, 'camera');
       },
       {
+        isVideoCongested: () => ctx.networkCongested === true,
         videoBitsPerSecond: profile.cameraBitrate,
         videoFrameRate: profile.cameraFrameRate,
         videoMaxWidth: profile.cameraWidth,
@@ -654,6 +657,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         },
         stopScreen,
         {
+          isVideoCongested: () => ctx.networkCongested === true,
           videoBitsPerSecond: profile.screenBitrate,
           videoFrameRate: profile.screenFrameRate,
           videoMaxWidth: profile.screenWidth,
@@ -1034,24 +1038,36 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       );
       remoteMediaUrl = ctx.receiver.url;
       ctx.lastReceivedAt = Date.now();
-      ctx.heartbeat = setInterval(() => {
-        if (!alive(ctx)) return;
-        if (Date.now() - ctx.lastReceivedAt > 15_000) {
-          recover(ctx, new Error('Call heartbeat timed out'));
-          return;
-        }
+      ctx.minRttMs = undefined;
+      ctx.networkCongested = false;
+      const updateTransportStats = () => {
         if (connection.transportStats && !ctx.statsPending) {
           ctx.statsPending = true;
           void connection
             .transportStats()
             .then((stats) => {
-              if (alive(ctx) && ctx.linkRevision === revision) transportDiagnostics = stats;
+              if (!alive(ctx) || ctx.linkRevision !== revision) return;
+              transportDiagnostics = stats;
+              if (!Number.isFinite(stats.rttMs) || stats.rttMs <= 0) return;
+              ctx.minRttMs = Math.min(ctx.minRttMs ?? stats.rttMs, stats.rttMs);
+              // Compare with this path's baseline: a distant relay is not in
+              // itself congested. Rising RTT exposes queues beyond send().
+              ctx.networkCongested = stats.rttMs > ctx.minRttMs + Math.max(80, ctx.minRttMs / 2);
             })
             .catch(() => {})
             .finally(() => {
               ctx.statsPending = false;
             });
         }
+      };
+      updateTransportStats();
+      ctx.heartbeat = setInterval(() => {
+        if (!alive(ctx)) return;
+        if (Date.now() - ctx.lastReceivedAt > 15_000) {
+          recover(ctx, new Error('Call heartbeat timed out'));
+          return;
+        }
+        updateTransportStats();
         void connection.send(new Uint8Array([1])).catch((cause) => {
           if (ctx.linkRevision === revision) recover(ctx, cause);
         });

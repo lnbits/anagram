@@ -148,12 +148,16 @@ pub async fn iroh_call_send(
     let data = call_frame(request.body(), limit)?;
     if lane == "batch" {
         for packet in audio_packets(&data)? {
-            connection.send_audio(packet.to_vec()).map_err(|e| e.to_string())?;
+            connection
+                .send_audio(packet.to_vec())
+                .await
+                .map_err(|e| e.to_string())?;
         }
         Ok(())
     } else if lane == "1" {
         connection
             .send_audio(data)
+            .await
             .map_err(|e| e.to_string())
     } else {
         connection

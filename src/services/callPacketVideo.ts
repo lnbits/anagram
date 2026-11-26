@@ -135,6 +135,8 @@ export async function callPacketVideoSupported(): Promise<boolean> {
         width: 640,
         height: 360,
         bitrate: 600000,
+        framerate: 24,
+        bitrateMode: 'constant',
         latencyMode: 'realtime',
       }),
       VideoDecoder.isConfigSupported({ codec: 'vp8', optimizeForLatency: true }),
@@ -326,9 +328,12 @@ export function recordPacketVideo(
     }
     let stopped = false,
       lastKey = -Infinity,
-      lastFrame = -Infinity;
+      nextFrameAt = -Infinity;
     let currentBitrate = bitrate,
       congestedAt = 0;
+    // React before a video write occupies several frame intervals and delays
+    // speech on the shared relay connection. Keep a floor for scheduling jitter.
+    const slowSendMs = Math.max(80, 2000 / (options?.videoFrameRate ?? 24));
     const dimensions = (width: number, height: number) => {
       const scale = Math.min(1, maxWidth / width, maxHeight / height);
       return [
@@ -343,6 +348,8 @@ export function recordPacketVideo(
       width,
       height,
       bitrate: currentBitrate,
+      framerate: options?.videoFrameRate ?? 24,
+      bitrateMode: 'constant' as const,
       latencyMode: 'realtime' as const,
     });
     const fail = () => {
@@ -358,17 +365,21 @@ export function recordPacketVideo(
         await c.send(frame.slice());
         if (stopped || c.stopped) return;
         const now = performance.now();
-        c.slowUntil = now - c.since > 180 ? now + 2000 : 0;
+        c.slowUntil = now - c.since > slowSendMs ? now + 2000 : 0;
         // A single slow peer must not lower the shared encoder for
         // everyone. Adapt at most once a second when all peers lag.
         if (
           now - congestedAt >= 1000 &&
           [...consumers].every(
-            (peer) => peer.stopped || peer.slowUntil > now || (peer.busy && now - peer.since > 180),
+            (peer) =>
+              peer.stopped ||
+              peer.options?.isVideoCongested?.() ||
+              peer.slowUntil > now ||
+              (peer.busy && now - peer.since > slowSendMs),
           )
         ) {
           congestedAt = now;
-          currentBitrate = Math.max(Math.min(bitrate, 200000), Math.floor(currentBitrate * 0.8));
+          currentBitrate = Math.max(Math.min(bitrate, 100000), Math.floor(currentBitrate * 0.8));
         }
       } catch (error) {
         c.pending = undefined;
@@ -466,12 +477,16 @@ export function recordPacketVideo(
             if (stopped) break;
             const now = performance.now();
             // Bounded encode queue and capture rate; stale frames are independently droppable.
-            const fps = options?.videoFrameRate ?? 24;
-            if (encoder.encodeQueueSize >= 2 || now - lastFrame < (1000 / fps) * 0.9) continue;
+            const frameInterval = 1000 / (options?.videoFrameRate ?? 24);
+            if (encoder.encodeQueueSize >= 2 || now < nextFrameAt) continue;
             // If nobody can accept a frame, skip encoding it. Besides wasting
             // CPU, encoding unseen deltas would force another costly keyframe.
             if (![...consumers].some((c) => !c.stopped && !c.busy)) continue;
-            if (now - congestedAt > 5000 && currentBitrate < bitrate) {
+            if (
+              now - congestedAt > 5000 &&
+              currentBitrate < bitrate &&
+              [...consumers].every((c) => !c.options?.isVideoCongested?.())
+            ) {
               currentBitrate = Math.min(bitrate, Math.floor(currentBitrate * 1.1));
               congestedAt = now;
             }
@@ -491,7 +506,12 @@ export function recordPacketVideo(
               now - lastKey >= 1000 ||
               (now - lastKey >= 500 && [...consumers].some((c) => c.needsKey && !c.busy));
             if (keyFrame) lastKey = now;
-            lastFrame = now;
+            // Keep the cadence when capture arrives between deadlines. Starting
+            // a fresh interval at every frame can halve a 30 fps camera to 15 fps.
+            // Skip missed deadlines after a stall instead of encoding a backlog.
+            nextFrameAt = Number.isFinite(nextFrameAt)
+              ? nextFrameAt + (Math.floor((now - nextFrameAt) / frameInterval) + 1) * frameInterval
+              : now + frameInterval;
             encoder.encode(frame, { keyFrame });
           } finally {
             frame.close();

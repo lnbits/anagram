@@ -1632,3 +1632,26 @@ it('recovers the receiving side without another invitation or permission request
   await h.runtime.receiveSignal(peer, reconnect);
   expect(endpoint.accept).toHaveBeenCalledOnce();
 });
+
+it.each([50, 400])(
+  'uses RTT growth, not distance to the relay, for video congestion (%i ms baseline)',
+  async (baseline) => {
+    vi.useFakeTimers();
+    const h = setup();
+    let rttMs = baseline;
+    h.connection.transportStats = vi.fn(async () => ({ relayOnly: true, rttMs, paths: 1 }));
+    const record = vi.fn<typeof recordCallMedia>(() => () => {});
+    Object.assign(h.deps, { record });
+    await h.runtime.receiveSignal(peer, invite({ mediaVersion: 2, videoSupported: true }));
+    await h.runtime.accept();
+    await vi.advanceTimersByTimeAsync(0);
+    const video = record.mock.calls.find(([stream]) => stream.getVideoTracks().length > 0)?.[4];
+    expect(video?.isVideoCongested?.()).toBe(false);
+    rttMs = baseline + Math.max(100, baseline);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(video?.isVideoCongested?.()).toBe(true);
+    rttMs = baseline + 20;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(video?.isVideoCongested?.()).toBe(false);
+  },
+);

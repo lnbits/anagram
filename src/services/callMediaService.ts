@@ -217,6 +217,7 @@ export function createCallMediaReceiver(mimeType: string, onError: () => void): 
 export interface CallRecordingOptions {
   audioGeneration?: number;
   sendAudioBatch?(packets: Uint8Array[]): Promise<void>;
+  isVideoCongested?: () => boolean;
   videoFrameRate?: number;
   videoBitsPerSecond?: number;
   videoMaxWidth?: number;

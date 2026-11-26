@@ -332,13 +332,17 @@ impl CallConnection {
             paths.len()
         )
     }
-    // Datagram buffers are bounded by Iroh; never enqueue stale speech behind
-    // video retransmissions. Relay TCP stalls can still delay the underlying path.
-    pub fn send_audio(&self, data: Vec<u8>) -> Result<(), JsError> {
+    // Backpressure the bounded audio sender instead of silently evicting queued
+    // speech when a capture burst fills QUIC's datagram buffer. Datagrams remain
+    // unreliable; this waits for local capacity, not delivery or retransmission.
+    pub async fn send_audio(&self, data: Vec<u8>) -> Result<(), JsError> {
         if data.len() <= 14 || data.len() > 1100 || data[0] != 9 || data[1] != 1 {
             return Err(JsError::new("Invalid audio packet"));
         }
-        self.conn.send_datagram(data.into()).map_err(js_error)
+        self.conn
+            .send_datagram_wait(data.into())
+            .await
+            .map_err(js_error)
     }
     pub async fn recv_audio(&self) -> Result<Vec<u8>, JsError> {
         loop {

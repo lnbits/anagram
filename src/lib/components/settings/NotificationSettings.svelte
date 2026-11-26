@@ -18,6 +18,7 @@
     setAndroidRelayNotificationConversationDetails,
   } from '#src/services/androidRelayNotificationService.ts';
   import {
+    AndroidNotificationRelaySelectionError,
     loadAndroidNotificationRelayChoices,
     saveAndroidNotificationRelaySelection,
     type AndroidNotificationRelayChoices,
@@ -80,8 +81,10 @@
     error = '';
     try {
       await action();
-    } catch {
-      error = 'Could not save notification settings. Please try again.';
+    } catch (cause) {
+      error = cause instanceof AndroidNotificationRelaySelectionError
+        ? cause.message
+        : 'Could not save notification settings. Please try again.';
     } finally {
       busy = false;
       await refresh();

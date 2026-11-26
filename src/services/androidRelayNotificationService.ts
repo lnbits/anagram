@@ -703,12 +703,8 @@ function resetRefreshCoordinator(): void {
 }
 
 function scheduleAndroidNotificationRefresh(): void {
-  if (isRefreshInProgress) {
-    return;
-  }
-  if (refreshDebounceTimeoutId !== null) {
-    clearTimeout(refreshDebounceTimeoutId);
-  }
+  // Keep the first scheduled deadline even if background updates keep arriving.
+  if (isRefreshInProgress || refreshDebounceTimeoutId !== null) return;
   refreshDebounceTimeoutId = setTimeout(() => {
     refreshDebounceTimeoutId = null;
     void runAndroidNotificationRefresh();
@@ -718,24 +714,22 @@ function scheduleAndroidNotificationRefresh(): void {
 async function runAndroidNotificationRefresh(): Promise<void> {
   isRefreshInProgress = true;
   isRefreshRequested = false;
+  // Complete this batch's callers after its configuration is applied. Requests
+  // arriving during the work belong to the next batch and must not hold a save open.
+  const resolve = resolveRefreshCoordinator;
+  const reject = rejectRefreshCoordinator;
+  refreshCoordinatorPromise = null;
+  resolveRefreshCoordinator = null;
+  rejectRefreshCoordinator = null;
   try {
     await performAndroidNotificationRefresh();
+    resolve?.();
   } catch (error) {
-    const reject = rejectRefreshCoordinator;
-    resetRefreshCoordinator();
     reject?.(error);
-    return;
+  } finally {
+    isRefreshInProgress = false;
+    if (isRefreshRequested) scheduleAndroidNotificationRefresh();
   }
-  isRefreshInProgress = false;
-
-  if (isRefreshRequested) {
-    scheduleAndroidNotificationRefresh();
-    return;
-  }
-
-  const resolve = resolveRefreshCoordinator;
-  resetRefreshCoordinator();
-  resolve?.();
 }
 
 export async function getAndroidRelayNotificationPermission(): Promise<AndroidRelayNotificationPermissionState> {
@@ -783,14 +777,11 @@ export async function initializeAndroidRelayNotificationsAfterLogin(): Promise<v
     return;
   }
 
-  // Record the attempt before requesting permission so denial or a failed setup
-  // does not prompt again on every visit. Settings can explicitly enable it later.
-  saveAndroidRelayNotificationsPreference(false);
   const choices = await loadAndroidNotificationRelayChoices();
   if (revision !== configurationRevision || choices.selectedRelayUrls.length === 0) return;
-  if (!choices.hasSavedSelection) {
-    saveAndroidNotificationRelaySelection(choices.selectedRelayUrls);
-  }
+  // Record a permission attempt only after relay setup is ready. Missing relay
+  // data or a failed load at first login must not become a notification opt-out.
+  saveAndroidRelayNotificationsPreference(false);
   await requestAndroidRelayNotificationsAfterLogin();
 }
 
@@ -809,8 +800,14 @@ export async function requestAndroidRelayNotificationsAfterLogin(): Promise<Andr
     return permission;
   }
 
+  const choices = await loadAndroidNotificationRelayChoices();
   if (revision !== configurationRevision || notificationsStopped)
     throw new Error('Notification configuration cancelled.');
+  // Settings displays defaults before a selection is saved. Persist them here
+  // so both first-login setup and the explicit enable switch use those relays.
+  if (!choices.hasSavedSelection && choices.selectedRelayUrls.length > 0) {
+    saveAndroidNotificationRelaySelection(choices.selectedRelayUrls);
+  }
   // Permission was granted and the user asked for notifications. Persist that
   // intent before native setup, which can fail transiently (including on resume).
   saveAndroidRelayNotificationsPreference(true);

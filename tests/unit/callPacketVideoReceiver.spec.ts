@@ -14,6 +14,8 @@ function receiver() {
     ondequeue?: () => void;
     decode: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
+    reset: ReturnType<typeof vi.fn>;
+    configure: ReturnType<typeof vi.fn>;
   };
   vi.stubGlobal(
     'VideoDecoder',
@@ -22,10 +24,13 @@ function receiver() {
       ondequeue?: () => void;
       decode = vi.fn(() => this.decodeQueueSize++);
       close = vi.fn();
+      reset = vi.fn(() => {
+        this.decodeQueueSize = 0;
+      });
+      configure = vi.fn();
       constructor() {
         decoder = this;
       }
-      configure() {}
     },
   );
   vi.stubGlobal(
@@ -38,12 +43,15 @@ function receiver() {
   );
   const error = vi.fn();
   const media = createPacketVideoReceiver(error);
-  const append = (timestamp: number, key = false) => {
+  const append = (timestamp: number, key = false, width = 64, height = 36) => {
     const bytes = new Uint8Array(20);
     bytes[0] = 1;
     bytes[1] = key ? 1 : 0;
     new DataView(bytes.buffer).setFloat64(2, timestamp);
-    bytes.set(key ? [0, 0, 0, 0x9d, 1, 0x2a, 64, 0, 36, 0] : [1], 10);
+    bytes.set(
+      key ? [0, 0, 0, 0x9d, 1, 0x2a, width & 255, width >> 8, height & 255, height >> 8] : [1],
+      10,
+    );
     media.append(bytes);
   };
   const drain = () => {
@@ -82,6 +90,31 @@ it('bounds a stalled decoder backlog and recovers only on an independent keyfram
     r.append(4000000, true);
     r.append(4040000);
     expect(r.timestamps()).toEqual([0, 40000, 80000, 4000000, 4040000]);
+    expect(r.error).not.toHaveBeenCalled();
+  } finally {
+    r.media.close();
+  }
+});
+
+it('restarts decoding on a size-changing keyframe without carrying over queued old-size frames', () => {
+  const r = receiver();
+  try {
+    for (let i = 0; i < 6; i++) r.append(i * 40000, i === 0);
+    expect(r.decoder.reset).not.toHaveBeenCalled();
+    r.append(240000, true, 360, 640);
+    expect(r.decoder.reset).toHaveBeenCalledTimes(1);
+    expect(r.decoder.configure).toHaveBeenLastCalledWith({
+      codec: 'vp8',
+      codedWidth: 360,
+      codedHeight: 640,
+      optimizeForLatency: true,
+    });
+    r.drain();
+    expect(r.timestamps()).toEqual([0, 40000, 80000, 240000]);
+    r.append(280000);
+    r.append(320000, true, 360, 640);
+    expect(r.decoder.reset).toHaveBeenCalledTimes(1);
+    expect(r.timestamps()).toEqual([0, 40000, 80000, 240000, 280000, 320000]);
     expect(r.error).not.toHaveBeenCalled();
   } finally {
     r.media.close();

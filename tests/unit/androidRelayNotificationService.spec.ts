@@ -207,6 +207,37 @@ describe('androidRelayNotificationService', () => {
     expect(moduleMocks.plugin.requestPermissions).toHaveBeenCalledOnce();
   });
 
+  it('does not record an opt-out if default relays are not available yet at first login', async () => {
+    unconfiguredListener();
+    moduleMocks.userRelayEntries.length = 0;
+    await initializeAndroidRelayNotificationsAfterLogin();
+    expect(localStorageValues.has('ui-android-relay-notifications')).toBe(false);
+    expect(moduleMocks.plugin.requestPermissions).not.toHaveBeenCalled();
+    moduleMocks.userRelayEntries.push({ url: 'wss://relay.example', read: true, write: true });
+    await initializeAndroidRelayNotificationsAfterLogin();
+    expect(moduleMocks.plugin.configure).toHaveBeenCalledOnce();
+    expect(localStorageValues.get('ui-android-relay-notifications')).toBe('1');
+  });
+
+  it('enables notifications from settings with the displayed default relay selection', async () => {
+    unconfiguredListener();
+    localStorageValues.set('ui-android-relay-notifications', '0');
+    await expect(requestAndroidRelayNotificationsAfterLogin()).resolves.toBe('granted');
+    expect(moduleMocks.plugin.configure).toHaveBeenCalledWith(expect.objectContaining({
+      relays: ['wss://relay.example/'],
+    }));
+    const saved = JSON.parse(localStorageValues.get('ui-android-relay-notifications-selected-relays')!);
+    expect(saved[new NostrPrivateKeySigner(moduleMocks.privateKey).pubkey]).toEqual(['wss://relay.example/']);
+  });
+
+  it('does not replace an explicitly empty relay selection when enabling notifications', async () => {
+    localStorageValues.set('ui-android-relay-notifications-selected-relays', JSON.stringify({
+      [new NostrPrivateKeySigner(moduleMocks.privateKey).pubkey]: [],
+    }));
+    await expect(requestAndroidRelayNotificationsAfterLogin()).rejects.toThrow('Choose at least one relay');
+    expect(moduleMocks.plugin.configure).not.toHaveBeenCalled();
+  });
+
   it('respects a declined permission without configuring keys or repeatedly prompting', async () => {
     unconfiguredListener();
     moduleMocks.plugin.requestPermissions.mockResolvedValue({ receive: 'denied' });
@@ -907,6 +938,42 @@ describe('androidRelayNotificationService', () => {
     await Promise.all([firstRefresh, secondRefresh, thirdRefresh]);
 
     expect(moduleMocks.plugin.getState).toHaveBeenCalledOnce();
+    expect(moduleMocks.plugin.configure).toHaveBeenCalledOnce();
+  });
+
+  it('does not postpone a pending save indefinitely when refresh requests keep arriving', async () => {
+    vi.useFakeTimers();
+    let completed = false;
+    const first = refreshAndroidRelayNotificationListener().then(() => { completed = true; });
+    const pending = [first];
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(100);
+      pending.push(refreshAndroidRelayNotificationListener());
+    }
+    expect(completed).toBe(true);
+    await vi.runAllTimersAsync();
+    await Promise.all(pending);
+  });
+
+  it('finishes a save even when another refresh is requested during configuration', async () => {
+    vi.useFakeTimers();
+    let finishConfiguration!: () => void;
+    moduleMocks.plugin.configure.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { finishConfiguration = resolve; });
+      return { enabled: true, startOnBoot: true, showConversationDetails: false, permission: 'granted' };
+    });
+    let firstCompleted = false;
+    let secondCompleted = false;
+    const first = refreshAndroidRelayNotificationListener().then(() => { firstCompleted = true; });
+    await vi.advanceTimersByTimeAsync(250);
+    const second = refreshAndroidRelayNotificationListener().then(() => { secondCompleted = true; });
+    finishConfiguration();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(firstCompleted).toBe(true);
+    expect(secondCompleted).toBe(false);
+    await vi.advanceTimersByTimeAsync(250);
+    await Promise.all([first, second]);
+    expect(moduleMocks.plugin.getState).toHaveBeenCalledTimes(2);
     expect(moduleMocks.plugin.configure).toHaveBeenCalledOnce();
   });
 

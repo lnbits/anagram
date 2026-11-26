@@ -21,11 +21,16 @@ test('Anagram UI can DM the bot and add it to private and public groups', async 
   mkdirSync(parent, { recursive: true });
   const dir = mkdtempSync(`${parent}browser-`);
   const store = new State(dir);
-  const joke = 'BTC: $67,123 USD'; // The expected reply text.
+  const quote = 'BTC: $67,123 USD';
+  let euroPrice = 58234;
   const bot = new PriceBot({
     store,
     net: new Network([local.url]),
-    feed: new PriceFeed({ fetchText: async () => '{"USD":67123}', log() {} }),
+    feed: new PriceFeed({
+      fetchText: async () => JSON.stringify({ USD: 67123, EUR: euroPrice }),
+      cacheSeconds: 0,
+      log() {},
+    }),
     cooldown: 0,
     log() {},
   });
@@ -36,30 +41,62 @@ test('Anagram UI can DM the bot and add it to private and public groups', async 
     user = await bootstrapUser(browser, TEST_ACCOUNTS.botOwner, { relayUrls: [local.url] });
     const page = user.page;
     const npub = nip19.npubEncode(bot.pubkey);
-    async function expectPromptBeforeReply(testId, prompt) {
+    async function expectPromptBeforeReply(testId, prompt, collapsed = false) {
       const rows = page.getByTestId(testId);
-      await expect(rows.filter({ hasText: joke })).toBeVisible();
+      const card = rows.filter({ has: page.getByTestId('bot-keyboard') });
+      const command = rows.filter({
+        has: page.locator('.message-text').filter({ hasText: prompt }),
+      });
+      await expect(card).toContainText(quote);
+      if (collapsed) {
+        await expect(command).toHaveCount(0);
+        await card.locator('.message-content').click({ button: 'right' });
+        await page.getByRole('menuitem', { name: 'Show original command', exact: true }).click();
+      }
       await expect
         .poll(async () => {
           const texts = await rows.locator('.message-text').allTextContents();
           const promptIndex = texts.findIndex((text) => text.includes(prompt));
-          return promptIndex >= 0 && promptIndex < texts.findIndex((text) => text.includes(joke));
+          return promptIndex >= 0 && promptIndex < texts.findIndex((text) => text.includes(quote));
         })
         .toBe(true);
       await page.reload();
-      await expect(rows.filter({ hasText: joke })).toBeVisible();
+      await expect(rows.filter({ hasText: quote })).toBeVisible();
+      if (collapsed) {
+        await expect(command).toHaveCount(0);
+        return;
+      }
       const texts = await rows.locator('.message-text').allTextContents();
       expect(texts.findIndex((text) => text.includes(prompt))).toBeGreaterThanOrEqual(0);
       expect(texts.findIndex((text) => text.includes(prompt))).toBeLessThan(
-        texts.findIndex((text) => text.includes(joke)),
+        texts.findIndex((text) => text.includes(quote)),
       );
+    }
+
+    async function checkButtons(testId) {
+      const rows = page.getByTestId(testId);
+      const keyboard = page.getByTestId('bot-keyboard');
+      const personal = keyboard.getByTestId('bot-personal-response');
+      const before = await rows.count();
+      await keyboard.getByRole('button', { name: 'EUR', exact: true }).click();
+      await expect(personal).toHaveText(`BTC: €${euroPrice.toLocaleString('en-US')} EUR`);
+      euroPrice += 100;
+      await keyboard.getByRole('button', { name: 'Refresh', exact: true }).click();
+      await expect(personal).toHaveText(`BTC: €${euroPrice.toLocaleString('en-US')} EUR`);
+      await expect(rows).toHaveCount(before);
+      await page.reload();
+      await expect(personal).toHaveText(`BTC: €${euroPrice.toLocaleString('en-US')} EUR`);
+      await keyboard.getByRole('button', { name: 'USD', exact: true }).click();
+      await expect(personal).toHaveText(quote);
+      await expect(rows).toHaveCount(before);
     }
 
     await openDirectChatFromIdentifier(page, npub, 'Bitcoin Price');
     await navigateToChat(page, bot.pubkey);
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('price USD');
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
-    await expectPromptBeforeReply('message-bubble', 'price USD');
+    await expectPromptBeforeReply('message-bubble', 'price USD', true);
+    await checkButtons('message-bubble');
 
     await page.getByRole('button', { name: 'Chat options' }).click();
     await page.getByRole('button', { name: 'New private group', exact: true }).click();
@@ -76,6 +113,7 @@ test('Anagram UI can DM the bot and add it to private and public groups', async 
       .fill(`price USD nostr:${npub}`);
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     await expectPromptBeforeReply('message-bubble', 'price USD');
+    await checkButtons('message-bubble');
 
     await page.getByRole('button', { name: 'Chat options' }).click();
     await page.getByRole('button', { name: 'New public group', exact: true }).click();
@@ -99,6 +137,7 @@ test('Anagram UI can DM the bot and add it to private and public groups', async 
       .fill(`price USD nostr:${npub}`);
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     await expectPromptBeforeReply('public-message', 'price USD');
+    await checkButtons('public-message');
     expect(user.browserErrors).toEqual([]);
   } finally {
     if (user) await disposeUsers(user);

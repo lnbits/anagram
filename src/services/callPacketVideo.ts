@@ -166,6 +166,8 @@ export function createPacketVideoReceiver(onError: () => void): CallMediaReceive
   let closed = false,
     waitingKey = true;
   let latestTimestamp = -1;
+  let codedWidth = 0,
+    codedHeight = 0;
   let decoder: VideoDecoder;
   const pending: EncodedVideoChunk[] = [];
   const drain = () => {
@@ -238,6 +240,22 @@ export function createPacketVideoReceiver(onError: () => void): CallMediaReceive
           const height = (vp8[8] | (vp8[9] << 8)) & 0x3fff;
           if (!width || !height || width > 1920 || height > 1080)
             throw new Error('Video dimensions exceed call limits');
+          if (width !== codedWidth || height !== codedHeight) {
+            // WebKit's decoder can retain the first frame's output dimensions
+            // across VP8 size changes. Restart at this independent keyframe so
+            // the new image is not stretched into the old output surface.
+            pending.length = 0;
+            if (codedWidth) decoder.reset();
+            decoder.configure({
+              codec: 'vp8',
+              codedWidth: width,
+              codedHeight: height,
+              optimizeForLatency: true,
+            });
+            codedWidth = width;
+            codedHeight = height;
+            waitingKey = true;
+          }
         }
         if (pending.length >= 6) {
           // A genuinely stalled decoder must not accumulate old video. Once

@@ -65,11 +65,36 @@ test('Anagram UI can DM the bot and use it in private and public groups', async 
         .toBe(true);
     }
 
+    async function checkButtons(testId, conversation) {
+      const rows = page.getByTestId(testId);
+      const keyboard = page.getByTestId('bot-keyboard');
+      const personal = keyboard.getByTestId('bot-personal-response');
+      const before = await rows.count();
+      await keyboard.getByRole('button', { name: 'Model', exact: true }).click();
+      await expect(personal).toHaveText('Model: test-model');
+      await keyboard.getByRole('button', { name: 'Help', exact: true }).click();
+      await expect(personal).toContainText('/reset — forget this conversation');
+      expect(bot.conversations.size(conversation)).toBe(2);
+      await keyboard.getByRole('button', { name: 'New chat', exact: true }).click();
+      const reset = conversation.startsWith('dm:')
+        ? 'Done. I have forgotten our conversation.'
+        : 'Done. I have forgotten this group’s conversation.';
+      await expect(personal).toHaveText(reset);
+      expect(bot.conversations.size(conversation)).toBe(0);
+      await expect(rows).toHaveCount(before);
+      await page.reload();
+      await expect(personal).toHaveText(reset);
+      await keyboard.getByRole('button', { name: 'Model', exact: true }).click();
+      await expect(personal).toHaveText('Model: test-model');
+      await expect(rows).toHaveCount(before);
+    }
+
     await openDirectChatFromIdentifier(page, npub, 'Ollama Bridge');
     await navigateToChat(page, bot.pubkey);
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Explain mining');
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     await expectPromptBeforeReply('message-bubble', 'Explain mining');
+    await checkButtons('message-bubble', `dm:${user.session.publicKey}`);
 
     await page.getByRole('button', { name: 'Chat options' }).click();
     await page.getByRole('button', { name: 'New private group', exact: true }).click();
@@ -86,6 +111,7 @@ test('Anagram UI can DM the bot and use it in private and public groups', async 
       .fill(`Private question nostr:${npub}`);
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     await expectPromptBeforeReply('message-bubble', 'Private question');
+    await checkButtons('message-bubble', `private:${Object.keys(store.data.groups)[0]}`);
 
     await page.getByRole('button', { name: 'Chat options' }).click();
     await page.getByRole('button', { name: 'New public group', exact: true }).click();
@@ -109,6 +135,7 @@ test('Anagram UI can DM the bot and use it in private and public groups', async 
       .fill(`Public question nostr:${npub}`);
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     await expectPromptBeforeReply('public-message', 'Public question');
+    await checkButtons('public-message', `public:${Object.keys(store.data.rooms)[0]}`);
     expect(ollama.requests.filter((r) => r.url === '/api/chat')).toHaveLength(3);
     expect(user.browserErrors).toEqual([]);
   } finally {

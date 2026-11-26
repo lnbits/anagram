@@ -11,6 +11,8 @@
   export let existingKeys: string[] = [];
   export let searchReady = true;
   export let onselect: (profile: ProfileSearchResult) => void = () => {};
+  // Lets the dialog react to keys the search results do not use (e.g. Enter to add).
+  export let onkeydown: ((event: KeyboardEvent) => void) | undefined = undefined;
   let search: ProfileSearchResults | undefined;
   let selectedValue = '';
   function select(profile: ProfileSearchResult) {
@@ -55,7 +57,10 @@
     spellcheck="false"
     autocapitalize="none"
     autocomplete="off"
-    onkeydown={(event) => search?.handleKeydown(event)}
+    onkeydown={(event) => {
+      search?.handleKeydown(event);
+      onkeydown?.(event);
+    }}
   />
   <button
     bind:this={scanButton}

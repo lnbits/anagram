@@ -44,6 +44,8 @@ interface HandshakeDelivery {
   timer?: ReturnType<typeof setInterval>;
 }
 export interface CallRuntimeDeps {
+  // Only enable for peers authorized by the room's current roster and session checks.
+  autoConnect?: boolean;
   packetVideoSupported?(): Promise<boolean>;
   preparePacketAudio?(): Promise<(() => void) | undefined>;
   videoProfile?(): CallVideoProfile;
@@ -100,6 +102,7 @@ interface Context {
   handshake?: HandshakeDelivery;
   ownPubkey: string | null;
   timeout?: ReturnType<typeof setTimeout>;
+  setupDeadline?: number;
   heartbeat?: ReturnType<typeof setInterval>;
   mime: string;
   lastReceivedAt: number;
@@ -173,7 +176,11 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       callId: ctx.id,
       action,
       mode: ctx.mode,
-      expiresAt: new Date(Date.now() + CALL_RING_TIMEOUT_MS).toISOString(),
+      expiresAt: new Date(
+        action === 'end' || action === 'ringing'
+          ? Date.now() + CALL_RING_TIMEOUT_MS
+          : (ctx.setupDeadline ?? Date.now() + CALL_RING_TIMEOUT_MS),
+      ).toISOString(),
       mediaVersion: 2,
       ...(ctx.localPacketVideo ? { packetVideoVersion: 1 } : {}),
       ...(ctx.releasePacketAudio && ctx.endpoint?.datagrams ? { packetAudioVersion: 1 } : {}),
@@ -248,7 +255,10 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
   }
   function armTimeout(ctx: Context, ms: number) {
     clearTimeout(ctx.timeout);
-    ctx.timeout = setTimeout(() => finish(ctx, 'timeout'), ms);
+    ctx.timeout = setTimeout(
+      () => finish(ctx, 'timeout'),
+      ctx.setupDeadline === undefined ? ms : Math.max(0, ctx.setupDeadline - Date.now()),
+    );
   }
   function stopHandshake(ctx: Context) {
     clearInterval(ctx.handshake?.timer);
@@ -321,6 +331,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
   ): Context {
     const ctx: Context = {
       ownPubkey: deps.getOwnPubkey(),
+      setupDeadline: deps.autoConnect ? Date.now() + CALL_RING_TIMEOUT_MS : undefined,
       id,
       peer,
       mode,
@@ -350,7 +361,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       peerName: name,
       direction,
       mode,
-      phase: direction === 'incoming' ? 'incoming' : 'preparing',
+      phase: direction === 'incoming' && !deps.autoConnect ? 'incoming' : 'preparing',
       startedAt: null,
       microphoneMuted: false,
       cameraMuted: mode === 'audio',
@@ -829,6 +840,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
           const connection = ctx.connection;
           if (!stream || !connection) throw new Error('Call media is not ready');
           ctx.ready = true;
+          ctx.setupDeadline = undefined;
           clearTimeout(ctx.timeout);
           clearInterval(ctx.recoveryTimer);
           ctx.recoveryTimer = undefined;
@@ -1073,7 +1085,7 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       }
       patch({ peerName: contact.name });
       if (!(await prepare(ctx))) return;
-      patch({ phase: 'outgoing' });
+      patch({ phase: deps.autoConnect ? 'connecting' : 'outgoing' });
       armTimeout(ctx, CALL_RING_TIMEOUT_MS);
       ctx.inviteSent = true;
       await beginHandshake(ctx, signal(ctx, 'invite'));
@@ -1133,6 +1145,8 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       return;
     }
     if (incoming.action === 'ringing') {
+      // Older room clients still ring; only their address response completes negotiation.
+      if (deps.autoConnect) return;
       if (
         ctx?.peer === peer &&
         ctx.id === incoming.callId &&
@@ -1148,7 +1162,10 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         ctx.id === incoming.callId &&
         incoming.mode === ctx.mode &&
         incoming.mimeType === ctx.mime &&
-        session?.phase === 'outgoing'
+        session?.direction === 'outgoing' &&
+        (deps.autoConnect
+          ? session.phase === 'connecting' && !ctx.peerConfirmed
+          : session.phase === 'outgoing')
       ) {
         confirmPeer(ctx, incoming);
         void connect(ctx, incoming);
@@ -1185,10 +1202,16 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
         .catch(() => {});
       return;
     }
-    incomingInvite = incoming;
     remember(peer, incoming.callId);
     const next = reserve(peer, contact.name, incoming.mode, 'incoming', incoming.callId);
     confirmPeer(next, incoming);
+    if (deps.autoConnect) {
+      next.setupDeadline = Math.min(next.setupDeadline!, Date.parse(incoming.expiresAt));
+      armTimeout(next, CALL_RING_TIMEOUT_MS);
+      void answer(next, incoming, incoming.mode);
+      return;
+    }
+    incomingInvite = incoming;
     armTimeout(next, Math.max(1, Date.parse(incoming.expiresAt) - Date.now()));
     void beginHandshake(
       next,
@@ -1203,9 +1226,11 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
     const ctx = context;
     const invite = incomingInvite;
     if (!ctx || !invite || session?.phase !== 'incoming') return;
+    await answer(ctx, invite, mode === 'audio' ? 'audio' : ctx.mode);
+  }
+  async function answer(ctx: Context, invite: CallSignal, captureMode: CallMode) {
     deps.unlockPlayback?.();
     preparePacketMedia(ctx);
-    const captureMode = mode === 'audio' ? 'audio' : ctx.mode;
     patch({ phase: 'preparing', cameraMuted: captureMode === 'audio' });
     try {
       if (!(await prepare(ctx, captureMode))) return;
@@ -1213,7 +1238,9 @@ export function createCallRuntime(deps: CallRuntimeDeps) {
       void connect(ctx, invite);
       await beginHandshake(ctx, {
         ...signal(ctx, 'accept'),
-        expiresAt: new Date(Date.now() + CALL_CONNECT_TIMEOUT_MS).toISOString(),
+        expiresAt: new Date(
+          ctx.setupDeadline ?? Date.now() + CALL_CONNECT_TIMEOUT_MS,
+        ).toISOString(),
       });
     } catch (cause) {
       fail(ctx, cause);

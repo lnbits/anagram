@@ -3,7 +3,7 @@ import { roomVideoProfile } from '#src/services/callVideoProfile.ts';
 import { toStore } from 'svelte/store';
 import { untrack } from 'svelte';
 import { callCaptureErrorKey } from '#src/services/callMediaService.ts';
-import { CALL_SUPPORT_TIMEOUT_MS, type CallMode } from '#src/types/call.ts';
+import { CALL_CONNECT_TIMEOUT_MS, type CallMode } from '#src/types/call.ts';
 import {
   type CallRoomLink,
   type CallRoomMember,
@@ -247,6 +247,7 @@ export function createCallRoomRuntime(deps: Deps) {
         continue;
       const runtime = createCallRuntime({
         ...deps.media,
+        autoConnect: true,
         // The room owns routing once; peer reconnects must not acquire/reset it.
         acquireAudioRoute: undefined,
         videoProfile: () =>
@@ -281,9 +282,6 @@ export function createCallRoomRuntime(deps: Deps) {
       peer.stop = toStore(() => runtime.session?.phase).subscribe((phase) => {
         void untrack(async () => {
           if (!current(s) || !peers.includes(peer)) return;
-          if (phase === 'incoming') {
-            await runtime.accept('audio');
-          }
           if (phase === 'active' && !peer.started) {
             peer.started = true;
             if (runtime.session?.microphoneMuted !== microphoneMuted) runtime.toggleMicrophone();
@@ -438,21 +436,27 @@ export function createCallRoomRuntime(deps: Deps) {
         update({ own: self, phase: 'joining' });
         const joining = session;
         if (!joining) return;
-        const request = () =>
-          send(joining, hostMember(joining), {
-            action: 'join',
-            member: self,
-            secret: link.secret,
-          });
-        deadline = setTimeout(() => leave('room.error.timeout'), 30_000);
-        retryJoin = setInterval(() => {
-          if (current(joining) && session?.phase === 'joining') void request().catch(() => {});
-        }, 5000);
+        let sending = false;
+        const request = async () => {
+          if (sending || !current(joining) || session?.phase !== 'joining') return;
+          sending = true;
+          try {
+            await send(joining, hostMember(joining), {
+              action: 'join',
+              member: self,
+              secret: link.secret,
+            });
+          } catch {
+            // Keep the bounded retry alive through transient failures and relay cooldowns.
+          } finally {
+            sending = false;
+          }
+        };
+        // A relay ACK does not confirm that the host received the request.
+        // Only an authenticated roster admits us; retries never extend this deadline.
+        deadline = setTimeout(() => leave('room.error.timeout'), CALL_CONNECT_TIMEOUT_MS);
+        retryJoin = setInterval(() => void request(), 5000);
         await request();
-        if (current(joining) && session?.phase === 'joining') {
-          clearTimeout(deadline);
-          deadline = setTimeout(() => leave('room.error.timeout'), CALL_SUPPORT_TIMEOUT_MS);
-        }
       }
     } catch (cause) {
       if (generation === version && busy)

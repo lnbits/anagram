@@ -37,7 +37,7 @@ function invite(overrides: Partial<CallSignal> = {}): CallSignal {
     ...overrides,
   };
 }
-function harness() {
+function harness(autoConnect = false) {
   const microphone = {
     kind: 'audio',
     stop: vi.fn(),
@@ -72,6 +72,7 @@ function harness() {
   const stopRecording = vi.fn();
   const receiver = { url: 'blob:remote', append: vi.fn(), close: vi.fn() };
   const deps = {
+    autoConnect,
     onEnded: vi.fn().mockResolvedValue(undefined),
     sendSignal: vi.fn().mockResolvedValue(undefined),
     getOwnPubkey: () => own,
@@ -112,8 +113,8 @@ function harness() {
   };
 }
 const runtimes: ReturnType<typeof createCallRuntime>[] = [];
-function setup() {
-  const h = harness();
+function setup(autoConnect = false) {
+  const h = harness(autoConnect);
   runtimes.push(h.runtime);
   return h;
 }
@@ -122,6 +123,147 @@ afterEach(() => {
     runtime.reset();
   });
   vi.useRealTimers();
+});
+
+describe('automatic room peer connections', () => {
+  it('exchanges addresses without ringing or an answer callback and ignores duplicate offers', async () => {
+    const h = setup(true);
+    let captured!: (stream: MediaStream) => void;
+    h.deps.getMedia.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          captured = resolve;
+        }),
+    );
+    let connected!: (connection: CallConnection) => void;
+    vi.mocked(h.endpoint.accept).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          connected = resolve;
+        }),
+    );
+    const offer = invite({ mediaVersion: 2 });
+    await h.runtime.receiveSignal(peer, offer);
+    expect(h.runtime.session?.phase).toBe('preparing');
+    expect(h.deps.sendSignal).not.toHaveBeenCalled();
+    captured(h.stream);
+    await vi.waitFor(() =>
+      expect(h.deps.sendSignal).toHaveBeenCalledWith(
+        peer,
+        expect.objectContaining({ action: 'accept', callId: offer.callId }),
+      ),
+    );
+    expect(h.runtime.session?.phase).toBe('connecting');
+    await h.runtime.receiveSignal(peer, offer);
+    expect(h.deps.createEndpoint).toHaveBeenCalledOnce();
+    expect(h.deps.getMedia).toHaveBeenCalledOnce();
+    expect(h.endpoint.accept).toHaveBeenCalledOnce();
+    expect(h.deps.sendSignal.mock.calls.some(([, signal]) => signal.action === 'ringing')).toBe(
+      false,
+    );
+    connected(h.connection);
+    await vi.waitFor(() => expect(h.runtime.session?.phase).toBe('active'));
+  });
+
+  it('keeps offering through legacy ringing and connects only once to the matching response', async () => {
+    vi.useFakeTimers();
+    const h = setup(true);
+    let connected!: (connection: CallConnection) => void;
+    vi.mocked(h.endpoint.connect).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          connected = resolve;
+        }),
+    );
+    await h.runtime.start(peer, 'video');
+    expect(h.runtime.session?.phase).toBe('connecting');
+    const offer = h.deps.sendSignal.mock.calls[0][1];
+    await h.runtime.receiveSignal(peer, {
+      ...offer,
+      action: 'ringing',
+      address: undefined,
+      mimeType: undefined,
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(
+      h.deps.sendSignal.mock.calls.filter(([, signal]) => signal.action === 'invite'),
+    ).toHaveLength(2);
+    const response = { ...offer, action: 'accept' as const };
+    await h.runtime.receiveSignal('e'.repeat(64), response);
+    await h.runtime.receiveSignal(peer, { ...response, callId: crypto.randomUUID() });
+    expect(h.endpoint.connect).not.toHaveBeenCalled();
+    await h.runtime.receiveSignal(peer, response);
+    await h.runtime.receiveSignal(peer, response);
+    expect(h.endpoint.connect).toHaveBeenCalledOnce();
+    const count = h.deps.sendSignal.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.deps.sendSignal).toHaveBeenCalledTimes(count);
+    connected(h.connection);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.runtime.session?.phase).toBe('active');
+  });
+
+  it('uses one setup deadline across preparation, retries and the transport response', async () => {
+    vi.useFakeTimers();
+    const h = setup(true);
+    let online!: () => void;
+    vi.mocked(h.endpoint.online).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          online = resolve;
+        }),
+    );
+    vi.mocked(h.endpoint.connect).mockImplementationOnce(() => new Promise(() => {}));
+    const deadline = Date.now() + 60_000;
+    const starting = h.runtime.start(peer, 'video');
+    await vi.advanceTimersByTimeAsync(20_000);
+    online();
+    await starting;
+    const offer = h.deps.sendSignal.mock.calls[0][1];
+    expect(Date.parse(offer.expiresAt)).toBe(deadline);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await h.runtime.receiveSignal(peer, { ...offer, action: 'accept' });
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(h.runtime.session?.phase).toBe('connecting');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.runtime.session?.endReason).toBe('timeout');
+    expect(h.microphone.stop).toHaveBeenCalledOnce();
+    const count = h.deps.sendSignal.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.deps.sendSignal).toHaveBeenCalledTimes(count);
+  });
+
+  it('bounds incoming setup by the offer expiry and releases late capture after timeout', async () => {
+    vi.useFakeTimers();
+    const h = setup(true);
+    let captured!: (stream: MediaStream) => void;
+    h.deps.getMedia.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          captured = resolve;
+        }),
+    );
+    await h.runtime.receiveSignal(
+      peer,
+      invite({ expiresAt: new Date(Date.now() + 5000).toISOString() }),
+    );
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(h.runtime.session?.endReason).toBe('timeout');
+    captured(h.stream);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.microphone.stop).toHaveBeenCalledOnce();
+    expect(h.deps.createEndpoint).not.toHaveBeenCalled();
+    expect(h.deps.sendSignal.mock.calls.every(([, signal]) => signal.action === 'end')).toBe(true);
+  });
+
+  it('never auto-connects a peer rejected by room membership resolution', async () => {
+    const h = setup(true);
+    h.deps.resolvePeer.mockResolvedValueOnce(null);
+    await h.runtime.receiveSignal(peer, invite());
+    expect(h.runtime.session).toBeNull();
+    expect(h.deps.getMedia).not.toHaveBeenCalled();
+    expect(h.deps.sendSignal).not.toHaveBeenCalled();
+  });
 });
 
 describe('call negotiation and lifetime', () => {

@@ -428,6 +428,57 @@ describe('link-based Iroh call rooms', () => {
     expect(h.runtime.localStream).toBeNull();
     expect(h.deps.send).not.toHaveBeenCalled();
   });
+  it.each([false, true])(
+    'admits a delayed join after the first publish fails: %s',
+    async (failedPublish) => {
+      vi.useFakeTimers();
+      const host = setup();
+      const guest = setup('b'.repeat(64));
+      await host.runtime.create();
+      const link = host.runtime.session!.link;
+      if (failedPublish)
+        guest.deps.send.mockRejectedValueOnce(new Error('rate-limited: retry later'));
+      await guest.runtime.join(link);
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(guest.runtime.session?.phase).toBe('joining');
+      const requests = () =>
+        guest.deps.send.mock.calls.filter(([, body]) => body.action === 'join');
+      expect(requests()).toHaveLength(3);
+      await host.runtime.receive(guest.deps.getOwnPubkey(), requests().at(-1)![1]);
+      const roster = host.deps.send.mock.calls.find(([, body]) => body.action === 'roster')![1];
+      await guest.runtime.receive(link.host, roster);
+      expect(guest.runtime.session?.phase).toBe('active');
+      expect(guest.runtime.session?.members).toEqual(host.runtime.session?.members);
+      expect(guest.runtime.error).toBe('');
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(requests()).toHaveLength(3);
+    },
+  );
+  it('does not overlap pending join sends or restart them after cancellation', async () => {
+    vi.useFakeTimers();
+    const host = setup();
+    const guest = setup('b'.repeat(64));
+    await host.runtime.create();
+    let reject!: (error: Error) => void;
+    guest.deps.send.mockImplementationOnce(
+      () =>
+        new Promise((_, fail) => {
+          reject = fail;
+        }),
+    );
+    const joining = guest.runtime.join(host.runtime.session!.link);
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(guest.deps.send).toHaveBeenCalledTimes(1);
+    expect(guest.runtime.session?.phase).toBe('joining');
+    guest.runtime.leave();
+    reject(new Error('Late publish failure'));
+    await joining;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(guest.deps.send.mock.calls.filter(([, body]) => body.action === 'join')).toHaveLength(1);
+    expect(guest.runtime.session?.phase).toBe('ended');
+    expect(guest.runtime.error).toBe('');
+    expect(guest.microphone.stop).toHaveBeenCalledOnce();
+  });
   it('times out joining an offline host and releases media', async () => {
     vi.useFakeTimers();
     const h = setup('b'.repeat(64));
@@ -438,10 +489,13 @@ describe('link-based Iroh call rooms', () => {
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       relays: ['wss://relay.example'],
     });
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(30_000);
     expect(h.runtime.error).toBe('room.error.timeout');
     expect(h.microphone.stop).toHaveBeenCalled();
     expect(h.runtime.busy).toBe(false);
+    const sends = h.deps.send.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(h.deps.send).toHaveBeenCalledTimes(sends);
   });
   it('refuses starting a room during another call', async () => {
     const h = setup();

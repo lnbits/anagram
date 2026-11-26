@@ -1,5 +1,6 @@
 # Anagram bots
 
+- [Bitcoin price](bitcoin-price/README.md): Bitcoin price replies from a configurable HTTPS provider, with caching and stale-price fallback.
 - [Dad jokes](dad-jokes/README.md): basic DMs, private groups and public groups.
 - [Poll bot](poll/README.md): Telegram-compatible inline buttons, private votes and personal results.
 - [Telegram bridge](telegram-bridge/README.md): bridge Telegram and Anagram conversations.

@@ -2,7 +2,7 @@
   "iroh": "1.3.0",
   "wasmBindgen": "0.2.122",
   "hashes": {
-    "anagram_iroh_calls.js": "44f6d095226b7f8b23e3c3a0cf9fdd4c6e11ec67b5065cd83211404821b9a427",
-    "anagram_iroh_calls_bg.wasm": "e4b2fdb895956ac9a8c37b49347ae2ab7920c3940034b6f923860f05c0b80302"
+    "anagram_iroh_calls.js": "d3bcbefb16575a6c2b005a92e864f8eb0ecd4ad9826836c06e6c7e419dc45171",
+    "anagram_iroh_calls_bg.wasm": "452a7c2499c15f14f8a8c8c96ed0c3c8cb54627d55d216faa9ff3c791a5b0fef"
   }
 }

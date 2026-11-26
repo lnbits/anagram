@@ -144,3 +144,66 @@ describe('packet call audio', () => {
     },
   );
 });
+
+// Exercise arrival and playback on separate clocks. Short calls with one injected
+// stall miss the repeated loss caused by forgetting an earlier delay spike.
+it.each([60, 80, 100])(
+  'adapts to recurring %i ms delivery pauses without recurring dropouts',
+  (stall) => {
+    const buffer = new CallAudioJitterBuffer();
+    let sequence = 0;
+    let interruptions = 0;
+    for (let now = 0; now < 60000; now += 20) {
+      while (sequence * 20 <= now) {
+        const captured = sequence * 20;
+        const arrival =
+          captured >= 3000 && captured % 3000 < stall
+            ? captured - (captured % 3000) + stall
+            : captured;
+        if (arrival > now) break;
+        buffer.push(packet(sequence++), arrival);
+      }
+      const frame = buffer.pull(now);
+      if (now >= 12000 && (!frame?.packet || frame.fec)) interruptions++;
+      expect(buffer.bufferedMs).toBeLessThanOrEqual(200);
+    }
+    expect(interruptions).toBe(0);
+  },
+);
+
+it('does not turn small capture clock drift into repeated multi-frame outages', () => {
+  const buffer = new CallAudioJitterBuffer();
+  let sequence = 0,
+    missing = 0,
+    longest = 0;
+  for (let now = 0; now < 120000; now += 20) {
+    while (sequence * 20.1 <= now) {
+      buffer.push(packet(sequence), sequence * 20.1);
+      sequence++;
+    }
+    const frame = buffer.pull(now);
+    if (now < 1000) continue;
+    missing = !frame?.packet || frame.fec ? missing + 1 : 0;
+    longest = Math.max(longest, missing);
+  }
+  expect(longest).toBeLessThanOrEqual(2);
+  expect(buffer.stats.targetMs).toBeLessThanOrEqual(160);
+});
+
+it('releases the spike allowance after stable delivery and keeps it bounded', () => {
+  const buffer = new CallAudioJitterBuffer();
+  let sequence = 0;
+  for (let now = 0; now < 30000; now += 20) {
+    while (sequence * 20 <= now) {
+      const captured = sequence * 20;
+      const arrival = captured >= 3000 && captured < 3100 ? 3100 : captured;
+      if (arrival > now) break;
+      buffer.push(packet(sequence++), arrival);
+    }
+    buffer.pull(now);
+    if (now >= 3200 && now < 12000) expect(buffer.stats.targetMs).toBeGreaterThanOrEqual(100);
+    expect(buffer.stats.targetMs).toBeLessThanOrEqual(160);
+  }
+  expect(buffer.stats.targetMs).toBe(40);
+  expect(buffer.stats.skipped).toBe(0);
+});

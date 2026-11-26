@@ -91,6 +91,9 @@ impl CallEndpoint {
         let endpoint = builder
             .transport_config(
                 QuicTransportConfig::builder()
+                    // Surface congestion to the bounded media senders instead
+                    // of queuing seconds of video in QUIC's bulk-transfer window.
+                    .send_window(32 * 1024)
                     .datagram_send_buffer_size(2200)
                     .datagram_receive_buffer_size(Some(8800))
                     .build(),

@@ -59,6 +59,8 @@ export class CallAudioJitterBuffer {
   private startAt = 0;
   private previousArrival: { at: number; timestamp: number } | undefined;
   private lastAdjustment = 0;
+  private delayFloor = 40;
+  private delayFloorUntil = 0;
   private misses = 0;
   private growthFrames = 0;
   private playing = false;
@@ -102,13 +104,12 @@ export class CallAudioJitterBuffer {
       this.newest = packet.sequence;
       this.startAt = now;
       this.previousArrival = undefined;
+      this.delayFloor = 40;
+      this.delayFloorUntil = 0;
       this.misses = 0;
       this.growthFrames = 0;
     }
-    if (distance(packet.sequence, this.expected) < 0) {
-      this.stats.late++;
-      return;
-    }
+    const late = distance(packet.sequence, this.expected) < 0;
     if (this.packets.has(packet.sequence)) {
       this.stats.duplicate++;
       return;
@@ -118,9 +119,24 @@ export class CallAudioJitterBuffer {
         const spacing = distance(packet.timestamp, this.previousArrival.timestamp) / 48;
         const variation = Math.abs(now - this.previousArrival.at - spacing);
         this.stats.jitterMs += (Math.min(variation, 500) - this.stats.jitterMs) / 16;
+        // A brief delay spike is diluted by the moving average. Remember it
+        // across several delivery bursts, including packets already too late
+        // to play, instead of repeating the same dropout every few seconds.
+        const observed = Math.min(
+          160,
+          Math.max(
+            40,
+            Math.ceil((20 + variation) / 20) * 20,
+            late ? Math.max(60, this.stats.targetMs) : 0,
+          ),
+        );
+        if (observed >= this.delayFloor || now >= this.delayFloorUntil) {
+          this.delayFloor = observed;
+          this.delayFloorUntil = now + 10000;
+        }
         const target = Math.min(
           160,
-          Math.max(40, Math.ceil((20 + 4 * this.stats.jitterMs) / 20) * 20),
+          Math.max(this.delayFloor, Math.ceil((20 + 4 * this.stats.jitterMs) / 20) * 20),
         );
         if (target > this.stats.targetMs || now - this.lastAdjustment >= 2000) {
           if (this.playing && target > this.stats.targetMs)
@@ -133,10 +149,18 @@ export class CallAudioJitterBuffer {
           this.lastAdjustment = now;
         }
       }
+      // A slower capture clock can leave each next packet just behind playout.
+      // Allow one expansion frame even at the target ceiling, rather than
+      // discarding successive arrivals until the entire decoder re-buffers.
+      if (late && this.playing) this.growthFrames = Math.max(1, this.growthFrames);
       this.newest = packet.sequence;
       this.previousArrival = { at: now, timestamp: packet.timestamp };
     } else if (!this.previousArrival)
       this.previousArrival = { at: now, timestamp: packet.timestamp };
+    if (late) {
+      this.stats.late++;
+      return;
+    }
     this.packets.set(packet.sequence, packet);
     // Preserve ordinary arrival bursts and clock drift. Only a substantial
     // backlog may skip speech; the adaptive target is not a discard deadline.

@@ -2,11 +2,10 @@ import { Stretch } from '@soundtouchjs/core';
 import type { CallAudioJitterBuffer } from './callAudioPackets.ts';
 
 // WSOLA changes duration without changing pitch. Keep it in the codec worker,
-// never on the render thread. Normal calls bypass it until a sustained backlog
-// requires catch-up; once started, retain its small overlap across tempo changes.
+// never on the render thread. Match independent capture/playback clocks in both
+// directions; retain the small overlap so tempo changes do not cut speech.
 export class CallAudioPlayout {
   private stretch?: Stretch;
-  private excessSince?: number;
   private readonly stereo = new Float32Array(1920);
   readonly stats = {
     tempo: 1,
@@ -16,16 +15,12 @@ export class CallAudioPlayout {
     processingBufferedMs: 0,
   };
 
-  pull(now: number, jitter: CallAudioJitterBuffer, decode: () => Float32Array): Float32Array {
+  pull(jitter: CallAudioJitterBuffer, decode: () => Float32Array): Float32Array {
     const excess = jitter.bufferedMs - jitter.stats.targetMs;
-    if (excess > 100) this.excessSince ??= now;
-    else this.excessSince = undefined;
-    if (
-      !this.stretch &&
-      this.stats.catchUpSupported &&
-      this.excessSince !== undefined &&
-      now - this.excessSince >= 500
-    ) {
+    if (!this.stretch && this.stats.catchUpSupported) {
+      // WSOLA needs lookahead. Prime it from buffered speech at startup rather
+      // than requesting missing packets when a running stream gets low.
+      if (excess < 40) return new Float32Array(960);
       this.stretch = new Stretch({ sampleRate: 48000, createBuffers: true });
       this.stretch.setParameters(48000, 20, 8, 5);
     }
@@ -38,9 +33,15 @@ export class CallAudioPlayout {
     this.stats.processedSamples += 960;
     if (!this.stretch) return next();
     const stretch = this.stretch;
-    // Leave a safety margin above the jitter target and gently return to normal.
-    // At most 10% faster, with hysteresis; a target change cannot cause a seek.
-    const desired = excess > 60 ? Math.min(1.1, 1 + (excess - 40) / 4000) : 1;
+    // Keep enough lookahead for the decoder, with a neutral band so packet
+    // bursts do not constantly change tempo. Slowing by at most 5% builds a
+    // reserve before shortage; speeding by at most 10% drains excess latency.
+    const desired =
+      excess < 40
+        ? Math.max(0.95, 1 + (excess - 40) / 1000)
+        : excess > 80
+          ? Math.min(1.1, 1 + (excess - 80) / 4000)
+          : 1;
     const tempo = this.stats.tempo + Math.max(-0.005, Math.min(0.005, desired - this.stats.tempo));
     stretch.tempo = this.stats.tempo = tempo;
     let frames = 0;

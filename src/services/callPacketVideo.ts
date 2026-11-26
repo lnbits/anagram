@@ -165,6 +165,16 @@ export function createPacketVideoReceiver(onError: () => void): CallMediaReceive
     waitingKey = true;
   let latestTimestamp = -1;
   let decoder: VideoDecoder;
+  const pending: EncodedVideoChunk[] = [];
+  const drain = () => {
+    if (closed) return;
+    try {
+      while (pending.length && decoder.decodeQueueSize < 3) decoder.decode(pending.shift()!);
+    } catch {
+      pending.length = 0;
+      onError();
+    }
+  };
   try {
     decoder = new VideoDecoder({
       output(frame) {
@@ -190,6 +200,7 @@ export function createPacketVideoReceiver(onError: () => void): CallMediaReceive
       },
     });
     decoder.configure({ codec: 'vp8', optimizeForLatency: true });
+    decoder.ondequeue = drain;
   } catch (error) {
     decoder?.close();
     handle.close();
@@ -226,22 +237,26 @@ export function createPacketVideoReceiver(onError: () => void): CallMediaReceive
           if (!width || !height || width > 1920 || height > 1080)
             throw new Error('Video dimensions exceed call limits');
         }
-        if (decoder.decodeQueueSize >= 3) {
+        if (pending.length >= 6) {
+          // A genuinely stalled decoder must not accumulate old video. Once
+          // a dependent frame is dropped, resume only on a fresh keyframe.
+          pending.length = 0;
           waitingKey = true;
-          // Let the bounded queue drain, then resume on a keyframe. Resetting an
-          // active native decoder adds pipeline churn and can block GStreamer.
-          return;
         }
         if (waitingKey && bytes[1] !== 1) return;
         if (waitingKey) latestTimestamp = timestamp;
         waitingKey = false;
-        decoder.decode(
+        // Relay delivery and main-thread scheduling can batch several frames.
+        // Preserve a short burst instead of dropping a delta and freezing until
+        // the next keyframe. Only three frames enter the decoder at a time.
+        pending.push(
           new EncodedVideoChunk({
             type: bytes[1] ? 'key' : 'delta',
             timestamp,
             data: bytes.subarray(10),
           }),
         );
+        drain();
       } catch {
         onError();
       }
@@ -249,6 +264,8 @@ export function createPacketVideoReceiver(onError: () => void): CallMediaReceive
     close() {
       if (closed) return;
       closed = true;
+      pending.length = 0;
+      decoder.ondequeue = null;
       decoder.close();
       handle.close();
     },

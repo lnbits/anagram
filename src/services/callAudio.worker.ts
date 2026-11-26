@@ -122,7 +122,7 @@ globalThis.onmessage = async ({ data }) => {
         if (closed) return;
         try {
           const now = performance.now();
-          const pcm = playout.pull(now, jitter, () => {
+          const pcm = playout.pull(jitter, () => {
             const frame = jitter.pull(now);
             return frame && decoder
               ? decoder.decodeFloat(frame.packet?.opus ?? null, {

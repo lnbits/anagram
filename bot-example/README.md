@@ -3,6 +3,7 @@
 - [Dad jokes](dad-jokes/README.md): basic DMs, private groups and public groups.
 - [Poll bot](poll/README.md): Telegram-compatible inline buttons, private votes and personal results.
 - [Telegram bridge](telegram-bridge/README.md): bridge Telegram and Anagram conversations.
+- [Ollama bridge](ollama-bridge/README.md): chat with a local Ollama model from DMs and groups; allowlisted people only.
 
 Bots run under their own Nostr identity. Invite them to private groups or share a public-group link; interactive public bots must be trusted by the group owner.
 

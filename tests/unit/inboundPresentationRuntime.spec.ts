@@ -5,7 +5,6 @@ import {
 import { createInboundPresentationRuntime } from '#src/stores/nostr/inboundPresentationRuntime.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-
 class TestCustomEvent<T = unknown> extends Event {
   readonly detail: T;
 
@@ -35,6 +34,17 @@ function createRuntime(options: {
 describe('inboundPresentationRuntime', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('suppresses notifications for a muted accepted chat and allows them after unmute', async () => {
+    const runtime = createRuntime({ foreground: true });
+    const key = 'a'.repeat(64);
+    expect(
+      await runtime.shouldNotifyForAcceptedChatOnly(key, { inbox_state: 'accepted', muted: true }),
+    ).toBe(false);
+    expect(await runtime.shouldNotifyForAcceptedChatOnly(key, { inbox_state: 'accepted' })).toBe(
+      true,
+    );
   });
 
   it('emits a foreground in-app banner activity for another chat', () => {

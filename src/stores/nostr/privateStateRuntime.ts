@@ -238,6 +238,15 @@ export function createPrivateStateRuntime({
     return nextCreatedAt;
   }
 
+  function observeContactCursorEvent(dTag: string, createdAt: number): void {
+    const owner = getLoggedInPublicKeyHex();
+    if (!owner || !Number.isSafeInteger(createdAt) || createdAt < 0) return;
+    const stream = `cursor:${owner}:${dTag}`;
+    lastReplaceableCreatedAtByStream.set(stream, Math.max(
+      lastReplaceableCreatedAtByStream.get(stream) ?? 0, createdAt,
+    ));
+  }
+
   function compareContactCursorState(
     first: ContactCursorState | ContactCursorContent | null | undefined,
     second: ContactCursorState | ContactCursorContent | null | undefined,
@@ -1876,6 +1885,8 @@ export function createPrivateStateRuntime({
           continue;
         }
 
+        observeContactCursorEvent(eventDTag, event.created_at ?? 0);
+
         const existingCursor = eventsByDTag.get(eventDTag);
         if (existingCursor && compareContactCursorState(existingCursor, cursorContent) >= 0) {
           continue;
@@ -1891,10 +1902,11 @@ export function createPrivateStateRuntime({
   async function applyContactCursorStateToContact(
     contact: ContactRecord,
     cursor: ContactCursorContent,
+    current: () => boolean = () => true,
   ): Promise<boolean> {
     const normalizedContactPubkey = inputSanitizerService.normalizeHexKey(contact.public_key);
     const loggedInPubkeyHex = getLoggedInPublicKeyHex();
-    if (!normalizedContactPubkey || !loggedInPubkeyHex) {
+    if (!normalizedContactPubkey || !loggedInPubkeyHex || !current()) {
       return false;
     }
 
@@ -1938,10 +1950,12 @@ export function createPrivateStateRuntime({
         metaBase: contact.meta,
         meta: nextContactMeta,
       });
+      if (!current()) return false;
       didChange = true;
     }
 
     const chatRow = await chatDataService.getChatByPublicKey(normalizedContactPubkey);
+    if (!current()) return false;
     if (!chatRow) {
       return didChange;
     }
@@ -1957,6 +1971,7 @@ export function createPrivateStateRuntime({
     const latestOwnMessageAt =
       (await chatDataService.findLatestMessageByAuthor(normalizedContactPubkey, loggedInPubkeyHex))
         ?.created_at ?? '';
+    if (!current()) return false;
     const effectiveCursorAt = resolveLatestReadBoundaryAtValue(
       cursor.last_seen_incoming_activity_at,
       contactMeta.last_seen_incoming_activity_at,
@@ -1971,6 +1986,7 @@ export function createPrivateStateRuntime({
       250,
       effectiveCursorAt,
     )) {
+      if (!current()) return false;
       for (const messageRow of batch) {
         if (
           inputSanitizerService.normalizeHexKey(messageRow.author_public_key) !==
@@ -1984,6 +2000,7 @@ export function createPrivateStateRuntime({
     let nextUnseenReactionCount = 0;
     for await (const batch of chatDataService.reactionMessageBatches(normalizedContactPubkey))
       for (const messageRow of batch) {
+        if (!current()) return false;
         if (
           inputSanitizerService.normalizeHexKey(messageRow.author_public_key) !== loggedInPubkeyHex
         ) {
@@ -2035,6 +2052,7 @@ export function createPrivateStateRuntime({
           messageRow.id,
           buildMetaWithReactions(messageRow.meta, nextReactions),
         );
+        if (!current()) return false;
         didChange = true;
       }
 
@@ -2047,12 +2065,15 @@ export function createPrivateStateRuntime({
     );
 
     if (JSON.stringify(chatRow.meta) !== JSON.stringify(nextChatMeta)) {
+      if (!current()) return false;
       await chatDataService.updateChatMeta(normalizedContactPubkey, nextChatMeta);
+      if (!current()) return false;
       didChange = true;
     }
 
     if (Number(chatRow.unread_count ?? 0) !== nextUnreadMessageCount) {
       await chatDataService.updateChatUnreadCount(normalizedContactPubkey, nextUnreadMessageCount);
+      if (!current()) return false;
       didChange = true;
     }
 
@@ -2155,28 +2176,38 @@ export function createPrivateStateRuntime({
     cursor: ContactCursorState,
     seedRelayUrls: string[] = [],
   ): Promise<void> {
+    const owner = getLoggedInPublicKeyHex();
+    const signal = startupRelaySignal(ndk);
+    const current = () => !signal.aborted && owner === getLoggedInPublicKeyHex();
     const normalizedContactPublicKey = inputSanitizerService.normalizeHexKey(contactPublicKey);
-    if (!normalizedContactPublicKey || !normalizeTimestamp(cursor.at)) {
+    if (!owner || !normalizedContactPublicKey || !normalizeTimestamp(cursor.at)) {
       return;
     }
 
     const preferences = await ensurePrivatePreferences({
       publishIfCreated: true,
     });
+    if (!current()) return;
     const dTag = await sha256Hex(`${preferences.contactSecret}${normalizedContactPublicKey}`);
+    if (!current()) return;
     const relayUrls = await resolveLoggedInPublishRelayUrls(seedRelayUrls);
+    if (!current()) return;
     if (relayUrls.length === 0) {
       throw new Error('Cannot publish contact cursor without at least one relay.');
     }
 
     await ensureRelayConnections(relayUrls);
+    if (!current()) return;
     const user = await ensureLoggedInSignerUser();
+    if (!current() || user.pubkey !== owner) return;
+    const content = await encryptContactCursorContent(cursor);
+    if (!current()) return;
 
     const cursorEvent = new ClientEvent(ndk, {
       kind: PRIVATE_PREFERENCES_KIND,
-      created_at: Math.floor(Date.now() / 1000),
+      created_at: allocateReplaceableCreatedAt(`cursor:${user.pubkey}:${dTag}`),
       pubkey: user.pubkey,
-      content: await encryptContactCursorContent(cursor),
+      content,
       tags: [['d', dTag]],
     });
 
@@ -2232,6 +2263,7 @@ export function createPrivateStateRuntime({
   }
 
   return {
+    observeContactCursorEvent,
     applyGroupMembershipRosterEvent,
     applyContactCursorStateToContact,
     buildChatMetaWithUnseenReactionCount,

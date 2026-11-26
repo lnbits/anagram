@@ -182,7 +182,7 @@
         items: chats.selectedChatId ? messages.getMessages(chats.selectedChatId) : [],
         pagination: chats.selectedChatId ? messages.getPaginationState(chats.selectedChatId) : null,
         remote:
-          nostr.groupHistoryState.chat === chats.selectedChatId ? nostr.groupHistoryState : null,
+          nostr.privateHistoryState.chat === chats.selectedChatId ? nostr.privateHistoryState : null,
       },
       unread: chats.unreadChatCount,
       loaded: chats.isLoaded,
@@ -834,7 +834,6 @@
   function canLoadOlder() {
     return Boolean(
       $state.selected &&
-      ($state.thread.pagination?.hasOlder || $state.thread.remote?.hasOlder) &&
       !loadingOlder &&
       olderLoad?.chatId !== $state.selected.id,
     );
@@ -850,10 +849,10 @@
     const current = () =>
       chats.selectedChatId === chatId && scrollArea === node && node.isConnected;
     try {
-      if (!$state.thread.pagination?.hasOlder && $state.selected?.type === 'group') {
+      if (!$state.thread.pagination?.hasOlder) {
         messages.pinMessageWindow(chatId);
         const first = messages.getMessages(chatId)[0];
-        await nostr.loadOlderGroupHistory(
+        await nostr.loadOlderPrivateHistory(
           chatId,
           first ? Date.parse(first.sentAt) / 1000 : Date.now() / 1000,
         );
@@ -1701,7 +1700,7 @@
             publicKey={$state.selected.publicKey}
             onmount={mountThread}
             firstDay={displayedMessages[0] ? date(displayedMessages[0].sentAt) : ''}
-            hasOlder={Boolean($state.thread.pagination?.hasOlder || $state.thread.remote?.hasOlder)}
+            hasOlder={true}
             historyStatus={$state.thread.remote?.loading
               ? $state.thread.remote.phase === 'keys'
                 ? $translate('chat.historyKeys')

@@ -101,3 +101,59 @@ it('cancels a queued REQ before the recovery budget releases it', async () => {
   await vi.advanceTimersByTimeAsync(1000);
   expect(send.mock.calls.map(([message]) => JSON.parse(message)[0])).toEqual(['REQ', 'CLOSE']);
 });
+
+it('shares one burst budget across many group sockets and prioritizes account publications', async () => {
+  vi.useFakeTimers();
+  const { RelayTrafficPolicy } = await import('#src/stores/nostr/relayTrafficPolicy.ts');
+  const policy = new RelayTrafficPolicy();
+  const frames: unknown[][] = [];
+  const sockets = Array.from({ length: 20 }, () => {
+    const relay = {
+      send: vi.fn(async (message: string) => {
+        frames.push(JSON.parse(message));
+      }),
+      close: vi.fn(),
+    };
+    paceRelayRequests(relay, policy);
+    return relay;
+  });
+  const requests = sockets.map((socket, i) => socket.send(JSON.stringify(['REQ', String(i)])));
+  expect(frames).toHaveLength(8);
+  const publication = sockets[0].send('["EVENT","personal-message"]');
+  // Closing one group must neither cancel another group's same-ID request nor reset the budget.
+  sockets[8].close();
+  await vi.advanceTimersByTimeAsync(119);
+  expect(frames).toHaveLength(8);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(frames).toHaveLength(16);
+  expect(frames[8]).toEqual(['EVENT', 'personal-message']);
+  expect(frames).not.toContainEqual(['REQ', '8']);
+  await vi.advanceTimersByTimeAsync(120);
+  await Promise.all([...requests, publication]);
+  expect(frames).toHaveLength(20);
+});
+
+it('cancels only the requesting socket when multiple group subscriptions reuse an ID', async () => {
+  vi.useFakeTimers();
+  const { RelayTrafficPolicy } = await import('#src/stores/nostr/relayTrafficPolicy.ts');
+  const policy = new RelayTrafficPolicy();
+  const wireA = vi.fn(async (_message: string) => {}),
+    wireB = vi.fn(async (_message: string) => {});
+  const a = { send: wireA, close: vi.fn() },
+    b = { send: wireB, close: vi.fn() };
+  paceRelayRequests(a, policy);
+  paceRelayRequests(b, policy);
+  await Promise.all(
+    Array.from({ length: 8 }, (_, i) => a.send(JSON.stringify(['REQ', String(i)]))),
+  );
+  const first = a.send('["REQ","same"]'),
+    second = b.send('["REQ","same"]');
+  await a.send('["CLOSE","same"]');
+  await vi.advanceTimersByTimeAsync(120);
+  await Promise.all([first, second]);
+  expect(wireA.mock.calls.map(([message]) => JSON.parse(message))).not.toContainEqual([
+    'REQ',
+    'same',
+  ]);
+  expect(wireB).toHaveBeenCalledWith('["REQ","same"]');
+});

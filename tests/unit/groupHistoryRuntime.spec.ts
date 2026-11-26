@@ -40,18 +40,18 @@ describe('demand-driven group history', () => {
     });
     const { runtime } = setup({ routes: routes(500), discoveryRelays: ['relay'] }, query);
     await runtime.load('group');
-    expect(query).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledTimes(6);
     const first = query.mock.calls[0][0];
-    expect(first.recipients).toHaveLength(16);
+    expect(first.recipients).toHaveLength(1);
     const cursor = first.pager.until;
     await vi.advanceTimersByTimeAsync(3600000);
-    expect(query).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledTimes(6);
     await runtime.load('group', cursor);
     const pages = query.mock.calls.map(([q]) => q).filter((q) => !q.discovery);
-    expect(pages).toHaveLength(2);
-    expect(pages[1].recipients).toEqual(first.recipients);
-    expect(pages[1].pager).toBe(first.pager);
-    expect(pages[1].pager.until).toBe(cursor - 100);
+    expect(pages).toHaveLength(11);
+    expect(pages[6].recipients).toEqual(first.recipients);
+    expect(pages[6].pager).toBe(first.pager);
+    expect(pages[6].pager.until).toBe(cursor - 500);
     expect(runtime.state.hasOlder).toBe(true);
   });
   it('limits even empty archives to six requests per action', async () => {
@@ -62,7 +62,7 @@ describe('demand-driven group history', () => {
     await runtime.load('group', 1700000000);
     expect(query.mock.calls.length).toBeLessThanOrEqual(12);
     expect(query.mock.calls[6][0].discovery).toBe(true);
-    expect(query.mock.calls[7][0].recipients[0]).toBe('epoch-404');
+    expect(query.mock.calls[7][0].recipients[0]).toBe('epoch-494');
   });
   it('does not let busy fast inboxes starve older messages on slower relays', async () => {
     const relays = ['fast-a', 'fast-b', 'archive-a', 'archive-b'];
@@ -105,7 +105,7 @@ describe('demand-driven group history', () => {
       expect(query).toHaveBeenCalledTimes(6);
       for (const [q] of query.mock.calls) {
         (q.discovery ? discovery : messages).add(q.relayUrl);
-        expect(q.recipients.length).toBeLessThanOrEqual(16);
+        expect(q.recipients.length).toBe(1);
       }
     }
     expect([...discovery].sort()).toEqual(relays);
@@ -131,7 +131,7 @@ describe('demand-driven group history', () => {
     await vi.advanceTimersByTimeAsync(60000);
     expect(query).toHaveBeenCalledTimes(1);
     await runtime.load('group', 1700000000);
-    expect(query.mock.calls.at(-1)![0].recipients).toEqual(['epoch-2', 'epoch-1']);
+    expect(query.mock.calls.at(-1)![0].recipients).toEqual(['epoch-2']);
     expect(query.mock.calls.at(-1)![0].pager.until).toBe(1800000000);
   });
   it('retains failed cursors and retries on demand after backoff', async () => {
@@ -154,6 +154,19 @@ describe('demand-driven group history', () => {
     expect(query.mock.calls[1][0].pager).toBe(pager);
     expect(pager.done).toBe(true);
   });
+  it('allows an explicit pull to recheck an exhausted relay without background polling', async () => {
+    const { runtime, query } = setup({ routes: routes(1), discoveryRelays: [] });
+    await runtime.load('group');
+    expect(runtime.state.hasOlder).toBe(false);
+    const first = query.mock.calls[0][0].pager;
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(query).toHaveBeenCalledTimes(1);
+    await runtime.load('group', 1700000000);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[1][0].pager).not.toBe(first);
+    expect(query.mock.calls[1][0].pager.until).toBe(1700000000 + 2 * 86400);
+  });
+
   it('coalesces requests, lets healthy replicas finish, and aborts on thread change', async () => {
     let release!: () => void;
     const query = vi.fn(async (q: GroupHistoryQuery) => {

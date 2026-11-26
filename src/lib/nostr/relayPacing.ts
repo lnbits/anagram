@@ -1,29 +1,83 @@
 import { RelayTrafficPolicy, type RelayCommand } from '#src/stores/nostr/relayTrafficPolicy.ts';
 
-// One wire budget for publications and queries. AUTH/CLOSE remain immediate.
+type RelayWire = {
+  send(message: string): Promise<void>;
+  close(): void;
+  connected?: boolean;
+  publishTimeout?: number;
+};
+type Socket = {
+  relay: RelayWire;
+  send: RelayWire['send'];
+  owner: () => string | undefined;
+  refusedRequest?: (id: string, reason: string) => void;
+};
+type Pending = {
+  socket: Socket;
+  message: string;
+  command: RelayCommand;
+  id: string;
+  expires: number;
+  owner: string | undefined;
+  resolve(): void;
+  reject(error: unknown): void;
+};
+const schedulers = new WeakMap<RelayTrafficPolicy, ReturnType<typeof createRelayScheduler>>();
+
+// One wire budget per relay for the account and all its epoch sockets.
+// AUTH/CLOSE remain immediate.
 // Long pauses return to the existing retry owners, never retaining stale payloads.
 export function paceRelayRequests(
-  relay: {
-    send(message: string): Promise<void>;
-    close(): void;
-    connected?: boolean;
-    publishTimeout?: number;
-  },
+  relay: RelayWire,
   policy = new RelayTrafficPolicy(),
   refusedRequest?: (id: string, reason: string) => void,
   owner: () => string | undefined = () => undefined,
 ) {
   const send = relay.send.bind(relay),
     close = relay.close.bind(relay);
-  type Pending = {
-    message: string;
-    command: RelayCommand;
-    id: string;
-    expires: number;
-    owner: string | undefined;
-    resolve(): void;
-    reject(error: unknown): void;
+  const socket: Socket = { relay, send, owner, refusedRequest };
+  let scheduler = schedulers.get(policy);
+  if (!scheduler) {
+    scheduler = createRelayScheduler(policy);
+    schedulers.set(policy, scheduler);
+  }
+  relay.send = (message) => {
+    let command: string, id: string;
+    try {
+      const frame = JSON.parse(message);
+      command = frame[0];
+      id = command === 'EVENT' ? (frame[1]?.id ?? frame[1]) : frame[1];
+    } catch {
+      return send(message);
+    }
+    if (command === 'CLOSE') {
+      scheduler.cancelRequest(socket, id);
+    }
+    if (command !== 'REQ' && command !== 'EVENT' && command !== 'COUNT') return send(message);
+    const type = command;
+    return new Promise<void>((resolve, reject) => {
+      const item: Pending = {
+        socket,
+        message,
+        command: type,
+        owner: owner(),
+        id,
+        expires: type === 'EVENT' ? Date.now() + (relay.publishTimeout ?? 5000) - 1 : Infinity,
+        resolve,
+        reject,
+      };
+      scheduler.enqueue(item);
+    });
   };
+  const cancel = () => scheduler.cancel(socket);
+  relay.close = () => {
+    cancel();
+    close();
+  };
+  return { pump: scheduler.pump, cancel };
+}
+
+function createRelayScheduler(policy: RelayTrafficPolicy) {
   const queue: Pending[] = [];
   const sent: number[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -31,7 +85,7 @@ export function paceRelayRequests(
     if (item.command === 'REQ') {
       // nostr-tools fire() ignores send() rejections. Use its close callback,
       // after subscribe() has finished assigning the subscription state.
-      refusedRequest?.(item.id, reason);
+      item.socket.refusedRequest?.(item.id, reason);
       item.resolve();
     } else item.reject(new Error(reason));
   }
@@ -42,9 +96,11 @@ export function paceRelayRequests(
     for (let i = queue.length - 1; i >= 0; i--) {
       const item = queue[i];
       const reason =
-        (item.owner !== owner() ? 'Relay operation cancelled after account change' : undefined) ??
+        (item.owner !== item.socket.owner()
+          ? 'Relay operation cancelled after account change'
+          : undefined) ??
         policy.blockReason(item.command) ??
-        (relay.connected === false
+        (item.socket.relay.connected === false
           ? 'Relay closed before send'
           : item.expires <= now
             ? 'Publish timed out before send'
@@ -63,9 +119,11 @@ export function paceRelayRequests(
       const item = queue.splice(index, 1)[0];
       sent.push(now);
       policy.sent(item.command);
-      void send(item.message).then(item.resolve, (error) =>
-        refuse(item, error instanceof Error ? error.message : String(error)),
-      );
+      void item.socket
+        .send(item.message)
+        .then(item.resolve, (error) =>
+          refuse(item, error instanceof Error ? error.message : String(error)),
+        );
     }
     if (queue.length) {
       const spacing = Math.min(...queue.map((item) => policy.spacingDelay(item.command)));
@@ -76,51 +134,32 @@ export function paceRelayRequests(
       timer = setTimeout(pump, Math.max(1, Math.min(Math.max(spacing, burst), expiry)));
     }
   }
-  relay.send = (message) => {
-    let command: string, id: string;
-    try {
-      const frame = JSON.parse(message);
-      command = frame[0];
-      id = command === 'EVENT' ? (frame[1]?.id ?? frame[1]) : frame[1];
-    } catch {
-      return send(message);
-    }
-    if (command === 'CLOSE') {
-      for (let i = queue.length - 1; i >= 0; i--) {
-        if (queue[i].command === 'REQ' && queue[i].id === id) queue.splice(i, 1)[0].resolve();
-      }
-    }
-    if (command !== 'REQ' && command !== 'EVENT' && command !== 'COUNT') return send(message);
-    const type = command;
-    return new Promise<void>((resolve, reject) => {
-      const item: Pending = {
-        message,
-        command: type,
-        owner: owner(),
-        id,
-        expires: type === 'EVENT' ? Date.now() + (relay.publishTimeout ?? 5000) - 1 : Infinity,
-        resolve,
-        reject,
-      };
+  return {
+    pump,
+    enqueue(item: Pending) {
       if (queue.length >= 256) {
         refuse(item, 'Relay send queue is full; retry later');
         return;
       }
       queue.push(item);
       pump();
-    });
+    },
+    cancelRequest(socket: Socket, id: string) {
+      for (let i = queue.length - 1; i >= 0; i--) {
+        const item = queue[i];
+        if (item.socket === socket && item.command === 'REQ' && item.id === id)
+          queue.splice(i, 1)[0].resolve();
+      }
+    },
+    cancel(socket: Socket) {
+      for (let i = queue.length - 1; i >= 0; i--) {
+        if (queue[i].socket !== socket) continue;
+        const item = queue.splice(i, 1)[0];
+        if (item.command !== 'REQ') item.reject(new Error('Relay closed before publish'));
+        else item.resolve();
+      }
+      // Closing an epoch socket must not reset the shared burst budget.
+      pump();
+    },
   };
-  function cancel() {
-    clearTimeout(timer);
-    for (const item of queue.splice(0)) {
-      if (item.command !== 'REQ') item.reject(new Error('Relay closed before publish'));
-      else item.resolve();
-    }
-    sent.length = 0;
-  }
-  relay.close = () => {
-    cancel();
-    close();
-  };
-  return { pump, cancel };
 }

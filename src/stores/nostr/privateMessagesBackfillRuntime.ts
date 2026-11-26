@@ -1,3 +1,4 @@
+import type { PrivateMessageRelayLease } from '#src/stores/nostr/privateMessageRelayClients.ts';
 import { startupRelayObserver, type RelaySyncUpdate } from '#src/stores/nostr/startupRelayTracking.ts';
 import { createGroupHistoryRuntime } from '#src/stores/nostr/groupHistoryRuntime.svelte.ts';
 import { createThreadHistoryRuntime } from '#src/stores/nostr/threadHistoryRuntime.ts';
@@ -113,6 +114,7 @@ interface PrivateMessagesBackfillRuntimeDeps {
     details?: Record<string, unknown>,
   ) => void;
   ndk: NostrClient;
+  acquirePrivateMessageRelayClient: (recipient: string) => Promise<PrivateMessageRelayLease>;
   normalizeThrottleMs: (value: number | undefined) => number;
   queuePrivateMessageIngestion: (
     wrappedEvent: ClientEvent,
@@ -168,6 +170,7 @@ export function createPrivateMessagesBackfillRuntime({
   getPrivateMessagesIngestQueue,
   logSubscription,
   ndk,
+  acquirePrivateMessageRelayClient,
   queuePrivateMessageIngestion,
   relaySignature,
   resolveGroupChatEpochEntries,
@@ -317,6 +320,24 @@ export function createPrivateMessagesBackfillRuntime({
     reprocess?: boolean;
     timeoutMs?: number;
   }): Promise<{ eventCount: number; relayUrls: string[]; oldest: number }> {
+    const [recipient] = options.recipientPubkeys;
+    if (!recipient || options.recipientPubkeys.length !== 1)
+      throw new Error('History reads require a single authentication identity');
+    const runToken = privateMessagesBackfillRunToken;
+    const lease = await acquirePrivateMessageRelayClient(recipient);
+    try {
+      if (runToken !== privateMessagesBackfillRunToken)
+        throw new Error('History restore cancelled');
+      return await readPrivateMessagesBackfillWindow(options, lease.client);
+    } finally {
+      lease.release();
+    }
+  }
+
+  async function readPrivateMessagesBackfillWindow(
+    options: Parameters<typeof runPrivateMessagesBackfillWindow>[0],
+    client: NostrClient,
+  ): Promise<{ eventCount: number; relayUrls: string[]; oldest: number }> {
     const runToken = privateMessagesBackfillRunToken;
     let eventCount = 0;
     let oldestEvent = Infinity;
@@ -324,13 +345,14 @@ export function createPrivateMessagesBackfillRuntime({
       options.signal?.aborted ||
       (!options.signal && runToken !== privateMessagesBackfillRunToken) ||
       options.loggedInPubkeyHex !== getLoggedInPublicKeyHex();
+    if (cancelled()) throw new Error('History restore cancelled');
     const report: ((update: RelaySyncUpdate) => void) | undefined = options.startupTaskId
       ? startupRelayObserver(ndk, [options.startupTaskId], options.startupTaskId, options.relayUrls, { parentStepId: 'message-history-restore' })
       : undefined;
     const completedRelays: string[] = [];
     const readyRelays =
-      options.requireReady === false
-        ? NostrRelaySet.fromRelayUrls(options.relayUrls, ndk, false)
+      options.requireReady === false || client !== ndk
+        ? NostrRelaySet.fromRelayUrls(options.relayUrls, client, false)
         : createReadyRelaySet(ndk, options.relayUrls);
     if (!readyRelays) {
       options.relayUrls.forEach((relayUrl) => report?.({ relayUrl, status: 'error', reason: 'unavailable' }));
@@ -349,7 +371,7 @@ export function createPrivateMessagesBackfillRuntime({
         const pageLimit = () => (options.probe ? 1 : pager.limit);
         while (!pager.done) {
           if (cancelled()) throw new Error('History restore cancelled');
-          const relaySet = NostrRelaySet.fromRelayUrls([relayUrl], ndk, false);
+          const relaySet = NostrRelaySet.fromRelayUrls([relayUrl], client, false);
           const page = await new Promise<{ count: number; oldest: number }>(
             (resolve, reject) => {
               let settled = false,
@@ -1272,14 +1294,17 @@ export function createPrivateMessagesBackfillRuntime({
     owner: getLoggedInPublicKeyHex,
     context: async (chatPublicKey) => {
       const chat = await chatDataService.getChatByPublicKey(chatPublicKey);
-      if (chat?.type !== 'group' || chat.meta.deleted_locally === true) return null;
+      const owner = getLoggedInPublicKeyHex();
+      if (!chat || !owner || chat.meta.deleted_locally === true) return null;
       const relays = await resolvePrivateMessageReadRelayUrls();
       return {
         routes: await resolvePrivateMessageRelayScopes(
-          resolveGroupChatEpochEntries(chat).map((entry) => entry.epoch_public_key),
+          chat.type === 'group'
+            ? resolveGroupChatEpochEntries(chat).map((entry) => entry.epoch_public_key)
+            : [owner],
           relays,
         ),
-        discoveryRelays: relays,
+        discoveryRelays: chat.type === 'group' ? relays : [],
       };
     },
     query: async (query) => queryGroupHistoryPage(query),
@@ -1343,8 +1368,12 @@ export function createPrivateMessagesBackfillRuntime({
         logSubscription('private-messages', 'thread-history-error', { error }),
       );
   }
-  const loadOlderGroupHistory = (chat: string, before: number) =>
-    groupHistory.load(chat, before);
+  function loadOlderPrivateHistory(chat: string, before: number): Promise<void> {
+    // Give an explicit pull the foreground lane instead of competing with the
+    // selected DM's automatic inbox scan. Background discovery keeps its lane.
+    threadHistory.stop();
+    return groupHistory.load(chat, before);
+  }
 
   function resetPrivateMessagesBackfillRuntimeState(): void {
     selectedThread = null;
@@ -1362,10 +1391,10 @@ export function createPrivateMessagesBackfillRuntime({
   }
 
   return {
-    get groupHistoryState() {
+    get privateHistoryState() {
       return groupHistory.state;
     },
-    loadOlderGroupHistory,
+    loadOlderPrivateHistory,
     prioritizeThreadHistory,
     repairMissingMessageDependency,
     resetPrivateMessagesBackfillRuntimeState,

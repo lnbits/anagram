@@ -60,6 +60,13 @@ export function createGroupHistoryRuntime(deps: {
       state.chat = chat;
     }
     if (active) return active;
+    // Exhaustion is a snapshot of the relay, not a permanent ban on pulling.
+    // An explicit pull can recheck archives that have since become available.
+    if (before !== undefined && !state.hasOlder) {
+      cursors.clear();
+      initialUntil = undefined;
+      state.hasOlder = true;
+    }
     const owner = deps.owner();
     if (!owner) return Promise.resolve();
     const token = generation,
@@ -135,9 +142,8 @@ export function createGroupHistoryRuntime(deps: {
         const keys = ctx.routes
           .filter((route) => route.relayUrls.includes(relay))
           .map((route) => route.publicKey);
-        return Array.from({ length: Math.ceil(keys.length / 16) }, (_, n) =>
-          keys.slice(n * 16, n * 16 + 16),
-        );
+        // Each epoch needs its own authenticated socket and paging cursor.
+        return keys.map((key) => [key]);
       };
       const relays = [
         ...new Set([
@@ -172,11 +178,13 @@ export function createGroupHistoryRuntime(deps: {
           state.phase = 'messages';
           for (const recipients of batches(updated, relay)) {
             const progress = cursor(`messages:${relay}:${recipients.join(',')}`, false);
-            if (progress.pager.done) continue;
-            const count = await request(recipients, relay, false, budget);
-            // Do not jump over an unfinished epoch batch, even when another relay
-            // already supplied older messages. Continue past genuinely empty pages.
-            if (count === undefined || count > 0 || !progress.pager.done) break;
+            while (!progress.pager.done && budget.remaining > 0) {
+              const count = await request(recipients, relay, false, budget);
+              if (count === undefined) break;
+              // A nonempty page may contain only cached messages. Spend this
+              // action's remaining budget advancing it before trying older keys.
+            }
+            if (!progress.pager.done || budget.remaining <= 0) break;
           }
         }),
       );
@@ -189,11 +197,9 @@ export function createGroupHistoryRuntime(deps: {
           (keys) => cursor(`messages:${relay}:${keys.join(',')}`, false).pager.done,
         ),
       );
-      const keysDone =
-        context.discoveryRelays.length > 0 &&
-        context.discoveryRelays.every(
-          (relay) => cursor(`keys:${relay}:${owner}`, true).pager.done,
-        );
+      const keysDone = context.discoveryRelays.every(
+        (relay) => cursor(`keys:${relay}:${owner}`, true).pager.done,
+      );
       state.hasOlder = !messagesDone || !keysDone || state.failed;
     })()
       .catch((error) => {

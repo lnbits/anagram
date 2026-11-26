@@ -27,6 +27,7 @@
   let active = true;
   let loadingNewer = false;
   async function newer() {
+    if (!hasNewer || loading || loadingNewer) return;
     loadingNewer = true;
     try {
       await onnewer();
@@ -121,12 +122,18 @@
     </div>{/if}
   {#if historyStatus}<span class="thread-history-status" role="status">{historyStatus}</span>{/if}
   {@render children()}
-  {#if loadingNewer}<div
-      class="thread-more thread-more--bottom"
-      role="status"
-      aria-label="Loading newer messages"
-    >
-      <span class="thread-history-spinner" aria-hidden="true"></span>
+  {#if hasNewer || loadingNewer}<div class="thread-more thread-more--bottom">
+      <button
+        class="thread-more__button"
+        data-testid="thread-load-newer"
+        aria-label="Load newer messages"
+        aria-busy={loadingNewer}
+        disabled={loading || loadingNewer}
+        onmousedown={(event) => event.preventDefault()}
+        onclick={newer}
+        >{#if loadingNewer}<span class="thread-history-spinner" aria-hidden="true"
+          ></span>{:else}<Icon name="down" />{/if}{$translate('common.more')}</button
+      >
     </div>{/if}
 </div>
 {#if !nearBottom}<button class="jump-latest" aria-label="Jump to latest messages" onclick={onlatest}

@@ -520,8 +520,8 @@ test('switching cached groups renders and positions messages before history chec
         // Only these fixture groups are expected to contain cached messages.
         if (id && !groups.includes(id)) return;
         if (!id) {
-          nostr.groupHistoryState.loading = false;
-          nostr.groupHistoryState.chat = '';
+          nostr.privateHistoryState.loading = false;
+          nostr.privateHistoryState.chat = '';
           return;
         }
         const thread = document.querySelector('[data-testid="chat-thread"]');
@@ -534,9 +534,9 @@ test('switching cached groups renders and positions messages before history chec
             thread.querySelectorAll('.message-row').length > 0,
         });
         // Keep relay loading pending: it must not delay showing the cached bottom.
-        nostr.groupHistoryState.chat = id;
-        nostr.groupHistoryState.loading = true;
-        nostr.groupHistoryState.hasOlder = true;
+        nostr.privateHistoryState.chat = id;
+        nostr.privateHistoryState.loading = true;
+        nostr.privateHistoryState.hasOlder = true;
       };
     },
     { groups, own: account.pubkey },

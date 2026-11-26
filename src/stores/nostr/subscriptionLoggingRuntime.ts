@@ -266,7 +266,7 @@ export function createSubscriptionLoggingRuntime({
       initialEoseDelivered = true;
       options.onEose?.(source);
     };
-    const subscription = ndk.subscribe(filters, {
+    const subscription = (options.relaySet?.ndk ?? ndk).subscribe(filters, {
       ...options,
       subId,
       // Routing and batching are explicit. NostrClient regrouping would replace unrelated listeners.

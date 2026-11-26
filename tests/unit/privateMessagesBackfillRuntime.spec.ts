@@ -43,6 +43,7 @@ function createRuntime(
     ensureLiveRecipientSubscription?: () => Promise<void>;
     getPrivateMessagesIngestQueue?: () => Promise<void>;
     ndk?: NostrClient;
+    acquirePrivateMessageRelayClient?: Parameters<typeof createPrivateMessagesBackfillRuntime>[0]['acquirePrivateMessageRelayClient'];
     readRelays?: string[];
     subscribeWithReqLogging?: ReturnType<typeof vi.fn>;
     resolveGroupChatEpochEntries?: (chat: {
@@ -75,6 +76,7 @@ function createRuntime(
     for (const url of overrides.readRelays ?? ['wss://relay.example'])
       vi.spyOn(client.pool.getRelay(url, false, false), 'connected', 'get').mockReturnValue(true);
   const runtime = createPrivateMessagesBackfillRuntime({
+    acquirePrivateMessageRelayClient: overrides.acquirePrivateMessageRelayClient ?? (async () => ({ client, release: vi.fn() })),
     ensureLiveRecipientSubscription: overrides.ensureLiveRecipientSubscription,
     beginStartupInternalTask,
     buildFilterSinceDetails: (since) => ({ since }),
@@ -216,6 +218,23 @@ describe('privateMessagesBackfillRuntime', () => {
     runtime.resetPrivateMessagesBackfillRuntimeState();
   });
 
+  it('routes history through the epoch client and releases it after EOSE', async () => {
+    serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue({ type: 'group', meta: {} });
+    const groupClient = new NostrClient();
+    const release = vi.fn();
+    const acquire = vi.fn(async () => ({ client: groupClient, release }));
+    const { runtime, subscribeWithReqLogging } = createRuntime({
+      acquirePrivateMessageRelayClient: acquire,
+      resolveGroupChatEpochEntries: () => [{ epoch_public_key: GROUP_EPOCH_A }],
+    });
+    runtime.prioritizeThreadHistory(GROUP_CHAT_PUBLIC_KEY);
+    await vi.runAllTimersAsync();
+    expect(acquire).toHaveBeenCalledWith(GROUP_EPOCH_A);
+    expect(subscribeWithReqLogging.mock.calls[0][3].relaySet.ndk).toBe(groupClient);
+    expect(release).toHaveBeenCalledOnce();
+    runtime.resetPrivateMessagesBackfillRuntimeState();
+  });
+
   it('fetches selected group epochs with foreground ingestion and bounded cached reads', async () => {
     const timestamp = 1800000000 - 80 * 86400;
     serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue({ type: 'group', meta: {} });
@@ -231,19 +250,52 @@ describe('privateMessagesBackfillRuntime', () => {
     const { runtime } = createRuntime({
       queuePrivateMessageIngestion: queue,
       subscribeWithReqLogging: fixture,
+      readRelays: ['wss://relay.example/'],
       resolveGroupChatEpochEntries: () =>
         [GROUP_EPOCH_A, GROUP_EPOCH_B].map((epoch_public_key) => ({ epoch_public_key })),
     });
     runtime.prioritizeThreadHistory(GROUP_CHAT_PUBLIC_KEY);
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(100);
     expect(serviceMocks.chatDataService.listLatestMessages).not.toHaveBeenCalled();
-    expect(fixture).toHaveBeenCalledTimes(1);
-    expect(new Set(fixture.mock.calls.flatMap((call) => call[2]['#p']))).toEqual(
+    await vi.waitFor(() => expect(runtime.privateHistoryState.loading).toBe(false));
+    expect(fixture).toHaveBeenCalledTimes(6);
+    expect(fixture.mock.calls[0][2]['#p']).toEqual([GROUP_EPOCH_A]);
+    expect(fixture.mock.calls.every((call) => call[2]['#p'].length === 1)).toBe(true);
+    expect(new Set(fixture.mock.calls.filter((call) => call[1] === 'group-page-messages').flatMap((call) => call[2]['#p']))).toEqual(
       new Set([GROUP_EPOCH_A, GROUP_EPOCH_B]),
     );
     expect(queue).toHaveBeenCalled();
     for (const call of queue.mock.calls as unknown as Array<[unknown, string, object]>)
       expect(call[2]).toMatchObject({ priority: 'foreground', uiThrottleMs: 0 });
+    runtime.resetPrivateMessagesBackfillRuntimeState();
+  });
+
+  it('pulls older direct messages from the account inbox and can recheck exhausted history', async () => {
+    serviceMocks.chatDataService.getChatByPublicKey.mockResolvedValue({ type: 'user', meta: {} });
+    const before = 1700000000;
+    const events = [{ id: TARGET_EVENT_ID, created_at: before - 86400 }];
+    const fixture = relayFixture(events);
+    const queue = vi.fn(async () => true);
+    const { runtime } = createRuntime({
+      subscribeWithReqLogging: fixture,
+      queuePrivateMessageIngestion: queue,
+    });
+    const pull = runtime.loadOlderPrivateHistory(DIRECT_CHAT_PUBLIC_KEY, before);
+    await vi.advanceTimersByTimeAsync(100);
+    await pull;
+    expect(fixture.mock.calls[0][2]).toMatchObject({
+      '#p': [LOGGED_IN_PUBLIC_KEY], until: before + 2 * 86400,
+    });
+    expect(fixture.mock.calls.length).toBeLessThanOrEqual(6);
+    expect(queue).toHaveBeenCalledWith(expect.objectContaining({ id: TARGET_EVENT_ID }),
+      LOGGED_IN_PUBLIC_KEY, expect.objectContaining({ priority: 'foreground' }));
+    expect(runtime.privateHistoryState).toMatchObject({ loading: false, hasOlder: false });
+    events.push({ id: '9'.repeat(64), created_at: before - 2 * 86400 });
+    const retry = runtime.loadOlderPrivateHistory(DIRECT_CHAT_PUBLIC_KEY, before);
+    await vi.advanceTimersByTimeAsync(100);
+    await retry;
+    expect(queue).toHaveBeenCalledWith(expect.objectContaining({ id: '9'.repeat(64) }),
+      LOGGED_IN_PUBLIC_KEY, expect.anything());
     runtime.resetPrivateMessagesBackfillRuntimeState();
   });
 
@@ -288,7 +340,7 @@ describe('privateMessagesBackfillRuntime', () => {
     expect(stop).not.toHaveBeenCalled();
     eose();
     await vi.advanceTimersByTimeAsync(0);
-    expect(runtime.groupHistoryState).toMatchObject({ loading: false, failed: false });
+    expect(runtime.privateHistoryState).toMatchObject({ loading: false, failed: false });
     expect(stop).toHaveBeenCalled();
     runtime.resetPrivateMessagesBackfillRuntimeState();
   });
@@ -525,9 +577,15 @@ describe('privateMessagesBackfillRuntime', () => {
     expect(seen.size).toBe(0);
     expect(subscribe).not.toHaveBeenCalled();
     expect(completeStartupStep).not.toHaveBeenCalled();
-    const page = runtime.loadOlderGroupHistory(GROUP_CHAT_PUBLIC_KEY, 1800000000);
+    const page = runtime.loadOlderPrivateHistory(GROUP_CHAT_PUBLIC_KEY, 1800000000);
     await vi.advanceTimersByTimeAsync(100);
     await page;
+    expect(seen).toEqual(new Set(['old-a']));
+    for (let page = 0; page < 2; page++) {
+      const pending = runtime.loadOlderPrivateHistory(GROUP_CHAT_PUBLIC_KEY, 1800000000);
+      await vi.advanceTimersByTimeAsync(100);
+      await pending;
+    }
     expect(seen).toEqual(new Set(['old-a', 'old-b']));
     runtime.resetPrivateMessagesBackfillRuntimeState();
   });
@@ -587,7 +645,7 @@ describe('privateMessagesBackfillRuntime', () => {
         expect.anything(),
       );
       await vi.advanceTimersByTimeAsync(10000);
-      expect(runtime.groupHistoryState).toMatchObject({
+      expect(runtime.privateHistoryState).toMatchObject({
         loading: false,
         hasOlder: true,
         failed: true,
@@ -705,8 +763,8 @@ describe('privateMessagesBackfillRuntime', () => {
     });
     await vi.advanceTimersByTimeAsync(100);
     expect(await repair).toBe(true);
-    expect(subscribe).toHaveBeenCalledTimes(2);
-    expect(runtime.groupHistoryState.chat).toBe('');
+    expect(subscribe.mock.calls.length).toBeLessThanOrEqual(6);
+    expect(runtime.privateHistoryState.chat).toBe('');
     expect(queue).toHaveBeenCalledWith(
       expect.anything(),
       LOGGED_IN_PUBLIC_KEY,

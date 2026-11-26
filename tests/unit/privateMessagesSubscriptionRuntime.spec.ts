@@ -43,6 +43,7 @@ function createRuntime(
     refreshAllStoredContacts?: ReturnType<typeof vi.fn>;
     getPrivateMessagesIngestQueue?: () => Promise<void>;
     recipients?: () => Promise<string[]>;
+    acquirePrivateMessageRelayClient?: Parameters<typeof createPrivateMessagesSubscriptionRuntime>[0]['acquirePrivateMessageRelayClient'];
   } = {},
 ) {
   let privateMessagesSubscriptionLiveCoverageAt: number | null = null;
@@ -87,6 +88,7 @@ function createRuntime(
   const startPrivateMessagesStartupBackfill = vi.fn();
   const queuePrivateMessageIngestion = vi.fn();
   const runtime = createPrivateMessagesSubscriptionRuntime({
+    acquirePrivateMessageRelayClient: overrides.acquirePrivateMessageRelayClient ?? (async () => ({ client: ndk, release: vi.fn() })),
     beginStartupStep: startupRuntime.beginStartupStep,
     buildFilterSinceDetails: (since) => ({ since }),
     buildPrivateMessageSubscriptionTargetDetails: vi.fn(async () => ({})),
@@ -496,6 +498,41 @@ describe('privateMessagesSubscriptionRuntime', () => {
     runtime.resetPrivateMessagesSubscriptionRuntimeState();
   });
 
+  it('routes live group reads through the leased client and releases it on rotation', async () => {
+    const groupClient = new NostrClient();
+    const release = vi.fn();
+    const epoch = 'c'.repeat(64);
+    let recipients = [epoch];
+    const { runtime, subscribeWithReqLogging } = createRuntime({
+      recipients: async () => recipients,
+      acquirePrivateMessageRelayClient: async () => ({ client: groupClient, release }),
+    });
+    await runtime.subscribePrivateMessagesForLoggedInUser();
+    expect(subscribeWithReqLogging.mock.calls[0][3].relaySet.ndk).toBe(groupClient);
+    recipients = [];
+    await runtime.subscribePrivateMessagesForLoggedInUser();
+    expect(release).toHaveBeenCalledOnce();
+    runtime.stopPrivateMessagesLiveSubscription();
+  });
+
+  it('releases a pending group client when logout interrupts preparation', async () => {
+    const release = vi.fn();
+    let finish!: (lease: { client: NostrClient; release: () => void }) => void;
+    const acquire = vi.fn(() => new Promise<{ client: NostrClient; release: () => void }>((resolve) => { finish = resolve; }));
+    const { runtime, subscribeWithReqLogging } = createRuntime({
+      recipients: async () => ['c'.repeat(64)],
+      acquirePrivateMessageRelayClient: acquire,
+    });
+    const pending = runtime.subscribePrivateMessagesForLoggedInUser();
+    const rejected = expect(pending).rejects.toThrow('session changed');
+    await vi.waitFor(() => expect(acquire).toHaveBeenCalled());
+    runtime.stopPrivateMessagesLiveSubscription('logout');
+    finish({ client: new NostrClient(), release });
+    await rejected;
+    expect(release).toHaveBeenCalledOnce();
+    expect(subscribeWithReqLogging).not.toHaveBeenCalled();
+  });
+
   it('changes only the affected epoch recipient and retains group and fallback relay routes', async () => {
     const group = 'b'.repeat(64),
       epochA = 'c'.repeat(64),
@@ -526,12 +563,13 @@ describe('privateMessagesSubscriptionRuntime', () => {
       recipients: async () => [LOGGED_IN_PUBLIC_KEY, epoch],
     });
     await runtime.subscribePrivateMessagesForLoggedInUser();
-    const userStop = subscribeWithReqLogging.mock.results[0]?.value.stop;
+    const userIndex = subscribeWithReqLogging.mock.calls.findIndex((call) => call[2]['#p'][0] === LOGGED_IN_PUBLIC_KEY);
+    const userStop = subscribeWithReqLogging.mock.results[userIndex]?.value.stop;
     epoch = epochB;
     await runtime.subscribePrivateMessagesForLoggedInUser(true, { sinceOverride: 0 });
     expect(subscribeWithReqLogging).toHaveBeenCalledTimes(3);
     expect(userStop).not.toHaveBeenCalled();
-    expect(subscribeWithReqLogging.mock.calls[0]?.[3].relaySet.relayUrls).toEqual(RELAY_URLS);
+    expect(subscribeWithReqLogging.mock.calls[userIndex]?.[3].relaySet.relayUrls).toEqual(RELAY_URLS);
     expect(subscribeWithReqLogging.mock.calls[2]?.[3].relaySet.relayUrls).toEqual([
       'wss://group.test/',
       ...RELAY_URLS,

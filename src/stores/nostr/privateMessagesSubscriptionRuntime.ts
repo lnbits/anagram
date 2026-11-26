@@ -1,3 +1,4 @@
+import type { PrivateMessageRelayLease } from '#src/stores/nostr/privateMessageRelayClients.ts';
 import { startupRelayObserver } from '#src/stores/nostr/startupRelayTracking.ts';
 import NostrClient, {
   ClientEvent,
@@ -72,6 +73,7 @@ interface PrivateMessagesSubscriptionRuntimeDeps {
     details?: Record<string, unknown>,
   ) => void;
   ndk: NostrClient;
+  acquirePrivateMessageRelayClient: (recipient: string) => Promise<PrivateMessageRelayLease>;
   normalizeEventId: (value: unknown) => string | null;
   normalizeRelayStatusUrls: (relayUrls: string[]) => string[];
   normalizeThrottleMs: (value: number | undefined) => number;
@@ -135,6 +137,7 @@ export function createPrivateMessagesSubscriptionRuntime(
     listPrivateMessageRecipientPubkeys,
     logSubscription,
     ndk,
+    acquirePrivateMessageRelayClient,
     normalizeEventId,
     normalizeRelayStatusUrls,
     normalizeThrottleMs,
@@ -147,6 +150,7 @@ export function createPrivateMessagesSubscriptionRuntime(
     updateStoredEventSinceFromCreatedAt,
     updateStoredPrivateMessagesLastReceivedFromCreatedAt,
   } = runtimeState;
+  const pendingRelayLeases = new Set<PrivateMessageRelayLease>();
   let privateMessagesSubscription: ReturnType<NostrClient['subscribe']> | null = null;
   let privateMessagesSubscriptionSignature = '';
   const subscriptions = createDesiredSubscriptions();
@@ -505,6 +509,8 @@ export function createPrivateMessagesSubscriptionRuntime(
     desiredScopeCount = 0;
     messageHistoryRestoreContext = null;
     subscriptions.stop();
+    for (const lease of pendingRelayLeases) lease.release();
+    pendingRelayLeases.clear();
     scopes.clear();
     if (privateMessagesSubscription) {
       logSubscription('private-messages', 'stop', {
@@ -616,14 +622,22 @@ export function createPrivateMessagesSubscriptionRuntime(
           ...(groupRecipient ? { limit: 128 } : {}),
         };
         const signature = subscriptionSignature(filters, relayUrls);
+        let lease: PrivateMessageRelayLease;
         return {
           key: publicKey,
           signature,
           prepare: async () => {
-            await ensureRelayConnections(relayUrls);
+            if (!groupRecipient) await ensureRelayConnections(relayUrls);
             await getOrCreateSigner();
+            lease = await acquirePrivateMessageRelayClient(publicKey);
+            if (runGeneration !== generation || loggedInPubkeyHex !== getLoggedInPublicKeyHex()) {
+              lease.release();
+              throw new Error('Private message session changed');
+            }
+            pendingRelayLeases.add(lease);
           },
           start: (onEose: () => void, onClose: () => void) => {
+            pendingRelayLeases.delete(lease);
             changed = true;
             const state = {
               signature,
@@ -634,62 +648,73 @@ export function createPrivateMessagesSubscriptionRuntime(
               subscription: null as unknown as ReturnType<NostrClient['subscribe']>,
             };
             scopes.set(publicKey, state);
-            state.subscription = subscribeWithReqLogging(
-              'private-messages',
-              'private-messages-live',
-              filters,
-              {
-                relaySet: NostrRelaySet.fromRelayUrls(relayUrls, ndk, false),
-                cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
-                onRelayStatus: startupRelayObserver(ndk, ['private-message-events'], publicKey, relayUrls),
-                onEvent: (event) => {
-                  if (getLoggedInPublicKeyHex() !== loggedInPubkeyHex) return;
-                  const wrapped =
-                    event instanceof ClientEvent ? event : new ClientEvent(ndk, event);
-                  markPrivateMessagesLiveCoverageNow();
-                  runtimeState.privateMessagesSubscriptionLastEventSeenAt =
-                    new Date().toISOString();
-                  runtimeState.privateMessagesSubscriptionLastEventId =
-                    normalizeEventId(wrapped.id) ?? wrapped.id ?? null;
-                  runtimeState.privateMessagesSubscriptionLastEventCreatedAt =
-                    wrapped.created_at ?? null;
-                  updateStoredPrivateMessagesLastReceivedFromCreatedAt(wrapped.created_at);
-                  updateStoredEventSinceFromCreatedAt(wrapped.created_at);
-                  queuePrivateMessageIngestion(wrapped, loggedInPubkeyHex, {
-                    priority: 'foreground',
-                    ...(state.ready &&
-                    (!state.partial || state.completedRelayUrls.includes(wrapped.relay?.url ?? ''))
-                      ? { live: true }
-                      : {}),
-                  });
-                  bumpDeveloperDiagnosticsVersion();
+            try {
+              state.subscription = subscribeWithReqLogging(
+                'private-messages',
+                'private-messages-live',
+                filters,
+                {
+                  relaySet: NostrRelaySet.fromRelayUrls(relayUrls, lease.client, false),
+                  cacheUsage: NostrSubscriptionCacheUsage.ONLY_RELAY,
+                  onRelayStatus: startupRelayObserver(ndk, ['private-message-events'], publicKey, relayUrls),
+                  onEvent: (event) => {
+                    if (getLoggedInPublicKeyHex() !== loggedInPubkeyHex) return;
+                    const wrapped =
+                      event instanceof ClientEvent ? event : new ClientEvent(ndk, event);
+                    markPrivateMessagesLiveCoverageNow();
+                    runtimeState.privateMessagesSubscriptionLastEventSeenAt =
+                      new Date().toISOString();
+                    runtimeState.privateMessagesSubscriptionLastEventId =
+                      normalizeEventId(wrapped.id) ?? wrapped.id ?? null;
+                    runtimeState.privateMessagesSubscriptionLastEventCreatedAt =
+                      wrapped.created_at ?? null;
+                    updateStoredPrivateMessagesLastReceivedFromCreatedAt(wrapped.created_at);
+                    updateStoredEventSinceFromCreatedAt(wrapped.created_at);
+                    queuePrivateMessageIngestion(wrapped, loggedInPubkeyHex, {
+                      priority: 'foreground',
+                      ...(state.ready &&
+                      (!state.partial || state.completedRelayUrls.includes(wrapped.relay?.url ?? ''))
+                        ? { live: true }
+                        : {}),
+                    });
+                    bumpDeveloperDiagnosticsVersion();
+                  },
+                  onEose: () => {
+                    state.ready = true;
+                    state.partial = false;
+                    onEose();
+                    finishInitialMessages();
+                  },
+                  onInitialSync: (completed, pending) => {
+                    if (runGeneration !== generation || scopes.get(publicKey) !== state) return;
+                    state.ready = true;
+                    state.partial = pending.length > 0;
+                    state.completedRelayUrls = completed;
+                    finishInitialMessages();
+                  },
+                  onClose: () => {
+                    lease.release();
+                    if (scopes.get(publicKey) === state) scopes.delete(publicKey);
+                    onClose();
+                    queuePrivateMessagesWatchdog(0);
+                  },
                 },
-                onEose: () => {
-                  state.ready = true;
-                  state.partial = false;
-                  onEose();
-                  finishInitialMessages();
+                {
+                  signature,
+                  ...buildSubscriptionRelayDetails(relayUrls),
+                  ...buildFilterSinceDetails(since),
                 },
-                onInitialSync: (completed, pending) => {
-                  if (runGeneration !== generation || scopes.get(publicKey) !== state) return;
-                  state.ready = true;
-                  state.partial = pending.length > 0;
-                  state.completedRelayUrls = completed;
-                  finishInitialMessages();
-                },
-                onClose: () => {
-                  if (scopes.get(publicKey) === state) scopes.delete(publicKey);
-                  onClose();
-                  queuePrivateMessagesWatchdog(0);
-                },
+              );
+            } catch (error) {
+              lease.release();
+              throw error;
+            }
+            return {
+              stop: () => {
+                state.subscription.stop();
+                lease.release();
               },
-              {
-                signature,
-                ...buildSubscriptionRelayDetails(relayUrls),
-                ...buildFilterSinceDetails(since),
-              },
-            );
-            return state.subscription;
+            };
           },
         };
       });

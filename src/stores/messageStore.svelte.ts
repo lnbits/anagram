@@ -50,6 +50,7 @@ import { buildMentionMetadata } from '#src/utils/nostrMentions.ts';
 
 type MessageRow = Awaited<ReturnType<typeof chatDataService.listMessages>>[number];
 const MESSAGE_PAGE_SIZE = 50;
+const MESSAGE_WINDOW_SIZE = 500;
 const INITIAL_UNREAD_MESSAGE_LIMIT = 50;
 
 interface ChatMessagePaginationState {
@@ -828,9 +829,11 @@ export const useMessageStore = createStore('messageStore', () => {
     }
 
     const window = messagesByChat[normalizedChatId];
-    if (window?.length > 300) {
+    if (window?.length > MESSAGE_WINDOW_SIZE) {
       const loadingOlder = Boolean(nextState.oldestCursor && !nextState.newestCursor);
-      const retained = loadingOlder ? window.slice(0, 300) : window.slice(-300);
+      const retained = loadingOlder
+        ? window.slice(0, MESSAGE_WINDOW_SIZE)
+        : window.slice(-MESSAGE_WINDOW_SIZE);
       messagesByChat[normalizedChatId] = retained;
       nextState = {
         ...nextState,
@@ -1673,7 +1676,7 @@ export const useMessageStore = createStore('messageStore', () => {
   async function reloadMessageWindow(chatId: string, oldest: PersistedMessageCursor) {
     const [first, after, before] = await Promise.all([
       chatDataService.getMessageById(oldest.id),
-      chatDataService.listMessagesAfter(chatId, oldest, 299),
+      chatDataService.listMessagesAfter(chatId, oldest, MESSAGE_WINDOW_SIZE - 1),
       chatDataService.listMessagesBefore(chatId, oldest, 1),
     ]);
     return {

@@ -1,11 +1,14 @@
 import type { MessageRelayStatus } from '#src/types/chat.ts';
 
 export type RelayCommand = 'EVENT' | 'REQ' | 'COUNT';
+type RelayTrafficLane = RelayCommand | 'CONNECT';
 export type RelayFailureKind = 'rate-limited' | 'auth' | 'terminal' | 'transient';
 
 /** Shared by wire handling, query recovery and the persisted outbox. */
 export function relayFailureKind(reason: unknown): RelayFailureKind {
-  const text = (reason instanceof Error ? reason.message : String(reason ?? '')).trim();
+  const text = (reason instanceof Error ? reason.message : String(reason ?? ''))
+    .trim()
+    .replace(/^error:\s*/i, '');
   if (/^rate-limited:|^banned:.*rate[ -]?limit/i.test(text)) return 'rate-limited';
   if (/^auth-required:/i.test(text)) return 'auth';
   if (/^(blocked|restricted|invalid|unsupported|pow|duplicate|banned|relay-rejected):/i.test(text))
@@ -27,23 +30,59 @@ export function relayStatusRetryAt(
   return Number.isFinite(updated) ? updated + BAN_RETRY_MS : 0;
 }
 
-/** One instance per relay per client. Contains no payloads, keys or retry jobs.
+/** One instance per relay, shared by the account and its epoch clients.
  * Reconnects retain it; existing query/outbox owners decide what is still wanted. */
 export class RelayTrafficPolicy {
+  private connectionQueue: Promise<unknown> = Promise.resolve();
+  private nextConnectionAt = 0;
+  private banned = false;
+
+  // Serialize handshakes and spread group startup. Callers recheck their session
+  // and the existing connection backoff immediately before opening a socket.
+  connect<T>(attempt: () => Promise<T>, validate: () => void): Promise<T> {
+    const pending = this.connectionQueue.then(async () => {
+      validate();
+      const wait = Math.max(0, this.nextConnectionAt - Date.now());
+      if (wait) await new Promise<void>((resolve) => setTimeout(resolve, wait));
+      validate();
+      const blocked = this.connectionBlockReason();
+      if (blocked) throw new Error(blocked);
+      this.nextConnectionAt = Date.now() + 250;
+      return attempt();
+    });
+    this.connectionQueue = pending.catch(() => {});
+    return pending;
+  }
+
+  ban(): void {
+    this.banned = true;
+  }
+
+  connectionBlockReason(): string | undefined {
+    if (this.banned) return 'banned: Relay refused further connections.';
+    // A relay-wide pause (NOTICE or rate-limit ban) must also prevent opening
+    // another socket to that relay. Command-specific pauses remain independent.
+    const pause = Math.max(
+      this.delay('CONNECT'),
+      Math.min(this.delay('EVENT'), this.delay('REQ'), this.delay('COUNT')),
+    );
+    return pause > 0 ? 'rate-limited: Relay requested a pause before reconnecting.' : undefined;
+  }
+
   private lanes = new Map<
-    RelayCommand,
+    RelayTrafficLane,
     { until: number; interval: number; next: number; failures: number }
   >();
 
-  retryAt(command: RelayCommand): number {
+  retryAt(command: RelayTrafficLane): number {
     return this.lanes.get(command)?.until ?? 0;
   }
 
-  delay(command: RelayCommand): number {
+  delay(command: RelayTrafficLane): number {
     return Math.max(0, this.retryAt(command) - Date.now());
   }
 
-  rateLimited(command: RelayCommand, reason: string, hint?: unknown): void {
+  rateLimited(command: RelayTrafficLane, reason: string, hint?: unknown): void {
     const previous = this.lanes.get(command);
     if (previous && Date.now() > previous.until + BAN_RETRY_MS) previous.failures = 0;
     const parsed =
@@ -51,7 +90,9 @@ export class RelayTrafficPolicy {
         ? Number(hint)
         : NaN;
     const failures = Math.min(5, (previous?.failures ?? 0) + 1);
-    const fallback = /^banned:/i.test(reason) ? BAN_RETRY_MS : DEFAULT_RATE_LIMIT_MS;
+    const fallback = /^(?:error:\s*)?banned:/i.test(reason.trim())
+      ? BAN_RETRY_MS
+      : DEFAULT_RATE_LIMIT_MS;
     const delay =
       Number.isSafeInteger(parsed) && parsed > 0 && parsed < 8.64e15 - Date.now()
         ? parsed
@@ -80,6 +121,7 @@ export class RelayTrafficPolicy {
   }
 
   blockReason(command: RelayCommand): string | undefined {
+    if (this.banned) return 'banned: Relay refused further requests.';
     const delay = this.delay(command);
     return delay > 0
       ? `rate-limited: Relay requested a pause; retry in ${Math.ceil(delay / 1000)}s.`

@@ -165,3 +165,92 @@ it('rejects a recovery backlog before its publication timers expire, without lat
   await Promise.all(queued);
   expect(wire.filter((frame) => frame[0] === 'EVENT')).toHaveLength(1);
 });
+
+it('propagates group read cooldowns to other sockets and preserves them across epoch replacement', async () => {
+  const policy = new RelayTrafficPolicy();
+  const first = transport(policy),
+    second = transport(policy);
+  const closed = vi.fn();
+  first.relay.subscribe([{ kinds: [1059] }], { id: 'group-a', eoseTimeout: 2147483647 });
+  first.receive(['CLOSED', 'group-a', 'ERROR: rate-limited: slow down', 1000]);
+  second.relay.subscribe([{ kinds: [1059] }], {
+    id: 'group-b',
+    onclose: closed,
+    eoseTimeout: 2147483647,
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(closed).toHaveBeenCalledWith(expect.stringContaining('rate-limited'));
+  expect(second.wire.filter(([type]) => type !== 'CLOSE')).toEqual([]);
+  first.relay.close();
+  const replacement = transport(policy);
+  const held = vi.fn();
+  replacement.relay.subscribe([{ kinds: [1059] }], {
+    id: 'new-epoch',
+    onclose: held,
+    eoseTimeout: 2147483647,
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(held).toHaveBeenCalled();
+  const otherRelay = transport();
+  await otherRelay.relay.send('["REQ","unrelated-relay"]');
+  expect(otherRelay.wire).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(1000);
+  await replacement.relay.send('["REQ","recovered"]');
+  expect(replacement.wire.filter(([type]) => type === 'REQ')).toEqual([['REQ', 'recovered']]);
+});
+
+it.each([
+  'banned: too many rate-limit violations',
+  'ERROR: banned: too many rate-limit violations',
+])('shares relay-wide pauses for %s without opening replacement sockets', async (reason) => {
+  const policy = new RelayTrafficPolicy();
+  const a = transport(policy),
+    b = transport(policy);
+  a.relay.subscribe([{}], { id: 'group', eoseTimeout: 2147483647 });
+  a.receive(['CLOSED', 'group', reason]);
+  expect(policy.delay('REQ')).toBe(300000);
+  expect(policy.delay('EVENT')).toBe(300000);
+  expect(policy.delay('COUNT')).toBe(300000);
+  const open = vi.fn(async () => {});
+  await expect(policy.connect(open, () => {})).rejects.toThrow('rate-limited');
+  await expect(b.relay.send('["EVENT",{"id":"blocked"}]')).rejects.toThrow('rate-limited');
+  expect(open).not.toHaveBeenCalled();
+  expect(b.wire).toEqual([]);
+  await vi.advanceTimersByTimeAsync(300000);
+  await policy.connect(open, () => {});
+  expect(open).toHaveBeenCalledOnce();
+});
+
+it('stops all sibling sockets on a terminal relay ban without automatic retry', async () => {
+  const policy = new RelayTrafficPolicy();
+  const a = transport(policy),
+    b = transport(policy);
+  a.receive(['NOTICE', 'banned: access revoked']);
+  await expect(b.relay.send('["EVENT",{"id":"blocked"}]')).rejects.toThrow('banned');
+  const open = vi.fn(async () => {});
+  await vi.advanceTimersByTimeAsync(3600000);
+  await expect(policy.connect(open, () => {})).rejects.toThrow('banned');
+  expect(open).not.toHaveBeenCalled();
+  expect(b.wire).toEqual([]);
+});
+
+it('honours AUTH retry hints for new connections while keeping existing data lanes available', async () => {
+  const { relay, receive, policy } = transport();
+  await relay.send('["AUTH",{"id":"auth"}]');
+  receive(['OK', 'auth', false, 'rate-limited: authentication slower', 45000]);
+  expect(policy.delay('EVENT')).toBe(0);
+  expect(policy.delay('REQ')).toBe(0);
+  await expect(
+    policy.connect(
+      async () => {},
+      () => {},
+    ),
+  ).rejects.toThrow('rate-limited');
+  await vi.advanceTimersByTimeAsync(45000);
+  await expect(
+    policy.connect(
+      async () => {},
+      () => {},
+    ),
+  ).resolves.toBeUndefined();
+});

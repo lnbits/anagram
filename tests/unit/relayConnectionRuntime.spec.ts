@@ -1,4 +1,4 @@
-import { NostrRelayStatus } from '#src/lib/nostr/client.ts';
+import NostrClient, { NostrRelayStatus } from '#src/lib/nostr/client.ts';
 import {
   calculateRelayConnectRetryDelayMs,
   createRelayConnectionRuntime,
@@ -6,6 +6,7 @@ import {
   isUsableRelayClientUrl,
 } from '#src/stores/nostr/relayConnectionRuntime.ts';
 import { RELAY_CONNECT_RETRY_MAX_DELAY_MS } from '#src/stores/nostr/constants.ts';
+import { RelayTrafficPolicy } from '#src/stores/nostr/relayTrafficPolicy.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type FakeSocket = {
@@ -176,6 +177,48 @@ function createRuntimeHarness(
 describe('relayConnectionRuntime', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('shares group connection failures with new epochs even while the account socket is healthy', async () => {
+    const { runtime, relay, ndk, relayConnectRetryStateByUrl } = createRuntimeHarness();
+    relay.connected = true;
+    const policy = new RelayTrafficPolicy();
+    const first = new NostrClient({ relayTrafficPolicy: () => policy });
+    const second = new NostrClient({ relayTrafficPolicy: () => policy });
+    const stopFirst = runtime.configurePrivateMessageRelayClient(first);
+    const stopSecond = runtime.configurePrivateMessageRelayClient(second);
+    const connect = vi.fn(async () => { throw new Error('offline'); });
+    for (const child of [first, second]) {
+      const authenticate = child.transport.automaticallyAuth!;
+      child.transport.automaticallyAuth = (url) => {
+        child.transport.getExistingRelay(url)!.connect = connect;
+        return authenticate(url);
+      };
+    }
+    await expect(first.transport.ensureRelay(relay.url)).rejects.toThrow('offline');
+    expect(relayConnectRetryStateByUrl.get(relay.url)?.failureCount).toBe(1);
+    expect(second.relayConnectionRetryDelay?.(relay.url)).toBeGreaterThan(0);
+    // The already-open personal connection can still be used.
+    expect(ndk.relayConnectionRetryDelay?.(relay.url)).toBe(0);
+    await expect(second.transport.ensureRelay(relay.url)).rejects.toThrow('URL policy');
+    expect(connect).toHaveBeenCalledOnce();
+    expect(relayConnectRetryStateByUrl.get(relay.url)?.failureCount).toBe(1);
+    stopFirst(); stopSecond();
+  });
+
+  it('counts an AUTH failure once and ignores intentional epoch-client disposal', () => {
+    const { runtime, relayConnectRetryStateByUrl } = createRuntimeHarness();
+    const child = new NostrClient();
+    const dispose = runtime.configurePrivateMessageRelayClient(child);
+    const relay = child.pool.getRelay('wss://relay.example/', false);
+    child.pool.emit('relay:connecting', relay);
+    child.pool.emit('relay:auth-failed', relay);
+    child.pool.emit('relay:disconnect', relay);
+    expect(relayConnectRetryStateByUrl.get(relay.url)?.failureCount).toBe(1);
+    dispose();
+    child.pool.emit('relay:connecting', relay);
+    child.pool.emit('relay:disconnect', relay);
+    expect(relayConnectRetryStateByUrl.get(relay.url)?.failureCount).toBe(1);
   });
 
   it('reuses the same in-flight connect promise while the socket is still connecting', async () => {

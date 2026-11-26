@@ -84,6 +84,7 @@ import { createAppClientOptions } from '#src/stores/nostr/clientOptions.ts';
 import { createOutboundMessageReplayRuntime } from '#src/stores/nostr/outboundMessageReplayRuntime.ts';
 import { createPrivateContactListRuntime } from '#src/stores/nostr/privateContactListRuntime.ts';
 import { createPrivateContactMembershipRuntime } from '#src/stores/nostr/privateContactMembershipRuntime.ts';
+import { createPrivateMessageRelayClients } from '#src/stores/nostr/privateMessageRelayClients.ts';
 import { createPrivateMessagesBackfillRuntime } from '#src/stores/nostr/privateMessagesBackfillRuntime.ts';
 import { createPrivateMessagesIngestRuntime } from '#src/stores/nostr/privateMessagesIngestRuntime.ts';
 import { createPrivateMessagesSubscriptionRuntime } from '#src/stores/nostr/privateMessagesSubscriptionRuntime.ts';
@@ -1085,6 +1086,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     ensureRelayConnections,
     fetchRelayNip11Info,
     getOrCreateSigner: getOrCreateSignerImpl,
+    configurePrivateMessageRelayClient,
     getRelayConnectionAttemptBlockReason,
     getRelayConnectionState,
     isRelayConnectionPending,
@@ -1526,6 +1528,17 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     });
   }
 
+  const privateMessageRelayClients = createPrivateMessageRelayClients({
+    client: ndk,
+    configureClient: configurePrivateMessageRelayClient,
+    owner: getLoggedInPublicKeyHex,
+    epochPrivateKey: async (recipient) => {
+      const context = await findGroupChatEpochContextByRecipientPubkey(recipient);
+      if (!context || context.chat.meta.deleted_locally === true) return null;
+      return decryptPrivateStringContent(context.epochEntry.epoch_private_key_encrypted);
+    },
+  });
+
   const {
     ensurePrivateMessagesWatchdog: ensurePrivateMessagesWatchdogImpl,
     getPrivateMessagesSubscription,
@@ -1540,6 +1553,7 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     stopPrivateMessagesLiveSubscription,
     subscribePrivateMessagesForLoggedInUser: subscribePrivateMessagesForLoggedInUserImpl,
   } = createPrivateMessagesSubscriptionRuntime({
+    acquirePrivateMessageRelayClient: privateMessageRelayClients.acquire,
     beginStartupStep,
     buildFilterSinceDetails,
     buildPrivateMessageSubscriptionTargetDetails,
@@ -1660,14 +1674,15 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     repairMissingMessageDependency: repairMissingMessageDependencyImpl,
     resetPrivateMessagesBackfillRuntimeState: resetPrivateMessagesBackfillRuntimeStateImpl,
     resolveMissingMessageDependencyRepair: resolveMissingMessageDependencyRepairImpl,
-    groupHistoryState,
-    loadOlderGroupHistory,
+    privateHistoryState,
+    loadOlderPrivateHistory,
     prioritizeThreadHistory,
     restoreGroupEpochHistory: restoreGroupEpochHistoryImpl,
     restorePrivateMessagesForRecipient: restorePrivateMessagesForRecipientImpl,
     startPrivateMessagesStartupBackfill: startPrivateMessagesStartupBackfillImpl,
     stopPrivateMessagesBackfill: stopPrivateMessagesBackfillImpl,
   } = createPrivateMessagesBackfillRuntime({
+    acquirePrivateMessageRelayClient: privateMessageRelayClients.acquire,
     replayPendingGroupPage: async (recipients, until) => {
       const account = getLoggedInPublicKeyHex();
       if (!account) return;
@@ -2275,7 +2290,11 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
       resetReconnectHealingRuntimeStateRuntime();
     },
     resetPrivateMessagesIngestRuntimeState,
-    resetPrivateMessagesSubscriptionRuntimeState,
+    resetPrivateMessagesSubscriptionRuntimeState: (options) => {
+      stopPrivateMessagesLiveSubscription('clear-private-key');
+      privateMessageRelayClients.reset();
+      resetPrivateMessagesSubscriptionRuntimeState(options);
+    },
     resetPrivateMessagesUiRuntimeState,
     resetStartupSessionInitialization,
     resetStartupStepTracking,
@@ -2852,8 +2871,8 @@ export const useNostrStore = createStore('nostrStore', (onDispose) => {
     restoreMuteList,
     restoreContactCursorState,
     restoreGroupIdentitySecrets,
-    groupHistoryState,
-    loadOlderGroupHistory,
+    privateHistoryState,
+    loadOlderPrivateHistory,
     prioritizeThreadHistory,
     restoreGroupEpochHistory: restoreGroupEpochHistoryRuntime,
     restoreMyRelayList,

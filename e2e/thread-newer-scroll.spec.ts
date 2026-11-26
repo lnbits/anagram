@@ -37,8 +37,13 @@ for (const width of [1280, 390])
           await page.evaluate(async (group) => {
             const { chatDataService } = await import('/src/services/chatDataService.ts');
             const { useMessageStore } = await import('/src/stores/messageStore.svelte.ts');
+            const messages = useMessageStore();
+            // Keep this local-paging fixture stable while testing scroll intent.
+            // History-hydration tests cover background inbox refreshes, which can
+            // otherwise expand the window between the assertions below.
+            messages.reloadLoadedMessages = async () => {};
             const [first] = (await chatDataService.listLatestMessages(group, 150)).rows;
-            await useMessageStore().ensureMessageLoaded(group, String(first.id));
+            await messages.ensureMessageLoaded(group, String(first.id));
           }, group);
         } else {
           await page.getByRole('button', { name: 'Chat options' }).click();
@@ -89,7 +94,7 @@ for (const width of [1280, 390])
         await expect(thread.locator('.message-row')).toHaveCount(51);
         await expect(
           page.getByRole('button', { name: 'Load newer messages', exact: true }),
-        ).toHaveCount(0);
+        ).toHaveCount(1);
         // Position restoration alone must not start paging.
         await thread.evaluate((node) => {
           node.scrollTop = node.scrollHeight;
@@ -112,11 +117,12 @@ for (const width of [1280, 390])
           });
           await thread.dispatchEvent('touchend', { touches: [] });
         } else {
-          await thread.hover();
-          await page.mouse.wheel(0, 1);
+          await page.getByRole('button', { name: 'Load newer messages', exact: true }).click();
         }
         await expect.poll(() => thread.locator('.message-row').count()).toBeGreaterThan(51);
-        await expect(page.getByRole('status', { name: 'Loading newer messages' })).toHaveCount(0);
+        await expect(
+          thread.locator('[data-testid="thread-load-newer"][aria-busy="true"]'),
+        ).toHaveCount(0);
         const count = await thread.locator('.message-row').count();
         expect(count).toBeLessThanOrEqual(151);
         await expect

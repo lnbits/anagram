@@ -276,13 +276,13 @@ export function createRelayConnectionRuntime({
     return Math.max(0, (nextAttemptAt ?? 0) - Date.now());
   };
 
-  function getRelayConnectionAttemptBlockReason(relayUrl: string): string | null {
+  function getRelayConnectionAttemptBlockReason(relayUrl: string, client = ndk): string | null {
     const normalizedRelayUrl = normalizeRelayClientUrl(relayUrl);
     if (!normalizedRelayUrl || !isUsableRelayClientUrl(normalizedRelayUrl)) {
       return 'Relay URL is not usable as a client destination.';
     }
 
-    const relay = ndk.pool.relays.get(normalizedRelayUrl);
+    const relay = client.pool.relays.get(normalizedRelayUrl);
     if (relay?.connected) {
       return null;
     }
@@ -302,7 +302,7 @@ export function createRelayConnectionRuntime({
     )}ms.`;
   }
 
-  const connectedSince = new Map<string, number>();
+  const connectedSince = new WeakMap<NostrRelay, number>();
 
   function clearRelayConnectRetryState(relayUrl: string): void {
     const normalizedRelayUrl = normalizeRelayClientUrl(relayUrl);
@@ -339,6 +339,45 @@ export function createRelayConnectionRuntime({
       nextAttemptAt: new Date(nextAttemptAt).toISOString(),
       retryDelayMs,
     });
+  }
+
+  function configurePrivateMessageRelayClient(client: NostrClient): () => void {
+    const previousFilter = client.relayConnectionFilter;
+    client.relayConnectionFilter = (url) =>
+      previousFilter?.(url) !== false &&
+      getRelayConnectionAttemptBlockReason(url, client) === null;
+    client.relayConnectionRetryDelay = (url) => {
+      const normalized = normalizeRelayClientUrl(url);
+      if (!normalized || client.pool.relays.get(normalized)?.connected) return 0;
+      return Math.max(
+        0,
+        (relayConnectRetryStateByUrl.get(normalized)?.nextAttemptAt ?? 0) - Date.now(),
+      );
+    };
+    const failed = new WeakSet<NostrRelay>();
+    const connecting = (relay: NostrRelay) => failed.delete(relay);
+    const connected = (relay: NostrRelay) => connectedSince.set(relay, Date.now());
+    const failure = (relay: NostrRelay, error?: unknown) => {
+      if (failed.has(relay)) return;
+      failed.add(relay);
+      const since = connectedSince.get(relay);
+      if (since !== undefined && Date.now() - since >= 60_000)
+        clearRelayConnectRetryState(relay.url);
+      connectedSince.delete(relay);
+      recordRelayConnectFailure(relay, error);
+    };
+    client.pool.on('relay:connecting', connecting);
+    client.pool.on('relay:connect', connected);
+    client.pool.on('relay:connect-failed', failure);
+    client.pool.on('relay:auth-failed', failure);
+    client.pool.on('relay:disconnect', failure);
+    return () => {
+      client.pool.off('relay:connecting', connecting);
+      client.pool.off('relay:connect', connected);
+      client.pool.off('relay:connect-failed', failure);
+      client.pool.off('relay:auth-failed', failure);
+      client.pool.off('relay:disconnect', failure);
+    };
   }
 
   function guardRelayConnection(relay: NostrRelay | null | undefined): void {
@@ -469,7 +508,7 @@ export function createRelayConnectionRuntime({
       logRelayLifecycle('connecting', relay);
     });
     ndk.pool.on('relay:connect', (relay) => {
-      connectedSince.set(relay.url, Date.now());
+      connectedSince.set(relay, Date.now());
       authenticatedRelayUrls.delete(relay.url);
       bumpRelayStatusVersion();
       logRelayLifecycle('connect', relay);
@@ -485,10 +524,10 @@ export function createRelayConnectionRuntime({
       logRelayLifecycle('ready', relay);
     });
     ndk.pool.on('relay:disconnect', (relay) => {
-      const since = connectedSince.get(relay.url);
+      const since = connectedSince.get(relay);
       if (since !== undefined && Date.now() - since >= 60_000)
         clearRelayConnectRetryState(relay.url);
-      connectedSince.delete(relay.url);
+      connectedSince.delete(relay);
       recordRelayConnectFailure(relay);
       authenticatedRelayUrls.delete(relay.url);
       bumpRelayStatusVersion();
@@ -714,6 +753,7 @@ export function createRelayConnectionRuntime({
   }
 
   return {
+    configurePrivateMessageRelayClient,
     ensureRelayConnections,
     fetchRelayNip11Info,
     getRelayConnectionAttemptBlockReason,

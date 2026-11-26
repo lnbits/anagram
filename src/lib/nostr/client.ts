@@ -600,32 +600,12 @@ export class NostrRelay extends Emitter {
     if (this.client.relayConnectionFilter?.(this.url) === false)
       return Promise.reject(new Error('Relay connection rejected by URL policy'));
     if (this.connected) return Promise.resolve();
-    return (this.pending ??= (async () => {
-      this.status = NostrRelayStatus.CONNECTING;
-      this.client.pool.emit('relay:connecting', this);
-      this.connectionStats.attempts++;
-      try {
-        const relay = await this.client.transport.ensureRelay(this.url, {
-          connectionTimeout: timeoutMs,
-        });
-        this.status = NostrRelayStatus.CONNECTED;
-        this.connectionStats.success++;
-        this.connectionStats.connectedAt = Date.now();
-        relay.onclose = () => {
-          this.status = NostrRelayStatus.DISCONNECTED;
-          this.client.cancelRelayTraffic(this.url);
-          this.client.pool.emit('relay:disconnect', this);
-        };
-        this.client.pool.emit('relay:connect', this);
-        this.client.pool.emit('relay:ready', this);
-      } catch (error) {
-        this.status = NostrRelayStatus.DISCONNECTED;
-        throw error;
-      } finally {
-        this.pending = undefined;
-      }
-    })());
+    return (this.pending ??= this.client.transport
+      .ensureRelay(this.url, { connectionTimeout: timeoutMs })
+      .then(() => {})
+      .finally(() => { this.pending = undefined; }));
   }
+
   disconnect() {
     this.client.transport.close([this.url]);
     this.status = NostrRelayStatus.DISCONNECTED;
@@ -886,7 +866,7 @@ export class NostrSubscription extends Emitter {
                 // AUTH often finishes after the first REQ was rejected. Recover
                 // this relay in place; another healthy relay must not hide it from
                 // the watchdog, and authentication itself is never EOSE evidence.
-                if (!authRetried && relay.onauth && reason.startsWith('auth-required:')) {
+                if (!authRetried && relay.onauth && relayFailureKind(reason) === 'auth') {
                   authRetried = true;
                   let timer: ReturnType<typeof setTimeout> | undefined;
                   const cleanup = () => {
@@ -1015,19 +995,29 @@ export function guardRelayTraffic(
           id = frame[1];
         const command = typeof id === 'string' ? pending.get(id) : undefined;
         const refused = type === 'CLOSED' || (type === 'OK' && frame[2] === false);
-        if (refused && command && command !== 'AUTH') {
+        if (refused && command) {
           const index = type === 'OK' ? 3 : 2;
           const reason = typeof frame[index] === 'string' ? (frame[index] as string) : '';
           const kind = relayFailureKind(reason);
           if (kind === 'rate-limited') {
-            policy.rateLimited(command, reason, frame[index + 1]);
+            const commands = /^(?:error:\s*)?banned:/i.test(reason.trim())
+              ? ['EVENT', 'REQ', 'COUNT', 'CONNECT'] as const
+              : [command === 'AUTH' ? 'CONNECT' as const : command];
+            for (const lane of commands) policy.rateLimited(lane, reason, frame[index + 1]);
             paced.pump();
-          } else if (kind === 'transient') {
+          } else if (/^(?:error:\s*)?banned:/i.test(reason.trim())) {
+            policy.ban();
+            paced.pump();
+          } else if (kind === 'transient' && command !== 'AUTH') {
             // Keep an explicit server verdict distinct from a transport error,
             // including after its plain-text detail has been persisted.
             frame[index] = `relay-rejected: ${reason || 'Relay refused the request.'}`;
             replacement = JSON.stringify(frame);
           }
+        } else if (type === 'NOTICE' && typeof id === 'string' &&
+          /^(?:error:\s*)?banned:/i.test(id.trim()) && relayFailureKind(id) !== 'rate-limited') {
+          policy.ban();
+          paced.pump();
         } else if (
           type === 'NOTICE' &&
           typeof id === 'string' &&
@@ -1050,6 +1040,59 @@ export function guardRelayTraffic(
   };
 }
 
+// Guard the transport itself: fetch/publish can call ensureRelay without going
+// through NostrRelay.connect. Every account/epoch socket uses the same gate.
+function guardRelayConnections(
+  client: NostrClient,
+  transport: AbstractRelay,
+  relay: NostrRelay,
+): void {
+  const connect = transport.connect.bind(transport);
+  let pending: Promise<void> | undefined;
+  transport.connect = (options) => {
+    if (transport.connected) return Promise.resolve();
+    const signer = client.signer;
+    return (pending ??= client
+      .relayTrafficPolicy(relay.url)
+      .connect(
+        async () => {
+          relay.status = NostrRelayStatus.CONNECTING;
+          client.pool.emit('relay:connecting', relay);
+          relay.connectionStats.attempts++;
+          try {
+            await connect(options);
+            relay.status = NostrRelayStatus.CONNECTED;
+            relay.connectionStats.success++;
+            relay.connectionStats.connectedAt = Date.now();
+            transport.onclose = () => {
+              relay.status = NostrRelayStatus.DISCONNECTED;
+              client.cancelRelayTraffic(relay.url);
+              client.pool.emit('relay:disconnect', relay);
+            };
+            client.pool.emit('relay:connect', relay);
+            client.pool.emit('relay:ready', relay);
+          } catch (error) {
+            relay.status = NostrRelayStatus.DISCONNECTED;
+            client.pool.emit('relay:connect-failed', relay, error);
+            throw error;
+          }
+        },
+        () => {
+          if (options?.abort?.aborted || client.signer !== signer)
+            throw new Error('Relay connection cancelled after session change');
+          if (client.relayConnectionFilter?.(relay.url) === false)
+            throw new Error('Relay connection rejected by URL policy');
+          if ((client.relayConnectionRetryDelay?.(relay.url) ?? 0) > 0)
+            throw new Error('Relay connection is cooling down; will retry when ready');
+        },
+      )
+      .finally(() => {
+        pending = undefined;
+      }));
+  };
+}
+
+
 class RelayTransport extends SimplePool {
   getExistingRelay(url: string) {
     return this.relays.get(url);
@@ -1062,12 +1105,14 @@ export default class NostrClient {
   pool = new RelayPool(this);
   signer?: NostrSigner;
   private trafficPolicies = new Map<string, RelayTrafficPolicy>();
+  private sharedTrafficPolicy?: (url: string) => RelayTrafficPolicy;
   private trafficCancellations = new Map<string, () => void>();
   cancelRelayTraffic(url: string): void {
     this.trafficCancellations.get(normalizeURL(url))?.();
   }
   relayTrafficPolicy(url: string): RelayTrafficPolicy {
     const key = normalizeURL(url);
+    if (this.sharedTrafficPolicy) return this.sharedTrafficPolicy(key);
     let policy = this.trafficPolicies.get(key);
     if (!policy) this.trafficPolicies.set(key, (policy = new RelayTrafficPolicy()));
     return policy;
@@ -1081,9 +1126,11 @@ export default class NostrClient {
       signer?: NostrSigner;
       enableOutboxModel?: boolean;
       authenticate?: boolean;
+      relayTrafficPolicy?: (url: string) => RelayTrafficPolicy;
     } = {},
   ) {
     this.signer = options.signer;
+    this.sharedTrafficPolicy = options.relayTrafficPolicy;
     this.transport.trackRelays = false;
     const guarded = new WeakSet<object>();
     this.transport.automaticallyAuth = (url) => {
@@ -1093,6 +1140,7 @@ export default class NostrClient {
       const relay = this.pool.getRelay(url, false);
       if (transport && !guarded.has(transport)) {
         guarded.add(transport);
+        guardRelayConnections(this, transport, relay);
         this.trafficCancellations.set(
           normalizeURL(url),
           guardRelayTraffic(transport, this.relayTrafficPolicy(url), () => this.signer?.pubkey),
@@ -1104,6 +1152,7 @@ export default class NostrClient {
             this.pool.emit('relay:authed', relay);
           },
           failed: () => {
+            this.pool.emit('relay:auth-failed', relay);
             relay.status = NostrRelayStatus.DISCONNECTED;
             relay.emit('auth:failed', new Error('Relay authentication failed; will retry'));
           },

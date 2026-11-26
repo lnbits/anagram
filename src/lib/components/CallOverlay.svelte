@@ -13,6 +13,7 @@
   import { useNostrStore } from '#src/stores/nostrStore.svelte.ts';
   import { canShareCallScreen, callMediaSupported } from '#src/services/callMediaService.ts';
   import { createCallRingtone } from '#src/services/callRingtone.ts';
+  import { setCallSpeaker, releaseCallSpeaker } from '#src/services/callAudioOutput.ts';
   import { observeCallActivity } from '#src/services/callActivityService.ts';
   import { createActiveSpeakerSelector } from '#src/utils/callActiveSpeaker.ts';
   import { toStore } from 'svelte/store';
@@ -88,6 +89,8 @@
     activityEnabled = false;
   let previousId = '';
   const ringtone = createCallRingtone();
+  let joinSound: HTMLAudioElement;
+  const joinedParticipants = new Set<string>();
   const levels = new Map<string, number>();
   let selector = createActiveSpeakerSelector(),
     activeSpeaker = 'local';
@@ -175,6 +178,8 @@
         );
   $: resetSession($state.room?.own.sessionId ?? $state.session?.id ?? '');
   $: ringtone.setRinging(!room && (phase === 'incoming' || phase === 'outgoing'));
+  $: notifyGroupJoins(room && active, $state.participants, speakerMuted);
+  $: if (joinSound) void setCallSpeaker(joinSound, speaker).catch(() => {});
   $: if (ended) minimized = false;
   $: if (!$state.busy) invite = false;
   $: if ($state.local) void refreshDevices();
@@ -186,6 +191,7 @@
   function resetSession(id: string) {
     if (id === previousId) return;
     previousId = id;
+    joinedParticipants.clear();
     minimized = maxFill = speakerView = speakerMuted = playbackBlocked = false;
     outputError = '';
     moreControls = false;
@@ -194,6 +200,32 @@
     levels.clear();
     selector = createActiveSpeakerSelector();
     activeSpeaker = 'local';
+  }
+  function notifyGroupJoins(
+    activeRoom: boolean,
+    participants: typeof rooms.participants,
+    muted: boolean,
+  ) {
+    if (!activeRoom) {
+      joinedParticipants.clear();
+      joinSound?.pause();
+      return;
+    }
+    const members = new Set(participants.map((peer) => `${peer.pubkey}:${peer.sessionId}`));
+    for (const id of joinedParticipants) if (!members.has(id)) joinedParticipants.delete(id);
+    let entered = false;
+    for (const peer of participants) {
+      const id = `${peer.pubkey}:${peer.sessionId}`;
+      if (peer.phase !== 'active' || joinedParticipants.has(id)) continue;
+      joinedParticipants.add(id);
+      entered = true;
+    }
+    // A reconnect or roster update is not a new arrival. Coalesce simultaneous
+    // arrivals into one sound and respect the call's speaker mute/output.
+    if (entered && !muted && joinSound) {
+      joinSound.currentTime = 0;
+      void joinSound.play().catch(() => {});
+    }
   }
   function updateLevel(id: string, level: number) {
     levels.set(id, level);
@@ -300,11 +332,20 @@
   onDestroy(() => {
     disposed = true;
     ringtone.dispose();
+    joinSound?.pause();
+    releaseCallSpeaker(joinSound);
     stopActivity?.();
     calls.reset();
     rooms.reset();
   });
 </script>
+
+<audio
+  bind:this={joinSound}
+  src={room ? '/sounds/group-call-enter.wav' : undefined}
+  muted={speakerMuted}
+  preload="auto"
+></audio>
 
 {#snippet controls()}
   <div class="call-panel__controls" class:room-controls={room} class:expanded={moreControls}>

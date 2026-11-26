@@ -1,6 +1,9 @@
 import { nip19 } from '#src/lib/nostr/client.ts';
-import { __chatStoreTestUtils } from '#src/stores/chatStore.svelte.ts';
-import { describe, expect, it } from 'vitest';
+import { resetStores } from '#src/lib/state/store.svelte.ts';
+import { chatDataService } from '#src/services/chatDataService.ts';
+import { contactsService } from '#src/services/contactsService.ts';
+import { __chatStoreTestUtils, useChatStore } from '#src/stores/chatStore.svelte.ts';
+import { describe, expect, it, vi } from 'vitest';
 
 const {
   buildChatSearchText,
@@ -593,4 +596,66 @@ describe('chatStore logic', () => {
       ).lastMessage
     ).toBe('@Bobby hello');
   });
+});
+
+describe('chat reload concurrency', () => {
+  it.each([false, true])(
+    'preserves incoming request activity across a stale reload (blocked: %s)',
+    async (blocked) => {
+      resetStores();
+      const publicKey = 'c'.repeat(64);
+      const at = '2026-11-26T12:00:00.000Z';
+      let release!: () => void;
+      let snapshotRead!: () => void;
+      const barrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const reading = new Promise<void>((resolve) => {
+        snapshotRead = resolve;
+      });
+      vi.spyOn(chatDataService, 'init').mockResolvedValue(undefined);
+      vi.spyOn(contactsService, 'init').mockResolvedValue(undefined);
+      vi.spyOn(contactsService, 'listContacts').mockResolvedValue([]);
+      vi.spyOn(chatDataService, 'listChats').mockImplementation(async () => {
+        snapshotRead();
+        await barrier;
+        return [
+          {
+            id: publicKey,
+            public_key: publicKey,
+            type: 'user',
+            name: 'Sender',
+            last_message: '',
+            last_message_at: at,
+            unread_count: 0,
+            meta: blocked ? { inbox_state: 'blocked' } : {},
+          },
+        ];
+      });
+      try {
+        const store = useChatStore();
+        const reload = store.reload();
+        await reading;
+        store.applyIncomingMessage({
+          publicKey,
+          authorPublicKey: publicKey,
+          fallbackName: 'Sender',
+          messageText: 'Incoming request',
+          at,
+          unreadCount: 1,
+        });
+        expect(store.isRequestChat(publicKey)).toBe(true);
+        release();
+        await reload;
+        expect(store.isRequestChat(publicKey)).toBe(!blocked);
+        expect(
+          store.chats.find((chat) => chat.id === publicKey)?.meta.last_incoming_message_at,
+        ).toBe(at);
+      } finally {
+        release();
+        vi.restoreAllMocks();
+        resetStores();
+      }
+    },
+  );
 });

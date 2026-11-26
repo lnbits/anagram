@@ -859,6 +859,14 @@ export const useChatStore = createStore('chatStore', () => {
       const mapped = mapChatRowToChat(row, contexts.get(row.public_key.toLowerCase()));
       const current = live.get(mapped.id);
       live.delete(mapped.id);
+      // A message can be staged before its inbox activity reaches IndexedDB.
+      // Keep that activity when a stale reload would move a request into the inbox.
+      if (current)
+        syncMetaLatestTimestamp(
+          mapped.meta,
+          CHAT_LAST_INCOMING_MESSAGE_AT_META_KEY,
+          readMetaString(current.meta, CHAT_LAST_INCOMING_MESSAGE_AT_META_KEY),
+        );
       // A delete/reopen completed while this database snapshot was loading.
       if (
         current &&

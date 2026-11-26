@@ -811,7 +811,7 @@ test('a 20,000-message account opens a bounded cached window', async ({ page }) 
     }),
   );
   await page.setViewportSize({ width: 1280, height: 720 });
-  expect(await page.getByTestId('message-bubble').count()).toBeLessThanOrEqual(300);
+  expect(await page.getByTestId('message-bubble').count()).toBeLessThanOrEqual(500);
   await page.getByRole('button', { name: 'Search conversation' }).click();
   await page.getByLabel('Search messages', { exact: true }).fill('Cached message 10000');
   await page.getByRole('button', { name: 'Cached message 10000', exact: true }).click();

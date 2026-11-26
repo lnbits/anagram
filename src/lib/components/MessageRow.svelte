@@ -18,6 +18,8 @@
     senderContinues?: boolean;
     dayLabel: string;
     highlighted?: boolean;
+    // Group threads highlight other members' messages that mention the user.
+    mentionHighlight?: boolean;
     contextOpen?: boolean;
     contactName?: string;
     contactRelayUrls?: string[];
@@ -40,6 +42,7 @@
     senderContinues = false,
     dayLabel,
     highlighted = false,
+    mentionHighlight = false,
     contextOpen = false,
     contactName = '',
     contactRelayUrls = [],
@@ -51,6 +54,12 @@
     onactions = undefined,
     children,
   }: Props = $props();
+  const mentionsMe = $derived(
+    mentionHighlight &&
+      message.sender !== 'me' &&
+      message.meta.mentions_me === true &&
+      !message.meta.deleted,
+  );
 </script>
 
 {#snippet name()}{#if authorLabel}{@render authorLabel()}{:else}{author.name}{/if}{/snippet}
@@ -58,6 +67,7 @@
   class="message-row"
   class:context-open={contextOpen}
   class:highlighted
+  class:mentions-me={mentionsMe}
   class:sender-continuation={continuesSender}
   class:sender-continues={senderContinues}
   class:own={message.sender === 'me'}
@@ -66,6 +76,7 @@
   data-event-id={message.eventId ?? message.id}
   data-chat-public-key={message.chatId}
   data-author-public-key={message.authorPublicKey}
+  data-mentions-me={mentionsMe ? 'true' : undefined}
   data-day-label={dayLabel}
 >
   {#if bubbleLayout}

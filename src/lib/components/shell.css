@@ -225,7 +225,8 @@ p {
 .chat-item.active time {
   color: var(--nc-active-subtext);
 }
-.badge {
+.badge,
+.mention-badge {
   display: inline-flex;
   border-radius: 20px;
   align-items: center;
@@ -237,6 +238,9 @@ p {
   color: white;
   font-size: 11px;
   float: right;
+}
+.mention-badge {
+  font-weight: 700;
 }
 .nav-rail {
   display: grid;
@@ -950,6 +954,14 @@ input[type='range'] {
   background: var(--nc-reaction-accent-bg);
   outline: 1px solid var(--q-primary);
   border-radius: 8px;
+}
+.app-shell:not(.bubble-layout) .message-row.mentions-me {
+  background: var(--nc-reaction-accent-bg);
+  border-radius: 8px;
+}
+.bubble-layout .message-row.mentions-me .message-content {
+  background: var(--nc-reaction-accent-bg);
+  box-shadow: inset 3px 0 0 var(--q-primary);
 }
 .jump-latest {
   position: absolute;

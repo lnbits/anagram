@@ -532,6 +532,7 @@
         {message}
         {author}
         highlighted={highlightedMessage === message.id}
+        mentionHighlight
         bubbleLayout={messageLayout === 'bubbles'}
         continuesSender={presentation.continuesSender}
         senderContinues={presentation.senderContinues}

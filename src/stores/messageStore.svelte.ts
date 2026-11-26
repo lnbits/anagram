@@ -47,10 +47,17 @@ import {
 } from '#src/utils/messageReactions.ts';
 import { resolveMessageWindowMerge } from '#src/utils/messageWindowRange.ts';
 import { buildMentionMetadata } from '#src/utils/nostrMentions.ts';
+import {
+  UNREAD_MENTION_AT_META_KEY,
+  isAfterChatSeenBoundary,
+  isIncomingMentionRow,
+  laterMentionAt,
+} from '#src/utils/unreadMentions.ts';
 
 type MessageRow = Awaited<ReturnType<typeof chatDataService.listMessages>>[number];
 const MESSAGE_PAGE_SIZE = 50;
 const INITIAL_UNREAD_MESSAGE_LIMIT = 50;
+const UNREAD_MENTION_SCAN_LIMIT = 500;
 
 interface ChatMessagePaginationState {
   oldestCursor: PersistedMessageCursor | null;
@@ -1043,6 +1050,88 @@ export const useMessageStore = createStore('messageStore', () => {
 
     chatStore.setUnseenReactionCount(normalizedChatId, nextUnseenReactionCount);
     return nextUnseenReactionCount;
+  }
+
+  // Searches backward from a removed mention to the read cursor, the first remaining
+  // mention or the scan limit. Never walks the whole history, even without a read cursor.
+  async function findPreviousUnreadMentionAt(
+    chatId: string,
+    meta: Record<string, unknown>,
+    fromAt: string,
+    loggedInPublicKey: string | null,
+  ): Promise<string> {
+    let cursor = { id: Number.MAX_SAFE_INTEGER, created_at: fromAt };
+    let scanned = 0;
+    while (scanned < UNREAD_MENTION_SCAN_LIMIT) {
+      const batch = await chatDataService.listMessagesBefore(chatId, cursor, MESSAGE_PAGE_SIZE);
+      for (let index = batch.rows.length - 1; index >= 0; index -= 1) {
+        const row = batch.rows[index]!;
+        if (!isAfterChatSeenBoundary(meta, row.created_at)) {
+          return '';
+        }
+        if (isIncomingMentionRow(row, loggedInPublicKey)) {
+          return row.created_at;
+        }
+      }
+      scanned += batch.rows.length;
+      const oldest = batch.rows[0];
+      if (!batch.has_more || !oldest) {
+        return '';
+      }
+      cursor = { id: oldest.id, created_at: oldest.created_at };
+    }
+    return '';
+  }
+
+  // An edit or deletion can only move the indicator when it adds a mention or removes the
+  // latest unread one. Only unread_mention_at is patched, so read cursors written
+  // concurrently by markAsRead are never overwritten.
+  async function syncUnreadMentionForMessage(
+    previous: MessageRow,
+    next: MessageRow,
+  ): Promise<void> {
+    const normalizedChatId = normalizeChatIdentifier(next.chat_public_key);
+    const loggedInPublicKey = getLoggedInPublicKey();
+    const wasMention = isIncomingMentionRow(previous, loggedInPublicKey);
+    const isMention = isIncomingMentionRow(next, loggedInPublicKey);
+    if (!normalizedChatId || wasMention === isMention) {
+      return;
+    }
+
+    await chatDataService.init();
+    const chatRow = await chatDataService.getChatByPublicKey(normalizedChatId);
+    if (
+      !chatRow ||
+      chatRow.type !== 'group' ||
+      !isAfterChatSeenBoundary(chatRow.meta, next.created_at)
+    ) {
+      return;
+    }
+
+    const currentMentionAt = String(chatRow.meta[UNREAD_MENTION_AT_META_KEY] ?? '');
+    let nextMentionAt: string;
+    if (isMention) {
+      nextMentionAt = laterMentionAt(currentMentionAt, next.created_at);
+    } else if (Date.parse(currentMentionAt) === Date.parse(next.created_at)) {
+      nextMentionAt = await findPreviousUnreadMentionAt(
+        normalizedChatId,
+        chatRow.meta,
+        next.created_at,
+        loggedInPublicKey,
+      );
+    } else {
+      return;
+    }
+
+    if (nextMentionAt === currentMentionAt) {
+      return;
+    }
+    await chatDataService.updateChatMeta(
+      normalizedChatId,
+      { [UNREAD_MENTION_AT_META_KEY]: nextMentionAt },
+      true,
+    );
+    chatStore.setUnreadMentionAt(normalizedChatId, nextMentionAt);
   }
 
   async function syncChatUnseenReactionCount(chatId: string): Promise<number> {
@@ -2963,6 +3052,7 @@ export const useMessageStore = createStore('messageStore', () => {
     markMessageReactionsViewed,
     markMessagesReactionsViewed,
     syncChatsReadStateFromSeenBoundary,
+    syncUnreadMentionForMessage,
     syncChatUnseenReactionCount,
     removeChatMessages,
     upsertPersistedMessage,

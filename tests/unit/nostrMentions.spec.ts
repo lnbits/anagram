@@ -8,6 +8,7 @@ import {
   formatNostrMentionsForDisplay,
   parseNostrMentions,
   serializeMentionDraft,
+  textMentionsPublicKey,
 } from '#src/utils/nostrMentions.ts';
 import { describe, expect, it } from 'vitest';
 
@@ -164,5 +165,19 @@ describe('nostr mention utilities', () => {
     });
     expect(profile.nprofile).toBeUndefined();
     expect(profile.relayUrls).toBeUndefined();
+  });
+
+  it('detects mentions of one public key without false positives', () => {
+    const npub = nip19.npubEncode(BOB_PUBKEY);
+    const nprofile = nip19.nprofileEncode({ pubkey: BOB_PUBKEY, relays: ['wss://relay.example'] });
+    expect(textMentionsPublicKey(`hi nostr:${npub}`, BOB_PUBKEY)).toBe(true);
+    expect(textMentionsPublicKey(`hi nostr:${nprofile}`, BOB_PUBKEY.toUpperCase())).toBe(true);
+    expect(textMentionsPublicKey(`hi nostr:${nip19.npubEncode(ALICE_PUBKEY)}`, BOB_PUBKEY)).toBe(
+      false,
+    );
+    expect(textMentionsPublicKey('hi @Bob and npub1 and nprofile1', BOB_PUBKEY)).toBe(false);
+    expect(textMentionsPublicKey(`hi nostr:${npub.slice(0, -1)}q`, BOB_PUBKEY)).toBe(false);
+    expect(textMentionsPublicKey(`https://example.com/${npub}`, BOB_PUBKEY)).toBe(false);
+    expect(textMentionsPublicKey(`hi nostr:${npub}`, null)).toBe(false);
   });
 });

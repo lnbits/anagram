@@ -34,6 +34,7 @@ export interface ChatMetadata {
   // An absent preference preserves notifications for existing private groups.
   notifications_enabled?: boolean;
   unseen_reaction_count?: number;
+  unread_mention_at?: string;
   last_seen_received_activity_at?: string;
   inbox_state?: ChatInboxState;
   accepted_at?: string;

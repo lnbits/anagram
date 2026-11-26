@@ -9,6 +9,7 @@
   export let onselect: () => void;
   export let onkeydown: ((event: KeyboardEvent) => void) | undefined = undefined;
   export let unreadCount = 0;
+  export let unreadMentionCount = 0;
   export let muted = false;
   export let blocked = false;
   export let notificationsEnabled = false;
@@ -35,8 +36,13 @@
       >{blocked ? 'Blocked public group' : 'Public group'}</span
     ></span
   >
-  {#if unreadCount > 0}<span class="badge" aria-label={`${unreadCount} unread messages`}
-      >{unreadCount}</span
+  {#if unreadCount > 0}<span class="row-badges"
+      >{#if unreadMentionCount > 0}<span
+          class="mention-badge"
+          data-testid="chat-unread-mention-badge"
+          aria-label="Unread mention">@</span
+        >{/if}<span class="badge" aria-label={`${unreadCount} unread messages`}>{unreadCount}</span
+      ></span
     >{/if}
   {#snippet actions()}{#if onaction}<ChatRowMenu
         {items}
@@ -44,3 +50,11 @@
         testId="public-chat-actions-button"
       />{/if}{/snippet}
 </ChatListRow>
+
+<style>
+  .row-badges {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+</style>

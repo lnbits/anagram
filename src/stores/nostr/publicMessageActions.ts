@@ -11,6 +11,7 @@ import {
   type PublicRoom,
 } from './publicGroups.ts';
 import { previewUrl } from '#src/utils/linkPreview.ts';
+import { textMentionsPublicKey } from '#src/utils/nostrMentions.ts';
 import { publicMessageForDisplay, redactPublicLinks } from '#src/utils/publicMessage.ts';
 
 const HEX = /^[a-f0-9]{64}$/;
@@ -190,6 +191,12 @@ export function publicMessageState(root: PublicGroupMessage, room: PublicRoom, o
       deleteEventId: removal.id,
       deletedEventKind: 9,
     };
+  // Same rule as the room inbox: only trusted posts render profile mentions.
+  else if (
+    roomPolicy(room, root.pubkey) === 'trusted' &&
+    textMentionsPublicKey(current.content, own)
+  )
+    message.meta.mentions_me = true;
   const targets = new Set([root.id, ...edits.map((event) => event.id)]);
   const reactions = new Map<string, NonNullable<Message['meta']['reactions']>[number]>();
   for (const reaction of actions.filter((event) => event.kind === 7).sort(newer)) {

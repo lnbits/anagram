@@ -1482,6 +1482,7 @@
             <PublicGroupRow
               room={item.room}
               unreadCount={item.unreadCount ?? 0}
+              unreadMentionCount={item.unreadMentionCount ?? 0}
               muted={item.muted ?? false}
               blocked={item.blocked ?? false}
               notificationsEnabled={item.notificationsEnabled ?? false}
@@ -1783,6 +1784,7 @@
                 senderContinues={presentation.senderContinues}
                 dayLabel={presentation.dayLabel}
                 highlighted={highlightedMessage === message.id}
+                mentionHighlight={$state.selected?.type === 'group'}
                 contextOpen={contextMessage === message.id}
                 contactName={$state.selected?.name ?? ''}
                 contactRelayUrls={selectedRelayUrls}

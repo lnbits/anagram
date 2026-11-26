@@ -31,6 +31,7 @@ import {
   readMessageEditTargetEventId,
 } from '#src/utils/messageEdits.ts';
 import { buildMentionMetadata, formatGroupMentionsForDisplay } from '#src/utils/nostrMentions.ts';
+import { UNREAD_MENTION_AT_META_KEY, laterMentionAt } from '#src/utils/unreadMentions.ts';
 
 export function createPrivateMessagesIngestRuntime({
   verifyIncomingGroupMessage,
@@ -1508,6 +1509,18 @@ export function createPrivateMessagesIngestRuntime({
           uiThrottleMs,
         });
         await refreshReplyPreviewsForTargetMessage(nextEditedMessage, { uiThrottleMs });
+        if (
+          resolvedGroupChatPublicKey &&
+          !isSelfSentMessage &&
+          (editTargetMessage.meta.mentions_me === true ||
+            nextEditedMessage.meta.mentions_me === true)
+        ) {
+          const { useMessageStore } = await import('#src/stores/messageStore.svelte.ts');
+          await useMessageStore().syncUnreadMentionForMessage(
+            editTargetMessage,
+            nextEditedMessage,
+          );
+        }
         if (rumorNostrEvent) {
           await nostrEventDataService.upsertEvent({
             event: rumorNostrEvent,
@@ -1572,6 +1585,20 @@ export function createPrivateMessagesIngestRuntime({
       !isBlockedChat &&
       chatStore.visibleChatId !== chat.public_key &&
       isAfterSeenBoundary;
+    // Only a message that counts as unread can raise the group "@" indicator.
+    const unreadMentionAt =
+      resolvedGroupChatPublicKey && shouldIncrementUnreadCount && messageMeta.mentions_me === true
+        ? createdAt
+        : '';
+    const chatMeta = unreadMentionAt
+      ? {
+          ...chat.meta,
+          [UNREAD_MENTION_AT_META_KEY]: laterMentionAt(
+            chat.meta?.[UNREAD_MENTION_AT_META_KEY],
+            unreadMentionAt,
+          ),
+        }
+      : chat.meta;
     const nextUnreadCount = isSelfSentMessage
       ? currentUnreadCount
       : isBlockedChat || chatStore.visibleChatId === chat.public_key
@@ -1598,7 +1625,7 @@ export function createPrivateMessagesIngestRuntime({
         at: nextPreviewAt,
         unreadCount: nextUnreadCount,
         messageMeta,
-        meta: { ...chat.meta, ...(contact?.meta.picture ? { picture: contact.meta.picture } : {}) },
+        meta: { ...chatMeta, ...(contact?.meta.picture ? { picture: contact.meta.picture } : {}) },
       });
     }
     useMessageStore().stageIncomingMessage({
@@ -1613,6 +1640,7 @@ export function createPrivateMessagesIngestRuntime({
     const previousCommit = commitTail;
     const stagedChat = {
       ...chat,
+      meta: chatMeta,
       unread_count: nextUnreadCount,
       ...(shouldUpdateChatPreview
         ? { last_message: messagePreviewText, last_message_at: nextPreviewAt }
@@ -1631,6 +1659,7 @@ export function createPrivateMessagesIngestRuntime({
           ...(shouldUpdateChatPreview
             ? { preview: { text: messagePreviewText, at: nextPreviewAt } }
             : {}),
+          ...(unreadMentionAt ? { mentionAt: unreadMentionAt } : {}),
         },
         chat_public_key: chat.public_key,
         author_public_key: senderPubkeyHex,
